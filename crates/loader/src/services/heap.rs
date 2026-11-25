@@ -3,8 +3,8 @@
 //! Guest heap services backed by owned guest memory regions.
 
 use super::{
-    ERROR_INVALID_ADDRESS, ERROR_INVALID_HANDLE, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED,
-    KERNEL32, ServicesState,
+    ERROR_INVALID_ADDRESS, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY,
+    ERROR_NOT_SUPPORTED, KERNEL32, ServicesState,
 };
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
@@ -14,6 +14,15 @@ use crate::memory::PROCESS_HEAP;
 const HEAP_ZERO_MEMORY: u32 = 8;
 const HEAP_REALLOC_IN_PLACE_ONLY: u32 = 16;
 const HEAP_API: &str = "api-ms-win-core-heap-l1-1-0.dll";
+const HEAP_OBSOLETE_API: &str = "api-ms-win-core-heap-obsolete-l1-1-0.dll";
+// The legacy memory services accept the documented flags: the moveable
+// bit, the zero-initialization bit and the discardable/nocompact/nodiscard
+// hints of the 16-bit memory manager. The hints are inert on every 32- or
+// 64-bit Windows - memory is always fixed and the handle is the pointer.
+const GMEM_MOVEABLE: u32 = 0x2;
+const GMEM_ZEROINIT: u32 = 0x40;
+const LEGACY_INERT_HINTS: u32 = 0x0f00 | 0x10 | 0x20;
+const LEGACY_ACCEPTED: u32 = GMEM_MOVEABLE | GMEM_ZEROINIT | LEGACY_INERT_HINTS;
 
 pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
     registry.register(KERNEL32, "GetProcessHeap", |_, _, _| Ok(PROCESS_HEAP));
@@ -80,22 +89,60 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         Ok(1)
     });
 
-    let state = Arc::clone(state);
+    let service_state = Arc::clone(state);
     registry.register(KERNEL32, "HeapFree", move |args, cpu, memory| {
         let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
         let flags = args.get(1, memory).map_err(ExitReason::MemoryFault)? as u32;
         let address = args.get(2, memory).map_err(ExitReason::MemoryFault)?;
         if !memory.has_heap(handle) {
-            return state.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+            return service_state.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
         }
         if flags != 0 {
-            return state.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
+            return service_state.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
         }
         if address != 0 && !memory.release_heap_allocation(handle, address) {
-            return state.fail(cpu.gs_base, ERROR_INVALID_ADDRESS, 0);
+            return service_state.fail(cpu.gs_base, ERROR_INVALID_ADDRESS, 0);
         }
         Ok(1)
     });
+
+    // The 16-bit compatibility services. On every 32- or 64-bit Windows they
+    // are thin wrappers over the process heap: the moveable bit and the
+    // discardable hints change nothing, the handle is the pointer itself,
+    // and GlobalLock - not needed here - would return the same pointer.
+    for symbol in ["GlobalAlloc", "LocalAlloc"] {
+        let service_state = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            let flags = args.get(0, memory).map_err(ExitReason::MemoryFault)? as u32;
+            let size = args.get(1, memory).map_err(ExitReason::MemoryFault)?;
+            if flags & !LEGACY_ACCEPTED != 0 {
+                return service_state.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            // Fresh guest regions are always zero-filled, so the zero-init
+            // flag needs no extra work; the heap flags stay honest.
+            match memory.map_heap_allocation(PROCESS_HEAP, size.max(1) as usize) {
+                Ok(address) => Ok(address),
+                Err(_) => service_state.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, 0),
+            }
+        });
+    }
+
+    for symbol in ["GlobalFree", "LocalFree"] {
+        let service_state = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
+            // Freeing the null handle is a documented no-op success.
+            if handle == 0 {
+                return Ok(0);
+            }
+            if memory.release_heap_allocation(PROCESS_HEAP, handle) {
+                Ok(0)
+            } else {
+                // A failure answers the handle itself, as documented.
+                service_state.fail(cpu.gs_base, ERROR_INVALID_HANDLE, handle)
+            }
+        });
+    }
 
     for symbol in [
         "GetProcessHeap",
@@ -107,6 +154,10 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "HeapDestroy",
     ] {
         registry.alias(HEAP_API, KERNEL32, symbol);
+        registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
+    }
+    for symbol in ["GlobalAlloc", "GlobalFree", "LocalAlloc", "LocalFree"] {
+        registry.alias(HEAP_OBSOLETE_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
 }

@@ -231,19 +231,8 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         memory.read_u8(args.rcx).map_err(fault)?;
         Ok(0)
     });
-    // Nothing allocates local memory, so only a null handle can be freed.
-    registry.register_with_status(
-        KERNEL32,
-        "LocalFree",
-        ServiceStatus::Partial,
-        |args, _, _| {
-            if args.rcx == 0 {
-                Ok(0)
-            } else {
-                Err(UNSUPPORTED)
-            }
-        },
-    );
+    // `LocalFree` is no longer a null-only stub here: the heap services
+    // implement the legacy memory family since package 9 of #459.
     // `__stdio_common_vsprintf` is no longer a stub here: the typed registry
     // serves it since #466.
     for (module, symbol) in [

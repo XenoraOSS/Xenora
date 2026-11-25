@@ -368,5 +368,16 @@ between widths, the failures and the unique temporary names. Built by
 `kernel32.dll`. It is built at `-O0` and `-O2`, and once at `-O1` with
 `CRT_WINFILES_BREAK` as a control. `crates/cli/tests/run_program.rs` runs
 all three through `xenora run`.
+
+## The legacy memory services
+
+`tests/compat_fixtures/crt_winmemory.c` (package 9 of #459) is a hosted C
+program that allocates, writes, zero-checks and frees memory through the
+legacy `GlobalAlloc`/`LocalAlloc` family, checking the null free, the
+documented failure answers and the sharing with the process heap. Built by
+`build-crt-winmemory.sh` with mingw-w64, the calls are imports of
+`kernel32.dll`. It is built at `-O0` and `-O2`, and once at `-O1` with
+`CRT_WINMEMORY_BREAK` as a control. `crates/cli/tests/run_program.rs` runs
+all three through `xenora run`.
 Provenance is as for Gate A2: the source and scripts are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.

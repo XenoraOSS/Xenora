@@ -577,6 +577,16 @@ normal and archive bits because the drive keeps no attribute state, and
 `GetTempFileName` answers unique names within a run. Nothing was compared
 with Windows.
 
+### The legacy memory services
+
+`GlobalAlloc` and `LocalAlloc` are thin wrappers over the process heap, as
+on every 32- or 64-bit Windows: memory is always fixed, the handle is the
+pointer itself, and the moveable bit and the discardable hints of the
+16-bit memory manager are accepted and inert. Freeing the null handle is
+a no-op success; freeing a non-allocation answers the handle itself with
+the invalid-handle error. Flags outside the documented mask are an invalid
+parameter. Nothing was compared with Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.
