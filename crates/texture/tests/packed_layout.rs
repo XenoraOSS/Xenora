@@ -103,3 +103,36 @@ fn overflow_in_rows_levels_or_chain_is_rejected() {
         Err(TextureError::SizeOverflow)
     );
 }
+
+#[test]
+fn r8_packed_odd_mips_and_checked_overflow() {
+    let layout = PackedTextureLayout::new(R8Unorm, 5, 3, 3).unwrap();
+    assert_eq!(layout.format(), R8Unorm);
+    assert_eq!(
+        layout
+            .levels()
+            .iter()
+            .map(|m| (m.width, m.height, m.offset, m.row_bytes, m.rows, m.byte_len))
+            .collect::<Vec<_>>(),
+        vec![
+            (5, 3, 0, 5, 3, 15),
+            (2, 1, 15, 2, 1, 2),
+            (1, 1, 17, 1, 1, 1)
+        ]
+    );
+    assert_eq!(layout.byte_len(), 18);
+    assert_eq!(
+        PackedTextureLayout::new(R8Unorm, usize::MAX, 2, 1),
+        Err(TextureError::SizeOverflow)
+    );
+    assert_eq!(
+        PackedTextureLayout::new(R8Unorm, usize::MAX, 1, 2),
+        Err(TextureError::SizeOverflow)
+    );
+    for (w, h, m) in [(0, 1, 1), (1, 0, 1), (1, 1, 0), (5, 3, 4)] {
+        assert_eq!(
+            PackedTextureLayout::new(R8Unorm, w, h, m),
+            Err(TextureError::InvalidLayout)
+        );
+    }
+}

@@ -1431,3 +1431,34 @@ the full logical source must be readable and is fully charged to the payload bud
 The existing native region operation retains the exact owned destination-prior
 version and preserves bytes outside the patch. Existing arbitrary-byte capability
 checks and Produced destination dependencies remain unchanged.
+
+
+### Linear R8 sampled storage
+
+`TextureFormat::R8Unorm` adds canonical one-byte texels to `PackedTextureLayout`.
+Guest storage code3 and view code6 select this format. `GraphicsTextureCapabilities.r8`
+is independent of BC support and defaults false; native adapters enable it, while
+legacy installers and unsupported draw paths fail closed. R8 views share their
+backing and allow only R8 interpretation, including nested mip ranges.
+
+`MetalR8Texture::upload(device, R8TextureDesc, &[R8MipUpload])` validates every mip
+before native allocation. Each mip occurs exactly once; pitch is at least its width
+and less than Int32MAX, with an exact checked `row_pitch * height` byte span. Canonical
+and total padded inputs are bounded to 64MiB. The native dimension policy remains
+16,384 per axis, subject to allocation success. The texture is fully initialized and
+immutable, exposes read-only views, and retains actual `MTLPixelFormatR8Unorm` storage.
+It has no raw-texture or post-publication upload API. Single-row uploads pass zero
+native bytes-per-row, following Apple's
+[texture upload contract](https://developer.apple.com/documentation/metal/mtltexture/replace(region:mipmaplevel:withbytes:bytesperrow:)).
+
+The FFI upload/view caches retain explicit storage format and complete snapshot/view
+identity. Implicit R8 bindings use full-range views; selected views preserve mip-relative
+sampling. Sync, async and queued adapters share this typed upload path. Shader binding
+syntax is unchanged. Render/depth attachments, Produced R8 outputs, queued R8 texture
+copies and cross-family reinterpretation are outside this sampled-only extension.
+
+R8 sampling returns normalized red with absent green/blue components zero and alpha
+one, as specified by the [Metal Shading Language specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf)
+(page240). Nearest, unblended samples of bytes0,17,128,255 into a linear RGBA8 target
+therefore have expected bytes `[r,0,0,255]`. This contract does not replicate red
+into the other color channels or apply sRGB decoding.

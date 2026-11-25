@@ -1300,6 +1300,7 @@ fn cpu_typed_bc_snapshots_keep_original_blocks_and_require_capability() {
                 .unwrap();
             h.ctx.set_metal_typed_attachment_backend(
                 GraphicsTextureCapabilities {
+                    r8: false,
                     bc1: enabled,
                     bc3: enabled,
                 },
@@ -1422,12 +1423,29 @@ fn cpu_typed_bc_rejects_attachment_incompatible_view_and_invalid_shape() {
 fn cpu_typed_capabilities_are_independent_and_old_installers_reset_them() {
     use xenora_loader::graphics::{GraphicsTextureCapabilities, GraphicsTextureDesc};
     use xenora_texture::TextureFormat;
-    for (format, bc1, bc3, reset, succeeds) in [
-        (TextureFormat::Bc1RgbaUnorm, true, false, false, true),
-        (TextureFormat::Bc3RgbaUnorm, true, false, false, false),
-        (TextureFormat::Bc3RgbaUnorm, false, true, false, true),
-        (TextureFormat::Bc1RgbaUnorm, false, true, false, false),
-        (TextureFormat::Bc1RgbaUnorm, true, true, true, false),
+    for (format, bc1, bc3, r8, reset, succeeds) in [
+        (TextureFormat::Bc1RgbaUnorm, true, false, false, false, true),
+        (
+            TextureFormat::Bc3RgbaUnorm,
+            true,
+            false,
+            false,
+            false,
+            false,
+        ),
+        (TextureFormat::Bc3RgbaUnorm, false, true, false, false, true),
+        (
+            TextureFormat::Bc1RgbaUnorm,
+            false,
+            true,
+            false,
+            false,
+            false,
+        ),
+        (TextureFormat::Bc1RgbaUnorm, true, true, false, true, false),
+        (TextureFormat::R8Unorm, true, true, false, false, false),
+        (TextureFormat::R8Unorm, false, false, true, false, true),
+        (TextureFormat::R8Unorm, false, false, true, true, false),
     ] {
         let mut h = Harness::new();
         let pipeline = h.pipeline(VARYING, SAMPLED);
@@ -1445,7 +1463,7 @@ fn cpu_typed_capabilities_are_independent_and_old_installers_reset_them() {
             )
             .unwrap();
         h.ctx.set_metal_typed_attachment_backend(
-            GraphicsTextureCapabilities { bc1, bc3 },
+            GraphicsTextureCapabilities { r8, bc1, bc3 },
             move |draws, extent, _, _, _| {
                 assert!(succeeds);
                 assert!(draws[0].sampled.is_none());
@@ -1488,7 +1506,11 @@ fn cpu_typed_capabilities_are_independent_and_old_installers_reset_them() {
 fn cpu_legacy_bc_targets_reject_clear_only_and_draw_before_dispatch_preserving_frame() {
     use xenora_loader::graphics::{GraphicsTextureCapabilities, GraphicsTextureDesc};
     use xenora_texture::TextureFormat;
-    for format in [TextureFormat::Bc1RgbaUnorm, TextureFormat::Bc3RgbaUnorm] {
+    for format in [
+        TextureFormat::Bc1RgbaUnorm,
+        TextureFormat::Bc3RgbaUnorm,
+        TextureFormat::R8Unorm,
+    ] {
         for draw in [false, true] {
             let mut h = Harness::new();
             h.baseline();
@@ -1509,6 +1531,7 @@ fn cpu_legacy_bc_targets_reject_clear_only_and_draw_before_dispatch_preserving_f
                 .unwrap();
             h.ctx.set_metal_typed_attachment_backend(
                 GraphicsTextureCapabilities {
+                    r8: true,
                     bc1: true,
                     bc3: true,
                 },
@@ -1569,7 +1592,11 @@ fn cpu_legacy_bc_targets_reject_clear_only_and_draw_before_dispatch_preserving_f
 fn cpu_old_async_installers_reset_typed_bc_capabilities_before_submit() {
     use xenora_loader::graphics::{GraphicsTextureCapabilities, GraphicsTextureDesc};
     use xenora_texture::TextureFormat;
-    for format in [TextureFormat::Bc1RgbaUnorm, TextureFormat::Bc3RgbaUnorm] {
+    for format in [
+        TextureFormat::Bc1RgbaUnorm,
+        TextureFormat::Bc3RgbaUnorm,
+        TextureFormat::R8Unorm,
+    ] {
         for installer in 0..3 {
             let mut h = Harness::new();
             h.baseline();
@@ -1589,6 +1616,7 @@ fn cpu_old_async_installers_reset_typed_bc_capabilities_before_submit() {
                 .unwrap();
             h.ctx.set_metal_typed_async_backend(
                 GraphicsTextureCapabilities {
+                    r8: true,
                     bc1: true,
                     bc3: true,
                 },
@@ -1629,7 +1657,11 @@ fn cpu_old_async_installers_reset_typed_bc_capabilities_before_submit() {
 fn cpu_old_queued_installers_reset_typed_bc_capabilities_before_submit() {
     use xenora_loader::graphics::{GraphicsTextureCapabilities, GraphicsTextureDesc};
     use xenora_texture::TextureFormat;
-    for format in [TextureFormat::Bc1RgbaUnorm, TextureFormat::Bc3RgbaUnorm] {
+    for format in [
+        TextureFormat::Bc1RgbaUnorm,
+        TextureFormat::Bc3RgbaUnorm,
+        TextureFormat::R8Unorm,
+    ] {
         for view_installer in [false, true] {
             let mut h = Harness::new();
             h.baseline();
@@ -1649,6 +1681,7 @@ fn cpu_old_queued_installers_reset_typed_bc_capabilities_before_submit() {
                 .unwrap();
             h.ctx.set_metal_typed_queued_backend(
                 GraphicsTextureCapabilities {
+                    r8: true,
                     bc1: true,
                     bc3: true,
                 },
@@ -2502,4 +2535,173 @@ fn cpu_sampler_creation_does_not_skip_draw_time_view_lod_validation() {
             .is_err()
     );
     assert_eq!(h.ctx.last_presentation.lock().unwrap().frame_index, 0);
+}
+
+#[test]
+fn cpu_r8_snapshots_keep_packed_mips_and_require_independent_capability() {
+    use xenora_loader::graphics::{
+        GraphicsTextureCapabilities, GraphicsTextureDesc, GraphicsTextureViewDesc,
+        GraphicsTextureViewFormat,
+    };
+    use xenora_texture::TextureFormat;
+    let (format, length, view_format) = (
+        TextureFormat::R8Unorm,
+        18,
+        GraphicsTextureViewFormat::R8Unorm,
+    );
+    for enabled in [false, true] {
+        let mut h = Harness::new();
+        let pipeline = h.pipeline(VARYING, SAMPLED);
+        let texture = h
+            .ctx
+            .create_texture_resource(
+                h.device,
+                GraphicsTextureDesc {
+                    width: 5,
+                    height: 3,
+                    mip_levels: 3,
+                    format,
+                },
+                ResourceStates::COPY_DEST,
+            )
+            .unwrap();
+        // Literal R8 5x3, 2x1, 1x1 mip chain: 15 + 2 + 1 bytes.
+        let bytes: Vec<u8> = (0..length).map(|i| (i * 7 + 3) as u8).collect();
+        h.memory
+            .map_region(0xa000, length, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        h.memory.write_bytes(0xa000, &bytes).unwrap();
+        h.ctx
+            .copy_guest_to_resource(texture, 0, 0xa000, length, &h.memory)
+            .unwrap();
+        let view = h
+            .ctx
+            .create_texture_view(
+                h.device,
+                texture,
+                GraphicsTextureViewDesc {
+                    base_mip: 1,
+                    mip_count: 2,
+                    format: view_format,
+                },
+            )
+            .unwrap();
+        h.ctx.set_metal_typed_attachment_backend(
+            GraphicsTextureCapabilities {
+                r8: enabled,
+                bc1: false,
+                bc3: false,
+            },
+            move |draws, extent, _, _, _| {
+                assert!(enabled, "unsupported R8 reached CPU callback");
+                let draw = &draws[0];
+                let snapshot = draw.sampled_bindings.textures[0].as_ref().unwrap();
+                assert_eq!(snapshot.format, format);
+                assert_eq!(
+                    (snapshot.width, snapshot.height, snapshot.mip_levels),
+                    (5, 3, 3)
+                );
+                assert_eq!(&*snapshot.pixels, bytes.as_slice());
+                assert!(draw.sampled.is_none());
+                assert_eq!(draw.sampled_bindings.views[0].unwrap().format, view_format);
+                Ok(GraphicsPassOutput {
+                    colors: vec![vec![0; extent.0 * extent.1 * 4]],
+                    depth: None,
+                })
+            },
+        );
+        h.ctx
+            .cmd_resource_barrier(
+                h.list,
+                texture,
+                ResourceStates::COPY_DEST,
+                ResourceStates::PIXEL_SHADER_RESOURCE,
+            )
+            .unwrap();
+        h.ctx
+            .cmd_set_graphics_pipeline(h.list, Some(pipeline))
+            .unwrap();
+        h.ctx
+            .cmd_set_sampled_views(
+                h.list,
+                [Some(view), None],
+                [
+                    Some(SamplerDesc::nearest_clamp().with_explicit_mip(1)),
+                    None,
+                ],
+            )
+            .unwrap();
+        h.draw();
+        h.ctx.close_command_list(h.list).unwrap();
+        assert_eq!(
+            h.ctx
+                .execute_command_list(h.queue, h.list, &h.memory)
+                .is_ok(),
+            enabled
+        );
+    }
+}
+
+#[test]
+fn cpu_r8_rejects_cross_family_views_attachments_and_texture_copies() {
+    use xenora_loader::graphics::{
+        GraphicsImageCopyLocation, GraphicsTextureDesc, GraphicsTextureViewDesc,
+        GraphicsTextureViewFormat as V,
+    };
+    use xenora_texture::TextureFormat;
+    let mut h = Harness::new();
+    let desc = GraphicsTextureDesc {
+        width: 5,
+        height: 3,
+        mip_levels: 3,
+        format: TextureFormat::R8Unorm,
+    };
+    assert!(
+        h.ctx
+            .create_texture_resource(h.device, desc, ResourceStates::RENDER_TARGET)
+            .is_err()
+    );
+    let a = h
+        .ctx
+        .create_texture_resource(h.device, desc, ResourceStates::COPY_SOURCE)
+        .unwrap();
+    let b = h
+        .ctx
+        .create_texture_resource(h.device, desc, ResourceStates::COPY_DEST)
+        .unwrap();
+    for format in [
+        V::Rgba8Unorm,
+        V::Rgba8UnormSrgb,
+        V::Bc1RgbaUnorm,
+        V::Bc1RgbaUnormSrgb,
+        V::Bc3RgbaUnorm,
+        V::Bc3RgbaUnormSrgb,
+    ] {
+        assert!(
+            h.ctx
+                .create_texture_view(
+                    h.device,
+                    a,
+                    GraphicsTextureViewDesc {
+                        base_mip: 0,
+                        mip_count: 3,
+                        format
+                    }
+                )
+                .is_err()
+        );
+    }
+    assert!(
+        h.ctx
+            .cmd_set_color_targets(h.list, &[a], &[[0; 4]])
+            .is_err()
+    );
+    assert!(h.ctx.cmd_copy_resource(h.list, b, a).is_err());
+    assert!(h.ctx.cmd_copy_resource(h.list, a, b).is_err());
+    let loc = GraphicsImageCopyLocation::Rgba8 { origin: (0, 0) };
+    assert!(
+        h.ctx
+            .cmd_copy_image(h.list, b, loc, a, loc, (1, 1))
+            .is_err()
+    );
 }

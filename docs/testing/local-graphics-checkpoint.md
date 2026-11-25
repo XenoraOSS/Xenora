@@ -1,7 +1,7 @@
 # Local graphics checkpoint
 
 This summary records the accumulated graphics checkpoint and the subsequent
-nested-view, compute-cache, sampler-handle and guest-copy increments on 25 November 2026. It is not release certification or a
+nested-view, compute-cache, sampler-handle, guest-copy and R8 increments on 25 November 2026. It is not release certification or a
 claim of Xbox hardware equivalence. Supporting raw logs, mutation records and
 source manifests remain local and are not distributed with the repository.
 
@@ -14,6 +14,46 @@ failure, and saves each step's output under `artifacts/validation-*`. A successf
 run ends with `PASS`. Quick mode also rejects filters that select no passing tests.
 Use `--help` for prerequisites. These tests render offscreen and compare pixels;
 they do not open an application window. Avoid other GPU test runs at the same time.
+
+## Linear R8 sampled texture checkpoint
+
+R8 textures now keep one-byte texels throughout packed storage, transfers and
+native upload. All three production adapters sample actual Metal R8 textures,
+including selected and nested read-only mip views. The contract is sampled-only:
+R8 attachments, Produced textures and queued texture copies remain unsupported.
+
+Quick validation passed **66 tests across 21 steps**, with zero failures or ignored
+tests. Five new CPU checks cover packed odd mip chains, overflow, native upload
+preflight, byte budgets, explicit capabilities and unsupported resource roles.
+Existing capability/reset and guest service tables now include R8. Three native
+checks and two original guest tests cover exact channel values, poisoned padding,
+relative LOD, multiple immutable owners, malformed inputs, changed uploads and
+retirement. Guest tests exercise synchronous, asynchronous and queued adapters.
+
+Focused commands, with the Metal validation environment below for GPU selections:
+
+```sh
+cargo test --locked -p xenora-texture --test packed_layout r8_ -- --nocapture
+cargo test --locked -p xenora-metal --lib r8_ -- --nocapture
+cargo test --locked -p xenora-loader --test pipeline cpu_r8_ -- --nocapture
+cargo test --locked -p xenora-metal --features gpu-tests --test native_compute r8_sampled:: -- --nocapture --test-threads=1
+cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_r8_ -- --nocapture --test-threads=1
+```
+
+The native pixel expectations are literal and independent of production layout
+helpers. Red bytes0,17,128,255 must produce `[r,0,0,255]`, following the
+[MSL channel-default specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf).
+An intentional upload-pitch mutation introduced padding byte221 into actual pixels
+and failed the oracle. The source hash matched after restoration. A review corrected
+a guest-test assumption before execution: R8 host creation is allowed without native
+support, but drawing on a legacy backend must reject before renderer dispatch.
+
+All nine repository gates passed after restoration: **869 workspace tests passed,
+zero failed, 88 ignored**; the GPU suite reported **341 passed, zero failed, one
+manual test ignored**. GPU totals include CPU checks and overlapping workspace
+coverage. Native binaries are ARM64 linked to system Metal, with API/shader validation
+enabled. This completes the linear R8 sampled-texture increment; full Stage2/3 and
+R8 render/copy roles remain outside the accepted scope.
 
 ## Guest-backed buffer-region copy checkpoint
 

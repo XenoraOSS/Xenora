@@ -165,11 +165,11 @@ all sampled entries; opcode 21 alone cannot clear a previously bound slot 1.
 
 CreateTypedTexture (opcode 40) adds explicit storage formats without changing
 CreateTexture (opcode 6), which remains RGBA8. Storage-format codes are exactly
-0 = `Rgba8Unorm`, 1 = `Bc1RgbaUnorm`, and 2 = `Bc3RgbaUnorm`. These are separate
+0 = `Rgba8Unorm`, 1 = `Bc1RgbaUnorm`, 2 = `Bc3RgbaUnorm`, and 3 = `R8Unorm`. These are separate
 from the view-format codes below. Unknown codes and nonzero unused arguments reject.
 Width and height must be nonzero and at most 4,096. Height, mip count and initial
 state require zero upper32 bits. Mip count is nonzero and cannot exceed the full
-chain obtained by halving each dimension to one. BC creation accepts COMMON,
+chain obtained by halving each dimension to one. BC and R8 creation accept COMMON,
 COPY_DEST, COPY_SOURCE or PIXEL_SHADER_RESOURCE as its initial state.
 
 Backing storage is a tightly packed mip chain, ordered from mip 0 with no gaps or
@@ -178,6 +178,7 @@ row padding. For each mip, halve width and height and clamp each axis to one:
 | Storage | Bytes per row | Stored rows |
 | --- | --- | --- |
 | RGBA8 | width × 4 | height |
+| R8 | width | height |
 | BC1 | ceil(width / 4) × 8 | ceil(height / 4) |
 | BC3 | ceil(width / 4) × 16 | ceil(height / 4) |
 
@@ -225,6 +226,7 @@ existing host-backed typed Texture2D resource. View-format codes are:
 | 3 | Bc1RgbaUnormSrgb | BC1 |
 | 4 | Bc3RgbaUnorm | BC3 |
 | 5 | Bc3RgbaUnormSrgb | BC3 |
+| 6 | R8Unorm | R8 |
 
 Other codes and cross-family casts reject, including RGBA8-to-BC and BC1-to-BC3.
 Base mip
@@ -619,3 +621,30 @@ Recording reads no guest bytes. Pre-submit writes are observed, post-submit writ
 cannot change the retained snapshot, and failed admission is retryable with fresh
 bytes. Guest-backed destinations and guest-backed image transfers remain rejected.
 No guest opcode or native backend ABI is added by this extension.
+
+
+## Linear R8 sampled textures
+
+Storage code3 and view code6 expose linear R8Unorm without changing existing codes.
+R8 stores one byte per texel. A 5×3 chain with three levels contains 15 + 2 + 1 = 18
+bytes, with offsets0,15,17. Upload and Readback preserve these exact packed bytes;
+there is no expansion into RGBA storage. Root and child views accept only the R8
+interpretation; cross-family and R8 sRGB interpretations are unsupported.
+
+R8 sampling requires the backend's explicit R8 capability, independent of BC
+support. Legacy backend installers leave it disabled, and draw preparation rechecks
+support even if commands were recorded earlier. Native synchronous, asynchronous
+and queued adapters use actual Metal R8Unorm textures and immutable full-range or
+selected-mip views. Cache identity includes storage format, snapshot identity,
+dimensions, mip count and view descriptor. Changed uploaded bytes create new native
+storage; pending submissions retain their prior snapshot and view.
+
+This is sampled-texture support. R8 render/depth attachments, GPU-produced R8
+textures and queued texture-copy endpoints remain unsupported. Existing resource
+budgets, checked transfers, alias and retirement rules continue to apply.
+
+R8 sampling returns normalized red with absent green/blue components zero and alpha
+one, as specified by the [Metal Shading Language specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf)
+(page240). Nearest, unblended samples of bytes0,17,128,255 into a linear RGBA8 target
+therefore have expected bytes `[r,0,0,255]`. This contract does not replicate red
+into the other color channels or apply sRGB decoding.

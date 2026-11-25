@@ -107,9 +107,11 @@ impl Rgba8TextureDesc {
     }
 }
 
-/// Supported read-only interpretations of RGBA8 storage; no arbitrary casts.
+/// Read-only views within RGBA8, BC1, BC3, or linear R8 storage families.
+/// Cross-family casts and sRGB reinterpretation of R8 are unsupported.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureViewFormat {
+    R8Unorm,
     Rgba8Unorm,
     Rgba8UnormSrgb,
     Bc1RgbaUnorm,
@@ -226,6 +228,7 @@ impl NativeSampledTexture {
             ));
         }
         let pixel_format = match (self.format, desc.format) {
+            (TextureFormat::R8Unorm, TextureViewFormat::R8Unorm) => MTLPixelFormat::R8Unorm,
             (TextureFormat::Rgba8Unorm, TextureViewFormat::Rgba8Unorm) => {
                 MTLPixelFormat::RGBA8Unorm
             }
@@ -490,6 +493,146 @@ impl MetalBcTexture {
                     height: desc.height,
                     mips: desc.mips,
                     format: desc.format,
+                },
+                desc,
+            })
+        })
+    }
+}
+
+/// Bounded, immutable R8 storage; all mip data must be supplied before publication.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct R8TextureDesc {
+    pub width: usize,
+    pub height: usize,
+    pub mips: u32,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct R8MipUpload<'a> {
+    pub level: u32,
+    pub row_pitch: usize,
+    pub bytes: &'a [u8],
+}
+pub const MAX_R8_TEXTURE_BYTES: usize = 64 * 1024 * 1024;
+/// Fully initialized persistent R8 owner. Changed bytes require a new owner.
+/// ```compile_fail
+/// fn cannot_extract(t: xenora_metal::MetalR8Texture) { t.raw(); }
+/// ```
+/// ```compile_fail
+/// fn cannot_upload(t: xenora_metal::MetalR8Texture, mip: &xenora_metal::R8MipUpload<'_>) { t.upload_mip(mip); }
+/// ```
+#[derive(Clone, Debug)]
+pub struct MetalR8Texture {
+    texture: NativeSampledTexture,
+    desc: R8TextureDesc,
+}
+fn validate_r8_upload(
+    desc: R8TextureDesc,
+    uploads: &[R8MipUpload<'_>],
+) -> Result<PackedTextureLayout, MetalError> {
+    if desc.width > MAX_TEXTURE_DIMENSION || desc.height > MAX_TEXTURE_DIMENSION {
+        return Err(MetalError::new(
+            "R8 texture",
+            "dimension exceeds native policy",
+        ));
+    }
+    let layout =
+        PackedTextureLayout::new(TextureFormat::R8Unorm, desc.width, desc.height, desc.mips)
+            .map_err(|e| MetalError::new("R8 layout", format!("{e:?}")))?;
+    if layout.byte_len() > MAX_R8_TEXTURE_BYTES || uploads.len() != layout.levels().len() {
+        return Err(MetalError::new(
+            "R8 upload",
+            "byte budget or mip count mismatch",
+        ));
+    }
+    let mut seen = vec![false; layout.levels().len()];
+    let mut total = 0usize;
+    for upload in uploads {
+        let level = upload.level as usize;
+        let footprint = layout
+            .levels()
+            .get(level)
+            .ok_or_else(|| MetalError::new("R8 upload", "mip out of range"))?;
+        if seen[level]
+            || upload.row_pitch < footprint.row_bytes
+            || upload.row_pitch >= i32::MAX as usize
+            || upload.row_pitch.checked_mul(footprint.rows) != Some(upload.bytes.len())
+        {
+            return Err(MetalError::new(
+                "R8 upload",
+                "duplicate mip or invalid pitch/span",
+            ));
+        }
+        seen[level] = true;
+        total = total
+            .checked_add(upload.bytes.len())
+            .filter(|n| *n <= MAX_R8_TEXTURE_BYTES)
+            .ok_or_else(|| MetalError::new("R8 upload", "padded upload byte budget exceeded"))?;
+    }
+    Ok(layout)
+}
+impl MetalR8Texture {
+    pub fn desc(&self) -> R8TextureDesc {
+        self.desc
+    }
+    pub fn view(&self, desc: TextureViewDesc) -> Result<MetalTextureView, MetalError> {
+        self.texture.view(desc)
+    }
+    pub fn upload(
+        device: &ProtocolObject<dyn MTLDevice>,
+        desc: R8TextureDesc,
+        uploads: &[R8MipUpload<'_>],
+    ) -> Result<Self, MetalError> {
+        let layout = validate_r8_upload(desc, uploads)?;
+        let format = MTLPixelFormat::R8Unorm;
+        autoreleasepool(|_| {
+            // SAFETY: Canonical layout and dimensions were checked before allocation.
+            let descriptor = unsafe {
+                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                    format,
+                    desc.width,
+                    desc.height,
+                    desc.mips > 1,
+                )
+            };
+            // SAFETY: PackedTextureLayout validated a nonempty count within the full mip chain.
+            unsafe { descriptor.setMipmapLevelCount(desc.mips as usize) };
+            descriptor.setStorageMode(MTLStorageMode::Shared);
+            descriptor.setUsage(MTLTextureUsage::ShaderRead);
+            let texture = device
+                .newTextureWithDescriptor(&descriptor)
+                .ok_or_else(|| {
+                    MetalError::new("newTextureWithDescriptor", "R8 allocation failed")
+                })?;
+            for upload in uploads {
+                let level = &layout.levels()[upload.level as usize];
+                let region = MTLRegion {
+                    origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                    size: MTLSize {
+                        width: level.width,
+                        height: level.height,
+                        depth: 1,
+                    },
+                };
+                // SAFETY: Entire fresh mip and exact checked
+                // padded span. Single rows use Apple's required zero stride.
+                unsafe {
+                    texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                        region,
+                        upload.level as usize,
+                        NonNull::from(upload.bytes).cast(),
+                        if level.rows == 1 { 0 } else { upload.row_pitch },
+                    );
+                }
+            }
+            Ok(Self {
+                texture: NativeSampledTexture {
+                    texture,
+                    _parent: None,
+                    width: desc.width,
+                    height: desc.height,
+                    mips: desc.mips,
+                    format: TextureFormat::R8Unorm,
                 },
                 desc,
             })
@@ -964,6 +1107,94 @@ mod bc_upload_tests {
                 },
                 &valid,
                 true
+            )
+            .is_err()
+        );
+    }
+}
+
+#[cfg(test)]
+mod r8_validation_tests {
+    use super::*;
+    #[test]
+    fn r8_upload_preflight_checks_all_mips_pitches_and_spans() {
+        let desc = R8TextureDesc {
+            width: 5,
+            height: 3,
+            mips: 3,
+        };
+        let uploads = [
+            R8MipUpload {
+                level: 0,
+                row_pitch: 7,
+                bytes: &[99; 21],
+            },
+            R8MipUpload {
+                level: 1,
+                row_pitch: 3,
+                bytes: &[88; 3],
+            },
+            R8MipUpload {
+                level: 2,
+                row_pitch: 1,
+                bytes: &[77],
+            },
+        ];
+        assert_eq!(validate_r8_upload(desc, &uploads).unwrap().byte_len(), 18);
+        assert!(validate_r8_upload(desc, &uploads[..2]).is_err());
+        for bad in [
+            R8MipUpload {
+                level: 0,
+                row_pitch: 4,
+                bytes: &[0; 12],
+            },
+            R8MipUpload {
+                level: 0,
+                row_pitch: 7,
+                bytes: &[0; 20],
+            },
+            R8MipUpload {
+                level: 1,
+                row_pitch: 7,
+                bytes: &[0; 21],
+            },
+            R8MipUpload {
+                level: 3,
+                row_pitch: 7,
+                bytes: &[0; 21],
+            },
+            R8MipUpload {
+                level: 0,
+                row_pitch: i32::MAX as usize,
+                bytes: &[],
+            },
+            R8MipUpload {
+                level: 0,
+                row_pitch: usize::MAX,
+                bytes: &[],
+            },
+        ] {
+            let mut invalid = uploads;
+            invalid[0] = bad;
+            assert!(validate_r8_upload(desc, &invalid).is_err());
+        }
+        assert!(validate_r8_upload(R8TextureDesc { width: 0, ..desc }, &uploads).is_err());
+    }
+    #[test]
+    fn r8_padded_budget_is_checked_before_native_allocation() {
+        let bytes = vec![0; MAX_R8_TEXTURE_BYTES + 1];
+        assert!(
+            validate_r8_upload(
+                R8TextureDesc {
+                    width: 1,
+                    height: 1,
+                    mips: 1
+                },
+                &[R8MipUpload {
+                    level: 0,
+                    row_pitch: bytes.len(),
+                    bytes: &bytes
+                }]
             )
             .is_err()
         );

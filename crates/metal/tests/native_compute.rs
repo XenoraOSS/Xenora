@@ -453,3 +453,6 @@ mod produced_geometry;
 
 #[path = "native/pipeline_cache.rs"]
 mod pipeline_cache;
+
+#[path = "native/r8_sampled.rs"]
+mod r8_sampled;

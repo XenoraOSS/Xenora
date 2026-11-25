@@ -215,12 +215,14 @@ pub struct GraphicsTextureDesc {
 pub struct GraphicsTextureCapabilities {
     pub bc1: bool,
     pub bc3: bool,
+    pub r8: bool,
 }
 
 impl GraphicsTextureCapabilities {
     fn supports(self, format: TextureFormat) -> bool {
         match format {
             TextureFormat::Rgba8Unorm => true,
+            TextureFormat::R8Unorm => self.r8,
             TextureFormat::Bc1RgbaUnorm => self.bc1,
             TextureFormat::Bc3RgbaUnorm => self.bc3,
         }
@@ -445,6 +447,7 @@ pub struct GraphicsPipeline {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GraphicsTextureViewFormat {
+    R8Unorm,
     Rgba8Unorm,
     Rgba8UnormSrgb,
     Bc1RgbaUnorm,
@@ -456,6 +459,7 @@ pub enum GraphicsTextureViewFormat {
 impl GraphicsTextureViewFormat {
     fn storage_format(self) -> TextureFormat {
         match self {
+            Self::R8Unorm => TextureFormat::R8Unorm,
             Self::Rgba8Unorm | Self::Rgba8UnormSrgb => TextureFormat::Rgba8Unorm,
             Self::Bc1RgbaUnorm | Self::Bc1RgbaUnormSrgb => TextureFormat::Bc1RgbaUnorm,
             Self::Bc3RgbaUnorm | Self::Bc3RgbaUnormSrgb => TextureFormat::Bc3RgbaUnorm,

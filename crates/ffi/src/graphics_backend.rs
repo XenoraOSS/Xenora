@@ -21,9 +21,10 @@ use xenora_loader::memory::{GuestMemory, MemoryPermissions};
 use xenora_metal::{
     BcMipUpload, BcTextureDesc, BindingSlot, BlendFactor as F, BlendOperation as O, BlendState,
     BoundSampledTexture, ColorWriteMask, DepthCompare, DepthLoad, DepthSnapshot, DepthState,
-    MetalBcTexture, MetalRgba8Texture, MetalRgba8TextureDesc, MetalSampler, MetalTextureView,
-    NativeCompute, Rgba8MipLevel, SampledBinding, TextureViewDesc, TextureViewFormat, TriangleDraw,
-    TriangleShader, TriangleState, TriangleTargetsPass,
+    MetalBcTexture, MetalR8Texture, MetalRgba8Texture, MetalRgba8TextureDesc, MetalSampler,
+    MetalTextureView, NativeCompute, R8MipUpload, R8TextureDesc, Rgba8MipLevel, SampledBinding,
+    TextureViewDesc, TextureViewFormat, TriangleDraw, TriangleShader, TriangleState,
+    TriangleTargetsPass,
 };
 use xenora_shader::{PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT};
 use xenora_texture::{PackedTextureLayout, TextureFormat};
@@ -51,18 +52,20 @@ struct UploadedView {
 enum UploadedStorage {
     Rgba8(MetalRgba8Texture),
     Bc(MetalBcTexture),
+    R8(MetalR8Texture),
 }
 impl UploadedStorage {
     fn view(&self, desc: TextureViewDesc) -> Result<MetalTextureView, xenora_metal::MetalError> {
         match self {
             Self::Rgba8(t) => t.view(desc),
             Self::Bc(t) => t.view(desc),
+            Self::R8(t) => t.view(desc),
         }
     }
     fn rgba8(&self) -> Result<MetalRgba8Texture, GraphicsError> {
         match self {
             Self::Rgba8(t) => Ok(t.clone()),
-            Self::Bc(_) => Err(GraphicsError::InvalidDescriptor),
+            Self::Bc(_) | Self::R8(_) => Err(GraphicsError::InvalidDescriptor),
         }
     }
 }
@@ -72,10 +75,13 @@ fn texture_capabilities(gpu: &NativeCompute) -> GraphicsTextureCapabilities {
     GraphicsTextureCapabilities {
         bc1: supported,
         bc3: supported,
+        // R8Unorm is supported across Apple GPU families in Apple's feature tables:
+        // https://developer.apple.com/metal/Metal-Feature-Set-Tables.pdf
+        r8: true,
     }
 }
 
-// Compressed whole resources use an immutable full-range native view.
+// Non-RGBA8 whole resources use an immutable full-range native view.
 fn sampled_view_desc(
     snapshot: &GraphicsTextureSnapshot,
     explicit: Option<GraphicsTextureViewDesc>,
@@ -86,6 +92,7 @@ fn sampled_view_desc(
             base_mip: 0,
             mip_count: snapshot.mip_levels,
             format: match format {
+                TextureFormat::R8Unorm => GraphicsTextureViewFormat::R8Unorm,
                 TextureFormat::Bc1RgbaUnorm => GraphicsTextureViewFormat::Bc1RgbaUnorm,
                 TextureFormat::Bc3RgbaUnorm => GraphicsTextureViewFormat::Bc3RgbaUnorm,
                 TextureFormat::Rgba8Unorm => unreachable!(),
@@ -99,6 +106,7 @@ fn native_view_desc(desc: GraphicsTextureViewDesc) -> TextureViewDesc {
         base_mip: desc.base_mip,
         mip_count: desc.mip_count,
         format: match desc.format {
+            GraphicsTextureViewFormat::R8Unorm => TextureViewFormat::R8Unorm,
             GraphicsTextureViewFormat::Rgba8Unorm => TextureViewFormat::Rgba8Unorm,
             GraphicsTextureViewFormat::Rgba8UnormSrgb => TextureViewFormat::Rgba8UnormSrgb,
             GraphicsTextureViewFormat::Bc1RgbaUnorm => TextureViewFormat::Bc1RgbaUnorm,
@@ -180,7 +188,31 @@ fn upload_texture(
             }
             UploadedStorage::Rgba8(texture)
         }
-        format => {
+        TextureFormat::R8Unorm => {
+            let uploads: Vec<_> = layout
+                .levels()
+                .iter()
+                .enumerate()
+                .map(|(level, mip)| R8MipUpload {
+                    level: level as u32,
+                    row_pitch: mip.row_bytes,
+                    bytes: &sampled.pixels[mip.offset..mip.offset + mip.byte_len],
+                })
+                .collect();
+            UploadedStorage::R8(
+                MetalR8Texture::upload(
+                    gpu.device(),
+                    R8TextureDesc {
+                        width: sampled.width,
+                        height: sampled.height,
+                        mips: sampled.mip_levels,
+                    },
+                    &uploads,
+                )
+                .map_err(metal_error)?,
+            )
+        }
+        format @ (TextureFormat::Bc1RgbaUnorm | TextureFormat::Bc3RgbaUnorm) => {
             let uploads: Vec<_> = layout
                 .levels()
                 .iter()

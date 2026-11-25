@@ -545,6 +545,7 @@ fn cpu_queued_typed_host_bc_coexists_with_produced_rgba_and_retires_after_reset(
     let capture = h.backend.clone();
     h.ctx.set_metal_typed_queued_backend(
         GraphicsTextureCapabilities {
+            r8: false,
             bc1: true,
             bc3: false,
         },

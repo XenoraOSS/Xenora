@@ -357,6 +357,7 @@ pub fn graphics_call_v1(
                     0 => xenora_texture::TextureFormat::Rgba8Unorm,
                     1 => xenora_texture::TextureFormat::Bc1RgbaUnorm,
                     2 => xenora_texture::TextureFormat::Bc3RgbaUnorm,
+                    3 => xenora_texture::TextureFormat::R8Unorm,
                     _ => return Err(GraphicsError::InvalidDescriptor),
                 };
                 value = graphics
@@ -380,6 +381,7 @@ pub fn graphics_call_v1(
                     3 => GraphicsTextureViewFormat::Bc1RgbaUnormSrgb,
                     4 => GraphicsTextureViewFormat::Bc3RgbaUnorm,
                     5 => GraphicsTextureViewFormat::Bc3RgbaUnormSrgb,
+                    6 => GraphicsTextureViewFormat::R8Unorm,
                     _ => return Err(GraphicsError::InvalidDescriptor),
                 };
                 let desc = GraphicsTextureViewDesc {

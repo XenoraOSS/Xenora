@@ -5,6 +5,7 @@ use crate::TextureError;
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureFormat {
     Rgba8Unorm,
+    R8Unorm,
     Bc1RgbaUnorm,
     Bc3RgbaUnorm,
 }
@@ -94,6 +95,7 @@ fn footprint(
     // https://learn.microsoft.com/en-us/windows/win32/direct3d11/texture-block-compression-in-direct3d-11
     let (columns, rows, unit_bytes) = match format {
         TextureFormat::Rgba8Unorm => (width, height, 4),
+        TextureFormat::R8Unorm => (width, height, 1),
         TextureFormat::Bc1RgbaUnorm => (width.div_ceil(4), height.div_ceil(4), 8),
         TextureFormat::Bc3RgbaUnorm => (width.div_ceil(4), height.div_ceil(4), 16),
     };

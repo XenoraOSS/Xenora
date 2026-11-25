@@ -4638,3 +4638,327 @@ fn original_guest_backed_region_pending_destination_version_and_retirement() {
         );
     }
 }
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_r8_mips_nested_views_changed_uploads_and_retirement() {
+    for (asynchronous, queued) in [(false, false), (true, false), (true, true)] {
+        let mut guest = GuestScript::new();
+        let device = guest.handle(1, &[]);
+        let queue = guest.handle(2, &[H(device)]);
+        let allocator = guest.handle(3, &[H(device)]);
+        let list = guest.handle(4, &[H(device), H(allocator)]);
+        let textures =
+            [0, 1].map(|_| guest.handle(40, &[H(device), I(5), I(3), I(3), I(3), I(COPY_DEST)]));
+        let views = textures.map(|t| guest.handle(37, &[H(device), H(t), I(0), I(3), I(6)]));
+        let parent = guest.handle(37, &[H(device), H(textures[0]), I(1), I(2), I(6)]);
+        let child = guest.handle(45, &[H(device), H(parent), I(1), I(1), I(6)]);
+        guest.ok(38, &[H(parent)]);
+        guest.call(26, &[H(textures[0])], 2, Some(u64::MAX));
+        let target = guest.handle(6, &[H(device), I(6), I(2), I(1), I(RENDER_TARGET)]);
+        let vb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+        let cb = guest.handle(5, &[H(device), I(96), I(COPY_DEST)]);
+        let p = guest.bytes(&floats(&[
+            [-1., -1., 0., 1.],
+            [3., -1., 0., 1.],
+            [-1., 3., 0., 1.],
+        ]));
+        let uv = guest.bytes(&floats(&[
+            [0.1, 0.1, 0., 1.],
+            [0.1, 0.1, 0., 1.],
+            [0.1, 0.1, 0., 1.],
+            [0.9, 0.9, 0., 1.],
+            [0.9, 0.9, 0., 1.],
+            [0.9, 0.9, 0., 1.],
+        ]));
+        guest.ok(9, &[H(vb), I(0), I(p), I(48)]);
+        guest.ok(9, &[H(cb), I(0), I(uv), I(96)]);
+        let pipeline = guest_nested_view_pipeline(&mut guest, device);
+        let mut readbacks = Vec::new();
+        for frame in 0..2 {
+            let (a, b, red) = if frame == 0 {
+                (
+                    [
+                        11u8, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 171, 193, 99,
+                    ],
+                    [
+                        61u8, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 201, 211, 219,
+                    ],
+                    [11u8, 61, 25, 171, 99, 219],
+                )
+            } else {
+                (
+                    [
+                        31u8, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 121, 143, 149,
+                    ],
+                    [
+                        81u8, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 151, 161, 169,
+                    ],
+                    [31u8, 81, 45, 121, 149, 169],
+                )
+            };
+            for (texture, bytes) in [(textures[0], a), (textures[1], b)] {
+                let address = guest.bytes(&bytes);
+                guest.ok(9, &[H(texture), I(0), I(address), I(18)]);
+                guest.barrier(list, texture, COPY_DEST, PIXEL_RESOURCE);
+            }
+            if frame == 0 {
+                guest.barrier(list, vb, COPY_DEST, VERTEX_BUFFER);
+                guest.barrier(list, cb, COPY_DEST, VERTEX_BUFFER);
+            } else {
+                guest.barrier(list, target, COPY_SOURCE, RENDER_TARGET);
+            }
+            guest.targets(list, &[target]);
+            guest.ok(17, &[H(list), I(6), I(2)]);
+            guest.ok(14, &[H(list), H(pipeline)]);
+            guest.ok(18, &[H(list), H(vb), I(0), I(16)]);
+            for (column, (view, mip)) in [
+                (views[0], 0),
+                (views[1], 0),
+                (views[0], 0),
+                (views[0], 1),
+                (child, 0),
+                (views[1], 2),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                guest.ok(
+                    19,
+                    &[H(list), H(cb), I(if column == 2 { 48 } else { 0 }), I(16)],
+                );
+                let table = sampled_table(&mut guest, [Some(view), None], [Some(mip), None], false);
+                guest.ok(39, &[H(list), I(table)]);
+                guest.ok(
+                    22,
+                    &[
+                        H(list),
+                        I(0),
+                        I(0),
+                        I(0),
+                        I(15),
+                        I(0),
+                        I(0),
+                        I(1),
+                        I(column as u64),
+                        I(0),
+                        I(1),
+                        I(2),
+                    ],
+                );
+                guest.ok(23, &[H(list), I(3), I(1), I(0), I(0)]);
+            }
+            for texture in textures {
+                guest.barrier(list, texture, PIXEL_RESOURCE, COPY_DEST);
+            }
+            guest.barrier(list, target, RENDER_TARGET, COPY_SOURCE);
+            if asynchronous && frame == 1 {
+                guest.ok(12, &[H(list)]);
+                let receipt = guest.handle(30, &[H(queue), H(list)]);
+                guest.ok(11, &[H(list), H(allocator)]);
+                for view in [views[0], views[1], child] {
+                    guest.ok(38, &[H(view)]);
+                }
+                for resource in [textures[0], textures[1], vb, cb] {
+                    guest.ok(26, &[H(resource)]);
+                }
+                guest.ok(27, &[H(pipeline)]);
+                guest.call(32, &[H(receipt)], 0, Some(1));
+                guest.ok(33, &[H(receipt)]);
+            } else {
+                finish_guest_submission(&mut guest, queue, list, asynchronous, 6);
+                guest.ok(11, &[H(list), H(allocator)]);
+                if frame == 1 {
+                    for view in [views[0], views[1], child] {
+                        guest.ok(38, &[H(view)]);
+                    }
+                    for texture in textures {
+                        guest.ok(26, &[H(texture)]);
+                    }
+                }
+            }
+            let row: Vec<_> = red.into_iter().flat_map(|r| [r, 0, 0, 255]).collect();
+            let output = guest.bytes(&[0xa5; 64]);
+            guest.ok(10, &[H(target), I(0), I(output + 8), I(48)]);
+            readbacks.push((output, row.repeat(2)));
+        }
+        let final_pixels = readbacks.last().unwrap().1.clone();
+        check_original_guest_backend(guest, asynchronous, queued, &readbacks, 2, &final_pixels);
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_r8_validation_relative_lod_and_legacy_capability_rejection() {
+    for (asynchronous, queued) in [(false, false), (true, false), (true, true)] {
+        let mut guest = GuestScript::new();
+        let device = guest.handle(1, &[]);
+        let queue = guest.handle(2, &[H(device)]);
+        let allocator = guest.handle(3, &[H(device)]);
+        let list = guest.handle(4, &[H(device), H(allocator)]);
+        guest.call(
+            40,
+            &[H(device), I(0), I(3), I(1), I(3), I(COPY_DEST)],
+            2,
+            Some(u64::MAX),
+        );
+        guest.call(
+            40,
+            &[H(device), I(5), I(3), I(4), I(3), I(COPY_DEST)],
+            2,
+            Some(u64::MAX),
+        );
+        let texture = guest.handle(40, &[H(device), I(5), I(3), I(3), I(3), I(COPY_DEST)]);
+        let narrow = guest.handle(37, &[H(device), H(texture), I(1), I(1), I(6)]);
+        for format in [0, 1, 2, 3, 4, 5] {
+            guest.call(
+                37,
+                &[H(device), H(texture), I(0), I(1), I(format)],
+                2,
+                Some(u64::MAX),
+            );
+        }
+        guest.call(
+            45,
+            &[H(device), H(narrow), I(1), I(1), I(6)],
+            2,
+            Some(u64::MAX),
+        );
+        let bytes = guest.bytes(&[
+            11u8, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 171, 193, 99,
+        ]);
+        guest.ok(9, &[H(texture), I(0), I(bytes), I(18)]);
+        // Upload overflow must reject atomically, not overwrite the valid mip.
+        let bad = guest.bytes(&[250; 19]);
+        guest.call(9, &[H(texture), I(0), I(bad), I(19)], 2, Some(u64::MAX));
+        let target = guest.handle(6, &[H(device), I(2), I(2), I(1), I(RENDER_TARGET)]);
+        let vb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+        let cb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+        let p = guest.bytes(&floats(&[
+            [-1., -1., 0., 1.],
+            [3., -1., 0., 1.],
+            [-1., 3., 0., 1.],
+        ]));
+        let uv = guest.bytes(&floats(&[[0.25, 0.5, 0., 1.]; 3]));
+        guest.ok(9, &[H(vb), I(0), I(p), I(48)]);
+        guest.ok(9, &[H(cb), I(0), I(uv), I(48)]);
+        let pipeline = guest_nested_view_pipeline(&mut guest, device);
+        let mut readbacks = Vec::new();
+        for invalid in [false, true] {
+            if !invalid {
+                guest.barrier(list, texture, COPY_DEST, PIXEL_RESOURCE);
+                guest.barrier(list, vb, COPY_DEST, VERTEX_BUFFER);
+                guest.barrier(list, cb, COPY_DEST, VERTEX_BUFFER);
+            } else {
+                guest.barrier(list, target, COPY_SOURCE, RENDER_TARGET);
+            }
+            guest.targets(list, &[target]);
+            guest.ok(17, &[H(list), I(2), I(2)]);
+            guest.ok(14, &[H(list), H(pipeline)]);
+            guest.ok(18, &[H(list), H(vb), I(0), I(16)]);
+            guest.ok(19, &[H(list), H(cb), I(0), I(16)]);
+            let table = sampled_table(
+                &mut guest,
+                [Some(narrow), None],
+                [Some(u32::from(invalid)), None],
+                false,
+            );
+            guest.ok(39, &[H(list), I(table)]);
+            guest.ok(23, &[H(list), I(3), I(1), I(0), I(0)]);
+            guest.barrier(list, target, RENDER_TARGET, COPY_SOURCE);
+            if invalid {
+                guest.ok(12, &[H(list)]);
+                guest.call(
+                    if asynchronous { 30 } else { 25 },
+                    &[H(queue), H(list)],
+                    2,
+                    Some(u64::MAX),
+                );
+            } else {
+                finish_guest_submission(&mut guest, queue, list, asynchronous, 1);
+            }
+            guest.ok(11, &[H(list), H(allocator)]);
+            let output = guest.bytes(&[0xa5; 32]);
+            guest.ok(10, &[H(target), I(0), I(output + 8), I(16)]);
+            readbacks.push((output, [171, 0, 0, 255].repeat(4)));
+        }
+        check_original_guest_backend(
+            guest,
+            asynchronous,
+            queued,
+            &readbacks,
+            1,
+            &[171, 0, 0, 255].repeat(4),
+        );
+    }
+    // Explicit legacy registration must revoke typed R8 capability. The panic
+    // callback is a dispatch guard, not simulated GPU execution evidence.
+    let mut guest = GuestScript::new();
+    let device = guest.handle(1, &[]);
+    let queue = guest.handle(2, &[H(device)]);
+    let allocator = guest.handle(3, &[H(device)]);
+    let list = guest.handle(4, &[H(device), H(allocator)]);
+    // Creation is backend-independent. Only execution checks the downgraded
+    // renderer's format capabilities. Use whole-texture slot0, not view APIs.
+    let texture = guest.handle(40, &[H(device), I(5), I(3), I(3), I(3), I(COPY_DEST)]);
+    let texels = guest.bytes(&[128; 18]);
+    guest.ok(9, &[H(texture), I(0), I(texels), I(18)]);
+    let target = guest.handle(6, &[H(device), I(1), I(1), I(1), I(RENDER_TARGET)]);
+    let vb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+    let cb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+    let p = guest.bytes(&floats(&[
+        [-1., -1., 0., 1.],
+        [3., -1., 0., 1.],
+        [-1., 3., 0., 1.],
+    ]));
+    let uv = guest.bytes(&floats(&[[0.5, 0.5, 0., 1.]; 3]));
+    guest.ok(9, &[H(vb), I(0), I(p), I(48)]);
+    guest.ok(9, &[H(cb), I(0), I(uv), I(48)]);
+    let pipeline = guest_nested_view_pipeline(&mut guest, device);
+    guest.barrier(list, texture, COPY_DEST, PIXEL_RESOURCE);
+    guest.barrier(list, vb, COPY_DEST, VERTEX_BUFFER);
+    guest.barrier(list, cb, COPY_DEST, VERTEX_BUFFER);
+    guest.targets(list, &[target]);
+    guest.ok(17, &[H(list), I(1), I(1)]);
+    guest.ok(14, &[H(list), H(pipeline)]);
+    guest.ok(18, &[H(list), H(vb), I(0), I(16)]);
+    guest.ok(19, &[H(list), H(cb), I(0), I(16)]);
+    guest.ok(21, &[H(list), H(texture), I(0), I(0), I(0)]);
+    guest.ok(23, &[H(list), I(3), I(1), I(0), I(0)]);
+    guest.ok(12, &[H(list)]);
+    guest.call(25, &[H(queue), H(list)], 2, Some(u64::MAX));
+    let pe = guest.finish();
+    let services = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    {
+        let mut graphics = services.graphics.lock().unwrap();
+        install_pipeline_backend(&mut graphics).unwrap();
+        graphics.set_metal_backend(|_, _, _| panic!("legacy R8 draw dispatched renderer"));
+    }
+    let mut imports = ImportRegistry::new();
+    register_standard_services(&mut imports, services.clone());
+    let result = run_synthetic_startup(
+        &pe,
+        StartupLayout {
+            image_base: BASE,
+            stack_top: 0x500000000,
+            tls_base: 0x300000000,
+        },
+        imports,
+        100_000,
+    )
+    .unwrap();
+    assert_eq!(result.execution.exit_reason, ExitReason::Halt);
+    for call in guest.calls {
+        assert_eq!(
+            result.image.memory.read_u64(call.status).unwrap(),
+            call.expected_status
+        );
+        if let Some(expected) = call.expected_result {
+            assert_eq!(result.image.memory.read_u64(call.result).unwrap(), expected);
+        }
+    }
+    let graphics = services.graphics.lock().unwrap();
+    let presentation = graphics.last_presentation.lock().unwrap();
+    assert_eq!(presentation.frame_index, 0);
+    assert!(presentation.pixels.is_empty());
+}

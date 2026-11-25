@@ -1003,13 +1003,13 @@ fn cpu_guest_views_share_object_budget_and_bindings_share_command_budget() {
 
 #[test]
 fn cpu_guest_typed_bc_creation_footprint_and_compressed_transfer_roundtrip() {
-    for (format, length) in [(1, 48usize), (2, 96)] {
+    for (format, length) in [(1, 48usize), (2, 96), (3, 30)] {
         let mut h = Harness::new();
         let (device, queue, allocator, list) = h.setup_list();
         for args in [
             [device, 0, 5, 3, format, ResourceStates::COPY_DEST.0 as u64],
             [device, 5, 5, 4, format, ResourceStates::COPY_DEST.0 as u64],
-            [device, 5, 5, 3, 3, ResourceStates::COPY_DEST.0 as u64],
+            [device, 5, 5, 3, 4, ResourceStates::COPY_DEST.0 as u64],
         ] {
             assert_eq!(h.call(40, &args), Ok(2));
             assert_eq!(h.output(), SENTINEL);
@@ -1050,7 +1050,7 @@ fn cpu_guest_typed_bc_creation_footprint_and_compressed_transfer_roundtrip() {
 fn cpu_guest_typed_bc_view_formats_and_create_envelope_are_checked() {
     let mut h = Harness::new();
     let (device, _, _, _) = h.setup_list();
-    for (format, valid_views) in [(1, [2, 3]), (2, [4, 5])] {
+    for (format, valid_views) in [(1, [2, 3]), (2, [4, 5]), (3, [6, 6])] {
         let texture = h.ok(
             40,
             &[
@@ -1062,7 +1062,7 @@ fn cpu_guest_typed_bc_view_formats_and_create_envelope_are_checked() {
                 ResourceStates::PIXEL_SHADER_RESOURCE.0 as u64,
             ],
         );
-        for view_format in 0..=6 {
+        for view_format in 0..=7 {
             let status = h.call(37, &[device, texture, 0, 1, view_format]);
             if valid_views.contains(&view_format) {
                 assert_eq!(status, Ok(0));
@@ -1584,7 +1584,7 @@ fn cpu_guest_child_views_share_global_object_budget() {
 fn cpu_guest_child_view_formats_follow_root_family() {
     let mut h = Harness::new();
     let device = h.ok(1, &[]);
-    for (storage, formats) in [(0, [0, 1]), (1, [2, 3]), (2, [4, 5])] {
+    for (storage, formats) in [(0, [0, 1]), (1, [2, 3]), (2, [4, 5]), (3, [6, 6])] {
         let root = h.ok(
             40,
             &[
@@ -1597,7 +1597,7 @@ fn cpu_guest_child_view_formats_follow_root_family() {
             ],
         );
         let parent = h.ok(37, &[device, root, 1, 3, formats[1]]);
-        for format in 0..=6 {
+        for format in 0..=7 {
             let result = h.call(45, &[device, parent, 1, 2, format]);
             if formats.contains(&format) {
                 assert_eq!(result, Ok(0));
