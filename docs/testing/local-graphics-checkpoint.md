@@ -5,6 +5,16 @@ nested-view, compute-cache and sampler-handle increments, reviewed on 25 Novembe
 claim of Xbox hardware equivalence. Supporting raw logs, mutation records and
 source manifests remain local and are not distributed with the repository.
 
+## One-command validation
+
+From the repository root, run `./scripts/validate-graphics.sh` for the focused
+checks, or `./scripts/validate-graphics.sh full` for all nine repository gates.
+The script enables Metal validation, runs GPU tests serially, stops on the first
+failure, and saves each step's output under `artifacts/validation-*`. A successful
+run ends with `PASS`. Quick mode also rejects filters that select no passing tests.
+Use `--help` for prerequisites. These tests render offscreen and compare pixels;
+they do not open an application window. Avoid other GPU test runs at the same time.
+
 ## Reusable sampler handles
 
 Sampler handles are immutable descriptors reused across recorded draws. Binding

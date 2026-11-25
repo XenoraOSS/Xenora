@@ -1,0 +1,114 @@
+#!/bin/bash
+# SPDX-License-Identifier: GPL-3.0-or-later
+set -euo pipefail
+
+usage() {
+    cat <<'HELP'
+Usage: scripts/validate-graphics.sh [quick|full]
+
+quick (default): focused CPU and native Metal checks for produced geometry,
+                 nested views, sampler handles and compute pipeline caching.
+full:            all nine repository validation gates, including the GPU suite.
+
+Run on native Apple Silicon with the repository build dependencies installed.
+Tests compare offscreen GPU pixels automatically; no application window opens.
+Logs are saved under artifacts/validation-*. Run only one GPU workload at a time.
+CARGO_BUILD_JOBS may be set to 1, 2, 3 or 4 (default: 4).
+HELP
+}
+
+if [[ $# -gt 1 ]]; then usage >&2; exit 2; fi
+mode=${1:-quick}
+case "$mode" in
+    -h|--help) usage; exit 0 ;;
+    quick|full) ;;
+    *) usage >&2; exit 2 ;;
+esac
+root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+cd "$root"
+if [[ $(uname -s) != Darwin || $(uname -m) != arm64 ]]; then
+    echo "Native arm64 macOS is required; do not run through Rosetta." >&2
+    exit 2
+fi
+command -v cargo >/dev/null || { echo "Install the repository Rust toolchain first." >&2; exit 2; }
+export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
+case "$CARGO_BUILD_JOBS" in
+    1|2|3|4) ;;
+    *) echo "CARGO_BUILD_JOBS must be between 1 and 4." >&2; exit 2 ;;
+esac
+if [[ "$mode" == full ]]; then
+    for dependency in python3 timeout git; do
+        command -v "$dependency" >/dev/null || {
+            echo "Missing dependency: $dependency (see scripts/bootstrap.sh)." >&2
+            exit 2
+        }
+    done
+fi
+export MTL_DEBUG_LAYER=1
+export MTL_SHADER_VALIDATION=1
+export MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1
+export MTL_SHADER_VALIDATION_ABORT_ON_FAULT=1
+mkdir -p artifacts
+lock=artifacts/graphics-validation.lock
+if ! mkdir "$lock" 2>/dev/null; then
+    echo "Another validation run may be active: $root/$lock" >&2
+    echo "If a prior run was killed, remove that empty directory only after it stops." >&2
+    exit 2
+fi
+log_dir=""
+finish() {
+    result=$?
+    trap - EXIT
+    rmdir "$lock" || true
+    if [[ $result -ne 0 ]]; then
+        echo "Validation stopped (exit $result). Logs: ${log_dir:-not created}" >&2
+    fi
+    exit "$result"
+}
+trap finish EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+log_dir=$(mktemp -d "$root/artifacts/validation-${mode}.XXXXXX")
+step=0
+last_log=""
+run() {
+    step=$((step + 1))
+    local label=$1
+    shift
+    last_log="$log_dir/$(printf '%02d' "$step")-$label.log"
+    printf '\n[%s] %s\n' "$step" "$label"
+    printf '  %q' "$@"
+    printf '\n'
+    "$@" 2>&1 | tee "$last_log"
+}
+run_tests() {
+    run "$@"
+    if ! grep -Eq 'test result: ok\. [1-9][0-9]* passed;' "$last_log"; then
+        echo "No passing tests selected; check the test filter. Log: $last_log" >&2
+        exit 1
+    fi
+}
+printf 'Running %s validation. Logs: %s\n' "$mode" "$log_dir"
+if [[ "$mode" == quick ]]; then
+    run_tests geometry-cpu cargo test --locked -p xenora-loader --test produced_geometry -- --nocapture
+    run_tests nested-cpu cargo test --locked -p xenora-loader --test pipeline cpu_nested_view -- --nocapture
+    run_tests nested-abi cargo test --locked -p xenora-loader --test graphics_service cpu_guest_child_view -- --nocapture
+    run_tests samplers-cpu cargo test --locked -p xenora-loader --test pipeline cpu_sampler -- --nocapture
+    run_tests samplers-abi cargo test --locked -p xenora-loader --test graphics_service cpu_guest_sampler -- --nocapture
+    run_tests geometry-gpu cargo test --locked -p xenora-metal --features gpu-tests --test native_compute produced_geometry:: -- --nocapture --test-threads=1
+    run_tests geometry-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_produced_geometry_ -- --nocapture --test-threads=1
+    run_tests nested-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_nested_views -- --nocapture --test-threads=1
+    run_tests samplers-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_sampler_handles -- --nocapture --test-threads=1
+    run_tests pipeline-cache cargo test --locked -p xenora-metal --features gpu-tests --test native_compute pipeline_cache:: -- --nocapture --test-threads=1
+else
+    run format cargo fmt --all -- --check
+    run clippy cargo clippy --locked --workspace --all-targets -- -D warnings
+    run workspace cargo test --locked --workspace
+    run gpu scripts/test-gpu.sh
+    run fixtures scripts/assemble-fixture.sh --check
+    run status python3 scripts/audit/status.py --check
+    run claims scripts/audit/claims.sh
+    run dependencies scripts/audit/dependencies.sh
+    run diff git diff --check
+fi
+printf '\nPASS: all %s %s steps completed. Logs: %s\n' "$step" "$mode" "$log_dir"
