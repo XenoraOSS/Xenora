@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 132 |
-| Generated adapters | 132 |
-| Unique handler implementations | 132 |
-| Implemented | 40 |
-| Partial | 90 |
+| Services with a declared ABI | 168 |
+| Generated adapters | 168 |
+| Unique handler implementations | 161 |
+| Implemented | 68 |
+| Partial | 98 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 132 |
-| API-set aliases (not services) | 132 |
+| Conformance-tested through guest dispatch | 168 |
+| API-set aliases (not services) | 168 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -36,6 +36,7 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!__stdio_common_vsprintf_s` | `(options: u64, buffer: ptr, count: u64, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null buffer, a zero count, a null or invalid format, or ERANGE when the text does not fit, and the buffer becomes empty; the invalid parameter handler is not modelled, so execution always continues |
 | `ucrtbase.dll!__stdio_common_vfprintf_s` | `(options: u64, stream: ptr, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null stream or format or an invalid format; identical to the plain form here because %n is always invalid |
 | `ucrtbase.dll!putchar` | `(character: i32) -> i32` | implemented | never: writing stdout cannot fail, as the output is captured |
+| `ucrtbase.dll!puts` | `(text: ptr) -> i32` | implemented | EOF with errno EINVAL for a null string; writing stdout cannot otherwise fail, as the output is captured |
 | `ucrtbase.dll!fwrite` | `(buffer: ptr, size: u64, count: u64, stream: ptr) -> u64` | partial | 0 with errno EINVAL for a null buffer or stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
 | `ucrtbase.dll!fputs` | `(text: ptr, stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null string or stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
 | `ucrtbase.dll!fflush` | `(stream: ptr) -> i32` | partial | stops the guest for a pointer that is no stream |
@@ -43,14 +44,49 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!fopen` | `(name: ptr, mode: ptr) -> ptr` | partial | null with errno EINVAL, ENOENT, EACCES, EMFILE, ENOSPC or ENOMEM |
 | `ucrtbase.dll!fclose` | `(stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null stream; stops the guest for a standard stream or a pointer that is no stream |
 | `ucrtbase.dll!fgets` | `(buffer: ptr, count: i32, stream: ptr) -> ptr` | partial | null at end of file; null with errno EINVAL or EBADF; stops the guest for a pointer that is no stream |
+| `ucrtbase.dll!fputws` | `(text: ptr, stream: ptr) -> u32` | partial | WEOF for a wide character above 255 (C locale), on a byte-oriented stream, or with errno EINVAL or EBADF |
+| `ucrtbase.dll!fgetws` | `(buffer: ptr, count: i32, stream: ptr) -> ptr` | partial | null at end of file, on a byte-oriented stream, or with errno EINVAL or EBADF |
+| `ucrtbase.dll!putwchar` | `(unit: u32) -> u32` | partial | WEOF for a wide character above 255 or once stdout is byte-oriented |
+| `ucrtbase.dll!fputwc` | `(unit: u32, stream: ptr) -> u32` | partial | WEOF for a wide character above 255 (C locale), on a byte-oriented stream, or with errno EINVAL or EBADF |
+| `ucrtbase.dll!getwchar` | `() -> u32` | partial | WEOF at end of input or once stdin is byte-oriented |
 | `ucrtbase.dll!getchar` | `() -> i32` | implemented | EOF at end of input; the input is what the host supplied, never interactive |
-| `ucrtbase.dll!feof` | `(stream: ptr) -> i32` | partial | the indicator of the standard input only; other streams report 0; -1 with errno EINVAL for a null stream |
+| `ucrtbase.dll!feof` | `(stream: ptr) -> i32` | partial | the indicator of the standard input and of file streams; the output streams report 0; -1 with errno EINVAL for a null stream |
+| `ucrtbase.dll!fopen_s` | `(file: ptr, name: ptr, mode: ptr) -> i32` | partial | the error number as its result and in errno, with the output pointer null; EINVAL for a null or empty argument, or a name or mode it cannot read; stops the guest for an output pointer it cannot write; the invalid parameter handler is not modelled |
+| `ucrtbase.dll!clearerr` | `(stream: ptr) -> void` | implemented | never; errno EINVAL for a null stream; stops the guest for a pointer that is no stream |
 | `ucrtbase.dll!_ftelli64` | `(stream: ptr) -> u64` | partial | -1 with errno EINVAL for a null stream, or EBADF after its file was deleted; stops the guest for a standard stream or a pointer that is no stream |
 | `ucrtbase.dll!_fseeki64` | `(stream: ptr, offset: u64, origin: i32) -> i32` | partial | -1 with errno EINVAL for a null stream, an unknown origin or a position before the start, or EBADF after its file was deleted; stops the guest for a standard stream or a pointer that is no stream |
 | `ucrtbase.dll!fgetpos` | `(stream: ptr, position: ptr) -> i32` | partial | -1 with errno EINVAL for a null argument; stops the guest for a standard stream, a pointer that is no stream, or a position it cannot write |
 | `ucrtbase.dll!fsetpos` | `(stream: ptr, position: ptr) -> i32` | partial | -1 with errno EINVAL for a null argument or a negative position; stops the guest for a standard stream, a pointer that is no stream, or a position it cannot read |
 | `ucrtbase.dll!remove` | `(name: ptr) -> i32` | implemented | -1 with errno ENOENT for a missing or rejected name, EACCES for a directory, EINVAL for a null or empty name |
 | `ucrtbase.dll!rename` | `(from: ptr, to: ptr) -> i32` | partial | -1 with errno ENOENT when the old name holds nothing, EACCES when the new name exists or its directory does not, EINVAL for a null or rejected name; stops the guest for a directory |
+| `ucrtbase.dll!tmpfile` | `() -> ptr` | implemented | null with errno EMFILE at 64 streams, ENOSPC when the drive is full, ENOMEM when the FILE object cannot be allocated |
+| `ucrtbase.dll!tmpnam` | `(buffer: ptr) -> ptr` | implemented | never; a null buffer uses the static one; stops the guest for a buffer it cannot write |
+| `ucrtbase.dll!_open` | `(name: ptr, flags: i32, mode: i32) -> i32` | partial | -1 with errno ENOENT missing, EACCES for a directory, EEXIST with _O_CREAT|_O_EXCL, EINVAL for a null or rejected name or bad access bits, EMFILE at 8192 descriptors, ENOSPC when the drive is full; stops the guest for the wide text modes |
+| `ucrtbase.dll!_close` | `(fd: i32) -> i32` | implemented | -1 with errno EBADF for a descriptor that is not open; stops the guest for a standard descriptor |
+| `ucrtbase.dll!_read` | `(fd: i32, buffer: ptr, count: u32) -> i32` | implemented | -1 with errno EBADF for a descriptor that is not open or not readable, EINVAL for a null buffer or a count over the transfer limit; stops the guest for a buffer it cannot write |
+| `ucrtbase.dll!_write` | `(fd: i32, buffer: ptr, count: u32) -> i32` | implemented | -1 with errno EBADF for a descriptor that is not open or not writable, EINVAL for a null buffer or a count over the transfer limit, ENOSPC when the drive is full; stops the guest for a buffer it cannot read |
+| `ucrtbase.dll!_lseek` | `(fd: i32, offset: i32, origin: i32) -> i32` | implemented | -1 with errno EBADF for a descriptor that is not open, EINVAL for an unknown origin, a position before the start or one no 32-bit long holds |
+| `ucrtbase.dll!_fileno` | `(stream: ptr) -> i32` | implemented | -1 with errno EINVAL for a null stream; stops the guest for a pointer that is no stream |
+| `ucrtbase.dll!_isatty` | `(fd: i32) -> i32` | implemented | 0 always, as nothing here is a character device; errno EBADF for a descriptor that is not open |
+| `ucrtbase.dll!_access` | `(name: ptr, mode: i32) -> i32` | implemented | -1 with errno ENOENT for a missing or rejected name, EINVAL for a null or empty name or mode bits other than 0, 2, 4 and 6 |
+| `ucrtbase.dll!_unlink` | `(name: ptr) -> i32` | implemented | -1 with errno ENOENT missing, EACCES for a directory, EINVAL for a null or empty name; it is remove by another name |
+| `ucrtbase.dll!_gmtime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!_localtime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!_mktime64` | `(tm: ptr) -> ptr` | implemented | -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!asctime` | `(tm: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or out-of-range fields |
+| `ucrtbase.dll!_ctime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!asctime_s` | `(buffer: ptr, size: u64, tm: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
+| `ucrtbase.dll!_ctime64_s` | `(buffer: ptr, size: u64, time: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
+| `ucrtbase.dll!clock` | `() -> u64` | implemented | never |
+| `ucrtbase.dll!_difftime64` | `(time1: u64, time2: u64) -> f64` | implemented | never |
+| `ucrtbase.dll!strftime` | `(out: ptr, size: u64, format: ptr, tm: ptr) -> u64` | implemented | 0 when the result does not fit; EINVAL for null arguments or invalid fields |
+| `ucrtbase.dll!gmtime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!localtime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!mktime` | `(tm: ptr) -> ptr` | implemented | -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!ctime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!ctime_s` | `(buffer: ptr, size: u64, time: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
+| `ucrtbase.dll!difftime` | `(time1: u64, time2: u64) -> f64` | implemented | never |
+| `kernel32.dll!FileTimeToLocalFileTime` | `(input: ptr, output: ptr) -> u32` | partial | never in range; the machine's local time is UTC, so the conversion is the identity; guest fault on an invalid pointer |
 | `ucrtbase.dll!mbtowc` | `(wide: ptr, text: ptr, count: u64) -> i32` | implemented | -1 with errno EILSEQ when count is 0; stops the guest for memory it cannot read |
 | `ucrtbase.dll!wctomb` | `(text: ptr, wide: u32) -> i32` | implemented | -1 with errno EILSEQ for a wide character above 255 |
 | `ucrtbase.dll!mblen` | `(text: ptr, count: u64) -> i32` | implemented | -1 when count is 0 |

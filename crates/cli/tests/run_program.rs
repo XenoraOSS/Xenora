@@ -79,6 +79,11 @@ fn crt_files(name: &str) -> PathBuf {
     build("build-crt-files.sh", "run-program-crt-files", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_wstream(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-wstream.sh", "run-program-crt-wstream", &OUT).join(format!("{name}.exe"))
+}
+
 fn crt_math(name: &str) -> PathBuf {
     static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-crt-math.sh", "run-program-crt-math", &OUT).join(format!("{name}.exe"))
@@ -496,6 +501,24 @@ fn a_program_using_wide_conversions_passes_its_checks() {
         run.stdout.contains("check 18 failed: control"),
         "{}",
         run.stdout
+    );
+}
+
+#[test]
+fn a_program_reading_and_writing_wide_stream_io_passes_its_checks() {
+    for name in ["crt-wstream-O0", "crt-wstream-O2"] {
+        let run = run_program(&crt_wstream(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {}{}", run.stdout, run.stderr);
+        // `putwchar` oriented stdout wide: its byte is the program's only
+        // standard output; the diagnostics are on stderr.
+        assert_eq!(run.stdout, "z", "{name}");
+        assert_eq!(run.stderr, "crt-wstream: 17/17 checks passed\r\n", "{name}");
+    }
+    let run = run_program(&crt_wstream("crt-wstream-break"), &[], &[]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "check 2 failed: fputws\r\ncrt-wstream: 16/17 checks passed\r\n"
     );
 }
 

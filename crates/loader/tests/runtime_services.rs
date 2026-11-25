@@ -5453,3 +5453,54 @@ fn descriptor_edges_past_the_end_and_a_full_table() {
     assert_eq!(guest.call("_close", &[probe]) & 0xFFFF_FFFF, 0);
     assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
 }
+
+/// `fputws`/`fgetws`/`putwchar`/`getwchar` in the C locale: every byte is
+/// its wide character, the C orientation is enforced, and a wide character
+/// above 255 fails the write.
+#[test]
+fn wide_stream_io_writes_and_reads_in_the_c_locale() {
+    let (mut guest, [_stdin, stdout, _error]) = stdio_guest();
+    let wide: Vec<u8> = b"wide line\n"
+        .iter()
+        .flat_map(|byte| [*byte, 0])
+        .chain([0, 0])
+        .collect();
+    guest.memory.write_bytes(STRINGS, &wide).unwrap();
+    let file = opened(&mut guest, "wide-a.txt", "w+b");
+    // fputws returns a non-negative value on success, never WEOF.
+    assert!(guest.call("fputws", &[STRINGS, file]) < 0xFFFF);
+    close(&mut guest, file);
+    assert!(guest.state.standard_output().is_empty());
+
+    let file = opened(&mut guest, "wide-a.txt", "r");
+    guest.memory.write_bytes(SCRATCH, &[0xEE; 64]).unwrap();
+    assert_eq!(guest.call("fgetws", &[SCRATCH, 32, file]), SCRATCH);
+    let mut back = Vec::new();
+    for at in 0..11u64 {
+        back.push(guest.memory.read_u16(SCRATCH + at * 2).unwrap() as u8);
+    }
+    assert_eq!(&back[..10], b"wide line\n");
+    assert_eq!(back[10], 0);
+    close(&mut guest, file);
+
+    // putwchar writes the byte of the character in the C locale.
+    assert_eq!(guest.call("putwchar", &[u64::from(b'A')]), u64::from(b'A'));
+    assert_eq!(guest.state.standard_output(), b"A");
+    // stdout is wide-oriented now: a byte write on it fails, as the CRT
+    // fails the conflict.
+    let byte = place(&mut guest, STRINGS + 0x40, b"B");
+    assert_eq!(
+        guest.call("fputs", &[byte, stdout]) & 0xFFFF_FFFF,
+        0xFFFF_FFFF
+    );
+    // A wide character above 255 cannot convert in the C locale.
+    assert_eq!(guest.call("putwchar", &[0x100]), 0xFFFF);
+
+    // getwchar reads one byte as its wide character.
+    let (mut guest, _streams) = stdio_guest();
+    guest.state.set_standard_input(b"Hi there");
+    assert_eq!(guest.call("getwchar", &[]), u64::from(b'H'));
+    assert_eq!(guest.call("getwchar", &[]), u64::from(b'i'));
+    // stdin is wide-oriented now: getchar answers EOF for the conflict.
+    assert_eq!(guest.call("getchar", &[]) & 0xFFFF_FFFF, 0xFFFF_FFFF);
+}

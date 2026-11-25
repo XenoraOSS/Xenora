@@ -85,6 +85,10 @@ pub(super) struct StandardStreams {
     /// The static buffer `tmpnam` uses when its argument is null, allocated
     /// once, as the CRT keeps one.
     temporary_static: u64,
+    /// The orientations of the two captured outputs, as on the file
+    /// streams: 0 unoriented, 1 byte, 2 wide.
+    output_orientation: u8,
+    error_orientation: u8,
 }
 
 /// The standard input: bytes the host supplied before the run, after the
@@ -94,6 +98,9 @@ pub(super) struct StandardStreams {
 struct Input {
     bytes: Vec<u8>,
     position: usize,
+    /// The C orientation, as on the file streams: 0 unoriented, 1 byte,
+    /// 2 wide.
+    orientation: u8,
     /// The end-of-file indicator: set when a read meets the end, cleared by
     /// nothing here because there is no `rewind` or `clearerr` yet.
     eof: bool,
@@ -110,6 +117,14 @@ impl Input {
             self.eof = true;
         }
         out
+    }
+
+    fn orient(&mut self, wide: bool) -> bool {
+        let wanted = if wide { 2 } else { 1 };
+        if self.orientation == 0 {
+            self.orientation = wanted;
+        }
+        self.orientation == wanted
     }
 
     /// One character, or none at the end. Meeting the end sets the
@@ -130,6 +145,9 @@ impl Input {
     /// `fgets`: at most `limit` characters, stopping after a line feed,
     /// which is kept. Nothing at the end of file.
     fn line(&mut self, limit: usize) -> Option<Vec<u8>> {
+        if !self.orient(false) {
+            return None;
+        }
         let mut line = Vec::new();
         while line.len() < limit {
             match self.character() {
@@ -420,11 +438,24 @@ impl StandardStreams {
         stream: Stream,
         bytes: &[u8],
     ) -> Result<Result<(), u32>, ExitReason> {
+        let orientation = match stream {
+            Stream::Output => &mut self.output_orientation,
+            Stream::Error => &mut self.error_orientation,
+            Stream::Input => return Err(RUNTIME_LIMIT),
+            Stream::File(file) => return Ok(self.opened.write(drive, file, bytes)),
+        };
+        if *orientation == 0 {
+            *orientation = 1;
+        }
+        // A byte write on a wide-oriented output writes nothing, as the CRT
+        // answers the conflict.
+        if *orientation == 2 {
+            return Ok(Err(EBADF));
+        }
         let captured = match stream {
             Stream::Output => &mut self.output,
             Stream::Error => &mut self.error,
-            Stream::Input => return Err(RUNTIME_LIMIT),
-            Stream::File(file) => return Ok(self.opened.write(drive, file, bytes)),
+            Stream::Input | Stream::File(_) => unreachable!(),
         };
         let feeds = bytes.iter().filter(|byte| **byte == b'\n').count();
         if bytes.len() + feeds > MAX_CAPTURED_OUTPUT - captured.len() {
@@ -636,6 +667,9 @@ impl StandardStreams {
     /// end. Text mode is applied when the input is supplied, so a character
     /// here is already after the replacement.
     pub(super) fn character_stdin(&mut self) -> i32 {
+        if !self.input.orient(false) {
+            return -1;
+        }
         match self.input.character() {
             Some(byte) => i32::from(byte),
             None => -1,
@@ -939,10 +973,14 @@ impl StandardStreams {
             }
             at += 1;
         }
+        // A refill keeps the orientation: it belongs to the stream, not to
+        // the buffer.
+        let orientation = self.input.orientation;
         self.input = Input {
             bytes: translated,
             position: 0,
             eof: false,
+            orientation,
         };
     }
 
@@ -1223,6 +1261,214 @@ impl StandardStreams {
         line.push(0);
         memory.write_bytes(buffer, &line).map_err(fault)?;
         Ok(Ok(buffer))
+    }
+
+    /// `fputws`: every wide character of the string written as its byte in
+    /// the C locale. `WEOF` (as u32, 0xFFFF) when one is above 255, when the
+    /// stream is oriented byte, or when the write itself fails.
+    pub(super) fn write_wide_string(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        string: u64,
+        file: u64,
+    ) -> Outcome<u32> {
+        if file == 0 || string == 0 {
+            return Ok(Err(Failed(0xFFFF, EINVAL)));
+        }
+        let mut bytes = Vec::new();
+        for at in 0..MAX_TRANSFER / 2 {
+            let unit = memory.read_u16(string + at * 2).map_err(fault)?;
+            if unit == 0 {
+                break;
+            }
+            let Ok(byte) = u8::try_from(unit) else {
+                return Ok(Err(Failed(0xFFFF, crt_files::EILSEQ)));
+            };
+            bytes.push(byte);
+        }
+        let stream = self.writable(file)?;
+        match stream {
+            Stream::File(file) => {
+                // The file layer owns conversion and orientation there; hand
+                // it the wide units, not the bytes.
+                let mut wide = Vec::with_capacity(bytes.len());
+                for byte in &bytes {
+                    wide.push(u16::from(*byte));
+                }
+                match self.opened.write_wide(drive, file, &wide) {
+                    Ok(true) => Ok(Ok(0)),
+                    Ok(false) | Err(_) => Ok(Err(Failed(0xFFFF, EBADF))),
+                }
+            }
+            Stream::Input => Ok(Err(Failed(0xFFFF, EBADF))),
+            Stream::Output | Stream::Error => {
+                let orientation = if stream == Stream::Output {
+                    &mut self.output_orientation
+                } else {
+                    &mut self.error_orientation
+                };
+                if *orientation == 0 {
+                    *orientation = 2;
+                }
+                if *orientation == 1 {
+                    return Ok(Err(Failed(0xFFFF, EBADF)));
+                }
+                match self.write_wide_captured(stream, &bytes) {
+                    Ok(()) => Ok(Ok(0)),
+                    Err(reason) => Err(reason),
+                }
+            }
+        }
+    }
+
+    /// The wide write on a captured output: the bytes are already converted;
+    /// the capture is text mode, as the byte write is.
+    fn write_wide_captured(&mut self, stream: Stream, bytes: &[u8]) -> Result<(), ExitReason> {
+        let captured = match stream {
+            Stream::Output => &mut self.output,
+            Stream::Error => &mut self.error,
+            _ => unreachable!(),
+        };
+        let feeds = bytes.iter().filter(|byte| **byte == b'\n').count();
+        if bytes.len() + feeds > MAX_CAPTURED_OUTPUT - captured.len() {
+            return Err(RUNTIME_LIMIT);
+        }
+        for &byte in bytes {
+            if byte == b'\n' {
+                captured.push(b'\r');
+            }
+            captured.push(byte);
+        }
+        Ok(())
+    }
+
+    /// `fgetws`: up to `count - 1` wide characters, stopping after a line
+    /// feed. Null at end of file, on an orientation conflict, or for the
+    /// output streams — `fgetws` answers null to all three, as `fgets` does.
+    pub(super) fn read_wide_line(
+        &mut self,
+        memory: &mut GuestMemory,
+        drive: &mut ObjectState,
+        buffer: u64,
+        count: u64,
+        file: u64,
+    ) -> Outcome<u64> {
+        if buffer == 0 || file == 0 {
+            return Ok(Err(Failed(0, EINVAL)));
+        }
+        if count == 0 {
+            return Ok(Ok(0));
+        }
+        let limit = ((count - 1).min(MAX_TRANSFER / 2)) as usize;
+        let wide: Option<Vec<u16>> = match self.stream(file)? {
+            Stream::File(file) => match self.opened.read_wide_line(drive, file, limit) {
+                Ok(line) => line,
+                Err(errno) => return Ok(Err(Failed(0, errno))),
+            },
+            Stream::Input => {
+                if !self.input.orient(true) {
+                    None
+                } else {
+                    let mut line = Vec::new();
+                    while line.len() < limit {
+                        match self.input.character() {
+                            Some(byte) => {
+                                line.push(u16::from(byte));
+                                if byte == b'\n' {
+                                    break;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    if line.is_empty() { None } else { Some(line) }
+                }
+            }
+            Stream::Output | Stream::Error => return Ok(Err(Failed(0, EBADF))),
+        };
+        let Some(mut wide) = wide else {
+            return Ok(Ok(0));
+        };
+        wide.push(0);
+        let mut stored = Vec::with_capacity(wide.len() * 2);
+        for unit in &wide {
+            stored.extend(unit.to_le_bytes());
+        }
+        memory.write_bytes(buffer, &stored).map_err(fault)?;
+        Ok(Ok(buffer))
+    }
+
+    /// `putwchar`: one wide character to the standard output, or `WEOF`.
+    pub(super) fn wide_character_stdout(&mut self, unit: u32) -> Outcome<u32> {
+        let Some(unit16) = u16::try_from(unit).ok() else {
+            return Ok(Err(Failed(0xFFFF, EINVAL)));
+        };
+        let Ok(byte) = u8::try_from(unit16) else {
+            return Ok(Err(Failed(0xFFFF, crt_files::EILSEQ)));
+        };
+        if self.output_orientation == 0 {
+            self.output_orientation = 2;
+        }
+        if self.output_orientation == 1 {
+            return Ok(Err(Failed(0xFFFF, EBADF)));
+        }
+        self.write_wide_captured(Stream::Output, &[byte])?;
+        Ok(Ok(u32::from(unit16)))
+    }
+
+    /// `fputwc`: one wide character to a stream, or `WEOF`. The conversion
+    /// is the C locale's: the byte of the character, nothing above 255.
+    pub(super) fn write_wide_unit(
+        &mut self,
+        drive: &mut ObjectState,
+        unit: u32,
+        file: u64,
+    ) -> Outcome<u32> {
+        if file == 0 {
+            return Ok(Err(Failed(0xFFFF, EINVAL)));
+        }
+        let Some(unit16) = u16::try_from(unit).ok() else {
+            return Ok(Err(Failed(0xFFFF, EINVAL)));
+        };
+        let Ok(byte) = u8::try_from(unit16) else {
+            return Ok(Err(Failed(0xFFFF, crt_files::EILSEQ)));
+        };
+        let stream = self.writable(file)?;
+        match stream {
+            Stream::Input => Ok(Err(Failed(0xFFFF, EBADF))),
+            Stream::File(file) => match self.opened.write_wide(drive, file, &[unit16]) {
+                Ok(true) => Ok(Ok(u32::from(unit16))),
+                Ok(false) | Err(_) => Ok(Err(Failed(0xFFFF, EBADF))),
+            },
+            Stream::Output | Stream::Error => {
+                let orientation = if stream == Stream::Output {
+                    &mut self.output_orientation
+                } else {
+                    &mut self.error_orientation
+                };
+                if *orientation == 0 {
+                    *orientation = 2;
+                }
+                if *orientation == 1 {
+                    return Ok(Err(Failed(0xFFFF, EBADF)));
+                }
+                self.write_wide_captured(stream, &[byte])?;
+                Ok(Ok(u32::from(unit16)))
+            }
+        }
+    }
+
+    /// `getwchar`: one wide character from the standard input, or `WEOF` at
+    /// the end or on an orientation conflict — both answer `WEOF`.
+    pub(super) fn wide_character_stdin(&mut self) -> u32 {
+        if !self.input.orient(true) {
+            return 0xFFFF;
+        }
+        match self.input.character() {
+            Some(byte) => u32::from(byte),
+            None => 0xFFFF,
+        }
     }
 
     /// `perror`: the message, a colon and a space when there is a message,

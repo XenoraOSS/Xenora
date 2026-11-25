@@ -26,6 +26,8 @@ use std::collections::BTreeMap;
 /// errno.h values.
 pub(super) const ENOENT: u32 = 2;
 pub(super) const EBADF: u32 = 9;
+/// A wide character the C locale cannot write.
+pub(super) const EILSEQ: u32 = 42;
 pub(super) const ENOMEM: u32 = 12;
 pub(super) const EACCES: u32 = 13;
 pub(super) const EINVAL: u32 = 22;
@@ -108,6 +110,17 @@ fn parse_mode(mode: &[u8]) -> Option<Mode> {
     })
 }
 
+/// The first io operation on a stream fixes its orientation, as the CRT
+/// fixes it: byte or wide. The other kind then fails. Returns false for a
+/// conflict.
+fn orient(stream: &mut FileStream, wide: bool) -> bool {
+    let wanted = if wide { 2 } else { 1 };
+    if stream.orientation == 0 {
+        stream.orientation = wanted;
+    }
+    stream.orientation == wanted
+}
+
 struct FileStream {
     path: String,
     /// Where the next read, or the next write of a stream that does not
@@ -126,6 +139,9 @@ struct FileStream {
     /// The error indicator. Nothing sets it yet, as a write that fails
     /// reports its `errno` at once; `clearerr` clears it all the same.
     error: bool,
+    /// The C orientation: 0 unoriented, 1 byte, 2 wide. The first io
+    /// operation sets it; the other kind of operation then fails.
+    orientation: u8,
 }
 
 /// A file descriptor, as `_open` and `_fileno` hand out. 0, 1 and 2 are
@@ -202,6 +218,7 @@ impl FileStreams {
                 temporary: false,
                 eof: false,
                 error: false,
+                orientation: 0,
             },
         );
         Ok(file)
@@ -269,6 +286,7 @@ impl FileStreams {
                 temporary: true,
                 eof: false,
                 error: false,
+                orientation: 0,
             },
         );
         Ok(file)
@@ -286,6 +304,15 @@ impl FileStreams {
         if !stream.writable {
             return Err(EBADF);
         }
+        if !orient(stream, false) {
+            return Err(EBADF);
+        }
+        self.write_bytes(drive, file, bytes)
+    }
+
+    /// The write itself, the orientation already taken care of.
+    fn write_bytes(&mut self, drive: &mut ObjectState, file: u64, bytes: &[u8]) -> Result<(), u32> {
+        let stream = self.open.get_mut(&file).ok_or(EBADF)?;
         let stored: Vec<u8> = if stream.text {
             let mut stored = Vec::with_capacity(bytes.len());
             for &byte in bytes {
@@ -315,6 +342,81 @@ impl FileStreams {
 
     /// `fgets`: up to `limit` characters, ending after a newline. `None` is
     /// end of file with nothing read.
+    /// `fputws` on a file stream: every wide character converts in the C
+    /// locale — one byte of the same value, or nothing when it is above
+    /// 255, which fails the write. Returns false for an orientation
+    /// conflict, as the CRT returns `WEOF` for one.
+    pub(super) fn write_wide(
+        &mut self,
+        drive: &mut ObjectState,
+        file: u64,
+        wide: &[u16],
+    ) -> Result<bool, u32> {
+        let stream = self.open.get_mut(&file).ok_or(EBADF)?;
+        if !stream.writable {
+            return Err(EBADF);
+        }
+        if !orient(stream, true) {
+            return Ok(false);
+        }
+        let mut bytes = Vec::with_capacity(wide.len());
+        for unit in wide {
+            let Some(byte) = u8::try_from(*unit).ok() else {
+                return Err(EILSEQ);
+            };
+            bytes.push(byte);
+        }
+        self.write_bytes(drive, file, &bytes)?;
+        Ok(true)
+    }
+
+    /// `fgetws` on a file stream: bytes read as `fgets` reads them, every
+    /// one zero-extended to its wide character. `None` is end of file with
+    /// nothing read; the inner `Ok(false)` is an orientation conflict.
+    pub(super) fn read_wide_line(
+        &mut self,
+        drive: &ObjectState,
+        file: u64,
+        limit: usize,
+    ) -> Result<Option<Vec<u16>>, u32> {
+        // Orient before delegating, so a conflict does not consume input.
+        let stream = self.open.get_mut(&file).ok_or(EBADF)?;
+        // An orientation conflict reads nothing, exactly what end of file
+        // reads: `fgetws` answers null to both.
+        if !orient(stream, true) {
+            return Ok(None);
+        }
+        if !stream.readable {
+            return Err(EBADF);
+        }
+        let data = drive.drive_file(&stream.path).ok_or(EBADF)?;
+        let mut at = usize::try_from(stream.position).map_or(data.len(), |at| at.min(data.len()));
+        if limit == 0 {
+            let ended = at == data.len() || (stream.text && data[at] == CTRL_Z);
+            return Ok((!ended).then(Vec::new));
+        }
+        let mut line = Vec::new();
+        while line.len() < limit && at < data.len() {
+            let mut byte = data[at];
+            if stream.text {
+                if byte == CTRL_Z {
+                    break;
+                }
+                if byte == b'\r' && data.get(at + 1) == Some(&b'\n') {
+                    at += 1;
+                    byte = b'\n';
+                }
+            }
+            at += 1;
+            line.push(u16::from(byte));
+            if byte == b'\n' {
+                break;
+            }
+        }
+        stream.position = at as u64;
+        Ok((!line.is_empty()).then_some(line))
+    }
+
     /// The position of a stream: where its next read takes place, or its
     /// next write unless it appends.
     pub(super) fn tell(&self, file: u64) -> Result<u64, u32> {
@@ -515,6 +617,7 @@ impl FileStreams {
             temporary: flags & 0x40 != 0,
             eof: false,
             error: false,
+            orientation: 0,
         };
         if append && let Some(data) = drive.drive_file(&stream.path) {
             stream.position = data.len() as u64;
@@ -701,6 +804,9 @@ impl FileStreams {
     ) -> Result<Option<Vec<u8>>, u32> {
         let stream = self.open.get_mut(&file).ok_or(EBADF)?;
         if !stream.readable {
+            return Err(EBADF);
+        }
+        if !orient(stream, false) {
             return Err(EBADF);
         }
         let data = drive.drive_file(&stream.path).ok_or(EBADF)?;
