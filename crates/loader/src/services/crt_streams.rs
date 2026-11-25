@@ -163,7 +163,7 @@ pub(super) struct Failed<T>(pub T, pub u32);
 
 pub(super) type Outcome<T> = Result<Result<T, Failed<T>>, ExitReason>;
 
-fn fault(error: MemoryError) -> ExitReason {
+pub(super) fn fault(error: MemoryError) -> ExitReason {
     ExitReason::MemoryFault(error)
 }
 
@@ -182,7 +182,11 @@ fn drive_name(memory: &GuestMemory, name: u64) -> Result<Option<Option<String>>,
     Ok(Some(ObjectState::drive_path(&bytes)))
 }
 
-fn c_string(memory: &GuestMemory, address: u64, limit: u64) -> Result<Vec<u8>, MemoryError> {
+pub(super) fn c_string(
+    memory: &GuestMemory,
+    address: u64,
+    limit: u64,
+) -> Result<Vec<u8>, MemoryError> {
     let mut bytes = Vec::new();
     for offset in 0..limit {
         let at = address.checked_add(offset).ok_or(MemoryError::Overflow)?;
