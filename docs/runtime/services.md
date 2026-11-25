@@ -116,6 +116,28 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!_unlock_file` | `(stream: ptr) -> i32` | partial | -1 with errno EBADF for a null stream; stops the guest for a pointer that is no stream |
 | `kernel32.dll!GetLastError` | `() -> u32` | partial | never |
 | `kernel32.dll!SetLastError` | `(code: u32) -> void` | partial | never |
+| `kernel32.dll!MultiByteToWideChar` | `(codepage: u32, flags: u32, input: ptr, input_count: i32, output: ptr, output_count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for an unknown page, a zero or out-of-range byte count or a null input, with ERROR_INVALID_FLAGS for flags past MB_ERR_INVALID_CHARS, with ERROR_NO_UNICODE_TRANSLATION for malformed input under MB_ERR_INVALID_CHARS, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!WideCharToMultiByte` | `(codepage: u32, flags: u32, input: ptr, input_count: i32, output: ptr, output_count: i32, default_char: ptr, used_default: ptr) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for an unknown page, a zero or out-of-range count, a null input or default-character arguments under UTF-8, with ERROR_INVALID_FLAGS for flags past WC_ERR_INVALID_CHARS, with ERROR_NO_UNICODE_TRANSLATION for unrepresentable input under WC_ERR_INVALID_CHARS, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!GetACP` | `() -> u32` | partial | never |
+| `kernel32.dll!GetOEMCP` | `() -> u32` | partial | never |
+| `kernel32.dll!IsValidCodePage` | `(codepage: u32) -> bool32` | partial | never; false for a page Xenora does not serve |
+| `kernel32.dll!GetCPInfo` | `(codepage: u32, info: out<18>) -> bool32` | partial | false with ERROR_INVALID_PARAMETER for a page Xenora does not serve or a null output; stops the guest for memory that faults |
+| `kernel32.dll!GetSystemDefaultLCID` | `() -> u32` | partial | never |
+| `kernel32.dll!GetUserDefaultLCID` | `() -> u32` | partial | never |
+| `kernel32.dll!GetUserDefaultLangID` | `() -> u32` | partial | never |
+| `kernel32.dll!GetUserDefaultLocaleName` | `(output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!GetLocaleInfoW` | `(lcid: u32, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!GetLocaleInfoA` | `(lcid: u32, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!GetLocaleInfoEx` | `(name: ptr, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!lstrlenA` | `(text: ptr) -> i32` | partial | never |
+| `kernel32.dll!lstrlenW` | `(text: ptr) -> i32` | partial | never |
+| `kernel32.dll!lstrcpyA` | `(destination: ptr, source: ptr) -> ptr` | partial | never |
+| `kernel32.dll!lstrcmpA` | `(left: ptr, right: ptr) -> i32` | partial | never |
+| `kernel32.dll!lstrcmpiA` | `(left: ptr, right: ptr) -> i32` | partial | never |
+| `kernel32.dll!CompareStringA` | `(lcid: u32, flags: u32, left: ptr, left_count: i32, right: ptr, right_count: i32) -> i32` | partial | sets ERROR_INVALID_PARAMETER for another locale or unsupported flags |
+| `kernel32.dll!CompareStringW` | `(lcid: u32, flags: u32, left: ptr, left_count: i32, right: ptr, right_count: i32) -> i32` | partial | sets ERROR_INVALID_PARAMETER for another locale or unsupported flags |
+| `kernel32.dll!GetStringTypeW` | `(kind: u32, source: ptr, count: i32, output: ptr) -> bool32` | partial | sets ERROR_INVALID_PARAMETER for CT_CTYPE2 and CT_CTYPE3 |
+| `kernel32.dll!LCMapStringW` | `(lcid: u32, flags: u32, source: ptr, count: i32, destination: ptr, destination_count: i32) -> i32` | partial | sets ERROR_INVALID_PARAMETER for unsupported flags or another locale, ERROR_INSUFFICIENT_BUFFER for a small output |
 | `kernel32.dll!GetStdHandle` | `(kind: u32) -> u64` | partial | sets ERROR_INVALID_PARAMETER for an unknown device |
 | `kernel32.dll!SetStdHandle` | `(kind: u32, handle: u64) -> bool32` | partial | sets ERROR_INVALID_PARAMETER for an unknown device |
 | `kernel32.dll!GetConsoleCP` | `() -> u32` | partial | never |
