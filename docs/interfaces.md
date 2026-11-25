@@ -620,8 +620,6 @@ and error indicators. Nothing raises the error indicator yet, as a failed
 read or write reports its `errno` at the call. `clearerr` is `implemented`;
 `fopen_s` is `partial` for the unmodelled handler.
 
-||||||| parent of c43c9fe (runtime: the C time services of package 5 of #459)
-=======
 **The C time services (#459, package 5).** `_gmtime64`/`gmtime`,
 `_localtime64`/`localtime`, `_mktime64`/`mktime`, `asctime`, `_ctime64`/
 `ctime`, `asctime_s`, `_ctime64_s`/`ctime_s`, `clock`, `_difftime64`/
@@ -639,7 +637,24 @@ after 3000 are `EINVAL`, as the Microsoft pages say. All `implemented`.
 `GetDateFormatW` and `GetTimeFormatW` belong to the locale package and are
 not served.
 
->>>>>>> c43c9fe (runtime: the C time services of package 5 of #459)
+||||||| parent of 981871e (runtime: the wide conversions and classification of package 6 of #459)
+=======
+**The wide conversions and classification (#459, package 6, first
+part).** `mbtowc`/`wctomb`/`mblen`/`mbstowcs`/`wcstombs`/`mbsrtowcs`/
+`wcsrtombs` through `api-ms-win-crt-convert-l1-1-0.dll`, and `iswctype`,
+`iswalpha` and its siblings, `towlower`/`towupper`, `wcsncat` and
+`_wcsdup` through `api-ms-win-crt-string-l1-1-0.dll`. The C locale is the
+only one the emulator has, and its multibyte encoding is documented as
+the answer: every byte is the wide character of the same value,
+zero-extended, and a wide character above 255 fails the conversion with
+`EILSEQ`. The restartable forms have no shift state to keep and say so.
+The classification is the ASCII table, through `iswctype`'s bits — the
+form mingw-w64 actually imports, as the `isw*` macros inline to it. All
+`implemented`. The wide stream operations and the wide printf forms are
+the rest of package 6 and are not served yet: they need the stream
+orientation machinery, which is their own work.
+
+>>>>>>> 981871e (runtime: the wide conversions and classification of package 6 of #459)
 ### CRT integer conversion
 
 UCRT and the CRT conversion API set expose strtol, strtoul, wcstol, and

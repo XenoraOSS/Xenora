@@ -555,6 +555,150 @@ service kernel32.dll FileTimeToLocalFileTime(input: ptr, output: ptr) -> u32
     ref fileapi.h FileTimeToLocalFileTime
     test c_time_formats_and_measures_as_the_crt_does
 
+service ucrtbase.dll mbtowc(wide: ptr, text: ptr, count: u64) -> i32
+    handler mbtowc
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    fails -1 with errno EILSEQ when count is 0; stops the guest for memory it cannot read
+    ref stdlib.h mbtowc
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll wctomb(text: ptr, wide: u32) -> i32
+    handler wctomb
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    fails -1 with errno EILSEQ for a wide character above 255
+    ref stdlib.h wctomb
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll mblen(text: ptr, count: u64) -> i32
+    handler mblen
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    fails -1 when count is 0
+    ref stdlib.h mblen
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll mbstowcs(wide: ptr, text: ptr, count: u64) -> u64
+    handler mbstowcs
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    fails never in the C locale; a null destination is the length query
+    ref stdlib.h mbstowcs
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll wcstombs(text: ptr, wide: ptr, count: u64) -> u64
+    handler wcstombs
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    fails (size_t)-1 with errno EILSEQ for a wide character above 255
+    ref stdlib.h wcstombs
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll mbsrtowcs(wide: ptr, source: ptr, count: u64, state: ptr) -> u64
+    handler mbsrtowcs
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    fails never in the C locale; no shift state exists
+    ref wchar.h mbsrtowcs
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll wcsrtombs(text: ptr, source: ptr, count: u64, state: ptr) -> u64
+    handler wcsrtombs
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    fails (size_t)-1 with errno EILSEQ for a wide character above 255
+    ref wchar.h wcsrtombs
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll iswctype(wide: u32, mask: u32) -> i32
+    handler iswctype
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h iswctype
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll iswalpha(wide: u32) -> i32
+    handler iswalpha
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h iswalpha
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll iswdigit(wide: u32) -> i32
+    handler iswdigit
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h iswdigit
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll iswalnum(wide: u32) -> i32
+    handler iswalnum
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h iswalnum
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll iswlower(wide: u32) -> i32
+    handler iswlower
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h iswlower
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll iswupper(wide: u32) -> i32
+    handler iswupper
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h iswupper
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll iswspace(wide: u32) -> i32
+    handler iswspace
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h iswspace
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll towlower(wide: u32) -> u32
+    handler towlower
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h towlower
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll towupper(wide: u32) -> u32
+    handler towupper
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never
+    ref wctype.h towupper
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll wcsncat(start: ptr, end: ptr, count: u64) -> ptr
+    handler wcsncat
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails never; stops the guest for memory it cannot write
+    ref wchar.h wcsncat
+    test wide_characters_convert_in_the_c_locale
+
+service ucrtbase.dll _wcsdup(text: ptr) -> ptr
+    handler _wcsdup
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    fails null when the copy cannot be allocated
+    ref wchar.h _wcsdup
+    test wide_characters_convert_in_the_c_locale
+
 service ucrtbase.dll perror(message: ptr) -> void
     handler perror
     status partial

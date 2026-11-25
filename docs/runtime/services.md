@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 145 |
-| Generated adapters | 145 |
-| Unique handler implementations | 138 |
-| Implemented | 50 |
+| Services with a declared ABI | 163 |
+| Generated adapters | 163 |
+| Unique handler implementations | 156 |
+| Implemented | 68 |
 | Partial | 93 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 145 |
-| API-set aliases (not services) | 145 |
+| Conformance-tested through guest dispatch | 163 |
+| API-set aliases (not services) | 163 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -82,6 +82,24 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!ctime_s` | `(buffer: ptr, size: u64, time: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
 | `ucrtbase.dll!difftime` | `(time1: u64, time2: u64) -> f64` | implemented | never |
 | `kernel32.dll!FileTimeToLocalFileTime` | `(input: ptr, output: ptr) -> u32` | partial | never in range; the machine's local time is UTC, so the conversion is the identity; guest fault on an invalid pointer |
+| `ucrtbase.dll!mbtowc` | `(wide: ptr, text: ptr, count: u64) -> i32` | implemented | -1 with errno EILSEQ when count is 0; stops the guest for memory it cannot read |
+| `ucrtbase.dll!wctomb` | `(text: ptr, wide: u32) -> i32` | implemented | -1 with errno EILSEQ for a wide character above 255 |
+| `ucrtbase.dll!mblen` | `(text: ptr, count: u64) -> i32` | implemented | -1 when count is 0 |
+| `ucrtbase.dll!mbstowcs` | `(wide: ptr, text: ptr, count: u64) -> u64` | implemented | never in the C locale; a null destination is the length query |
+| `ucrtbase.dll!wcstombs` | `(text: ptr, wide: ptr, count: u64) -> u64` | implemented | (size_t)-1 with errno EILSEQ for a wide character above 255 |
+| `ucrtbase.dll!mbsrtowcs` | `(wide: ptr, source: ptr, count: u64, state: ptr) -> u64` | implemented | never in the C locale; no shift state exists |
+| `ucrtbase.dll!wcsrtombs` | `(text: ptr, source: ptr, count: u64, state: ptr) -> u64` | implemented | (size_t)-1 with errno EILSEQ for a wide character above 255 |
+| `ucrtbase.dll!iswctype` | `(wide: u32, mask: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswalpha` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswdigit` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswalnum` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswlower` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswupper` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswspace` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!towlower` | `(wide: u32) -> u32` | implemented | never |
+| `ucrtbase.dll!towupper` | `(wide: u32) -> u32` | implemented | never |
+| `ucrtbase.dll!wcsncat` | `(start: ptr, end: ptr, count: u64) -> ptr` | implemented | never; stops the guest for memory it cannot write |
+| `ucrtbase.dll!_wcsdup` | `(text: ptr) -> ptr` | implemented | null when the copy cannot be allocated |
 | `ucrtbase.dll!perror` | `(message: ptr) -> void` | partial | never |
 | `ucrtbase.dll!fputc` | `(character: i32, stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
 | `ucrtbase.dll!strerror` | `(code: i32) -> ptr` | partial | never; the message is valid until the next call |

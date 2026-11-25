@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 145] = [
+pub static SERVICES: [ServiceMetadata; 163] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -712,6 +712,204 @@ pub static SERVICES: [ServiceMetadata; 145] = [
         failure: "never in range; the machine's local time is UTC, so the conversion is the identity; guest fault on an invalid pointer",
         reference: "fileapi.h FileTimeToLocalFileTime",
         tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "mbtowc",
+        parameters: &[Parameter { name: "wide", kind: "ptr" }, Parameter { name: "text", kind: "ptr" }, Parameter { name: "count", kind: "u64" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll"],
+        failure: "-1 with errno EILSEQ when count is 0; stops the guest for memory it cannot read",
+        reference: "stdlib.h mbtowc",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "wctomb",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "wide", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll"],
+        failure: "-1 with errno EILSEQ for a wide character above 255",
+        reference: "stdlib.h wctomb",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "mblen",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "count", kind: "u64" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll"],
+        failure: "-1 when count is 0",
+        reference: "stdlib.h mblen",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "mbstowcs",
+        parameters: &[Parameter { name: "wide", kind: "ptr" }, Parameter { name: "text", kind: "ptr" }, Parameter { name: "count", kind: "u64" }],
+        result: "u64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll"],
+        failure: "never in the C locale; a null destination is the length query",
+        reference: "stdlib.h mbstowcs",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "wcstombs",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "wide", kind: "ptr" }, Parameter { name: "count", kind: "u64" }],
+        result: "u64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll"],
+        failure: "(size_t)-1 with errno EILSEQ for a wide character above 255",
+        reference: "stdlib.h wcstombs",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "mbsrtowcs",
+        parameters: &[Parameter { name: "wide", kind: "ptr" }, Parameter { name: "source", kind: "ptr" }, Parameter { name: "count", kind: "u64" }, Parameter { name: "state", kind: "ptr" }],
+        result: "u64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll"],
+        failure: "never in the C locale; no shift state exists",
+        reference: "wchar.h mbsrtowcs",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "wcsrtombs",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "source", kind: "ptr" }, Parameter { name: "count", kind: "u64" }, Parameter { name: "state", kind: "ptr" }],
+        result: "u64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll"],
+        failure: "(size_t)-1 with errno EILSEQ for a wide character above 255",
+        reference: "wchar.h wcsrtombs",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "iswctype",
+        parameters: &[Parameter { name: "wide", kind: "u32" }, Parameter { name: "mask", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h iswctype",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "iswalpha",
+        parameters: &[Parameter { name: "wide", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h iswalpha",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "iswdigit",
+        parameters: &[Parameter { name: "wide", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h iswdigit",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "iswalnum",
+        parameters: &[Parameter { name: "wide", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h iswalnum",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "iswlower",
+        parameters: &[Parameter { name: "wide", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h iswlower",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "iswupper",
+        parameters: &[Parameter { name: "wide", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h iswupper",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "iswspace",
+        parameters: &[Parameter { name: "wide", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h iswspace",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "towlower",
+        parameters: &[Parameter { name: "wide", kind: "u32" }],
+        result: "u32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h towlower",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "towupper",
+        parameters: &[Parameter { name: "wide", kind: "u32" }],
+        result: "u32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "wctype.h towupper",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "wcsncat",
+        parameters: &[Parameter { name: "start", kind: "ptr" }, Parameter { name: "end", kind: "ptr" }, Parameter { name: "count", kind: "u64" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "never; stops the guest for memory it cannot write",
+        reference: "wchar.h wcsncat",
+        tests: &["wide_characters_convert_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_wcsdup",
+        parameters: &[Parameter { name: "text", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll"],
+        failure: "null when the copy cannot be allocated",
+        reference: "wchar.h _wcsdup",
+        tests: &["wide_characters_convert_in_the_c_locale"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -2172,6 +2370,167 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a1 = call.u64(1)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: u32 = handlers::file_time_to_local_file_time(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "mbtowc", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::mbtowc(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "wctomb", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::wctomb(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "mblen", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::mblen(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "mbstowcs", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::mbstowcs(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "wcstombs", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::wcstombs(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "mbsrtowcs", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.u64(3)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::mbsrtowcs(&mut context, a0, a1, a2, a3)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "wcsrtombs", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.u64(3)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::wcsrtombs(&mut context, a0, a1, a2, a3)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "iswctype", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iswctype(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "iswalpha", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iswalpha(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "iswdigit", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iswdigit(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "iswalnum", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iswalnum(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "iswlower", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iswlower(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "iswupper", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iswupper(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "iswspace", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iswspace(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "towlower", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::towlower(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "towupper", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::towupper(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "wcsncat", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::wcsncat(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_wcsdup", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_wcsdup(&mut context, a0)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();
