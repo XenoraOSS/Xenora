@@ -119,10 +119,7 @@ impl CrtStartup {
     /// Guest address of `_timezone`, allocated from the process heap on first
     /// use. The legacy variable is the seconds west of UTC of the host time
     /// zone; the runtime clock is documented UTC, so the cell stays zero.
-    pub(super) fn timezone_address(
-        &mut self,
-        memory: &mut GuestMemory,
-    ) -> Result<u64, ExitReason> {
+    pub(super) fn timezone_address(&mut self, memory: &mut GuestMemory) -> Result<u64, ExitReason> {
         match self.timezone {
             Some(base) => Ok(base),
             None => {

@@ -13,7 +13,7 @@ use xenora_loader::cpu::{CpuState, ExitReason, Register};
 use xenora_loader::dbt::DbtEngine;
 use xenora_loader::import_table::{ImportName, ImportTableError, MAX_IMPORTS, parse_imports};
 use xenora_loader::imports::{
-    ImportError, ImportRegistry, RegistryError, ServiceStatus, Win64Args,
+    IMPORT_TRAMPOLINE_BASE_VA, ImportError, ImportRegistry, RegistryError, ServiceStatus, Win64Args,
 };
 use xenora_loader::memory::{GuestMemory, MemoryPermissions};
 use xenora_loader::pe::ParsedPe;
@@ -144,6 +144,9 @@ struct Guest {
     memory: GuestMemory,
     clock: Arc<MockClock>,
     state: Arc<ServicesState>,
+    /// IAT slot RVAs in import order: the table services, `_errno`, then
+    /// the legacy data symbols.
+    slots: Vec<u32>,
     teb: u64,
     /// Upper halves and XMM lanes of unrelated arguments hold this pattern.
     xmm: [u128; 4],
@@ -156,6 +159,9 @@ impl Guest {
             .map(|service| (service.library, Symbol::Name(service.symbol)))
             .collect();
         imports.push(("ucrtbase.dll", Symbol::Name("_errno")));
+        for symbol in LEGACY_DATA_SYMBOLS {
+            imports.push(("msvcrt.dll", Symbol::Name(symbol)));
+        }
         let image = build(&imports);
         let pe = ParsedPe::parse(&image.bytes).unwrap();
         let mut memory = pe.load_into_memory(&image.bytes).unwrap().memory;
@@ -169,7 +175,7 @@ impl Guest {
         let bound = registry
             .bind_imports(&pe, &image.bytes, BASE, &mut memory)
             .unwrap();
-        assert_eq!(bound, SERVICES.len() + 1);
+        assert_eq!(bound, SERVICES.len() + 1 + LEGACY_DATA_SYMBOLS.len());
         let mut engine = DbtEngine::new(256 * 1024).unwrap();
         engine.set_import_registry(registry);
         Self {
@@ -177,6 +183,7 @@ impl Guest {
             memory,
             clock,
             state,
+            slots: image.slots,
             teb: 0,
             xmm: [0xAAAA_BBBB_CCCC_DDDD_EEEE_FFFF_0123_4567; 4],
         }
@@ -4311,6 +4318,18 @@ fn arguments_are_assigned_by_position_and_read_the_stack_after_the_fourth() {
 // --- registry ----------------------------------------------------------------
 
 /// Bits above an `int` argument are not part of it.
+/// The legacy CRT data imports the harness image carries after `_errno`,
+/// in this order (#643).
+const LEGACY_DATA_SYMBOLS: [&str; 7] = [
+    "__argc",
+    "__argv",
+    "_environ",
+    "__initenv",
+    "_fmode",
+    "_commode",
+    "_timezone",
+];
+
 const JUNK: u64 = 0xFFFF_FFFF_0000_0000;
 /// The low 32 bits of an `int` result of -1.
 const MINUS_ONE: u64 = 0xFFFF_FFFF;
@@ -4581,6 +4600,61 @@ fn legacy_amsg_exit_ends_the_process() {
         ExitReason::ProcessExit(7),
         "the first exit status wins"
     );
+}
+
+#[test]
+fn legacy_data_imports_bind_the_crt_variable_cells() {
+    let mut guest = Guest::new();
+    let supplied = ["prog.exe", "alpha", "beta"];
+    guest.state.set_program_arguments(&supplied).unwrap();
+    // The slot of each data import, in the order of LEGACY_DATA_SYMBOLS.
+    let base = SERVICES.len() + 1;
+    let cell = |guest: &Guest, position: usize| {
+        guest
+            .memory
+            .read_u64(BASE + u64::from(guest.slots[base + position]))
+            .unwrap()
+    };
+    let argc = cell(&guest, 0);
+    let argv = cell(&guest, 1);
+    let environ = cell(&guest, 2);
+    let initenv = cell(&guest, 3);
+    let fmode = cell(&guest, 4);
+    let commode = cell(&guest, 5);
+    let timezone = cell(&guest, 6);
+    // None of them is a dispatch trampoline: a data import binds the
+    // variable itself, below the trampoline range.
+    for address in [argc, argv, environ, initenv, fmode, commode, timezone] {
+        assert!(address != 0, "bound");
+        assert!(
+            address < IMPORT_TRAMPOLINE_BASE_VA,
+            "{address:#x} is no trampoline"
+        );
+    }
+    // `_fmode` starts as _O_TEXT, `_commode` and `_timezone` as zero.
+    assert_eq!(guest.memory.read_u32(fmode).unwrap(), 0x4000);
+    assert_eq!(guest.memory.read_u32(commode).unwrap(), 0);
+    assert_eq!(guest.memory.read_u32(timezone).unwrap(), 0);
+    // `_fmode` and `_commode` are adjacent ints, `_commode` after `_fmode`.
+    assert_eq!(commode, fmode + 4);
+    // Before the runtime configures the arguments the cells are zero.
+    assert_eq!(guest.memory.read_u32(argc).unwrap(), 0);
+    assert_eq!(guest.memory.read_u64(argv).unwrap(), 0);
+
+    // The modern configuration fills the same cells the data imports bound.
+    assert_eq!(guest.call("_configure_narrow_argv", &[1]) & 0xFFFF_FFFF, 0);
+    let modern_argv = guest.call("__p___argv", &[]);
+    let modern_argc = guest.call("__p___argc", &[]);
+    assert_eq!(argv, modern_argv, "the data import is the modern cell");
+    assert_eq!(argc, modern_argc);
+    let table = guest.memory.read_u64(argv).unwrap();
+    assert_ne!(table, 0);
+    assert_eq!(guest.memory.read_u32(argc).unwrap(), 3);
+    // The modern accessor and the data cell read one table.
+    assert_eq!(guest.memory.read_u64(modern_argv).unwrap(), table);
+    // `_environ` and `__initenv` bind one cell, the one `_initialize_narrow_environment` fills.
+    assert_eq!(environ, initenv);
+    assert_eq!(environ, guest.call("__p__environ", &[]));
 }
 
 /// The module and symbol pairs a program built with mingw-w64 14.0.0 (UCRT)

@@ -565,21 +565,30 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
         ("__initenv", crt_arguments::Variable::Environ),
     ] {
         let s = state.clone();
-        registry.register_data("msvcrt.dll", symbol, ServiceStatus::Partial, move |memory| {
-            cell_memory(s.crt_arguments().address(memory, variable))
-        });
+        registry.register_data(
+            "msvcrt.dll",
+            symbol,
+            ServiceStatus::Partial,
+            move |memory| cell_memory(s.crt_arguments().address(memory, variable)),
+        );
     }
     for (symbol, index) in [("_fmode", 0_u64), ("_commode", 1_u64)] {
         let s = state.clone();
-        registry.register_data("msvcrt.dll", symbol, ServiceStatus::Partial, move |memory| {
-            cell_memory(s.crt_startup().file_mode_address(memory, index))
-        });
+        registry.register_data(
+            "msvcrt.dll",
+            symbol,
+            ServiceStatus::Partial,
+            move |memory| cell_memory(s.crt_startup().file_mode_address(memory, index)),
+        );
     }
     {
         let s = state.clone();
-        registry.register_data("msvcrt.dll", "_timezone", ServiceStatus::Partial, move |memory| {
-            cell_memory(s.crt_startup().timezone_address(memory))
-        });
+        registry.register_data(
+            "msvcrt.dll",
+            "_timezone",
+            ServiceStatus::Partial,
+            move |memory| cell_memory(s.crt_startup().timezone_address(memory)),
+        );
     }
 
     let s = state.clone();
