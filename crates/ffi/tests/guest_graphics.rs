@@ -4037,3 +4037,250 @@ fn original_guest_nested_views_parent_bounds_and_independent_root_lifetime() {
         );
     }
 }
+
+fn guest_sampler_handle_table(
+    guest: &mut GuestScript,
+    views: [Option<u64>; 2],
+    samplers: [Option<u64>; 2],
+) -> u64 {
+    let table = guest.bytes(&[0; 32]);
+    for (slot, handle) in views.into_iter().chain(samplers).enumerate() {
+        if let Some(handle) = handle {
+            guest.copy_result(handle, table + slot as u64 * 8);
+        }
+    }
+    table
+}
+
+struct GuestSamplerScene {
+    device: u64,
+    queue: u64,
+    allocators: [u64; 2],
+    lists: [u64; 2],
+    views: [u64; 2],
+    narrow: u64,
+    targets: [u64; 2],
+    pipeline: u64,
+    vb: u64,
+    cb: u64,
+}
+fn guest_sampler_scene(guest: &mut GuestScript) -> GuestSamplerScene {
+    let device = guest.handle(1, &[]);
+    let queue = guest.handle(2, &[H(device)]);
+    let allocators = [0, 1].map(|_| guest.handle(3, &[H(device)]));
+    let lists = allocators.map(|a| guest.handle(4, &[H(device), H(a)]));
+    let textures = [0, 1].map(|_| guest.handle(6, &[H(device), I(4), I(4), I(3), I(COPY_DEST)]));
+    let views = textures.map(|t| guest.handle(37, &[H(device), H(t), I(1), I(2), I(0)]));
+    let narrow = guest.handle(37, &[H(device), H(textures[1]), I(1), I(1), I(0)]);
+    // Original all-four-pairs PS: A/s1.r, B/s0.g, A/s0.b, B/s1.a.
+    for (texture, mip0, mip1) in [
+        (textures[0], [18u8, 31, 47, 255], [72, 83, 97, 255]),
+        (textures[1], [110u8, 127, 139, 211], [152, 167, 181, 199]),
+    ] {
+        let mut bytes = [3u8, 5, 7, 11].repeat(16); // root mip0 is a decoy
+        bytes.extend(mip0.repeat(4));
+        bytes.extend(mip1);
+        let address = guest.bytes(&bytes);
+        guest.ok(9, &[H(texture), I(0), I(address), I(84)]);
+        guest.barrier(lists[0], texture, COPY_DEST, PIXEL_RESOURCE);
+    }
+    let targets = [0, 1].map(|_| guest.handle(6, &[H(device), I(2), I(2), I(1), I(RENDER_TARGET)]));
+    let vb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+    let cb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+    let positions = guest.bytes(&floats(&[
+        [-1., -1., 0., 1.],
+        [3., -1., 0., 1.],
+        [-1., 3., 0., 1.],
+    ]));
+    let attributes = guest.bytes(&floats(&[[0.5, 0.5, 0., 1.]; 3]));
+    guest.ok(9, &[H(vb), I(0), I(positions), I(48)]);
+    guest.ok(9, &[H(cb), I(0), I(attributes), I(48)]);
+    guest.barrier(lists[0], vb, COPY_DEST, VERTEX_BUFFER);
+    guest.barrier(lists[0], cb, COPY_DEST, VERTEX_BUFFER);
+    let vs = include_bytes!("../../../fixtures/rdna2/x9-varying-vs.bin");
+    let ps = include_bytes!("../../../fixtures/rdna2/x9-multislot-ps.bin");
+    let va = guest.bytes(vs);
+    let pa = guest.bytes(ps);
+    let pipeline = guest.handle(
+        8,
+        &[
+            H(device),
+            I(va),
+            I(vs.len() as u64),
+            I(pa),
+            I(ps.len() as u64),
+        ],
+    );
+    GuestSamplerScene {
+        device,
+        queue,
+        allocators,
+        lists,
+        views,
+        narrow,
+        targets,
+        pipeline,
+        vb,
+        cb,
+    }
+}
+fn guest_sampler_draw_setup(
+    guest: &mut GuestScript,
+    scene: &GuestSamplerScene,
+    list: u64,
+    target: u64,
+) {
+    guest.targets(list, &[target]);
+    guest.ok(17, &[H(list), I(2), I(2)]);
+    guest.ok(14, &[H(list), H(scene.pipeline)]);
+    guest.ok(18, &[H(list), H(scene.vb), I(0), I(16)]);
+    guest.ok(19, &[H(list), H(scene.cb), I(0), I(16)]);
+}
+fn guest_sampler_column(guest: &mut GuestScript, list: u64, column: u64) {
+    guest.ok(
+        22,
+        &[
+            H(list),
+            I(0),
+            I(0),
+            I(0),
+            I(15),
+            I(0),
+            I(0),
+            I(1),
+            I(column),
+            I(0),
+            I(1),
+            I(2),
+        ],
+    );
+    guest.ok(23, &[H(list), I(3), I(1), I(0), I(0)]);
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_sampler_handles_snapshot_across_draws_lists_and_retirement() {
+    for (asynchronous, queued) in [(false, false), (true, false), (true, true)] {
+        let mut guest = GuestScript::new();
+        let scene = guest_sampler_scene(&mut guest);
+        let zero = guest.handle(46, &[H(scene.device), I(0), I(0), I(1f32.to_bits() as u64)]);
+        let one = guest.handle(46, &[H(scene.device), I(1), I(0), I(1f32.to_bits() as u64)]);
+        // No explicit mip: clamp sample_lz to relative mip1 through min/maxLOD.
+        let clamped = guest.handle(
+            46,
+            &[
+                H(scene.device),
+                I(u32::MAX as u64),
+                I(1f32.to_bits() as u64),
+                I(1f32.to_bits() as u64),
+            ],
+        );
+        for index in 0..2 {
+            let list = scene.lists[index];
+            guest_sampler_draw_setup(&mut guest, &scene, list, scene.targets[index]);
+            for column in 0..2 {
+                let pair = match (index, column) {
+                    (0, 0) | (1, 1) => [Some(zero), Some(one)],
+                    (0, 1) => [Some(one), Some(zero)],
+                    _ => [Some(clamped), Some(zero)],
+                };
+                let table = guest_sampler_handle_table(&mut guest, scene.views.map(Some), pair);
+                guest.ok(48, &[H(list), I(table)]);
+                guest_sampler_column(&mut guest, list, column);
+            }
+            guest.barrier(list, scene.targets[index], RENDER_TARGET, COPY_SOURCE);
+        }
+        // Recorded commands own values, not these handles. Both lists already
+        // contain zero/clamped snapshots when their handles disappear.
+        guest.ok(47, &[H(zero)]);
+        guest.ok(47, &[H(clamped)]);
+        let mut readbacks = Vec::new();
+        for index in 0..2 {
+            let list = scene.lists[index];
+            if asynchronous && index == 0 {
+                guest.ok(12, &[H(list)]);
+                let receipt = guest.handle(30, &[H(scene.queue), H(list)]);
+                guest.ok(47, &[H(one)]); // destruction after submit is permitted
+                guest.ok(11, &[H(list), H(scene.allocators[index])]);
+                guest.call(32, &[H(receipt)], 0, Some(1));
+                guest.ok(33, &[H(receipt)]);
+            } else {
+                finish_guest_submission(&mut guest, scene.queue, list, asynchronous, 2);
+                guest.ok(11, &[H(list), H(scene.allocators[index])]);
+                if index == 0 {
+                    guest.ok(47, &[H(one)]);
+                }
+            }
+            let expected = if index == 0 {
+                [72, 127, 47, 199, 18, 167, 97, 211].repeat(2)
+            } else {
+                [18, 167, 97, 211, 72, 127, 47, 199].repeat(2)
+            };
+            let output = guest.bytes(&[0xa5; 32]);
+            guest.ok(10, &[H(scene.targets[index]), I(0), I(output + 8), I(16)]);
+            readbacks.push((output, expected));
+        }
+        let final_pixels = readbacks.last().unwrap().1.clone();
+        check_original_guest_backend(guest, asynchronous, queued, &readbacks, 2, &final_pixels);
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_sampler_handles_invalid_second_is_atomic_and_lod_is_view_relative() {
+    for (asynchronous, queued) in [(false, false), (true, false), (true, true)] {
+        let mut guest = GuestScript::new();
+        let scene = guest_sampler_scene(&mut guest);
+        let zero = guest.handle(46, &[H(scene.device), I(0), I(0), I(1f32.to_bits() as u64)]);
+        let one = guest.handle(46, &[H(scene.device), I(1), I(0), I(1f32.to_bits() as u64)]);
+        let stale = guest.handle(46, &[H(scene.device), I(0), I(0), I(0)]);
+        guest.ok(47, &[H(stale)]);
+        let list = scene.lists[0];
+        guest_sampler_draw_setup(&mut guest, &scene, list, scene.targets[0]);
+        let good =
+            guest_sampler_handle_table(&mut guest, scene.views.map(Some), [Some(zero), Some(one)]);
+        guest.ok(48, &[H(list), I(good)]);
+        guest_sampler_column(&mut guest, list, 0);
+        // Valid changed sampler0 followed by stale sampler1 must not partially
+        // replace the prior table. Column1 remains identical to column0.
+        let bad =
+            guest_sampler_handle_table(&mut guest, scene.views.map(Some), [Some(one), Some(stale)]);
+        guest.call(48, &[H(list), I(bad)], 2, Some(u64::MAX));
+        guest_sampler_column(&mut guest, list, 1);
+        guest.barrier(list, scene.targets[0], RENDER_TARGET, COPY_SOURCE);
+        finish_guest_submission(&mut guest, scene.queue, list, asynchronous, 2);
+        guest.ok(11, &[H(list), H(scene.allocators[0])]);
+        let expected = [72, 127, 47, 199].repeat(4);
+        let mut readbacks = Vec::new();
+        let before = guest.bytes(&[0xa5; 32]);
+        guest.ok(10, &[H(scene.targets[0]), I(0), I(before + 8), I(16)]);
+        readbacks.push((before, expected.clone()));
+        // A valid sampler handle can still be invalid for a particular pair:
+        // root has mip2, but narrow view has only relative mip0. Descriptor
+        // binding is valid; draw preparation rejects relative mip1 atomically.
+        guest.barrier(list, scene.targets[0], COPY_SOURCE, RENDER_TARGET);
+        guest_sampler_draw_setup(&mut guest, &scene, list, scene.targets[0]);
+        let narrow = guest_sampler_handle_table(
+            &mut guest,
+            [Some(scene.views[0]), Some(scene.narrow)],
+            [Some(zero), Some(one)],
+        );
+        guest.ok(48, &[H(list), I(narrow)]);
+        guest_sampler_column(&mut guest, list, 0);
+        guest.barrier(list, scene.targets[0], RENDER_TARGET, COPY_SOURCE);
+        guest.ok(12, &[H(list)]);
+        guest.call(
+            if asynchronous { 30 } else { 25 },
+            &[H(scene.queue), H(list)],
+            2,
+            Some(u64::MAX),
+        );
+        guest.ok(11, &[H(list), H(scene.allocators[0])]);
+        let after = guest.bytes(&[0xa5; 32]);
+        guest.ok(10, &[H(scene.targets[0]), I(0), I(after + 8), I(16)]);
+        readbacks.push((after, expected.clone()));
+        guest.ok(47, &[H(zero)]);
+        guest.ok(47, &[H(one)]);
+        check_original_guest_backend(guest, asynchronous, queued, &readbacks, 1, &expected);
+    }
+}

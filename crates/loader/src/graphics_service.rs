@@ -88,10 +88,10 @@ pub fn graphics_call_v1(
     let opcode = words[1];
     let used = match opcode {
         1 => 0,
-        2 | 3 | 12 | 26 | 27 | 31 | 32 | 33 | 36 | 38 => 1,
-        4 | 11 | 14 | 25 | 28 | 30 | 34 | 39 => 2,
+        2 | 3 | 12 | 26 | 27 | 31 | 32 | 33 | 36 | 38 | 47 => 1,
+        4 | 11 | 14 | 25 | 28 | 30 | 34 | 39 | 48 => 2,
         5 | 7 | 15 | 17 | 29 | 41 | 42 => 3,
-        9 | 10 | 13 | 16 | 18 | 19 | 20 | 35 => 4,
+        9 | 10 | 13 | 16 | 18 | 19 | 20 | 35 | 46 => 4,
         6 | 8 | 21 | 23 | 37 | 45 => 5,
         24 | 40 | 43 => 6,
         44 => 11,
@@ -104,7 +104,7 @@ pub fn graphics_call_v1(
     memory
         .validate_write_range(result, 8)
         .map_err(ExitReason::MemoryFault)?;
-    if ((1..=8).contains(&opcode) || opcode == 37 || opcode == 40 || opcode == 45)
+    if ((1..=8).contains(&opcode) || opcode == 37 || opcode == 40 || opcode == 45 || opcode == 46)
         && graphics.guest_object_count() >= MAX_GUEST_OBJECTS
     {
         return Ok(STATUS_GRAPHICS_ERROR);
@@ -118,7 +118,8 @@ pub fn graphics_call_v1(
         || opcode == 41
         || opcode == 42
         || opcode == 43
-        || opcode == 44)
+        || opcode == 44
+        || opcode == 48)
         && graphics
             .guest_command_count(args.handle(0))
             .is_some_and(|count| count >= MAX_GUEST_COMMANDS)
@@ -245,6 +246,30 @@ pub fn graphics_call_v1(
                     clears.push(clear.to_le_bytes());
                 }
                 graphics.cmd_set_color_targets(args.handle(0), &targets, &clears)?;
+            }
+            46 => {
+                let mip = args.u32(1)?;
+                let desc = SamplerDesc {
+                    explicit_mip: (mip != u32::MAX).then_some(mip),
+                    min_lod: args.float(2)?,
+                    max_lod: args.float(3)?,
+                    ..SamplerDesc::nearest_clamp()
+                };
+                value = graphics.create_sampler(args.handle(0), desc)?.to_u64();
+            }
+            47 => graphics.destroy_sampler(args.handle(0))?,
+            48 => {
+                let mut bytes = [0u8; 32];
+                memory.read_bytes(args.0[1], &mut bytes)?;
+                let handles: [Option<GraphicsHandle>; 4] = std::array::from_fn(|i| {
+                    let raw = u64::from_le_bytes(bytes[i * 8..i * 8 + 8].try_into().unwrap());
+                    (raw != 0).then(|| GraphicsHandle::from_u64(raw))
+                });
+                graphics.cmd_set_sampled_view_handles(
+                    args.handle(0),
+                    [handles[0], handles[1]],
+                    [handles[2], handles[3]],
+                )?;
             }
             34 | 39 => {
                 let mut bytes = [0u8; 80];

@@ -2268,3 +2268,238 @@ fn cpu_nested_view_cannot_hide_sampled_output_backing_alias() {
     );
     assert_eq!(h.ctx.last_presentation.lock().unwrap().frame_index, 0);
 }
+
+struct CpuSamplerSnapshotPending(xenora_loader::graphics::GraphicsSubmissionRequest);
+impl xenora_loader::graphics::GraphicsPendingSubmission for CpuSamplerSnapshotPending {
+    fn poll(&mut self) -> Option<Result<GraphicsPassOutput, GraphicsError>> {
+        None
+    }
+    fn wait(&mut self) -> Result<GraphicsPassOutput, GraphicsError> {
+        assert_eq!(self.0.draws.len(), 2);
+        for (draw, mip) in self.0.draws.iter().zip([0, 1]) {
+            assert_eq!(
+                draw.sampled_bindings.samplers[0].unwrap().explicit_mip,
+                Some(mip)
+            );
+            assert!(draw.sampled_bindings.samplers[1].is_none());
+        }
+        Ok(GraphicsPassOutput {
+            colors: vec![vec![23, 41, 59, 255]],
+            depth: None,
+        })
+    }
+}
+
+#[test]
+fn cpu_sampler_handles_snapshot_per_draw_and_outlive_destroy_reset() {
+    use xenora_loader::graphics::{
+        GraphicsSubmissionStatus, GraphicsTextureViewDesc, GraphicsTextureViewFormat,
+    };
+    let mut h = Harness::new();
+    let root = h
+        .ctx
+        .create_committed_resource(
+            h.device,
+            ResourceDesc {
+                dimension: ResourceDimension::Texture2D,
+                width: 2,
+                height: 2,
+                depth_or_array_size: 1,
+                mip_levels: 2,
+                format_rgba8: true,
+            },
+            ResourceStates::PIXEL_SHADER_RESOURCE,
+            None,
+        )
+        .unwrap();
+    let view = h
+        .ctx
+        .create_texture_view(
+            h.device,
+            root,
+            GraphicsTextureViewDesc {
+                base_mip: 0,
+                mip_count: 2,
+                format: GraphicsTextureViewFormat::Rgba8Unorm,
+            },
+        )
+        .unwrap();
+    let pipeline = h.pipeline(VARYING, SAMPLED);
+    let target = h.texture(ResourceStates::RENDER_TARGET);
+    h.ctx
+        .set_metal_view_async_backend(|request| Ok(Box::new(CpuSamplerSnapshotPending(request))));
+    h.ctx
+        .cmd_set_graphics_pipeline(h.list, Some(pipeline))
+        .unwrap();
+    h.ctx
+        .cmd_set_color_targets(h.list, &[target], &[[0; 4]])
+        .unwrap();
+    h.ctx.cmd_set_viewport(h.list, 1, 1).unwrap();
+    let first = h
+        .ctx
+        .create_sampler(h.device, SamplerDesc::nearest_clamp().with_explicit_mip(0))
+        .unwrap();
+    let second = h
+        .ctx
+        .create_sampler(h.device, SamplerDesc::nearest_clamp().with_explicit_mip(1))
+        .unwrap();
+    h.ctx
+        .cmd_set_sampled_view_handles(h.list, [Some(view), None], [Some(first), None])
+        .unwrap();
+    h.draw();
+    h.ctx.destroy_sampler(first).unwrap();
+    assert!(
+        h.ctx
+            .cmd_set_sampled_view_handles(h.list, [Some(view), None], [Some(first), None])
+            .is_err()
+    );
+    h.ctx
+        .cmd_set_sampled_view_handles(h.list, [Some(view), None], [Some(second), None])
+        .unwrap();
+    h.draw();
+    h.ctx.close_command_list(h.list).unwrap();
+    let receipt = h
+        .ctx
+        .submit_command_list(h.queue, h.list, &h.memory)
+        .unwrap();
+    h.ctx.destroy_sampler(second).unwrap();
+    h.ctx.reset_command_list(h.list, h.allocator).unwrap();
+    h.ctx.destroy_texture_view(view).unwrap();
+    h.ctx.destroy_resource(root).unwrap();
+    assert_eq!(
+        h.ctx.wait_submission(receipt).unwrap(),
+        GraphicsSubmissionStatus::Complete
+    );
+    h.ctx.release_submission(receipt).unwrap();
+    assert_eq!(
+        h.ctx.last_presentation.lock().unwrap().pixels,
+        [23, 41, 59, 255]
+    );
+}
+
+#[test]
+fn cpu_sampler_handles_invalid_later_slot_is_atomic_and_aliases_reuse_descriptor() {
+    use xenora_loader::graphics::{GraphicsTextureViewDesc, GraphicsTextureViewFormat};
+    let mut h = Harness::new();
+    let root = h.texture(ResourceStates::PIXEL_SHADER_RESOURCE);
+    let view = h
+        .ctx
+        .create_texture_view(
+            h.device,
+            root,
+            GraphicsTextureViewDesc {
+                base_mip: 0,
+                mip_count: 1,
+                format: GraphicsTextureViewFormat::Rgba8Unorm,
+            },
+        )
+        .unwrap();
+    let sampler = h
+        .ctx
+        .create_sampler(h.device, SamplerDesc::nearest_clamp())
+        .unwrap();
+    assert!(
+        h.ctx
+            .cmd_set_sampled_view_handles(h.list, [Some(view), None], [Some(sampler), Some(root)])
+            .is_err()
+    );
+    h.ctx.destroy_texture_view(view).unwrap(); // Failed bind recorded no first-view reference.
+    let view = h
+        .ctx
+        .create_texture_view(
+            h.device,
+            root,
+            GraphicsTextureViewDesc {
+                base_mip: 0,
+                mip_count: 1,
+                format: GraphicsTextureViewFormat::Rgba8Unorm,
+            },
+        )
+        .unwrap();
+    let pipeline = h.pipeline(
+        VARYING,
+        include_bytes!("../../../fixtures/rdna2/x9-multislot-ps.bin"),
+    );
+    let target = h.texture(ResourceStates::RENDER_TARGET);
+    h.ctx
+        .set_metal_view_attachment_backend(|draws, _, _, _, _| {
+            let bindings = &draws[0].sampled_bindings;
+            assert_eq!(bindings.samplers, [Some(SamplerDesc::nearest_clamp()); 2]);
+            assert!(Arc::ptr_eq(
+                &bindings.textures[0].as_ref().unwrap().pixels,
+                &bindings.textures[1].as_ref().unwrap().pixels
+            ));
+            Ok(GraphicsPassOutput {
+                colors: vec![vec![0; 4]],
+                depth: None,
+            })
+        });
+    h.ctx
+        .cmd_set_graphics_pipeline(h.list, Some(pipeline))
+        .unwrap();
+    h.ctx
+        .cmd_set_color_targets(h.list, &[target], &[[0; 4]])
+        .unwrap();
+    h.ctx.cmd_set_viewport(h.list, 1, 1).unwrap();
+    h.ctx
+        .cmd_set_sampled_view_handles(h.list, [Some(view); 2], [Some(sampler); 2])
+        .unwrap();
+    assert!(
+        h.ctx
+            .cmd_set_sampled_view_handles(h.list, [Some(view), Some(root)], [Some(sampler); 2])
+            .is_err()
+    );
+    h.ctx.destroy_sampler(sampler).unwrap();
+    h.draw();
+    h.ctx.close_command_list(h.list).unwrap();
+    h.ctx
+        .execute_command_list(h.queue, h.list, &h.memory)
+        .unwrap();
+}
+
+#[test]
+fn cpu_sampler_creation_does_not_skip_draw_time_view_lod_validation() {
+    use xenora_loader::graphics::{GraphicsTextureViewDesc, GraphicsTextureViewFormat};
+    let mut h = Harness::new();
+    let root = h.texture(ResourceStates::PIXEL_SHADER_RESOURCE);
+    let view = h
+        .ctx
+        .create_texture_view(
+            h.device,
+            root,
+            GraphicsTextureViewDesc {
+                base_mip: 0,
+                mip_count: 1,
+                format: GraphicsTextureViewFormat::Rgba8Unorm,
+            },
+        )
+        .unwrap();
+    let sampler = h
+        .ctx
+        .create_sampler(h.device, SamplerDesc::nearest_clamp().with_explicit_mip(1))
+        .unwrap();
+    let pipeline = h.pipeline(VARYING, SAMPLED);
+    let target = h.texture(ResourceStates::RENDER_TARGET);
+    h.ctx.set_metal_view_attachment_backend(|_, _, _, _, _| {
+        panic!("invalid relative LOD reached CPU callback")
+    });
+    h.ctx
+        .cmd_set_graphics_pipeline(h.list, Some(pipeline))
+        .unwrap();
+    h.ctx
+        .cmd_set_color_targets(h.list, &[target], &[[0; 4]])
+        .unwrap();
+    h.ctx.cmd_set_viewport(h.list, 1, 1).unwrap();
+    h.ctx
+        .cmd_set_sampled_view_handles(h.list, [Some(view), None], [Some(sampler), None])
+        .unwrap();
+    h.ctx.destroy_sampler(sampler).unwrap();
+    h.draw();
+    h.ctx.close_command_list(h.list).unwrap();
+    assert!(
+        h.ctx
+            .execute_command_list(h.queue, h.list, &h.memory)
+            .is_err()
+    );
+    assert_eq!(h.ctx.last_presentation.lock().unwrap().frame_index, 0);
+}

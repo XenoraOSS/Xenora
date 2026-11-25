@@ -90,7 +90,7 @@ fn cpu_invalid_envelopes_and_reserved_words_preserve_result() {
         (0, 0),
         (0, 2),
         (1, 0),
-        (1, 46), // First unassigned opcode after CreateChildTextureView.
+        (1, 49), // First unassigned opcode after SampledViewHandles.
         (1, u64::MAX),
         (2, 1),
         (15, 1),
@@ -1611,4 +1611,175 @@ fn cpu_guest_child_view_formats_follow_root_family() {
         h.ok(38, &[parent]);
         h.ok(26, &[root]);
     }
+}
+
+#[test]
+fn cpu_guest_sampler_create_preflight_and_malformed_descriptors_consume_no_handles() {
+    let mut h = Harness::new();
+    let device = h.ok(1, &[]);
+    let max = f32::MAX.to_bits() as u64;
+    for args in [
+        [0, u32::MAX as u64, 0, max],
+        [device, 1u64 << 32, 0, max],
+        [device, 0, 1u64 << 32, max],
+        [device, 0, 0, 1u64 << 32],
+        [device, 0, f32::NAN.to_bits() as u64, max],
+        [device, 0, 0, f32::INFINITY.to_bits() as u64],
+        [device, 0, (-1.0f32).to_bits() as u64, max],
+        [device, 0, 2.0f32.to_bits() as u64, 1.0f32.to_bits() as u64],
+    ] {
+        assert_eq!(h.call(46, &args), Ok(2));
+        assert_eq!(h.output(), SENTINEL);
+    }
+    let mut words = record(46, &[device, u32::MAX as u64, 0, max]);
+    words[6] = 1;
+    h.prepare(words);
+    assert_eq!(
+        graphics_call_v1(&mut h.ctx, &mut h.memory, DESC, 128, OUT),
+        Ok(1)
+    );
+    assert_eq!(h.output(), SENTINEL);
+    h.prepare(record(46, &[device, u32::MAX as u64, 0, max]));
+    assert!(matches!(
+        graphics_call_v1(&mut h.ctx, &mut h.memory, DESC, 128, OUT + 1),
+        Err(ExitReason::MemoryFault(_))
+    ));
+    h.memory
+        .map_region_with_data(0x5000, 8, MemoryPermissions::READ_ONLY, &[0; 8])
+        .unwrap();
+    assert!(matches!(
+        graphics_call_v1(&mut h.ctx, &mut h.memory, DESC, 128, 0x5000),
+        Err(ExitReason::MemoryFault(_))
+    ));
+    let sampler = h.ok(46, &[device, u32::MAX as u64, 0, max]);
+    assert_eq!(sampler, device + 1);
+    h.ok(47, &[sampler]);
+    assert_eq!(h.call(47, &[sampler]), Ok(2));
+    assert_eq!(h.call(47, &[device]), Ok(2));
+}
+
+#[test]
+fn cpu_guest_sampler_handle_table_preflight_and_snapshot_lifetimes() {
+    let mut h = Harness::new();
+    let (device, _, allocator, list) = h.setup_list();
+    let root = h.ok(
+        6,
+        &[
+            device,
+            1,
+            1,
+            1,
+            ResourceStates::PIXEL_SHADER_RESOURCE.0 as u64,
+        ],
+    );
+    let view = h.ok(37, &[device, root, 0, 1, 0]);
+    let sampler = h.ok(46, &[device, 0, 0, f32::MAX.to_bits() as u64]);
+    let table = |words: [u64; 4]| {
+        words
+            .into_iter()
+            .flat_map(u64::to_le_bytes)
+            .collect::<Vec<_>>()
+    };
+    h.memory
+        .write_bytes(DATA, &table([view, 0, sampler, root]))
+        .unwrap();
+    assert_eq!(h.call(48, &[list, DATA]), Ok(2));
+    assert_eq!(h.output(), SENTINEL);
+    h.ok(38, &[view]); // Bad last handle did not retain first view.
+    let view = h.ok(37, &[device, root, 0, 1, 0]);
+    h.memory
+        .write_bytes(DATA, &table([view, 0, sampler, 0]))
+        .unwrap();
+    h.prepare(record(48, &[list, DATA]));
+    assert!(matches!(
+        graphics_call_v1(&mut h.ctx, &mut h.memory, DESC, 128, OUT + 1),
+        Err(ExitReason::MemoryFault(_))
+    ));
+    assert!(matches!(
+        h.call(48, &[list, DATA + 4096 - 24]),
+        Err(ExitReason::MemoryFault(_))
+    ));
+    // Result/table overlap is safe because the complete immutable table is read first.
+    h.prepare(record(48, &[list, DATA]));
+    assert_eq!(
+        graphics_call_v1(&mut h.ctx, &mut h.memory, DESC, 128, DATA + 24),
+        Ok(0)
+    );
+    h.ok(47, &[sampler]);
+    assert_eq!(h.call(38, &[view]), Ok(2));
+    h.memory.write_bytes(DATA, &table([0; 4])).unwrap();
+    h.ok(48, &[list, DATA]);
+    assert_eq!(h.call(38, &[view]), Ok(2));
+    h.ok(11, &[list, allocator]);
+    h.ok(38, &[view]);
+    h.ok(26, &[root]);
+}
+
+#[test]
+fn cpu_guest_sampler_objects_and_handle_bindings_obey_shared_budgets() {
+    let mut h = Harness::new();
+    let (device, _, allocator, list) = h.setup_list();
+    let mut first = 0;
+    for _ in 0..4092 {
+        let sampler = h.ok(46, &[device, u32::MAX as u64, 0, f32::MAX.to_bits() as u64]);
+        if first == 0 {
+            first = sampler;
+        }
+    }
+    assert_eq!(h.call(46, &[device, 0, 0, 0]), Ok(2));
+    assert_eq!(h.output(), SENTINEL);
+    h.ok(47, &[first]);
+    h.ok(46, &[device, 0, 0, 0]);
+    h.memory.write_bytes(DATA, &[0; 32]).unwrap();
+    for _ in 0..4096 {
+        h.ok(48, &[list, DATA]);
+    }
+    assert_eq!(h.call(48, &[list, DATA]), Ok(2));
+    assert_eq!(h.output(), SENTINEL);
+    h.ok(11, &[list, allocator]);
+    h.ok(48, &[list, DATA]);
+}
+
+#[test]
+fn cpu_guest_sampler_handle_bindings_preserve_independent_null_slots() {
+    let mut h = Harness::new();
+    let (device, _, allocator, list) = h.setup_list();
+    let root = h.ok(
+        6,
+        &[
+            device,
+            1,
+            1,
+            1,
+            ResourceStates::PIXEL_SHADER_RESOURCE.0 as u64,
+        ],
+    );
+    let view = h.ok(37, &[device, root, 0, 1, 0]);
+    let sampler = h.ok(46, &[device, u32::MAX as u64, 0, f32::MAX.to_bits() as u64]);
+    for mask in 0..16 {
+        let words: [u64; 4] = std::array::from_fn(|i| {
+            if mask & (1 << i) == 0 {
+                0
+            } else if i < 2 {
+                view
+            } else {
+                sampler
+            }
+        });
+        h.memory
+            .write_bytes(
+                DATA,
+                &words
+                    .into_iter()
+                    .flat_map(u64::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+        h.ok(48, &[list, DATA]); // Presence is validated against used pairs only on an actual draw.
+    }
+    h.ok(47, &[sampler]);
+    assert_eq!(h.call(38, &[view]), Ok(2));
+    h.ok(11, &[list, allocator]);
+    h.ok(38, &[view]);
+    h.ok(26, &[root]);
 }

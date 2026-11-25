@@ -1,9 +1,44 @@
 # Local graphics checkpoint
 
 This summary records the accumulated graphics checkpoint and the subsequent
-nested-view and compute-cache increment, reviewed on 25 November 2026. It is not release certification or a
+nested-view, compute-cache and sampler-handle increments, reviewed on 25 November 2026. It is not release certification or a
 claim of Xbox hardware equivalence. Supporting raw logs, mutation records and
 source manifests remain local and are not distributed with the repository.
+
+## Reusable sampler handles
+
+Sampler handles are immutable descriptors reused across recorded draws. Binding
+copies their values, so destroying a handle afterward does not invalidate recorded
+or pending work. New binds using destroyed handles reject. The current scope retains
+nearest/clamp sampling and existing view-relative LOD validation.
+
+Run the focused CPU selections from the repository root:
+
+```sh
+CARGO_BUILD_JOBS=4 cargo test --locked -p xenora-loader --test pipeline cpu_sampler -- --nocapture
+CARGO_BUILD_JOBS=4 cargo test --locked -p xenora-loader --test graphics_service cpu_guest_sampler -- --nocapture
+```
+
+These selections cover recording snapshots, stale handles, atomic table validation,
+LOD checks, guest memory preflight and shared object/command budgets. The focused
+run passed all seven (three pipeline, four service). For the original guest pixel
+tests, enable the Metal validation environment shown below and run:
+
+```sh
+CARGO_BUILD_JOBS=4 cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_sampler_handles -- --nocapture --test-threads=1
+```
+
+Both guest tests passed through synchronous, asynchronous and queued adapters.
+They check cross-slot sampling, distinct recorded descriptors, handle destruction
+before collection, stale-second-handle failure atomicity and view-relative LOD
+rejection preserving previous output. A deliberate mutation forcing explicit mip0
+failed with incorrect readback pixels; source hashes matched after restoration.
+All nine repository gates passed: **848 workspace tests passed, zero failed,82
+ignored**; the GPU script reported **330 passed, zero failed, one manual test
+ignored**. GPU totals include CPU checks and overlapping coverage. Native guest
+execution was ARM64 with system Metal and API/shader validation enabled.
+Independent source and literal-oracle reviews found no scoped blocker. Broader
+descriptor heaps, filter modes and full Stage2/3 remain open.
 
 ## Latest nested-view and compute-cache checkpoint
 

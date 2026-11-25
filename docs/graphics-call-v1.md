@@ -93,6 +93,9 @@ loader ResourceStates bits. Unsupported formats and layouts fail.
 | 43 | CopyBufferRegion | list, destination, destination byte offset, source, source byte offset, byte count | 0 |
 | 44 | CopyImage | list, destination, destination kind, destination A, destination B, source, source kind, source A, source B, width, height | 0 |
 | 45 | CreateChildTextureView | device, parent view, relative base mip u32, mip count u32, format | view handle |
+| 46 | CreateSampler | device, explicit mip u32, min LOD bits u32, max LOD bits u32 | sampler handle |
+| 47 | DestroySampler | sampler handle | 0 |
+| 48 | SampledViewHandles | list, address of 32-byte view/sampler-handle payload | 0 |
 
 CreatePipeline reads nonempty, four-byte-aligned shader blobs of at most 1024 bytes
 each. Decoding and translation must succeed before a pipeline handle is allocated.
@@ -550,3 +553,26 @@ Same-queue predecessors are implicit dependencies. Collecting a descendant first
 validates and publishes its ancestors before exposing the descendant. Existing
 resource, payload and logical-range limits remain in force. Original native and
 guest graph tests validate this bounded extension locally.
+
+
+## Reusable immutable sampler handles
+
+CreateSampler (opcode46) creates a nearest/clamp descriptor. Its explicit-mip word
+uses u32::MAX for no explicit selection. Min/max LOD words contain IEEE754 float32
+bits; all three words require zero upper32 bits. LOD bounds must be finite,
+nonnegative and ordered. View-dependent mip checks remain at draw preparation.
+Live sampler handles count toward the shared guest object limit.
+
+SampledViewHandles (opcode48) reads four little-endian u64 values in this order:
+`[view0, view1, sampler0, sampler1]`. Zero independently unbinds each slot, preserving
+cross-slot texture/sampler pairs. The entire table and all live handle types are
+validated before one binding command is appended. A bad second entry preserves the
+previous bindings. The result span is preflighted before any mutation, and input/result
+aliasing is supported after the table has been consumed.
+
+Binding copies sampler descriptors into recorded commands. DestroySampler (opcode47)
+therefore immediately frees the live handle slot without altering recorded or pending
+work; subsequent binds or destruction using that stale handle fail. Commands own
+bounded descriptor values, not references to retired sampler objects. View lifetime
+rules remain unchanged. Existing value-based binding opcodes remain supported.
+This adds reusable descriptors, not general descriptor heaps or new filter modes.

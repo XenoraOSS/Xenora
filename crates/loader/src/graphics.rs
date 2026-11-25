@@ -1061,6 +1061,7 @@ pub struct GraphicsContext {
     graph_backend: bool,
     geometry_backend: bool,
     texture_views: HashMap<GraphicsHandle, GraphicsTextureView>,
+    samplers: HashMap<GraphicsHandle, xenora_texture::SamplerDesc>,
     retired_views: HashMap<GraphicsHandle, GraphicsTextureView>,
     queued_backend: Option<Arc<QueuedRenderer>>,
     queued: HashMap<GraphicsHandle, QueuedReceipt>,
@@ -1140,6 +1141,7 @@ impl GraphicsContext {
             graph_backend: false,
             geometry_backend: false,
             texture_views: HashMap::new(),
+            samplers: HashMap::new(),
             retired_views: HashMap::new(),
             queued_backend: None,
             queued: HashMap::new(),
@@ -3249,6 +3251,7 @@ impl GraphicsContext {
             + self.retired_pipelines.len()
             + usize::from(self.submission.is_some())
             + self.queued.len()
+            + self.samplers.len()
             + self.texture_views.len()
             + self.retired_views.len()
     }
@@ -3646,6 +3649,56 @@ impl GraphicsContext {
             self.retired_views.insert(view, value);
         }
         Ok(())
+    }
+
+    /// Create an immutable sampler descriptor. Texture-relative LOD validation
+    /// remains per used sampling pair at draw preparation.
+    pub fn create_sampler(
+        &mut self,
+        device: GraphicsHandle,
+        desc: xenora_texture::SamplerDesc,
+    ) -> Result<GraphicsHandle, GraphicsError> {
+        if !self.devices.contains_key(&device) {
+            return Err(GraphicsError::InvalidDeviceHandle);
+        }
+        desc.validate()
+            .map_err(|_| GraphicsError::InvalidDescriptor)?;
+        if self.guest_object_count() >= crate::graphics_service::MAX_GUEST_OBJECTS {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        let handle = self.allocate_handle();
+        self.samplers.insert(handle, desc);
+        Ok(handle)
+    }
+
+    /// Recorded and submitted work owns descriptor copies, not sampler handles.
+    pub fn destroy_sampler(&mut self, sampler: GraphicsHandle) -> Result<(), GraphicsError> {
+        self.samplers
+            .remove(&sampler)
+            .map(|_| ())
+            .ok_or(GraphicsError::InvalidResourceHandle)
+    }
+
+    /// Resolve all sampler handles before atomically recording ordinary view bindings.
+    /// Texture and sampler slots are independent; per-pair occupancy is checked at draw.
+    pub fn cmd_set_sampled_view_handles(
+        &mut self,
+        list: GraphicsHandle,
+        views: [Option<GraphicsHandle>; 2],
+        sampler_handles: [Option<GraphicsHandle>; 2],
+    ) -> Result<(), GraphicsError> {
+        let mut samplers = [None; 2];
+        for (slot, handle) in sampler_handles.into_iter().enumerate() {
+            if let Some(handle) = handle {
+                samplers[slot] = Some(
+                    *self
+                        .samplers
+                        .get(&handle)
+                        .ok_or(GraphicsError::InvalidResourceHandle)?,
+                );
+            }
+        }
+        self.cmd_set_sampled_views(list, views, samplers)
     }
 
     /// Atomically replace both texture slots with view handles and independent samplers.

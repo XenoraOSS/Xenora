@@ -672,7 +672,9 @@ an actual native shared-storage `MetalTextureView`, not a cropped upload or samp
 clamp. View dimensions are those of the selected base mip, including odd and nonsquare
 extents; explicit mip indices and per-pair sampler LOD checks are relative to the view.
 The selected range must fit the complete backing mip chain without arithmetic overflow.
-These views remain single-sample 2D, slice zero, shader-read-only, with no nested views.
+These views remain single-sample 2D, slice zero and shader-read-only. Loader child
+views normalize parent-relative ranges to the root backing; native views still use
+that normalized root range. Destroying a parent handle leaves independent children valid.
 
 Metal's [range-view API](https://developer.apple.com/documentation/metal/mtltexture/maketextureview%28pixelformat%3Atexturetype%3Alevels%3Aslices%3A%29)
 shares the parent allocation. Linear/sRGB conversion does not require
@@ -1394,3 +1396,17 @@ independent bounded acceptance is summarized in the
 logs are not distributed. This extension preserves the current geometry formats
 and shader ABI; additional formats,
 instancing and indirect draws require separate work.
+
+
+### Reusable immutable sampler descriptors
+
+`create_sampler` stores a validated `SamplerDesc` in a counted live handle;
+`destroy_sampler` removes it immediately. `cmd_set_sampled_view_handles` resolves
+both view slots and both sampler slots before recording, then reuses the existing
+value-based sampled-view command. Descriptors are copied at recording time, so
+handle destruction cannot change recorded draws or pending submissions. Stale or
+wrong-kind handles reject future use. Slots unbind independently and retain existing
+cross-pair and view-relative LOD checks. Guest opcodes46–48 expose this interface;
+see the [guest ABI](graphics-call-v1.md#reusable-immutable-sampler-handles).
+The native backend and shader ABI are unchanged. General descriptor heaps and
+additional filtering/addressing modes remain outside this increment.
