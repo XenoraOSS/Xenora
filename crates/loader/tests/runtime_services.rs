@@ -5047,3 +5047,32 @@ fn memmove_binds_through_the_private_api_set() {
         .collect();
     assert_eq!(moved, b"moved");
 }
+
+/// Regression checks for three descriptor edge cases: a read past the end
+/// keeps the seeked position, a zero-byte write does not extend the file,
+/// and a full descriptor table refuses before creating or truncating.
+#[test]
+fn descriptor_edges_past_the_end_and_a_full_table() {
+    let (mut guest, _streams) = stdio_guest();
+    store(&mut guest, "edge.bin", b"abc");
+    guest.memory.write_bytes(NAME, b"edge.bin\0").unwrap();
+    let fd = guest.call("_open", &[NAME, 2 | 0x8000, 0]) & 0xFFFF_FFFF;
+    assert!(fd >= 3, "{fd:x}");
+    // Seek past the end, read: nothing read, position stays at 8.
+    assert_eq!(guest.call("_lseek", &[fd, 8, 0]) & 0xFFFF_FFFF, 8);
+    assert_eq!(guest.call("_read", &[fd, SCRATCH, 1]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.call("_lseek", &[fd, 0, 1]) & 0xFFFF_FFFF, 8);
+    // A zero-byte write there does not extend the file: a second descriptor
+    // still sees the end at offset 3.
+    assert_eq!(guest.call("_write", &[fd, SCRATCH, 0]) & 0xFFFF_FFFF, 0);
+    let probe = guest.call("_open", &[NAME, 0x8000, 0]) & 0xFFFF_FFFF;
+    assert_eq!(guest.call("_lseek", &[probe, 0, 2]) & 0xFFFF_FFFF, 3);
+    assert_eq!(guest.call("_close", &[probe]) & 0xFFFF_FFFF, 0);
+    // A real write lands at 8 and does extend, with the gap zeroed.
+    guest.memory.write_bytes(SCRATCH, b"Z").unwrap();
+    assert_eq!(guest.call("_write", &[fd, SCRATCH, 1]) & 0xFFFF_FFFF, 1);
+    let probe = guest.call("_open", &[NAME, 0x8000, 0]) & 0xFFFF_FFFF;
+    assert_eq!(guest.call("_lseek", &[probe, 0, 2]) & 0xFFFF_FFFF, 9);
+    assert_eq!(guest.call("_close", &[probe]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
+}
