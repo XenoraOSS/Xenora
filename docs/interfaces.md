@@ -78,10 +78,34 @@ Windows while the process has one thread. The exit closes every guest handle:
 kernel objects, Winsock sockets and task-queue handles, which
 `ServicesState::open_handle_count` counts together. Files stay on the synthetic `C:` drive, guest memory stays mapped so the host
 can inspect it, and `atexit` functions are not run: that belongs to the C
-runtime's `exit`, which is not implemented. `ServicesState::exit_status`
+runtime's `exit`, described below. `ServicesState::exit_status`
 reports the status. After an exit the `DbtEngine` that ran the guest executes
 no further guest instruction and answers every later `run` with the same
 `ProcessExit`. A service callback that was in progress is never resumed.
+
+A C program ends through the C runtime instead. `ucrtbase.dll` and
+`api-ms-win-crt-runtime-l1-1-0.dll` provide three ways out, each ending the
+guest with the same `ProcessExit` and the same cleanup as `ExitProcess`:
+
+| Service | Behaviour |
+| --- | --- |
+| `exit(status)` | Calls the functions registered with `atexit` and `_crt_atexit`, most recently registered first, then ends the process with `status` |
+| `_exit(status)` | Ends the process with `status` and calls no registered function |
+| `abort()` | Ends the process with exit code 3 and calls no registered function |
+
+`exit` takes one function at a time from the registered list. A function
+registered while `exit` runs is therefore called next, before the older ones
+that have not run yet, which is ISO C's rule. A registered function that calls
+`exit` again is undefined in ISO C; here the functions that have not run yet
+run once each and the process ends with the status of the later call.
+Functions that `_cexit` has already run are not run again.
+
+All three are partial. `exit` flushes no stream, because there are none, and
+runs no thread-local destructor. It does not walk a module's own `_onexit`
+table; that module's startup code runs it through `_execute_onexit_table`.
+`abort` prints no message and does not call a `SIGABRT` handler, which the
+documentation says it does when one is set. `_Exit`, `quick_exit` and
+`_c_exit` are not provided. None of this has been compared with Windows.
 
 A TLS callback may end the process too. Startup then reports the exit as its
 outcome, with the status, and runs neither the remaining callbacks nor the
@@ -175,6 +199,27 @@ Win32 references include Microsoft's documentation for
 [SetProcessPriorityBoost](https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-setprocesspriorityboost),
 and [GetProcessPriorityBoost](https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-getprocesspriorityboost).
 
+### Generated report paths and future caches
+
+Probe exports can write to `artifacts/` or `diagnostics/probe/` within a
+Xenora Git checkout. Explicit `--report` destinations outside checkouts are
+allowed. Relative paths use the process's current directory. A symlink in
+the directory path is resolved before applying the policy, and dangling
+links or links at individual output filenames are refused. The guard checks
+every filename before creating any directories or files.
+
+Future persistent caches default to
+`~/Library/Caches/local.xenora.Xenora/` on macOS and must be outside
+checkouts, including ignored development output directories. This policy
+does not enable a persistent cache.
+
+The probe stages reports on the destination filesystem and publishes each
+complete file by rename. An I/O failure during publication can leave a mix of
+old and new reports. Use an output directory controlled by the caller.
+Preflight assumes the directory tree stays stable. A writer exposed to
+concurrent untrusted changes needs directory-descriptor-relative operations
+that reject links during traversal and publication.
+
 ### Performance timing
 
 The guest can import `QueryPerformanceCounter` and `QueryPerformanceFrequency`
@@ -222,6 +267,53 @@ References include Microsoft's
 [virtual allocation](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualalloc),
 and [virtual release](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualfree) contracts.
 
+### Stubs a hosted C program binds
+
+`VirtualProtect` and `VirtualQuery` are declared `stub` in the typed
+registry (`docs/runtime/services.md`). A C program built with the mingw-w64
+runtime imports both and does not call them on a normal run: they serve its
+runtime pseudo-relocations. They exist so that such a program's imports bind.
+
+A call to either stops the guest with the runtime-limit fault
+(`IllegalInstruction(0xFE)`). The service writes nothing: no output buffer, no
+result and no last-error value. It does not return a made-up success or a
+failure code Windows would not give, so a program that needs one of them
+stops at that call. Neither changes a page protection nor describes a region;
+each needs work the runtime does not have yet (regions that can be split,
+translated-code invalidation for executable pages, recorded allocation
+bases).
+
+### Structured exceptions and CPU faults
+
+`__C_specific_handler` (`ucrtbase.dll`, and the CRT private API set) is the
+language handler of MSVC-style C structured exception handling (`__try`,
+`__except`, `__finally`) and of the mingw-w64 C runtime's startup frames
+(#453). It reads the function's scope table, calls `__except` filters in the
+search phase and `__finally` termination handlers in the unwind phase as
+guest code, and starts the unwind to an accepting `__except` body with the
+exception code in EAX. The scope-table layout is derived from compiled
+programs, not from a public specification; `docs/research/exception-handling.md`
+records it.
+
+A fault raised by a guest instruction becomes an exception the guest can
+catch when the process has an exception directory:
+
+| CPU fault (`ExitReason`) | Exception |
+| --- | --- |
+| `DivideError` | `STATUS_INTEGER_DIVIDE_BY_ZERO` (`0xC0000094`), also for a quotient overflow |
+| `MemoryFault` with an address | `STATUS_ACCESS_VIOLATION` (`0xC0000005`), parameters 0 read / 1 write / 8 instruction fetch, then the address |
+| `IllegalInstruction` at UD2 | `STATUS_ILLEGAL_INSTRUCTION` (`0xC000001D`) |
+
+Every other fault still stops the guest: `GeneralProtection`, `SimdException`,
+`IllegalInstruction` at any other opcode (it may be a valid instruction Xenora
+does not implement) including the runtime-limit marker `0xFE`, faults inside
+host services, and faults whose stack has no room for the dispatcher. A fault
+no filter accepts stops the guest with the original reason at the faulting
+instruction; a raised exception no frame accepts stops it with
+`ExitReason::UnhandledException(code)`. The filter stored by
+`SetUnhandledExceptionFilter` is not called. Nothing here was compared with
+Windows or with an Xbox console.
+
 ### CRT strings and byte memory
 
 The standard registry provides `strlen`, `strnlen`, `strcpy`, `strncpy`,
@@ -245,6 +337,71 @@ up to 1 MiB. Each nonempty span must be fully mapped with the required permissio
 A span may cross adjacent guest regions. Writes validate the full destination before changing
 bytes, and moves preserve the original source bytes when ranges overlap.
 
+### Program arguments and environment
+
+A hosted C program's startup code gets `argc`, `argv` and `envp` for `main`
+from five C runtime services. A host supplies the arguments with
+`ServicesState::set_program_arguments(&["program", "first", ...])`, program
+name first, before it runs the guest.
+
+| Service | Behaviour |
+| --- | --- |
+| `__p___argc()`, `__p___argv()`, `__p__environ()` | The address of the guest variable `__argc`, `__argv` or `_environ`. All three start as zero or null |
+| `_configure_narrow_argv(mode)` | For mode 1 or 2, sets `__argc` to the number of arguments and `__argv` to a table of pointers to their NUL-terminated strings, with a null pointer after the last, and returns 0. It builds the table once; later calls return 0 and change nothing. Mode 0 returns 0 and builds nothing. Any other mode returns `EINVAL` |
+| `_initialize_narrow_environment()` | Points `_environ` at a table holding one null pointer, once, and returns 0 |
+
+`set_program_arguments` refuses an argument containing a NUL byte, arguments
+whose bytes and terminators exceed 32,767 (`MAX_PROGRAM_ARGUMENT_BYTES`, the
+documented Windows command-line limit), and a call after the guest has built
+its table or read its command line. A host that never calls it gives the program one argument, the
+empty string, which is what ISO C specifies when no program name is
+available. An empty list gives it none.
+
+What is documented, inferred and chosen:
+
+- **Documented:** the three global variables and what they hold, and ISO C's
+  rules for `argv` (a null pointer after the last argument, strings the
+  program may modify).
+- **Inferred:** that each `__p_` function returns the address of its
+  variable, as the documented `__p__fmode` does. Microsoft lists these five
+  functions only by name.
+- **Xenora's choice:** what the two initialization functions do. Arguments
+  reach the guest as the bytes of the host's strings, with no code page.
+  Mode 2 asks for wildcard expansion and none is performed. The environment
+  is empty. The variables and tables are blocks from the process heap.
+
+The wide-character counterparts and environment variables do not exist.
+`GetCommandLineA` and `GetCommandLineW` are in the next section. All five services are `partial`. None of
+this has been compared with Windows.
+
+### Startup information and command line
+
+`GetStartupInfoA` and `GetStartupInfoW` return the `STARTUPINFO` structure the
+process was started with. The host takes the place of the creating process and
+passes it with `ServicesState::set_startup_info` before the guest runs; once the
+guest has read it, a change is refused. Strings with a NUL, strings of 32,767
+UTF-16 units or more, undocumented flags, flags documented as not combinable and
+`SW_SHOWDEFAULT` as the initial show state are refused. Without host input there
+are no flags and no strings. `cb` is 104, and the reserved members are zero. The
+desktop and title pointers stay the same for the life of the process. The
+functions document no failure, so a structure that cannot be written stops the
+guest. Nothing acts on the information: there are no windows, consoles or
+standard handles, and handle values reach the guest as the host gave them.
+
+`GetCommandLineA` and `GetCommandLineW` return one string each, at a fixed
+address. It is built from the program arguments on first use, and the arguments
+cannot change after that. Arguments are quoted so that the rules in Microsoft's
+"Parsing C command-line arguments" give them back. The program name takes no
+escapes there, so a quote in it is left out. No arguments give an empty string.
+The process code page is UTF-8, which is Xenora's choice, so the narrow strings
+are UTF-8.
+
+Both resolve through `kernel32.dll` and the API sets Microsoft's pages list.
+Those pages list one set of locations for a function and its A and W names
+together, so both names resolve in each.
+`crates/loader/tests/startup_info.rs` runs original C and C++ programs through
+them. Nothing was compared with Windows.
+
 ### Guest heaps
 
 `GetProcessHeap`, `HeapAlloc`, `HeapSize`, and `HeapFree` expose the
@@ -267,6 +424,140 @@ Allocation failures also set the synthetic main thread's CRT `errno` to
 `_set_errno` through a stable guest memory slot. Additional guest threads
 and CRT parameter or new-handler callbacks remain unsupported. See
 [Microsoft CRT allocation documentation](https://learn.microsoft.com/cpp/c-runtime-library/memory-allocation).
+
+### Standard output and formatted printing
+
+A hosted C program prints through the C runtime. Six services give it the
+standard streams, and what it writes to `stdout` and to `stderr` is captured
+where a host or a test can read it: `ServicesState::standard_output()` and
+`ServicesState::standard_error()`.
+
+| Service | Behaviour |
+| --- | --- |
+| `__acrt_iob_func(index)` | The `FILE` object of `stdin` (0), `stdout` (1) or `stderr` (2) |
+| `__stdio_common_vfprintf(options, stream, format, locale, arguments)` | Formats with the arguments in the guest's `va_list`, writes to `stdout` or `stderr`, and returns the number of characters written. This is what `printf` and `fprintf` call |
+| `fwrite(buffer, size, count, stream)` | Writes `size * count` bytes and returns `count` |
+| `fputs(string, stream)` | Writes the string without its terminator and returns 0 |
+| `fflush(stream)` | Returns 0. A null stream means every stream |
+| `setvbuf(stream, buffer, mode, size)` | Checks the mode and size and returns 0 |
+
+The standard streams are text-mode streams, so each line feed a program
+writes is captured as a carriage return and a line feed, as the Windows
+documentation of text mode describes. Function results count the characters
+before that replacement. Output is never held back: `fflush` has nothing to
+do and `setvbuf` only validates. Each captured stream keeps at most 16 MiB
+(`MAX_CAPTURED_OUTPUT`).
+
+The formatting engine (`crates/loader/src/services/crt_format.rs`) follows
+Microsoft's "Format specification syntax: printf and wprintf functions" and
+ISO C:
+
+- Flags `-`, `+`, blank, `#` and `0`; a width and a precision as digits or
+  `*`; size prefixes `hh`, `h`, `l`, `ll`, `j`, `z`, `t`, `I`, `I32`, `I64`.
+- Types `d`, `i`, `u`, `o`, `x`, `X`, `c`, `s`, `p` and `%%`. An integer
+  without a size prefix, and a `long`, is 32 bits. A null string prints
+  `(null)`.
+- Its output is compared with the host C library's `snprintf` on 2,600
+  generated cases whose result ISO C defines
+  (`crates/loader/tests/printf/reference.py`).
+
+Documented failures return their documented result and set `errno` to
+`EINVAL`: a null stream, format, buffer or string, and an invalid `setvbuf`
+mode or size. An invalid format, which includes `%n` because Windows
+disables it by default, also returns -1 with `EINVAL` and writes nothing;
+on Windows the invalid parameter handler runs first.
+
+The standard input is the bytes the host supplies before the run, read in
+full by `xenora run` up to 1 MiB; more is a command-line error before
+anything executes, never a silent truncation. A terminal, or fd 0 already
+serving the diagnostic channel, means no input. Text mode applies when the
+input is stored: a CR LF pair becomes one line feed, a CR alone stays. The
+end-of-file indicator follows ISO C: a read that meets the end sets it, so
+a last line without a newline sets it while one that ends at a line feed
+does not. `scanf` and wide input are not provided.
+
+Everything else that is not modelled stops the guest with the runtime-limit
+fault and writes nothing, so that nothing is printed wrongly: the
+floating-point types (`e`, `f`, `g`, `a`), wide characters and strings (`C`,
+`S`, `lc`, `ls`), a locale object, option bits other than the three that do
+not affect these conversions, a pointer that is no stream, writing `stdin`,
+an index above 2, more than 1 MiB in one call, and output past the 16 MiB
+bound.
+
+Choices where the documentation leaves room, each marked in the source:
+`%p` prints sixteen upper-case hexadecimal digits; `0` pads a character and
+a string as it pads a number; a precision also limits `(null)`; `%#.0o` of
+zero prints `0`, which is ISO C's rule. All six services are `partial`. None
+of this has been compared with Windows.
+
+### Files through the C runtime
+
+`fopen`, `fclose` and `fgets` give a hosted C program files, and the output
+services above (`__stdio_common_vfprintf`, `fwrite`, `fputs`, `fflush`,
+`setvbuf`) accept a stream `fopen` returned as well as `stdout` and `stderr`.
+The files are the ones on the in-memory `C:` drive described under
+"Synthetic guest files": a file written through a C stream is the file
+`ReadFile` reads, and the reverse.
+
+| Service | Behaviour |
+| --- | --- |
+| `fopen(name, mode)` | Opens a file and returns its `FILE*`, or null with `errno` set. `r` needs the file to exist; `w` creates it or destroys its contents; `a` creates it and makes every write go to its end; `+` adds the other direction; `b` or `t` selects binary or text |
+| `fclose(stream)` | Closes the stream and returns 0; `EOF` with `EINVAL` for a null stream |
+| `fgets(buffer, count, stream)` | Reads up to `count - 1` characters, stopping after a newline, which it keeps, and adds a terminator. Returns the buffer, or null at end of file or on an error |
+| `perror(message)` | Writes the message, `: `, the text for `errno` and a newline to `stderr`; only the text when the message is null or empty |
+
+A stream is in text mode unless its mode has `b`: a line feed is stored as a
+carriage return and a line feed, the pair is read back as a line feed, and
+`CTRL+Z` ends the input. Names are ASCII, with either slash, in any case,
+with or without `C:\`, as the drive accepts them.
+
+`errno` after a failed `fopen`: `EINVAL` for a null or empty name or mode, a
+mode this runtime does not open, and a name the drive rejects; `ENOENT` when
+the file or its directory does not exist; `EACCES` for a directory; `EMFILE`
+when 64 streams are already open; `ENOSPC` when the drive holds its 256
+files; `ENOMEM` when the `FILE` object cannot be allocated. Output to a
+stream that was not opened for writing, and reading one not opened for
+reading, fail with `EBADF`; output the drive has no room for fails with
+`ENOSPC`. A failed write writes nothing.
+
+What is not provided, and what is Xenora's choice:
+
+- **Not provided:** the mode characters `x`, `c`, `n`, `N`, `S`, `R`, `T`,
+  `D` and `ccs=`, which are refused; `fread`, `fseek`, `ftell`, `rewind`,
+  `ferror`, `fscanf`, `feof` of a file stream, and closing a standard
+  stream, which stop the guest.
+- **No buffering.** A write reaches the drive at once, so the rule that a
+  `+` stream needs `fflush` or a seek between writing and reading does not
+  apply.
+- **No sharing.** A C stream is not a Win32 handle. It does not stop
+  `DeleteFileW` or `MoveFileW`, and ignores a handle's sharing mode. After
+  its file is deleted a stream's reads and writes fail with `EBADF`.
+- **Choices:** the `errno` values above other than `EINVAL` for a null or
+  empty argument, which is documented; an `a+` stream reads from the start;
+  every `perror` text except "No such file or directory", which is the one
+  Microsoft's page shows.
+
+All four services are `partial`. None of this has been compared with
+Windows.
+
+**Positions and file operations (#493).** `_ftelli64`, `_fseeki64`,
+`fgetpos` and `fsetpos` work on a stream `fopen` returned. A position is the
+byte offset in the file on the drive, in text mode too, where each line feed
+written is two bytes; `fpos_t` is the Universal CRT's `__int64`. `_fseeki64`
+takes `SEEK_SET`, `SEEK_CUR` and `SEEK_END`; a position before the start, an
+unknown origin and a null argument fail with -1 and `EINVAL`, and the
+position is unchanged. A position past the end is allowed, and a write there
+fills the gap with zero bytes. A text-mode seek to any offset is allowed,
+where Microsoft guarantees only offsets `ftell` returned. Positions of the
+standard streams are not modelled and stop the guest. `remove` deletes a
+file: `ENOENT` when it is missing or the name is rejected, `EACCES` for a
+directory. `rename` moves a file's bytes to a new name: `ENOENT` when the old
+name holds nothing, `EACCES` when the new name exists or its directory does
+not, `EINVAL` for a null or rejected name; renaming a directory is not
+modelled and stops the guest. Neither is stopped by an open stream, whose
+later operations fail with `EBADF`. `fseek`, `ftell` and `rewind` remain
+unprovided here; #312 holds them. `remove` is `implemented`, the other five
+`partial`.
 
 ### CRT integer conversion
 
@@ -293,24 +584,6 @@ C-locale `ctype.h` predicates (`isalnum`, `isalpha`, `isdigit`, `islower`,
 `tolower` / `toupper` accept `EOF` or an `unsigned char` value. Other
 `int` arguments stop the guest.
 
-`sprintf` and `snprintf` implement a bounded C-locale subset: `%%`, `%c`,
-`%s`, `%d`/`%i`, `%u`, `%x`/`%X`, `%p`, optional zero-pad widths, and
-`l`/`ll`/`z`/`t` length modifiers. Null string arguments render as
-`(null)`. Other conversions stop the guest. Transfers stay within the 1 MiB
-service budget.
-
-FILE streams implement `fopen`, `fclose`, `fread`, `fwrite`, `fseek`, `ftell`,
-`feof`, `ferror`, `rewind` and `__acrt_iob_func`. Single path components (no
-separators) use an in-memory store. Paths with a mounted drive letter open
-through the same host mount policy as `CreateFileW`: the file is loaded into a
-bounded buffer (up to 16 MiB, and not past the mount's size cap), and a
-writable stream replaces the host contents on `fclose`. Up to 32 streams.
-Stdin is empty, stdout/stderr discard writes. `printf` and `fprintf` use the
-same format subset as `sprintf` (stdout discards the payload and returns the
-length). The `__stdio_common_*` helpers remain unimplemented. Concurrent host
-edits while a stream is open are not visible; this is a research subset, not
-full CRT or Win32 file semantics.
-
 ### Process environment
 
 `getenv`, `GetEnvironmentVariableA` and `GetEnvironmentVariableW` read a
@@ -329,10 +602,9 @@ matches UTC and `tm_isdst` is always zero. 32-bit `time` saturates at the
 
 ### CRT `rand`
 
-`srand`, `rand` and `rand_s` use the publicly documented MSVC LCG
+`srand` and `rand` use the publicly documented MSVC LCG
 (`seed = seed * 214013 + 2531011`, return `(seed >> 16) & 0x7fff`). The seed is
-process-wide. `rand_s` writes that 15-bit value into a guest `unsigned int`;
-it is not a CSPRNG.
+process-wide. `rand_s` is refused: it has to be cryptographically strong.
 
 ### Process-local Winsock UDP and TCP loopback
 
@@ -365,23 +637,6 @@ IPv6, blocking waits on streams and host interfaces remain unsupported.
 next datagram; `WSAEINVAL` on a listening socket) and `FIONBIO` with a nonzero
 argument. Every socket is already non-blocking, so asking for blocking mode
 returns `WSAEOPNOTSUPP` instead of being ignored.
-
-### CRT character and line streams
-
-`fputc`, `putc`, `puts`, `fgetc` and `getc` are registered on `ucrtbase.dll`
-and `api-ms-win-crt-stdio-l1-1-0.dll` and share the stream state of `fopen`.
-The character functions return the byte as an unsigned char or `EOF`; writing
-a read-only stream or reading a write-only one returns `EOF` and sets the
-error indicator. `puts` adds a newline; standard output accepts and discards
-output. A host-backed stream reaches its mounted file at `fclose`. `fputs`,
-`fflush` and `fgets` are left to the separate hosted-C-program stdio tasks.
-
-`ungetc` pushes back one byte after at least one byte has been read: the
-position steps back, and the next read returns the pushed-back byte. It
-clears the end-of-file indicator and is never written to the file; a seek,
-`rewind` or write discards it. Pushing back `EOF`, a second byte, or a byte at
-the start of the stream returns `EOF`. C guarantees only one byte of
-push-back, and Xenora does not provide more.
 
 ### Bounds-checked string copies
 
@@ -526,7 +781,7 @@ before `XAsyncRun` returns (immediate dispatch). With a non-null manual
 completion port; the guest must `XTaskQueueDispatch` those ports.
 `XAsyncGetStatus` with `wait=true` returns `ERROR_NOT_SUPPORTED`.
 
-### Built-in guest modules
+### Guest modules
 
 GetModuleHandleA and GetModuleHandleW recognize synthetic Kernel32 and UCRT
 module names and their registered API-set aliases. GetProcAddress resolves
@@ -538,6 +793,33 @@ expose synthetic module handles and never load host libraries.
 `C:\xenora\guest.exe` for a null handle, and
 `C:\Windows\System32\<module>` for built-in DLL handles. They do not reveal
 host filesystem paths.
+The program's module handle is the base address its image was loaded at.
+`GetModuleHandleA` and `GetModuleHandleW` return it for a null name, and
+otherwise recognize the built-in Kernel32, KernelBase and UCRT modules and the
+API sets registered for Kernel32 and the UCRT. Names compare without case, and
+`.dll` is appended to a name without a dot. Paths and the program's own file name
+are not recognized. Built-in handles are identities without an image.
+
+`GetModuleHandleExA` and `GetModuleHandleExW` also count a reference, pin the
+module, leave the count alone, or find the module by an address. Pinning cannot
+be combined with an unchanged count. The address may lie anywhere in the program's
+image; a built-in module contains only its handle. The program, Kernel32 and
+KernelBase stay loaded whatever the count; the UCRT is unloaded with its last
+reference unless it was pinned. `FreeLibrary` releases only references that were
+counted.
+
+`K32GetModuleInformation`, and `GetModuleInformation` of `psapi.dll`, give the
+program's base, `SizeOfImage` and entry point. They refuse built-in modules with
+`ERROR_NOT_SUPPORTED` and any process but the current one. Microsoft documents no
+error codes for these functions; the ones used are Xenora's choice.
+
+`GetProcAddress` resolves case-sensitive names and ordinals of built-in modules to
+guest service trampolines. The catalog is built after every other standard service
+is registered and leaves out stubs. The program's own export table is not read.
+KernelBase exports only what Microsoft lists for it here. The services resolve
+through the API sets on Microsoft's pages. No host library is ever loaded.
+`crates/loader/tests/modules.rs` runs original C and C++ programs through them;
+nothing was compared with Windows.
 
 ### Synthetic guest files
 
@@ -656,12 +938,12 @@ security-review and implementation-review agents (not a human audit).
 - **Mount quota.** `HostMount::with_quota(bytes, entries)` optionally bounds
   the net bytes and the net number of files and directories that guest
   operations add to a writable mount, relative to its contents when mounted.
-  Writes, extending `SetEndOfFile`, `CreateFileW`, `CreateDirectoryW`,
-  `GetTempFileNameW` and CRT `fopen` are charged; shrinking, `DeleteFileW`
+  Writes, extending `SetEndOfFile`, `CreateFileW`, `CreateDirectoryW` and
+  `GetTempFileNameW` are charged; shrinking, `DeleteFileW`
   and `RemoveDirectoryW` give the amount back, never below zero. An operation
-  that would exceed a limit fails with `ERROR_DISK_FULL` (CRT: `ENOSPC`) and
-  leaves the host unchanged. CRT streams are charged when `fclose` writes them
-  back. Changes made by host processes are not counted, and
+  that would exceed a limit fails with `ERROR_DISK_FULL` and
+  leaves the host unchanged. CRT streams reach only the synthetic C: drive.
+  Changes made by host processes are not counted, and
   `HostMount::usage` reports the current amounts. No quota is set by default.
 - **Errors.** Errors from reading a directory or examining an entry are
   reported, except an entry removed while it is being listed. Host errors map
@@ -744,7 +1026,8 @@ See Microsoft's [event object documentation](https://learn.microsoft.com/windows
 ### Locks, one-time initialization and thread-local storage
 
 These services keep their state in the runtime and key ownership by guest
-TEB. These objects do not block through the guest scheduler yet, so any call that would block stops the
+TEB. With an attached scheduler a call that has to wait blocks only the calling
+guest thread ([guest threads](runtime/threads.md)). Without one it stops the
 guest with the runtime-limit fault (`IllegalInstruction(0xFE)`) rather than
 reporting success. Guest code reaches that fault by entering a critical
 section owned by another thread, acquiring a held SRW lock, or beginning a
@@ -752,7 +1035,7 @@ one-time initialization that another thread has pending.
 
 - Critical sections use the x64 `RTL_CRITICAL_SECTION` layout from
   `winnt.h`. Initialization writes the 40-byte structure. `LockCount` is -1
-  when free and -2 when held; the runtime also updates `RecursionCount` and
+  when free and -2 when held, also while threads wait; the runtime also updates `RecursionCount` and
   `OwningThread`. The owner may enter recursively. `TryEnterCriticalSection`
   returns FALSE when another thread owns it. Leaving a section the caller
   does not own, or using one that was never initialized, stops the guest.
@@ -762,8 +1045,13 @@ one-time initialization that another thread has pending.
   recursive. Releasing a mode the caller does not hold stops the guest.
 - Condition variables check that the caller holds the named lock. A
   zero-timeout sleep returns FALSE with `ERROR_TIMEOUT` and leaves the lock
-  held in its original mode. Longer sleeps return `ERROR_NOT_SUPPORTED`.
-  Wake calls do nothing, because no thread can be sleeping.
+  held in its original mode. With a scheduler, longer sleeps release the lock,
+  block and return with it held again: TRUE when woken, FALSE with
+  `ERROR_TIMEOUT` otherwise. `WakeConditionVariable` wakes the thread that has
+  slept longest, and `WakeAllConditionVariable` wakes all. A wake-up with no
+  sleeper is not remembered. Sleeping with a section entered more than once
+  stops the guest. Without a scheduler longer sleeps return
+  `ERROR_NOT_SUPPORTED`.
 - `InitOnceBeginInitialize` and `InitOnceComplete` support the synchronous
   mode, `INIT_ONCE_CHECK_ONLY` and `INIT_ONCE_INIT_FAILED`. The completed
   context is stored in the `INIT_ONCE` word, so later calls read it back.
@@ -822,10 +1110,11 @@ separately, for diagnostics.
 - `QueryUnbiasedInterruptTime` reports 100 ns ticks since the service state
   was created.
 - `Sleep` and `SleepEx` suspend the calling thread through the clock, so the
-  mock clock advances instead of waiting. No APCs exist, so an alertable sleep
-  always returns zero. `INFINITE` and sleeps longer than 10 seconds stop the
-  guest with the runtime-limit fault, because a single guest thread could not
-  be woken.
+  mock clock advances instead of waiting. With a scheduler other guest threads
+  run meanwhile, zero gives up the rest of the turn, and any duration is
+  accepted. No APCs exist, so an alertable sleep always returns zero. Without a
+  scheduler, `INFINITE` and sleeps longer than 10 seconds stop the guest with
+  the runtime-limit fault, because a single guest thread could not be woken.
 
 ### Services that call guest code
 
@@ -858,8 +1147,8 @@ The CRT uses this for:
   on the default guest heap, and they hold at most 65,536 entries. Execution
   resets the table first, then calls the functions in reverse order of
   registration. `atexit` and `_crt_atexit` record process exit functions,
-  which `_cexit` runs in reverse order. Process termination through `exit` is
-  not modeled.
+  which `_cexit` runs in reverse order and returns. `exit` runs them and
+  then ends the process; see "PE32+ fixture startup" above.
 
 Null comparators, null arrays with a nonzero count, and reversed or
 misaligned tables would reach the CRT invalid-parameter handler. That
@@ -874,6 +1163,33 @@ initialization use `api-ms-win-core-synch-l1-2-0`; SLists use
 `api-ms-win-core-interlocked-l1-1-0`; TLS uses
 `api-ms-win-core-processthreads-l1-1-0`; and FLS uses
 `api-ms-win-core-fibers-l1-1-0`.
+
+### C runtime startup configuration
+
+A C program's startup code configures the C runtime before `main`. Nine
+services record what it sets and return what their public documentation says.
+They are declared in the typed registry (`docs/runtime/services.md`), all
+`partial`, because nothing acts on a recorded value:
+
+| Service | Returns | Not provided |
+| --- | --- | --- |
+| `_set_app_type(type)` | nothing | Nothing depends on the type |
+| `_set_new_mode(mode)` | the previous mode; -1 and `errno` `EINVAL` unless the mode is 0 or 1 | `malloc` never calls a new handler |
+| `_configthreadlocale(request)` | the setting before the call (1 enabled, 2 disabled; a program starts disabled); -1 and `errno` `EINVAL` unless the request is 0, 1 or 2 | There is no locale |
+| `__setusermatherr(handler)` | nothing | The handler is never called |
+| `_set_invalid_parameter_handler(handler)` | the previous handler, null at first | No service calls it for an invalid argument |
+| `__p__fmode()`, `__p__commode()` | the address of the guest `int` `_fmode` (initially `_O_TEXT`, `0x4000`, as documented) or `_commode` (initially 0; its documentation gives no initial value) | Nothing reads either until stdio exists |
+| `signal(sig, handler)` | the previous handler, `SIG_DFL` at first; `SIG_ERR` and `errno` `EINVAL` for a signal other than `SIGINT`, `SIGILL`, `SIGFPE`, `SIGSEGV`, `SIGTERM` and `SIGABRT` | No signal is ever raised. One table serves the process |
+| `SetUnhandledExceptionFilter(filter)` | the previous filter, null at first | No exception reaches it |
+
+`_fmode` and `_commode` share one 8-byte block allocated from the process heap
+on the first call to either. `ServicesState::crt_app_type` and
+`ServicesState::crt_user_math_error` let a host read the two values no service
+returns. `signal.h` also defines `SIGBREAK` and `SIGABRT_COMPAT`, which the
+documentation of `signal` does not list; they are refused, and whether Windows
+accepts them was not checked. `memcpy` also resolves through
+`api-ms-win-crt-private-l1-1-0.dll`, the API set the mingw-w64 runtime imports
+it from. None of this has been compared with Windows.
 
 ## Synthetic tiled textures
 
@@ -968,6 +1284,65 @@ compare function. Colour and the stored depth are both read back.
 These passes are checked on the GPU with Metal validation against expectations
 derived independently from the public semantics; synthetic fixtures only.
 
+## Hosted C++ guests and the cooperative scheduler
+
+`run_synthetic_startup` runs the guest's entry point directly on the calling
+thread, so a guest that called `CreateThread` was refused with
+`ERROR_NOT_SUPPORTED`: the thread services require a scheduler, because they
+run a guest thread and let it wait for another.
+
+`run_synthetic_startup_scheduled` runs the same startup under the
+[deterministic cooperative scheduler](../crates/loader/src/scheduler.rs). The
+entry point and every thread it creates take turns, one guest thread at a
+time, and share one instruction budget. The state passed to it must be the one
+the import registry was built with, because the scheduler finds the guest's
+threads through it. A guest that exits the process still reports its own exit
+status.
+
+A hosted C++ guest additionally needs the C++ runtime services. `libstdc++-6.dll`
+provides `operator new` and `operator delete`, which reuse the same guest heap
+the C runtime's `malloc` and `free` use, `std::string`'s out-of-line
+`_M_dispose` and `_S_copy`, and libstdc++'s error paths. Those error paths are
+noreturn functions: Xenora implements no C++ exception machinery, so they stop
+the guest with the runtime-limit fault instead of returning.
+
+`libgcc_s_seh-1.dll!__emutls_get_address` provides GCC's emulated
+thread-local storage. The compiler emits a descriptor holding one variable's
+size and alignment and passes the descriptor's address; the runtime returns the
+calling thread's own block for that descriptor, so two guest threads never
+share a thread-local variable.
+
+C++ exceptions and stack unwinding are **not** implemented. They need a
+guest-side SEH unwinder that walks the guest stack through its
+`RUNTIME_FUNCTION` tables, not a service, so a C++ guest is built with
+`-fno-exceptions` until that milestone lands.
+
+## Guest graphics command path
+
+`xenora_graphics.dll` exposes the graphics runtime to guest code, so a guest
+program can author graphics work instead of receiving one fixed draw. The
+exports cover device, command queue, command allocator and command list
+creation; buffer and render-target resources; viewport, render-target, vertex
+and index binding; draws; execution; framebuffer readback into guest memory;
+and ordered destruction. Every export takes Win64 arguments, returns an
+`HRESULT`, and passes generation-checked opaque handles, never host pointers.
+
+A guest draw travels from the loaded executable through the import binding and
+the service layer into `GraphicsContext`, out to a backend that renders
+through the translated gfx1030 stages, and back as pixels in a render-target
+resource the guest can read. The native Metal path crosses the existing
+`BackendRenderer` closure boundary, so the loader stays free of a direct Metal
+dependency and the deterministic software reference rasteriser remains the
+default on a host without a GPU.
+
+Destruction is ordered and enforced: a device outlives its queues, allocators,
+command lists and resources, an allocator outlives its command lists, a
+resource outlives the recording lists that reference it, and a recording list
+must be closed before it is destroyed. A refusal is an explicit error.
+
+The exact exports, arguments and limits are in the
+[guest graphics command path](runtime/guest-graphics.md).
+
 ### Guest texture binding (descriptor tables)
 
 `GraphicsContext` lets a guest command list sample one texture in the pixel
@@ -1011,3 +1386,28 @@ interpolated palette entries differently (171/84 against 170/85, measured
 on an M5 Pro), so the tests use endpoint colours only. Pipeline
 state objects do not exist yet, so the backend, not the guest, chooses the
 pixel shader. These entry points are not yet wired to guest imports.
+
+## Native app: running an executable and the Metal HUD
+
+`Xenora.app` runs a chosen executable only through the `xenora run` worker,
+which `scripts/build-app.sh` bundles as `Contents/MacOS/xenora-cli` (not
+`xenora`: the default macOS file system ignores case, so that name would be
+the app's own `Xenora`). The Run action passes `run --experimental --pe
+<file>`, then `--trace` when the Metal HUD is on, then `--` and the program
+arguments typed in the window. The worker's separate process and 15-second
+wall deadline apply exactly as on the command line, where a program has no
+step limit unless `--max-steps` gives one (#448), and the app
+adds no execution path of its own. The app shows the worker's exit status
+(the program's own; 124 is the wall deadline, 125 any other runner or guest
+failure, 2 a refused command line), the last `trace stage=` it printed, and
+up to 256 KiB of each output stream. `XENORA_CLI` names another worker, for
+`swift run`.
+
+The Metal HUD switch (View > Show Metal HUD, Shift-Command-H, or the Display
+section) is off by default and is stored in the app's defaults as
+`MetalHUDEnabled`. It overlays the Metal device, frame size, frame counters
+and host-measured timings on fixture frames. A program run has no draw path
+yet and `xenora run` takes `--metal-hud` for the embedded fixtures only, so
+for a program the switch turns on tracing instead. Apple's Metal Performance
+HUD cannot attach to these frames, which are read back from offscreen Metal
+targets and drawn as images.

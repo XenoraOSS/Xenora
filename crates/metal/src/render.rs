@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 use std::ptr::NonNull;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{NSObjectProtocol, ProtocolObject};
@@ -10,21 +12,205 @@ use objc2_metal::{
     MTLCommandEncoder, MTLCommandQueue, MTLCompareFunction, MTLDepthStencilDescriptor,
     MTLDepthStencilState, MTLDevice, MTLFunction, MTLIndexType, MTLLoadAction, MTLOrigin,
     MTLPixelFormat, MTLPrimitiveType, MTLRegion, MTLRenderCommandEncoder, MTLRenderPassDescriptor,
-    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLShaderValidation, MTLSize,
-    MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureUsage, MTLViewport,
+    MTLRenderPipelineDescriptor, MTLRenderPipelineState, MTLShaderValidation, MTLSharedEvent,
+    MTLSize, MTLStorageMode, MTLStoreAction, MTLTexture, MTLTextureDescriptor, MTLTextureUsage,
+    MTLViewport,
 };
 
 use xenora_texture::{Bc1Subresource, Bc1Upload};
 
 use super::{
-    ComputeInput, MetalError, NativeCompute, compile_options, complete_command, find_function,
-    validate_source,
+    ComputeInput, MetalError, NativeCompute, check_command_status, compile_options,
+    complete_command, find_function, validate_source,
 };
 
 const MAX_PIXELS: usize = 4096;
 const PIXEL_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA8Unorm;
 
+/// A GPU timeline on the render device. Signal commands use the render
+/// context's queue; queue waits use a separate Metal command queue.
+pub struct MetalRenderFence {
+    event: Retained<ProtocolObject<dyn MTLSharedEvent>>,
+    signal_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    wait_queue: Retained<ProtocolObject<dyn MTLCommandQueue>>,
+    state: Mutex<RenderFenceState>,
+}
+
+struct RenderFenceState {
+    pending_signal: Option<EventCommand>,
+    enqueued_value: u64,
+    failed: bool,
+}
+
+struct EventCommand(Retained<ProtocolObject<dyn MTLCommandBuffer>>);
+
+// SAFETY: As with the compute submission table, committed Metal command
+// buffers move between threads under exclusive access. We only query status
+// and release the retained command under the pending-signal mutex.
+unsafe impl Send for EventCommand {}
+
+impl MetalRenderFence {
+    /// Schedule an update after already-committed work on the render queue.
+    /// At most one signal per fence remains in flight.
+    pub fn signal(&self, value: u64) -> Result<u64, MetalError> {
+        autoreleasepool(|_| {
+            let mut state = self.state()?;
+            if value < state.enqueued_value || value == u64::MAX {
+                return Err(MetalError::new(
+                    "render fence signal",
+                    "reserved or decreasing value",
+                ));
+            }
+            if let Some(previous) = state.pending_signal.as_ref() {
+                Self::finish(previous, Duration::from_secs(1))?;
+            }
+            let command = Self::event_command(&self.signal_queue)?;
+            command
+                .0
+                .encodeSignalEvent_value((*self.event).as_ref(), value);
+            command.0.commit();
+            state.pending_signal = Some(command);
+            state.enqueued_value = value;
+            Ok(self.event.signaledValue())
+        })
+    }
+
+    /// Read the completed shared-event value and surface a failed command.
+    pub fn completed_value(&self) -> Result<u64, MetalError> {
+        autoreleasepool(|_| {
+            let mut state = self.state()?;
+            Self::retire_signal(&mut state)?;
+            Ok(self.event.signaledValue())
+        })
+    }
+
+    /// Wait on the host without enqueueing any GPU work.
+    pub fn host_wait(&self, value: u64, timeout: Duration) -> Result<u64, MetalError> {
+        let completed = self.completed_value()?;
+        if completed < value {
+            // Round down: a sub-millisecond budget is a poll.
+            let millis = u64::try_from(timeout.min(Duration::from_secs(1)).as_millis()).unwrap();
+            if millis != 0 {
+                self.event.waitUntilSignaledValue_timeoutMS(value, millis);
+            }
+        }
+        self.completed_value()
+    }
+
+    /// Encode a wait on another Metal queue once a producer has been
+    /// committed. The caller may render after the wait buffer completes.
+    pub fn queue_wait(&self, value: u64, timeout: Duration) -> Result<u64, MetalError> {
+        autoreleasepool(|_| {
+            let mut state = self.state()?;
+            Self::retire_signal(&mut state)?;
+            if value > state.enqueued_value {
+                return Ok(self.event.signaledValue());
+            }
+            if timeout.is_zero() {
+                return Err(MetalError::new(
+                    "render fence",
+                    "queue wait budget exhausted",
+                ));
+            }
+            let command = Self::event_command(&self.wait_queue)?;
+            command
+                .0
+                .encodeWaitForEvent_value((*self.event).as_ref(), value);
+            command.0.commit();
+            if let Err(error) = Self::finish(&command, timeout.min(Duration::from_secs(1))) {
+                // Retire this fence permanently and release the wait buffer
+                // even if the producer failed. The sentinel is never returned
+                // by completed_value, and no dependent draw is submitted.
+                state.failed = true;
+                self.event.setSignaledValue(u64::MAX);
+                return Err(error);
+            }
+            Self::retire_signal(&mut state)?;
+            Ok(self.event.signaledValue())
+        })
+    }
+
+    fn state(&self) -> Result<std::sync::MutexGuard<'_, RenderFenceState>, MetalError> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|_| MetalError::new("render fence", "state poisoned"))?;
+        if state.failed {
+            return Err(MetalError::new(
+                "render fence",
+                "previous queue wait failed",
+            ));
+        }
+        Ok(state)
+    }
+
+    fn retire_signal(state: &mut RenderFenceState) -> Result<(), MetalError> {
+        if let Some(command) = state.pending_signal.as_ref() {
+            let status = command.0.status();
+            if super::is_terminal(status) {
+                check_command_status(&command.0, status)?;
+                state.pending_signal = None;
+            }
+        }
+        Ok(())
+    }
+
+    fn event_command(
+        queue: &ProtocolObject<dyn MTLCommandQueue>,
+    ) -> Result<EventCommand, MetalError> {
+        queue
+            .commandBuffer()
+            .map(EventCommand)
+            .ok_or_else(|| MetalError::new("render fence commandBuffer", "allocation failed"))
+    }
+
+    fn finish(command: &EventCommand, timeout: Duration) -> Result<(), MetalError> {
+        let started = Instant::now();
+        loop {
+            let status = command.0.status();
+            if super::is_terminal(status) {
+                return check_command_status(&command.0, status);
+            }
+            let remaining = timeout.saturating_sub(started.elapsed());
+            if remaining.is_zero() {
+                return Err(MetalError::new(
+                    "render fence",
+                    "event command deadline exceeded",
+                ));
+            }
+            std::thread::sleep(remaining.min(Duration::from_micros(250)));
+        }
+    }
+}
+
 impl NativeCompute {
+    /// Create a shared event on this context's Metal device.
+    pub fn new_render_fence(&self, initial_value: u64) -> Result<MetalRenderFence, MetalError> {
+        if initial_value == u64::MAX {
+            return Err(MetalError::new("render fence", "reserved initial value"));
+        }
+        autoreleasepool(|_| {
+            let event = self
+                .device
+                .newSharedEvent()
+                .ok_or_else(|| MetalError::new("newSharedEvent", "render fence unavailable"))?;
+            let wait_queue = self.device.newCommandQueue().ok_or_else(|| {
+                MetalError::new("newCommandQueue", "render fence wait queue unavailable")
+            })?;
+            event.setSignaledValue(initial_value);
+            Ok(MetalRenderFence {
+                event,
+                signal_queue: self.queue.clone(),
+                wait_queue,
+                state: Mutex::new(RenderFenceState {
+                    pending_signal: None,
+                    enqueued_value: initial_value,
+                    failed: false,
+                }),
+            })
+        })
+    }
+
     /// Draw one triangle with trusted MSL into a cleared RGBA8Unorm target.
     ///
     /// The entries are ordered vertex, then fragment. Vertex slot zero holds

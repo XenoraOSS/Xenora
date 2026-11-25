@@ -1,0 +1,894 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+//! The streams of a hosted C program, and where their output goes.
+//!
+//! `__acrt_iob_func` hands out the `FILE` objects for `stdin`, `stdout` and
+//! `stderr`. What the guest writes to `stdout` and to `stderr` is kept in two
+//! host-side buffers that a host or a test reads through `ServicesState`.
+//!
+//! The standard streams "always open in text mode by default", and in text
+//! mode "each line feed is replaced with a carriage return-line feed pair"
+//! that "has no effect on the return value" (Microsoft Learn, "Text and
+//! binary mode file I/O" and "fwrite"). The buffers hold the bytes after that
+//! replacement, which is what the operating system would be handed.
+//!
+//! A stream that `fopen` returned is a file on the in-memory drive; its rules
+//! are in `crt_files.rs`.
+//!
+//! Output is never held back: there is no buffering to flush or to configure.
+//! A pointer that is no stream, reading `stdin` and closing a standard stream
+//! are not modelled and stop the guest with the runtime-limit fault.
+
+use super::ObjectState;
+use super::crt_files::{self, EACCES, EBADF, EINVAL, ENOENT, ERANGE, FileStreams};
+use super::crt_format::{self, Floats, FormatError, Source};
+use super::files::DriveEntry;
+use crate::cpu::ExitReason;
+use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
+
+/// The exit for a request the runtime does not model.
+const RUNTIME_LIMIT: ExitReason = ExitReason::IllegalInstruction(0xFE);
+/// `typedef struct _iobuf { void* _Placeholder; } FILE;` (corecrt_wstdio.h).
+const FILE_BYTES: u64 = 8;
+/// The most a format string or one `fwrite` or `fputs` may hold.
+const MAX_TRANSFER: u64 = 1 << 20;
+/// The longest file name or mode string `fopen` reads, in bytes.
+const MAX_NAME: u64 = 260;
+/// The most each captured stream keeps. Writing past it stops the guest.
+pub const MAX_CAPTURED_OUTPUT: usize = 16 << 20;
+
+/// Option bits of `__stdio_common_vfprintf` (corecrt_stdio_config.h). The
+/// wide-specifier bit concerns the wide functions and changes nothing this
+/// engine formats. The other two say how floating point is written. Any
+/// other bit stops the guest.
+const LEGACY_WIDE_SPECIFIERS: u64 = 0x04;
+const LEGACY_THREE_DIGIT_EXPONENTS: u64 = 0x10;
+const STANDARD_ROUNDING: u64 = 0x20;
+/// `__stdio_common_vsprintf` only: which termination and result rules of the
+/// buffer forms apply (corecrt_stdio_config.h). The generated code of a
+/// mingw-w64 `snprintf` or `sprintf` passes the standard bit, and `_snprintf`
+/// the legacy one. Setting both contradicts itself and stops the guest.
+const LEGACY_VSPRINTF_NULL_TERMINATION: u64 = 0x01;
+const STANDARD_SNPRINTF_BEHAVIOR: u64 = 0x02;
+const KNOWN_OPTIONS: u64 = LEGACY_WIDE_SPECIFIERS
+    | LEGACY_THREE_DIGIT_EXPONENTS
+    | STANDARD_ROUNDING
+    | LEGACY_VSPRINTF_NULL_TERMINATION
+    | STANDARD_SNPRINTF_BEHAVIOR;
+
+/// `_IOFBF`, `_IOLBF` and `_IONBF` (stdio.h).
+const IOFBF: i32 = 0x0000;
+const IOLBF: i32 = 0x0040;
+const IONBF: i32 = 0x0004;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Stream {
+    Input,
+    Output,
+    Error,
+    /// A stream `fopen` returned, by the address of its `FILE` object.
+    File(u64),
+}
+
+#[derive(Default)]
+pub(super) struct StandardStreams {
+    /// Guest address of the three `FILE` objects, `stdin` first.
+    files: Option<u64>,
+    output: Vec<u8>,
+    error: Vec<u8>,
+    /// The streams `fopen` has open.
+    opened: FileStreams,
+    /// Guest blocks that the services returning memory hand out.
+    scratch: Scratch,
+    /// What the guest reads from `stdin` (#467).
+    input: Input,
+}
+
+/// The standard input: bytes the host supplied before the run, after the
+/// text-mode replacement of CR LF with LF. It is bounded so that a run stays
+/// deterministic; the limit is the CLI's, not the runtime's.
+#[derive(Default)]
+struct Input {
+    bytes: Vec<u8>,
+    position: usize,
+    /// The end-of-file indicator: set when a read meets the end, cleared by
+    /// nothing here because there is no `rewind` or `clearerr` yet.
+    eof: bool,
+}
+
+impl Input {
+    /// One character, or none at the end. Meeting the end sets the
+    /// indicator, even when characters came before it in the same read.
+    fn character(&mut self) -> Option<u8> {
+        match self.bytes.get(self.position) {
+            Some(&byte) => {
+                self.position += 1;
+                Some(byte)
+            }
+            None => {
+                self.eof = true;
+                None
+            }
+        }
+    }
+
+    /// `fgets`: at most `limit` characters, stopping after a line feed,
+    /// which is kept. Nothing at the end of file.
+    fn line(&mut self, limit: usize) -> Option<Vec<u8>> {
+        let mut line = Vec::new();
+        while line.len() < limit {
+            match self.character() {
+                Some(byte) => {
+                    line.push(byte);
+                    if byte == b'\n' {
+                        break;
+                    }
+                }
+                None => break,
+            }
+        }
+        if line.is_empty() { None } else { Some(line) }
+    }
+}
+
+/// Guest blocks in the process heap that the C runtime services which return
+/// memory write into. A block stays valid until the next call that fills it
+/// again, which is what the documentation of `strerror` asks for.
+#[derive(Default)]
+struct Scratch {
+    /// The block `strerror` writes its message into, and its size.
+    message: Option<(u64, u64)>,
+    /// The block `localeconv` returns.
+    locale: Option<u64>,
+}
+
+/// What a service returns when it fails with a result and an `errno` value:
+/// the handler sets `errno` to the second field and returns the first.
+pub(super) struct Failed<T>(pub T, pub u32);
+
+pub(super) type Outcome<T> = Result<Result<T, Failed<T>>, ExitReason>;
+
+fn fault(error: MemoryError) -> ExitReason {
+    ExitReason::MemoryFault(error)
+}
+
+/// The bytes of the C string at `address`, without its terminator.
+/// A file name argument as the drive stores it. `None` for a null pointer
+/// or a name longer than `MAX_PATH`; `Some(None)` for a name the drive
+/// rejects. A name that cannot be read stops the guest with a fault.
+fn drive_name(memory: &GuestMemory, name: u64) -> Result<Option<Option<String>>, ExitReason> {
+    if name == 0 {
+        return Ok(None);
+    }
+    let bytes = c_string(memory, name, MAX_NAME + 1).map_err(fault)?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_NAME {
+        return Ok(None);
+    }
+    Ok(Some(ObjectState::drive_path(&bytes)))
+}
+
+fn c_string(memory: &GuestMemory, address: u64, limit: u64) -> Result<Vec<u8>, MemoryError> {
+    let mut bytes = Vec::new();
+    for offset in 0..limit {
+        let at = address.checked_add(offset).ok_or(MemoryError::Overflow)?;
+        match memory.read_u8(at)? {
+            0 => break,
+            byte => bytes.push(byte),
+        }
+    }
+    Ok(bytes)
+}
+
+/// Arguments from the guest's `va_list`: one 8-byte slot each, in order.
+struct VaList<'a> {
+    memory: &'a GuestMemory,
+    next: u64,
+}
+
+impl Source for VaList<'_> {
+    fn argument(&mut self) -> Result<u64, MemoryError> {
+        let slot = self.memory.read_u64(self.next)?;
+        self.next = self.next.checked_add(8).ok_or(MemoryError::Overflow)?;
+        Ok(slot)
+    }
+
+    fn string(&mut self, address: u64, limit: usize) -> Result<Vec<u8>, MemoryError> {
+        c_string(self.memory, address, limit as u64)
+    }
+}
+
+/// What one format string and its arguments make.
+enum Formatted {
+    Text(Vec<u8>),
+    /// The format itself is invalid: `%n` or a character that has no meaning
+    /// as a type. Windows calls the invalid parameter handler; each caller
+    /// says what it does when execution continues.
+    Invalid,
+}
+
+/// Reads the format string and formats it with the arguments at `arguments`,
+/// or explains why not. Shared by the stream and the buffer forms.
+fn formatted(
+    memory: &GuestMemory,
+    options: u64,
+    format: u64,
+    locale: u64,
+    arguments: u64,
+    buffer_options: bool,
+) -> Result<Formatted, ExitReason> {
+    // The behaviour bits belong to the buffer forms; passing them to a
+    // stream form stops the guest, as an unknown bit does.
+    let known = if buffer_options {
+        KNOWN_OPTIONS
+    } else {
+        KNOWN_OPTIONS & !(LEGACY_VSPRINTF_NULL_TERMINATION | STANDARD_SNPRINTF_BEHAVIOR)
+    };
+    if options & !known != 0 || locale != 0 {
+        return Err(RUNTIME_LIMIT);
+    }
+    let template = c_string(memory, format, MAX_TRANSFER + 1).map_err(fault)?;
+    if template.len() as u64 > MAX_TRANSFER {
+        return Err(RUNTIME_LIMIT);
+    }
+    let mut source = VaList {
+        memory,
+        next: arguments,
+    };
+    let floats = Floats {
+        three_digit_exponents: options & LEGACY_THREE_DIGIT_EXPONENTS != 0,
+        standard_rounding: options & STANDARD_ROUNDING != 0,
+    };
+    match crt_format::format(&template, &mut source, floats) {
+        Ok(text) => Ok(Formatted::Text(text)),
+        Err(FormatError::Invalid) => Ok(Formatted::Invalid),
+        Err(FormatError::Unsupported | FormatError::TooLong) => Err(RUNTIME_LIMIT),
+        Err(FormatError::Fault(error)) => Err(fault(error)),
+    }
+}
+
+/// `__stdio_common_vsprintf` (#466). Which result and termination rules the
+/// option bits select is in the comment at [`STANDARD_SNPRINTF_BEHAVIOR`];
+/// the rules themselves are from Microsoft's `snprintf` and `_snprintf`
+/// pages:
+///
+/// - Standard: the result is always the length the text would have, and a
+///   terminator is written whenever `count` is not zero, even when the text
+///   does not fit. A null buffer with a zero count is the documented size
+///   query and writes nothing.
+/// - Legacy: an exact fit returns the length without writing a terminator.
+///   Truncation returns -1. Both forms support a size query with a null
+///   buffer and zero count.
+///
+/// A null buffer with a nonzero count is an invalid parameter in both. The
+/// writes never leave `[buffer, buffer + count)`. A fault inside the buffer
+/// stops the guest.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn print_to_buffer(
+    memory: &mut GuestMemory,
+    options: u64,
+    buffer: u64,
+    count: u64,
+    format: u64,
+    locale: u64,
+    arguments: u64,
+) -> Outcome<i32> {
+    let standard = options & STANDARD_SNPRINTF_BEHAVIOR != 0;
+    let legacy = options & LEGACY_VSPRINTF_NULL_TERMINATION != 0;
+    if standard && legacy {
+        return Err(RUNTIME_LIMIT);
+    }
+    if format == 0 || buffer == 0 && count != 0 {
+        return Ok(Err(Failed(-1, EINVAL)));
+    }
+    let mut text = match formatted(memory, options, format, locale, arguments, true)? {
+        // Xenora's choice for when execution continues after the invalid
+        // parameter handler: nothing is written and the result is -1.
+        Formatted::Invalid => return Ok(Err(Failed(-1, EINVAL))),
+        Formatted::Text(text) => text,
+    };
+    let len = text.len() as u64;
+    if buffer == 0 {
+        return Ok(Ok(len as i32));
+    }
+    if count != 0 {
+        let capacity = count - u64::from(standard);
+        text.truncate(len.min(capacity) as usize);
+        if standard || len < count {
+            text.push(0);
+        }
+        memory.write_bytes(buffer, &text).map_err(fault)?;
+    }
+    // Microsoft's page does not set errno for a truncated legacy write.
+    Ok(Ok(if standard || len <= count {
+        len as i32
+    } else {
+        -1
+    }))
+}
+
+/// `__stdio_common_vsprintf_s` (#466), the secure form. Microsoft's
+/// `sprintf_s` page: a null buffer, a zero count or a null format invokes the
+/// invalid parameter handler, and so does an invalid format string; a buffer
+/// too small for the text and its terminator is set to the empty string and
+/// the result is -1. When execution continues the error is `EINVAL`, or
+/// `ERANGE` for the small buffer. Xenora does not model the handler, so
+/// execution always continues.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn print_to_buffer_secure(
+    memory: &mut GuestMemory,
+    options: u64,
+    buffer: u64,
+    count: u64,
+    format: u64,
+    locale: u64,
+    arguments: u64,
+) -> Outcome<i32> {
+    if buffer == 0 || count == 0 || format == 0 {
+        return Ok(Err(Failed(-1, EINVAL)));
+    }
+    let mut text = match formatted(memory, options, format, locale, arguments, true)? {
+        Formatted::Invalid => {
+            memory.write_u8(buffer, 0).map_err(fault)?;
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        Formatted::Text(text) => text,
+    };
+    let len = text.len() as u64;
+    if len >= count {
+        memory.write_u8(buffer, 0).map_err(fault)?;
+        return Ok(Err(Failed(-1, ERANGE)));
+    }
+    text.push(0);
+    memory.write_bytes(buffer, &text).map_err(fault)?;
+    Ok(Ok(len as i32))
+}
+
+impl StandardStreams {
+    pub(super) fn output(&self) -> &[u8] {
+        &self.output
+    }
+
+    pub(super) fn error(&self) -> &[u8] {
+        &self.error
+    }
+
+    /// `__acrt_iob_func`: the `FILE` object of `stdin` (0), `stdout` (1) or
+    /// `stderr` (2). The three are allocated together from the process heap
+    /// on first use.
+    pub(super) fn file(&mut self, memory: &mut GuestMemory, index: u32) -> Result<u64, ExitReason> {
+        if index > 2 {
+            return Err(RUNTIME_LIMIT);
+        }
+        let base = match self.files {
+            Some(base) => base,
+            None => {
+                let base = memory
+                    .map_heap_allocation(PROCESS_HEAP, (3 * FILE_BYTES) as usize)
+                    .map_err(fault)?;
+                self.files = Some(base);
+                base
+            }
+        };
+        Ok(base + FILE_BYTES * u64::from(index))
+    }
+
+    /// Which stream a non-null `FILE*` is: a standard stream, or one `fopen`
+    /// returned. Any other pointer is no stream.
+    fn stream(&self, file: u64) -> Result<Stream, ExitReason> {
+        match self.files.map(|base| file.wrapping_sub(base)) {
+            Some(0) => Ok(Stream::Input),
+            Some(8) => Ok(Stream::Output),
+            Some(16) => Ok(Stream::Error),
+            _ if self.opened.contains(file) => Ok(Stream::File(file)),
+            _ => Err(RUNTIME_LIMIT),
+        }
+    }
+
+    /// A stream that may be written. Writing `stdin` is not modelled.
+    fn writable(&self, file: u64) -> Result<Stream, ExitReason> {
+        match self.stream(file)? {
+            Stream::Input => Err(RUNTIME_LIMIT),
+            stream => Ok(stream),
+        }
+    }
+
+    /// Write to a stream. A standard stream is captured in text mode: each
+    /// line feed becomes a carriage return and a line feed. A file stream can
+    /// fail, with the `errno` value in the inner result and nothing written.
+    fn write(
+        &mut self,
+        drive: &mut ObjectState,
+        stream: Stream,
+        bytes: &[u8],
+    ) -> Result<Result<(), u32>, ExitReason> {
+        let captured = match stream {
+            Stream::Output => &mut self.output,
+            Stream::Error => &mut self.error,
+            Stream::Input => return Err(RUNTIME_LIMIT),
+            Stream::File(file) => return Ok(self.opened.write(drive, file, bytes)),
+        };
+        let feeds = bytes.iter().filter(|byte| **byte == b'\n').count();
+        if bytes.len() + feeds > MAX_CAPTURED_OUTPUT - captured.len() {
+            return Err(RUNTIME_LIMIT);
+        }
+        for &byte in bytes {
+            if byte == b'\n' {
+                captured.push(b'\r');
+            }
+            captured.push(byte);
+        }
+        Ok(Ok(()))
+    }
+
+    /// `__stdio_common_vfprintf`. Returns the number of characters written,
+    /// before the text-mode replacement.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn print(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        options: u64,
+        file: u64,
+        format: u64,
+        locale: u64,
+        arguments: u64,
+    ) -> Outcome<i32> {
+        // A null stream or format: the function returns -1 and sets errno.
+        if file == 0 || format == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        let stream = self.writable(file)?;
+        let text = match formatted(memory, options, format, locale, arguments, false)? {
+            // Xenora's choice for when execution continues after the invalid
+            // parameter handler: nothing is written and the result is that of
+            // a null format.
+            Formatted::Invalid => return Ok(Err(Failed(-1, EINVAL))),
+            Formatted::Text(text) => text,
+        };
+        // "A negative value if an output error occurs."
+        Ok(match self.write(drive, stream, &text)? {
+            Ok(()) => Ok(text.len() as i32),
+            Err(errno) => Err(Failed(-1, errno)),
+        })
+    }
+
+    /// `putchar`: `fputc` to `stdout`. Returns the character, or `EOF` with
+    /// `errno` set.
+    pub(super) fn put_character_stdout(
+        &mut self,
+        drive: &mut ObjectState,
+        character: i32,
+    ) -> Outcome<i32> {
+        let byte = [character as u8];
+        Ok(match self.write(drive, Stream::Output, &byte)? {
+            Ok(()) => Ok(i32::from(character as u8)),
+            Err(errno) => Err(Failed(-1, errno)),
+        })
+    }
+
+    /// `fwrite`. Returns the number of whole items written.
+    pub(super) fn write_items(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        buffer: u64,
+        size: u64,
+        count: u64,
+        file: u64,
+    ) -> Outcome<u64> {
+        if buffer == 0 || file == 0 {
+            return Ok(Err(Failed(0, EINVAL)));
+        }
+        let stream = self.writable(file)?;
+        let Some(length) = size
+            .checked_mul(count)
+            .filter(|bytes| *bytes <= MAX_TRANSFER)
+        else {
+            return Err(RUNTIME_LIMIT);
+        };
+        if length == 0 {
+            return Ok(Ok(0));
+        }
+        let mut bytes = vec![0; length as usize];
+        memory.read_bytes(buffer, &mut bytes).map_err(fault)?;
+        // Fewer items than `count` means an error. A failed write here
+        // writes none of them.
+        Ok(match self.write(drive, stream, &bytes)? {
+            Ok(()) => Ok(count),
+            Err(errno) => Err(Failed(0, errno)),
+        })
+    }
+
+    /// `fputs`. Writes the string without its terminator and returns a
+    /// nonnegative value, here 0; `EOF` is -1.
+    pub(super) fn put_string(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        text: u64,
+        file: u64,
+    ) -> Outcome<i32> {
+        if text == 0 || file == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        let stream = self.writable(file)?;
+        let bytes = c_string(memory, text, MAX_TRANSFER + 1).map_err(fault)?;
+        if bytes.len() as u64 > MAX_TRANSFER {
+            return Err(RUNTIME_LIMIT);
+        }
+        Ok(match self.write(drive, stream, &bytes)? {
+            Ok(()) => Ok(0),
+            Err(errno) => Err(Failed(-1, errno)),
+        })
+    }
+
+    /// `fputc`. Writes the character converted to `unsigned char` to the
+    /// stream and returns it, or `EOF` with `errno` set.
+    pub(super) fn put_character(
+        &mut self,
+        drive: &mut ObjectState,
+        character: i32,
+        file: u64,
+    ) -> Outcome<i32> {
+        if file == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        let stream = self.writable(file)?;
+        let byte = [character as u8];
+        Ok(match self.write(drive, stream, &byte)? {
+            Ok(()) => Ok(i32::from(character as u8)),
+            Err(errno) => Err(Failed(-1, errno)),
+        })
+    }
+
+    /// `_lock_file` and `_unlock_file`. The lock itself does nothing, and
+    /// that is a consequence of the execution model rather than a swallowed
+    /// error: Xenora's guest scheduler runs one guest thread at a time, so
+    /// two guest threads can never hold the same stream at once.
+    pub(super) fn lock(&self, file: u64) -> Outcome<i32> {
+        if file == 0 {
+            return Ok(Err(Failed(-1, EBADF)));
+        }
+        // A pointer that is no stream is not modelled.
+        self.stream(file)?;
+        Ok(Ok(0))
+    }
+
+    /// A guest block of at least `size` bytes that a service writes into.
+    /// The same block is used again until a larger one is needed.
+    pub(super) fn message_block(
+        &mut self,
+        memory: &mut GuestMemory,
+        size: u64,
+    ) -> Result<u64, ExitReason> {
+        if let Some((address, capacity)) = self.scratch.message
+            && capacity >= size
+        {
+            return Ok(address);
+        }
+        let address = memory
+            .map_heap_allocation(PROCESS_HEAP, size.max(1) as usize)
+            .map_err(fault)?;
+        self.scratch.message = Some((address, size));
+        Ok(address)
+    }
+
+    /// The guest block `localeconv` returns. It is filled once and stays.
+    pub(super) fn locale_block(
+        &mut self,
+        memory: &mut GuestMemory,
+        size: u64,
+    ) -> Result<u64, ExitReason> {
+        match self.scratch.locale {
+            Some(address) => Ok(address),
+            None => {
+                let address = memory
+                    .map_heap_allocation(PROCESS_HEAP, size.max(1) as usize)
+                    .map_err(fault)?;
+                self.scratch.locale = Some(address);
+                Ok(address)
+            }
+        }
+    }
+
+    /// `getchar`: one character from the standard input, or `EOF` at the
+    /// end. Text mode is applied when the input is supplied, so a character
+    /// here is already after the replacement.
+    pub(super) fn character_stdin(&mut self) -> i32 {
+        match self.input.character() {
+            Some(byte) => i32::from(byte),
+            None => -1,
+        }
+    }
+
+    /// `feof`: the end-of-file indicator of the stream. Only the standard
+    /// input can end here; the captured output streams cannot be read, and
+    /// file streams do not expose theirs yet.
+    pub(super) fn end_of_file(&mut self, file: u64) -> Outcome<i32> {
+        if file == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        match self.stream(file)? {
+            Stream::Input => Ok(Ok(i32::from(self.input.eof))),
+            _ => Ok(Ok(0)),
+        }
+    }
+
+    /// The bytes the guest reads from `stdin`, before any text-mode
+    /// replacement. A CR LF pair becomes one line feed; a CR alone stays.
+    pub(super) fn set_input(&mut self, bytes: &[u8]) {
+        let mut translated = Vec::with_capacity(bytes.len());
+        let mut at = 0;
+        while at < bytes.len() {
+            if bytes[at] == b'\r' && bytes.get(at + 1) == Some(&b'\n') {
+                // The CR of a pair is dropped; the LF is pushed next round.
+            } else {
+                translated.push(bytes[at]);
+            }
+            at += 1;
+        }
+        self.input = Input {
+            bytes: translated,
+            position: 0,
+            eof: false,
+        };
+    }
+
+    /// `fflush`. A null stream means every open stream. Nothing is ever held
+    /// back, so there is nothing to do.
+    pub(super) fn flush(&self, file: u64) -> Result<i32, ExitReason> {
+        if file != 0 {
+            self.stream(file)?;
+        }
+        Ok(0)
+    }
+
+    /// `setvbuf`. The mode and size are checked as documented and then have
+    /// no effect.
+    pub(super) fn set_buffer(&self, file: u64, mode: i32, size: u64) -> Outcome<i32> {
+        if file == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        self.stream(file)?;
+        let valid = match mode {
+            // "No buffer is used, regardless of buffer or size."
+            IONBF => true,
+            // "Allowable range: 2 <= size <= INT_MAX".
+            IOFBF | IOLBF => (2..=i32::MAX as u64).contains(&size),
+            _ => false,
+        };
+        Ok(if valid {
+            Ok(0)
+        } else {
+            Err(Failed(-1, EINVAL))
+        })
+    }
+
+    /// `fopen`. Returns the new `FILE*`, or null with the `errno` value.
+    pub(super) fn open(
+        &mut self,
+        memory: &mut GuestMemory,
+        drive: &mut ObjectState,
+        name: u64,
+        mode: u64,
+    ) -> Outcome<u64> {
+        // A null name or mode is an invalid parameter, as an empty one is.
+        if name == 0 || mode == 0 {
+            return Ok(Err(Failed(0, EINVAL)));
+        }
+        let name = c_string(memory, name, MAX_NAME + 1).map_err(fault)?;
+        let mode = c_string(memory, mode, MAX_NAME + 1).map_err(fault)?;
+        if name.len() as u64 > MAX_NAME || mode.len() as u64 > MAX_NAME {
+            return Ok(Err(Failed(0, EINVAL)));
+        }
+        Ok(self
+            .opened
+            .open(memory, drive, &name, &mode)
+            .map_err(|errno| Failed(0, errno)))
+    }
+
+    /// `fclose`. Returns 0, or `EOF` with `EINVAL` for a null stream. Closing
+    /// a standard stream is not modelled.
+    pub(super) fn close(&mut self, memory: &mut GuestMemory, file: u64) -> Outcome<i32> {
+        if file == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        match self.stream(file)? {
+            Stream::File(file) => {
+                self.opened.close(memory, file);
+                Ok(Ok(0))
+            }
+            _ => Err(RUNTIME_LIMIT),
+        }
+    }
+
+    /// `_ftelli64`: the position of a file stream, or -1 with `EINVAL` for a
+    /// null stream. The standard streams have no position here: telling
+    /// one is not modelled and stops the guest.
+    pub(super) fn tell(&self, file: u64) -> Outcome<i64> {
+        if file == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        match self.stream(file)? {
+            Stream::File(file) => Ok(self
+                .opened
+                .tell(file)
+                .map(|position| position as i64)
+                .map_err(|errno| Failed(-1, errno))),
+            _ => Err(RUNTIME_LIMIT),
+        }
+    }
+
+    /// `_fseeki64`: 0, or -1 with `EINVAL` for a null stream, an origin
+    /// other than `SEEK_SET`, `SEEK_CUR` or `SEEK_END`, or a position before
+    /// the start. Seeking a standard stream is not modelled.
+    pub(super) fn seek(
+        &mut self,
+        drive: &ObjectState,
+        file: u64,
+        offset: i64,
+        origin: u32,
+    ) -> Outcome<i32> {
+        if file == 0 || origin > 2 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        match self.stream(file)? {
+            Stream::File(file) => Ok(self
+                .opened
+                .seek(drive, file, offset, origin)
+                .map(|()| 0)
+                .map_err(|errno| Failed(-1, errno))),
+            _ => Err(RUNTIME_LIMIT),
+        }
+    }
+
+    /// `fgetpos`: the position into the guest's `fpos_t`, an `__int64` in
+    /// the Universal CRT. 0, or -1 with `EINVAL` for a null argument. A
+    /// `fpos_t` that cannot be written stops the guest with a fault.
+    pub(super) fn get_position(
+        &self,
+        memory: &mut GuestMemory,
+        file: u64,
+        position: u64,
+    ) -> Outcome<i32> {
+        if file == 0 || position == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        match self.tell(file)? {
+            Ok(at) => {
+                memory.write_u64(position, at as u64).map_err(fault)?;
+                Ok(Ok(0))
+            }
+            Err(Failed(_, errno)) => Ok(Err(Failed(-1, errno))),
+        }
+    }
+
+    /// `fsetpos`: move to the position a `fpos_t` holds, as `_fseeki64`
+    /// from the start does.
+    pub(super) fn set_position(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &ObjectState,
+        file: u64,
+        position: u64,
+    ) -> Outcome<i32> {
+        if file == 0 || position == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        let at = memory.read_u64(position).map_err(fault)? as i64;
+        self.seek(drive, file, at, 0)
+    }
+
+    /// `remove`: delete a file. 0, or -1 with `ENOENT` for a name the drive
+    /// does not hold or rejects, `EACCES` for a directory, `EINVAL` for a
+    /// null name. An open stream does not stop it, as streams take no part
+    /// in sharing here; its later operations fail with `EBADF`.
+    pub(super) fn remove_file(
+        &self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        name: u64,
+    ) -> Outcome<i32> {
+        let Some(path) = drive_name(memory, name)? else {
+            return Ok(Err(Failed(-1, EINVAL)));
+        };
+        let Some(path) = path else {
+            return Ok(Err(Failed(-1, ENOENT)));
+        };
+        Ok(match drive.drive_entry(&path) {
+            DriveEntry::File => {
+                drive.drive_remove(&path);
+                Ok(0)
+            }
+            DriveEntry::Directory => Err(Failed(-1, EACCES)),
+            DriveEntry::Missing { .. } => Err(Failed(-1, ENOENT)),
+        })
+    }
+
+    /// `rename`: give a file a new name. 0, or -1 with `ENOENT` when the old
+    /// name holds nothing, `EACCES` when the new name already exists or its
+    /// directory does not, `EINVAL` for a null or rejected name. Renaming a
+    /// directory is not modelled and stops the guest.
+    pub(super) fn rename_file(
+        &self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        from: u64,
+        to: u64,
+    ) -> Outcome<i32> {
+        let (Some(from), Some(to)) = (drive_name(memory, from)?, drive_name(memory, to)?) else {
+            return Ok(Err(Failed(-1, EINVAL)));
+        };
+        let (Some(from), Some(to)) = (from, to) else {
+            return Ok(Err(Failed(-1, EINVAL)));
+        };
+        match drive.drive_entry(&from) {
+            DriveEntry::File => {}
+            DriveEntry::Directory => return Err(RUNTIME_LIMIT),
+            DriveEntry::Missing { .. } => return Ok(Err(Failed(-1, ENOENT))),
+        }
+        Ok(match drive.drive_entry(&to) {
+            DriveEntry::Missing { parent: true } => {
+                drive.drive_rename(&from, &to);
+                Ok(0)
+            }
+            _ => Err(Failed(-1, EACCES)),
+        })
+    }
+
+    /// `fgets`. Returns `buffer`, or null at end of file or on an error.
+    pub(super) fn get_line(
+        &mut self,
+        memory: &mut GuestMemory,
+        drive: &ObjectState,
+        buffer: u64,
+        count: i32,
+        file: u64,
+    ) -> Outcome<u64> {
+        if buffer == 0 || file == 0 || count <= 0 {
+            return Ok(Err(Failed(0, EINVAL)));
+        }
+        // Up to count - 1 characters, and then the terminator.
+        let limit = ((count - 1) as u64).min(MAX_TRANSFER) as usize;
+        let line = match self.stream(file)? {
+            Stream::File(file) => match self.opened.read_line(drive, file, limit) {
+                Ok(line) => line,
+                Err(errno) => return Ok(Err(Failed(0, errno))),
+            },
+            Stream::Input => self.input.line(limit),
+            // The output streams cannot be read.
+            Stream::Output | Stream::Error => return Ok(Err(Failed(0, EBADF))),
+        };
+        // End of file with nothing read: null, and the buffer is left alone.
+        let Some(mut line) = line else {
+            return Ok(Ok(0));
+        };
+        line.push(0);
+        memory.write_bytes(buffer, &line).map_err(fault)?;
+        Ok(Ok(buffer))
+    }
+
+    /// `perror`: the message, a colon and a space when there is a message,
+    /// then the text for `errno` and a newline, to `stderr`.
+    pub(super) fn report(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        message: u64,
+        errno: u32,
+    ) -> Result<(), ExitReason> {
+        let mut text = Vec::new();
+        if message != 0 {
+            text = c_string(memory, message, MAX_TRANSFER + 1).map_err(fault)?;
+            if text.len() as u64 > MAX_TRANSFER {
+                return Err(RUNTIME_LIMIT);
+            }
+        }
+        if !text.is_empty() {
+            text.extend_from_slice(b": ");
+        }
+        text.extend_from_slice(crt_files::error_text(errno).as_bytes());
+        text.push(b'\n');
+        self.write(drive, Stream::Error, &text).map(|_| ())
+    }
+}

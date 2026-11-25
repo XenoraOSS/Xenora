@@ -67,6 +67,140 @@ The runner prints the guest's exit value and returns a nonzero host status
 for load or interpreter faults. The gate compares both outcomes. These
 fixtures exercise synthetic commands and local Apple Silicon readback.
 
+## Module programs
+
+`modules.c` is an original C program with no C library linked. It compares its
+module handle, image range and entry point with the linker's `__ImageBase`, its
+own start function and its mapped header, tries the `GetModuleHandleEx` flags and
+their failures, counts references to the C runtime, and ends through an
+`ExitProcess` it looks up by name, with 0x4D0D. A failed check ends it with its
+number. `modules.cpp` is an original hosted C++ program that holds references with
+a class and uses the Windows headers' `MODULEINFO` and the `psapi.dll` export.
+
+`build-modules.sh [output directory]` builds both with mingw-w64 at `-O0`, `-O1`,
+`-O2` and `-Os`. `MODULES_BREAK` is a control that fails its fifth check,
+`MODULES_PIN` pins a module, and one build imports from API sets and KernelBase.
+`cargo test -p xenora-loader --test modules` runs the script and the programs, and
+fails when the compiler is missing. No executable is committed.
+
+## Process startup programs
+
+`startup_info.c` is an original C program with no C library linked. It reads its
+startup information and command line, narrow and wide, checks that a second read
+gives the same, splits the command line by Microsoft's documented rules after
+trying its splitter on their six examples, saves what it found on the synthetic
+`C:` drive and exits with 0x5157. A failed check exits with its number.
+`startup_info.cpp` is an original hosted C++ program whose global constructor
+reads the same before `main`. It uses the public Windows headers, so its layout
+assertions are independent of the structure declared in the C program.
+
+`build-startup-info.sh [output directory]` builds both with mingw-w64 at `-O0`,
+`-O1`, `-O2` and `-Os`. `MINGW_GCC` names the compiler. Three more builds of the C
+program are controls: `STARTUP_BREAK` expects a wrong size, one imports the four
+functions from API sets, and one names an API set Microsoft's
+pages do not list and must be refused before entry. `cargo test -p xenora-loader --test startup_info` runs
+the script and the programs, and fails when the compiler is missing. No
+executable is committed.
+
+## A hosted C++ program
+
+`guest_cpp.cpp` is an original C++ program that uses the C++ runtime as an
+ordinary program does. It has a namespace-scope object with a constructor and
+a destructor, a function-local static that is constructed on first use, a
+`std::vector<int>` sorted with `std::sort` and a comparator, a `std::string`
+compared with `memcmp`, a table of function pointers called through the
+table, a base class and a derived class whose virtual method is called
+through a base pointer, a `thread_local` variable, a second guest thread
+created with `CreateThread` and waited for with `WaitForSingleObject`, a file
+it writes with `fprintf` and reads back with `fgets`, and an `atexit`
+registration. It prints ten lines and exits with the number of the first check
+that fails.
+
+`build-guest-cpp.sh [output directory]` builds it. `cargo test -p xenora-loader
+--test guest_cpp_path` runs that script and then runs the result through
+`run_synthetic_startup_scheduled`, the standard services and the DBT. No built
+executable is committed: the test builds from source every time, in CI too.
+The test fails, and does not skip, when the compiler is missing.
+
+Compiler configuration:
+
+| Step | Command |
+| --- | --- |
+| Compile and link | `x86_64-w64-mingw32-g++ -O<level> -fno-rtti -fno-exceptions -fno-threadsafe-statics -o <name>.exe guest_cpp.cpp` |
+
+It is built at `-O0`, `-O1`, `-O2` and `-Os`, and once more as a control that
+imports a service no Xenora service provides, so the loader must refuse the
+image before the entry point runs.
+
+`-fno-exceptions` and `-fno-rtti` are deliberate for this program: it links
+the C++ runtime dynamically, and the guest runtime provides that runtime's
+functions as services, which have no exception machinery or type-info
+vtables. Exceptions are exercised by the next program, which links the C++
+runtime statically. `std::thread` is not used either: it needs
+`libwinpthread-1.dll` and its eighteen pthread entry points, where the Win32
+thread API the loader already implements with its deterministic cooperative
+scheduler is enough.
+
+Tools. `MINGW_GXX` defaults to Homebrew's mingw-w64 when it is installed and
+otherwise to the `x86_64-w64-mingw32-g++` on `PATH`. As with the other
+mingw-built fixtures, the script requires the compiler driver, the compiler
+proper, the assembler and the linker, and every library they load that is a
+file on disk, to be ARM64, and checks each with `file` and `lipo -archs`.
+
+## A C++ program that throws
+
+`guest_cpp_exceptions.cpp` is an original C++ program that throws and
+catches (#447). It throws an `int`; a `std::runtime_error` five calls deep,
+each frame owning an object whose destructor counts; a `std::logic_error`
+that a handler rethrows with `throw;`; a plain class caught with
+`catch (...)`; a second exception from inside a handler; and an exception
+through a frame with an 8 KiB stack array while two `double` values live
+across the throwing call. It prints one line per check and returns the
+number of checks that failed. Given the argument `uncaught`, it throws an
+exception nobody catches; since #453 that exception reaches the C runtime's
+startup filter, which lets `std::terminate` report it and `abort` end the
+process with exit code 3.
+
+`build-guest-cpp.sh` builds it too, at `-O0`, `-O1`, `-O2` and `-Os`:
+
+| Step | Command |
+| --- | --- |
+| Compile and link | `x86_64-w64-mingw32-g++ -O<level> -Wall -Wextra -Werror -static-libstdc++ -static-libgcc -o guest-cpp-exceptions-<level>.exe guest_cpp_exceptions.cpp` |
+
+Static linking puts GCC's SEH unwinder and C++ personality into the
+executable as guest code, so the program needs the operating system's
+exception services rather than C++ runtime services. `cargo test -p
+xenora-loader --test guest_cpp_exceptions` builds and runs it.
+
+## C structured exceptions
+
+`guest_c_seh.c` is an original freestanding C program that uses MSVC-style
+structured exception handling (#453). Each case is selected at compile time
+with `-DCASE=<name>`, reports what ran by calling `xenora_note` (a service the
+test registers under `xenora_seh.dll`) and exits with its own status. The
+cases are a divide by zero caught by `__try`/`__except` (exit 42); a filter
+that declines so the caller's filter catches it (43); a fault no filter
+accepts; a write, a read and a call to unmapped addresses whose filter reports
+the access-violation parameters (44 to 46); UD2 under a constant filter (47);
+a `__finally` one frame below the handler and one in the handler's own frame
+(48, 49); and a filter that continues execution after a raise (50). Each
+case's notes and status are stated next to it in the source.
+
+`build-guest-c-seh.sh` builds every case at `-O0`, `-O1` and `-O2`, with
+import libraries made from definition files and no C runtime:
+
+| Step | Command |
+| --- | --- |
+| Compile | `clang --target=x86_64-pc-windows-msvc -O<level> -fasync-exceptions -ffreestanding -fno-stack-protector -Wall -Wextra -Werror -Wno-unused-function -DCASE=<case> -c guest_c_seh.c` |
+| Link | `lld-link /entry:entry /subsystem:console /nodefaultlib /machine:x64 <case>.obj kernel32.lib ucrtbase.lib xenora_seh.lib` |
+
+`-fasync-exceptions` makes a CPU fault inside `__try` catchable. `cargo test
+-p xenora-loader --test guest_c_seh` builds and runs every case.
+The script finds its linker as `build-gate-a1.sh` does: `LLD_LINK`, Homebrew
+`lld`, the `lld-link` beside a Homebrew LLVM, `lld-link` on `PATH`, then the
+`rust-lld` in the active Rust toolchain, so a machine with only Rust and a
+clang can build the cases.
+
 ## Gate A1: a C program with no C library
 
 `gate_a1.c` is an original C program that links no C library. It imports
@@ -110,3 +244,118 @@ Provenance. The source, the name lists and the script were written for Xenora
 and are GPL-3.0-or-later. Nothing from a Windows SDK, a C runtime or another
 project is compiled or linked. The compiler and linker are LLVM projects
 under the Apache License 2.0 with LLVM exceptions; they are tools, not inputs.
+
+## Gate A2: a hosted C program
+
+`gate_a2.c` is an original C program that uses the standard C library as an
+ordinary program does. It includes only `<stdio.h>`, `<stdlib.h>` and
+`<string.h>`. It prints its arguments, fills heap memory from a small
+generator, sorts it with `qsort` and a callback, checksums it, writes a
+report with `fprintf` and `fputs`, reads it back with `fgets`, `strtoul` and
+`strtoull`, confirms that a missing file is reported, registers a function
+with `atexit`, and returns from `main`. It checks every result itself and
+exits with the number of the first check that fails. It uses no floating
+point and reads no input.
+
+`build-gate-a2.sh [output directory]` builds it. `cargo test -p xenora-loader
+--test gate_a2` runs that script and then runs the result through
+`run_synthetic_startup`, the standard services and the DBT. No built
+executable is committed: the test builds from source every time, in CI too.
+The test fails, and does not skip, when the compiler is missing.
+
+Compiler configuration:
+
+| Step | Command |
+| --- | --- |
+| Compile and link | `x86_64-w64-mingw32-gcc -O<level> -Wall -Wextra -Werror -o <name>.exe gate_a2.c` |
+
+It is built at `-O0`, `-O1`, `-O2` and `-Os`, and three more times at `-O1` as
+controls: `GATE_BREAK` (one wrong expectation), `GATE_EXIT` (`exit(42)` half
+way) and `GATE_ABORT` (`abort()` half way).
+One further build, `GATE_SPIN`, prints its arguments, counts to the first one
+and ends; given 0 it never ends. It also writes one line to standard error. The gate does not run it;
+`crates/cli/tests/run_program.rs` uses it to test the limits of `xenora run`.
+
+Tools. `MINGW_GCC` defaults to Homebrew's mingw-w64 when it is installed and
+otherwise to the `x86_64-w64-mingw32-gcc` on `PATH`. The toolchain must use
+the Universal C Runtime, which Homebrew's does; a toolchain built for the
+older `msvcrt.dll` produces a program that imports other functions. On macOS
+the script requires the compiler driver, the compiler proper, the assembler
+and the linker, and every library they load that is a file on disk, to be
+ARM64: it checks each with `file` and `lipo -archs`, and each library
+`otool -L` lists with `lipo -archs`. It writes the compiler version to
+`toolchain.txt`, which the test prints, and what the native checks looked at
+to `toolchain-native.txt`. The test builds into a directory of its own for
+each test process under the Cargo target directory.
+
+Provenance. The source and the script were written for Xenora and are
+GPL-3.0-or-later. Unlike the Gate A1 program, each built executable contains
+code that is not Xenora's: mingw-w64's startup objects and a little of GCC's
+support library, as any program built with that toolchain does. Neither is
+stored in the repository or in its history; the executables are test output.
+mingw-w64's `COPYING` file says its runtime is under the Zope Public License
+2.1 except for parts marked as public domain, BSD or LGPL; GCC's support
+library is GPL-3.0-or-later with the GCC Runtime Library Exception. The C
+library itself is not linked: the program imports it by name, and Xenora's
+own services answer.
+
+## The buffer forms of printf
+
+`tests/compat_fixtures/crt_sprintf.c` (#466) is a hosted C program that
+formats into a buffer with `snprintf`, `sprintf`, `_snprintf` and
+`sprintf_s`, queries the needed size with a null buffer, and writes a
+character with `putchar`. Built by `build-crt-sprintf.sh` with mingw-w64
+(UCRT flavour) and `-fno-builtin`, the calls are imports of
+`api-ms-win-crt-stdio-l1-1-0.dll`. Each check compares the result and the
+bytes in and around the buffer with what Microsoft's `snprintf`,
+`_snprintf` and `sprintf_s` pages describe: termination and truncation for
+the standard, legacy and secure forms, the guards before and after the
+buffer included. It is built at `-O0` and `-O2`, and once at `-O1` with
+`CRT_SPRINTF_BREAK`, which expects a wrong length on purpose as a control.
+`crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+Provenance is as for Gate A2: the source and script are Xenora's, and the
+executables are test output that contains mingw-w64 startup code.
+
+## The standard input
+
+`tests/compat_fixtures/crt_stdin.c` (#467) is a hosted C program that reads
+lines from its standard input with a buffer of 8 and checks what ISO C says
+at the edges. Built by `build-crt-stdin.sh` with mingw-w64 (UCRT flavour)
+and `-fno-builtin`, the calls are imports of `api-ms-win-crt-stdio-l1-1-0.dll`.
+The host pipes a fixed input: two short lines in CR LF, one line longer than
+the buffer, and a last line with no newline; the checks count the reads, the
+bytes after the text-mode replacement, the line feeds and any surviving
+carriage return, and the end-of-file indicator. With the argument `empty`
+and no input it expects every count to be zero. It is built at `-O0` and
+`-O2`, and once at `-O1` with `CRT_STDIN_BREAK`, which expects a wrong read
+count as a control. `crates/cli/tests/run_program.rs` runs all three through
+`xenora run`, and feeds one 1 MiB + 1 byte to check the refusal. Provenance
+is as for Gate A2.
+
+## C runtime file positions
+
+`tests/compat_fixtures/crt_files.c` (#493) is a hosted C program that writes
+files on Xenora's in-memory drive and moves through them with `_ftelli64`,
+`_fseeki64`, `fgetpos` and `fsetpos`, in binary and text mode, then renames
+and removes them. Every expected value follows from the bytes it writes; it
+exits with the number of the first failed check, or 0. `build-crt-files.sh`
+builds it with mingw-w64 (UCRT flavour) at `-O0` and `-O2`, and once at `-O1`
+with `CRT_FILES_BREAK`, which expects a text position without the carriage
+returns, so check 17 fails, as a control. `crates/cli/tests/run_program.rs`
+runs all three through `xenora run`. Provenance is as for Gate A2.
+
+## C runtime mathematics
+
+`tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the
+49 `math.h` functions Xenora serves beyond `sqrt` and `fabs`. Built by
+`build-crt-math.sh` with mingw-w64 (UCRT flavour) and `-fno-builtin`, each call
+is an import of `api-ms-win-crt-math-l1-1-0.dll`; the arguments are volatile so
+no call is folded at compile time. The program compares every result with a
+value it carries and exits with the number of the first failed check, or 0.
+Functions that IEC 60559 fixes exactly must match to the bit; the others may be
+one unit in the last place from a reference computed with mpmath at 200 bits by
+`crt_math_reference.py`. It is built at `-O0` and `-O2`, and once at `-O1` with
+`CRT_MATH_BREAK`, which expects a wrong value for check 67, as a control.
+`crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+Provenance is as for Gate A2: the source and scripts are Xenora's, and the
+executables are test output that contains mingw-w64 startup code.

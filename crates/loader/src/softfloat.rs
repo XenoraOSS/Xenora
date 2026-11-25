@@ -29,6 +29,18 @@ pub enum Rounding {
     Zero,
 }
 
+impl Rounding {
+    /// From the two-bit encoding MXCSR and the ROUND immediates share.
+    pub fn from_bits(bits: u64) -> Self {
+        match bits & 3 {
+            0 => Rounding::Nearest,
+            1 => Rounding::Down,
+            2 => Rounding::Up,
+            _ => Rounding::Zero,
+        }
+    }
+}
+
 /// Arithmetic controls from MXCSR.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Control {
@@ -42,12 +54,7 @@ pub struct Control {
 impl Control {
     pub fn from_mxcsr(mxcsr: u32) -> Self {
         Self {
-            rounding: match mxcsr >> 13 & 3 {
-                0 => Rounding::Nearest,
-                1 => Rounding::Down,
-                2 => Rounding::Up,
-                _ => Rounding::Zero,
-            },
+            rounding: Rounding::from_bits(u64::from(mxcsr >> 13)),
             denormals_are_zero: mxcsr & 1 << 6 != 0,
             flush_to_zero: mxcsr & 1 << 15 != 0,
             overflow_masked: mxcsr & 1 << 10 != 0,
@@ -599,6 +606,40 @@ pub fn from_integer(format: Format, value: i64, control: &Control) -> Outcome {
         false,
         control,
     )
+}
+
+/// Round to an integral value in the same format, keeping the sign of a zero.
+/// ROUND reports no denormal operand, and invalid only for a signaling NaN.
+pub fn round_to_integral(
+    format: Format,
+    value: u64,
+    rounding: Rounding,
+    control: &Control,
+) -> Outcome {
+    let (value, _) = operand(format, value, control);
+    if format.is_nan(value) {
+        return Outcome {
+            bits: value | format.quiet_bit(),
+            flags: if format.is_signaling(value) {
+                INVALID
+            } else {
+                0
+            },
+        };
+    }
+    let sign = format.sign(value);
+    let (significand, exponent) = format.unpack(value);
+    if format.is_infinite(value) || exponent >= 0 {
+        return exact(value);
+    }
+    let (magnitude, inexact) =
+        round_shift(u128::from(significand), -exponent, false, sign, rounding);
+    // The magnitude fits the significand, so this only normalizes it.
+    let mut outcome = round(format, sign, magnitude, 0, false, control);
+    if inexact {
+        outcome.flags |= PRECISION;
+    }
+    outcome
 }
 
 /// Convert to a signed integer of `bits`. A NaN or a value outside the range

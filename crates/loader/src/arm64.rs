@@ -307,23 +307,27 @@ impl Arm64Assembler {
     }
 
     /// RBIT Xd, Xn: reverse the bit order of the source.
+    /// Panics if a register number exceeds 31.
     pub fn rbit_64(&mut self, xd: u8, xn: u8) {
-        self.emit(0xdac0_0000 | ((u32::from(xn) & 0x1f) << 5) | (u32::from(xd) & 0x1f));
+        assert!(xd <= XZR && xn <= XZR, "RBIT register must be in 0..=31");
+        self.emit(0xdac0_0000 | (u32::from(xn) << 5) | u32::from(xd));
     }
 
     /// CLZ Xd, Xn: count the leading zero bits of the source.
+    /// Panics if a register number exceeds 31.
     pub fn clz_64(&mut self, xd: u8, xn: u8) {
-        self.emit(0xdac0_1000 | ((u32::from(xn) & 0x1f) << 5) | (u32::from(xd) & 0x1f));
+        assert!(xd <= XZR && xn <= XZR, "CLZ register must be in 0..=31");
+        self.emit(0xdac0_1000 | (u32::from(xn) << 5) | u32::from(xd));
     }
 
     /// LSLV Xd, Xn, Xm: shift the source left by the amount in Xm.
+    /// Panics if a register number exceeds 31.
     pub fn lslv_64(&mut self, xd: u8, xn: u8, xm: u8) {
-        self.emit(
-            0x9ac2_2000
-                | ((u32::from(xm) & 0x1f) << 16)
-                | ((u32::from(xn) & 0x1f) << 5)
-                | (u32::from(xd) & 0x1f),
+        assert!(
+            xd <= XZR && xn <= XZR && xm <= XZR,
+            "LSLV register must be in 0..=31"
         );
+        self.emit(0x9ac0_2000 | (u32::from(xm) << 16) | (u32::from(xn) << 5) | u32::from(xd));
     }
 
     /// LDR Qt, [Xn, #offset] (offset a multiple of 16)
@@ -829,6 +833,44 @@ mod tests {
         branch.b(0);
         branch.patch_b(0, 5);
         assert_eq!(branch.instructions()[0], 0x14000005);
+    }
+
+    #[test]
+    fn rbit_clz_lslv_encodings_match_llvm() {
+        // A64 words from Apple Clang's integrated assembler and llvm-objdump.
+        let mut asm = Arm64Assembler::new();
+        asm.rbit_64(X10, X9); // rbit x10, x9
+        asm.rbit_64(X0, XZR); // rbit x0, xzr
+        asm.clz_64(X10, X10); // clz x10, x10
+        asm.clz_64(XZR, X30); // clz xzr, x30
+        asm.lslv_64(X11, X11, X10); // lslv x11, x11, x10
+        asm.lslv_64(X0, X1, X0); // lslv x0, x1, x0
+        asm.lslv_64(XZR, X30, XZR); // lslv xzr, x30, xzr
+        assert_eq!(
+            asm.instructions(),
+            [
+                0xdac0012a, 0xdac003e0, 0xdac0114a, 0xdac013df, 0x9aca216b, 0x9ac02020, 0x9adf23df,
+            ]
+        );
+    }
+
+    #[test]
+    fn rbit_clz_lslv_reject_out_of_range_registers() {
+        let invalid_operands: [fn(&mut Arm64Assembler); 7] = [
+            |asm| asm.rbit_64(32, X0),
+            |asm| asm.rbit_64(X0, 32),
+            |asm| asm.clz_64(32, X0),
+            |asm| asm.clz_64(X0, 32),
+            |asm| asm.lslv_64(32, X0, X0),
+            |asm| asm.lslv_64(X0, 32, X0),
+            |asm| asm.lslv_64(X0, X0, 32),
+        ];
+        for (index, emit) in invalid_operands.into_iter().enumerate() {
+            let mut asm = Arm64Assembler::new();
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| emit(&mut asm)));
+            assert!(result.is_err(), "invalid operand case {index} was accepted");
+            assert!(asm.instructions().is_empty());
+        }
     }
 
     #[test]

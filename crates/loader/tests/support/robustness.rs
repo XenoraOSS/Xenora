@@ -40,6 +40,7 @@ pub const ARG_ZERO: u8 = 0;
 /// left out, so each input runs quickly and deterministically.
 fn excluded(module: &str, symbol: &str) -> bool {
     module.eq_ignore_ascii_case("xenora_fixture.dll")
+        || module.eq_ignore_ascii_case("xenora_graphics.dll")
         || matches!(symbol, "WSAPoll" | "XTaskQueueDispatch")
 }
 

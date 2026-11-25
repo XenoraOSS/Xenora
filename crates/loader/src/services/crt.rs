@@ -6,8 +6,12 @@ use super::ServicesState;
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus, Win64Args};
 use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
+use crate::runtime::ServiceContext;
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
+
+use super::crt_files;
+use super::crt_streams::{Failed, Outcome};
 
 const SCAN_BUDGET: u64 = 1_048_576;
 const UCRT: &str = "ucrtbase.dll";
@@ -222,20 +226,6 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         registry.set_status(UCRT, symbol, ServiceStatus::Partial);
     }
 
-    registry.register(UCRT, "memchr", |args, _, memory| {
-        if args.r8 == 0 {
-            return Ok(0);
-        }
-        let mut buffer = transfer_buffer(args.r8, 0)?;
-        memory
-            .read_bytes(args.rcx, &mut buffer)
-            .map_err(ExitReason::MemoryFault)?;
-        Ok(buffer
-            .iter()
-            .position(|&byte| byte == args.rdx as u8)
-            .map_or(0, |index| args.rcx + index as u64))
-    });
-
     registry.register(UCRT, "strcpy", |args, _, memory| {
         copy_string(memory, args.rcx, args.rdx, u64::MAX, true)
     });
@@ -308,13 +298,18 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         find_wide(memory, args.rcx, args.rdx as u16, false)
     });
     for symbol in [
-        "memchr", "strcpy", "strncpy", "strcat", "strncat", "strstr", "wcsstr", "strspn",
-        "strcspn", "wcscpy", "wcsncpy", "wcscat", "wcschr", "wcsrchr", "strtok", "strpbrk",
-        "wcsspn", "wcscspn", "wcspbrk", "wcstok", "strtok_s", "wcstok_s",
+        "strcpy", "strncpy", "strcat", "strncat", "strstr", "wcsstr", "strspn", "strcspn",
+        "wcscpy", "wcsncpy", "wcscat", "wcschr", "wcsrchr", "strtok", "strpbrk", "wcsspn",
+        "wcscspn", "wcspbrk", "wcstok", "strtok_s", "wcstok_s",
     ] {
         registry.alias(CRT_STRING_API, UCRT, symbol);
         registry.set_status(UCRT, symbol, ServiceStatus::Partial);
     }
+    // The mingw-w64 C runtime imports `memcpy`, `memmove` and `memcmp`
+    // through this API set.
+    registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "memcpy");
+    registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "memmove");
+    registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "memcmp");
 }
 
 fn find_substring(
@@ -777,9 +772,9 @@ fn append_string(
 }
 
 const ENOMEM: u32 = 12;
-const EINVAL: u32 = 22;
+pub(super) const EINVAL: u32 = 22;
 
-fn set_errno(memory: &mut GuestMemory, teb: u64, error: u32) -> Result<(), ExitReason> {
+pub(super) fn set_errno(memory: &mut GuestMemory, teb: u64, error: u32) -> Result<(), ExitReason> {
     let address = memory
         .crt_errno_address(teb)
         .map_err(ExitReason::MemoryFault)?;
@@ -1022,6 +1017,200 @@ fn free(memory: &mut GuestMemory, address: u64) -> Result<(), ExitReason> {
     }
 }
 
+/// The Universal C runtime services that a C++ guest's runtime imports and
+/// that this runtime models. They are called through the generated adapters
+/// in `runtime_table.rs`, so each takes the service context and the
+/// arguments the registry declares.
+///
+/// The result of a service that returns a value and may set `errno`: the
+/// handler sets `errno` to the second field and returns the first.
+fn or_errno<T>(context: &mut ServiceContext<'_>, outcome: Outcome<T>) -> Result<T, ExitReason> {
+    match outcome? {
+        Ok(value) => Ok(value),
+        Err(Failed(value, errno)) => {
+            set_errno(context.memory, context.teb, errno)?;
+            Ok(value)
+        }
+    }
+}
+
+/// `fputc`. Writes the character converted to `unsigned char` to the stream
+/// and returns it, or `EOF` with `errno` set (stdio.h).
+pub fn fputc(
+    context: &mut ServiceContext<'_>,
+    character: i32,
+    stream: u64,
+) -> Result<i32, ExitReason> {
+    let outcome = {
+        let mut streams = context.state.crt_streams();
+        let mut drive = context.state.objects.lock().expect("guest object state");
+        streams.put_character(&mut drive, character, stream)
+    };
+    or_errno(context, outcome)
+}
+
+/// `_lock_file`. The lock itself does nothing: Xenora's guest scheduler runs
+/// one guest thread at a time, so two guest threads can never hold the same
+/// stream at once. That is a consequence of the execution model, not a
+/// swallowed error.
+pub fn _lock_file(
+    context: &mut ServiceContext<'_>,
+    stream: u64,
+    _mode: i32,
+) -> Result<i32, ExitReason> {
+    let outcome = context.state.crt_streams().lock(stream);
+    or_errno(context, outcome)
+}
+
+/// `_unlock_file`. The counterpart of `_lock_file`, and as empty.
+pub fn _unlock_file(context: &mut ServiceContext<'_>, stream: u64) -> Result<i32, ExitReason> {
+    let outcome = context.state.crt_streams().lock(stream);
+    or_errno(context, outcome)
+}
+
+/// The message `strerror` gives for an error number. The runtime's own error
+/// texts are used, so that `perror` and `strerror` name an error the same
+/// way. Any other number gets the generic text.
+fn error_message(code: i32) -> &'static str {
+    match code {
+        5 => "Input/output error",
+        code if code < 0 => "Unknown error",
+        code => crt_files::error_text(code as u32),
+    }
+}
+
+/// `strerror`. Returns a pointer to a NUL-terminated message for the error
+/// number. The message stays valid until the next call.
+pub fn strerror(context: &mut ServiceContext<'_>, code: i32) -> Result<u64, ExitReason> {
+    let text = error_message(code);
+    let mut bytes = text.as_bytes().to_vec();
+    bytes.push(0);
+    let address = {
+        let mut streams = context.state.crt_streams();
+        streams.message_block(context.memory, bytes.len() as u64)?
+    };
+    context
+        .memory
+        .write_bytes(address, &bytes)
+        .map_err(ExitReason::MemoryFault)?;
+    Ok(address)
+}
+
+/// The C locale's `struct lconv` (corecrt_locale.h): twelve pointers and
+/// eight characters, in the order Microsoft documents.
+const LCONV_BYTES: usize = 104;
+/// The offset of the first character member of `struct lconv`.
+const LCONV_CHARACTERS: usize = 80;
+/// `CHAR_MAX`, the value of a member the current locale does not provide.
+const CHAR_MAX: u8 = 127;
+
+/// One pointer of `struct lconv`.
+fn store_pointer(image: &mut [u8; LCONV_BYTES], offset: usize, value: u64) {
+    image[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+}
+
+/// `localeconv`. Returns a pointer to the C locale's `struct lconv`. Only
+/// the C locale is modelled: no other locale can be set.
+pub fn localeconv(context: &mut ServiceContext<'_>) -> Result<u64, ExitReason> {
+    // The decimal point of the C locale, and the empty string that every
+    // other string member points at.
+    let decimal = b".\0";
+    let empty = b"\0";
+    let size = (LCONV_BYTES + decimal.len() + empty.len()) as u64;
+    let address = {
+        let mut streams = context.state.crt_streams();
+        streams.locale_block(context.memory, size)?
+    };
+    let decimal_at = address + LCONV_BYTES as u64;
+    let empty_at = decimal_at + decimal.len() as u64;
+    let mut image = [0u8; LCONV_BYTES];
+    store_pointer(&mut image, 0, decimal_at);
+    for offset in [8usize, 16, 24, 32, 40, 48, 56, 64, 72] {
+        store_pointer(&mut image, offset, empty_at);
+    }
+    // The C locale has no monetary formatting, so none of its numeric
+    // members is available and every one of them is `CHAR_MAX`.
+    image[LCONV_CHARACTERS..LCONV_CHARACTERS + 8].fill(CHAR_MAX);
+    context
+        .memory
+        .write_bytes(address, &image)
+        .map_err(ExitReason::MemoryFault)?;
+    context
+        .memory
+        .write_bytes(decimal_at, decimal)
+        .map_err(ExitReason::MemoryFault)?;
+    context
+        .memory
+        .write_bytes(empty_at, empty)
+        .map_err(ExitReason::MemoryFault)?;
+    Ok(address)
+}
+
+/// The characters of the C locale are the basic character set, so a byte
+/// above 0x7F is not a valid single-byte character in it.
+const C_LOCALE_LAST: u8 = 0x7F;
+/// `(size_t)-1`, the result of a conversion that fails.
+const CONVERSION_FAILED: u64 = u64::MAX;
+
+/// `mbrtowc`. The C locale is single-byte, so one byte is one character.
+/// The registry declares the multibyte character by value rather than
+/// through a pointer, so the byte to convert is the `character` argument.
+///
+/// The conversion happens whether or not `output` points anywhere; nothing is
+/// written then. The `mbstate_t` is not used in the C locale, so a null
+/// `state` is accepted and a `state` that is not null is left alone.
+pub fn mbrtowc(
+    context: &mut ServiceContext<'_>,
+    output: u64,
+    count: u64,
+    character: i32,
+    _state: u64,
+) -> Result<u64, ExitReason> {
+    if count == 0 {
+        return Ok(0);
+    }
+    let byte = character as u8;
+    if byte > C_LOCALE_LAST {
+        // Not a valid single-byte character in the C locale.
+        return Ok(CONVERSION_FAILED);
+    }
+    if output != 0 {
+        // The null character is the one wide character the C locale writes
+        // as zero.
+        context
+            .memory
+            .write_u32(output, u32::from(byte))
+            .map_err(ExitReason::MemoryFault)?;
+    }
+    // The null character is a character of zero bytes.
+    Ok(u64::from(byte != 0))
+}
+
+/// `wcrtomb`. The C locale is single-byte, so a wide character of the basic
+/// character set is one byte. The conversion happens whether or not `output`
+/// points anywhere; nothing is written then. The `mbstate_t` is not used in
+/// the C locale, so a null `state` is accepted and a `state` that is not
+/// null is left alone.
+pub fn wcrtomb(
+    context: &mut ServiceContext<'_>,
+    output: u64,
+    character: u32,
+    _state: u64,
+) -> Result<u64, ExitReason> {
+    let byte = character;
+    if byte > u32::from(C_LOCALE_LAST) {
+        // The wide character cannot be represented in the C locale.
+        return Ok(CONVERSION_FAILED);
+    }
+    if output != 0 {
+        context
+            .memory
+            .write_u8(output, byte as u8)
+            .map_err(ExitReason::MemoryFault)?;
+    }
+    Ok(1)
+}
+
 /// MSVC-compatible linear congruential generator used by historical UCRT
 /// `rand` / `srand` (publicly documented recurrence). Not cryptographic.
 fn next_rand(seed: &std::sync::atomic::AtomicU32) -> u32 {
@@ -1045,21 +1234,7 @@ pub(super) fn register_rand(registry: &mut ImportRegistry, state: &Arc<ServicesS
     registry.register(UCRT, "rand", move |_, _, _| {
         Ok(u64::from(next_rand(&rand.crt_rand)))
     });
-    let rand_s = Arc::clone(state);
-    registry.register(UCRT, "rand_s", move |args, cpu, memory| {
-        if args.rcx == 0 {
-            set_errno(memory, cpu.gs_base, EINVAL)?;
-            return Ok(u64::from(EINVAL));
-        }
-        // Fill a guest `unsigned int` with 15 bits of LCG output in the low
-        // half, matching `rand`, rather than claiming CSPRNG strength.
-        let value = next_rand(&rand_s.crt_rand);
-        memory
-            .write_u32(args.rcx, value)
-            .map_err(ExitReason::MemoryFault)?;
-        Ok(0)
-    });
-    for symbol in ["srand", "rand", "rand_s"] {
+    for symbol in ["srand", "rand"] {
         registry.alias("api-ms-win-crt-utility-l1-1-0.dll", UCRT, symbol);
         registry.set_status(UCRT, symbol, ServiceStatus::Partial);
     }
@@ -1167,7 +1342,7 @@ fn errno_isolated_by_guest_teb_on_one_host_thread() {
 
 #[cfg(test)]
 #[test]
-fn strcpy_strncpy_strcat_and_memchr_operate_on_guest_memory() {
+fn strcpy_strncpy_and_strcat_operate_on_guest_memory() {
     use crate::cpu::{CpuState, Register};
     use crate::import_table::ImportName;
 
@@ -1194,10 +1369,6 @@ fn strcpy_strncpy_strcat_and_memchr_operate_on_guest_memory() {
     let mut out = [0u8; 3];
     memory.read_bytes(dest, &mut out).unwrap();
     assert_eq!(&out, b"ab\0");
-    assert_eq!(
-        call("memchr", [dest, u64::from(b'b'), 3], &mut cpu, &mut memory),
-        dest + 1
-    );
     assert_eq!(
         call("strncpy", [dest, source, 4], &mut cpu, &mut memory),
         dest

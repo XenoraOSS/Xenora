@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 const UCRT: &str = "ucrtbase.dll";
 const CRT_RUNTIME_API: &str = "api-ms-win-crt-runtime-l1-1-0.dll";
+const CRT_ENVIRONMENT_API: &str = "api-ms-win-crt-environment-l1-1-0.dll";
 const KERNEL32: &str = "kernel32.dll";
 const PROCESS_ENV_API: &str = "api-ms-win-core-processenvironment-l1-1-0.dll";
 const EINVAL: u32 = 22;
@@ -298,6 +299,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     );
 
     registry.alias(CRT_RUNTIME_API, UCRT, "getenv");
+    registry.alias(CRT_ENVIRONMENT_API, UCRT, "getenv");
+    registry.alias(CRT_ENVIRONMENT_API, UCRT, "_putenv");
     registry.alias(CRT_RUNTIME_API, UCRT, "_putenv");
     registry.set_status(UCRT, "getenv", ServiceStatus::Partial);
     registry.set_status(UCRT, "_putenv", ServiceStatus::Partial);

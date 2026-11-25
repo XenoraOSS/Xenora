@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Reference vectors for SSE and SSE2 floating point, from exact fractions.
 
-  generate   write float_vectors.txt next to this file
-  --check    recompute in memory and fail if the committed file differs
+  generate   write float_vectors.txt and dot_vectors.txt next to this file
+  --check    recompute in memory and fail if a committed file differs
 
 Every finite result is computed as an exact `fractions.Fraction` (square roots by
 integer comparison) and then rounded by definition, so nothing here shares code
@@ -12,7 +12,12 @@ sections. Cases whose flags those sections leave open are not generated:
 a denormal dividend over zero, flushing an exact denormal result, and the
 precision flag of a denormal converted to an integer under DAZ.
 
-Line: <operation> <mxcsr> <a> <b> <result> <mxcsr flags>, all values hex.
+Also not generated: a DPPS or DPPD addition of two different NaNs, and one whose
+multiplications stop differently taken together or one by one.
+
+Line: <operation> <mxcsr> <a> <b> <result> <mxcsr flags>, all values hex. In
+dot_vectors.txt the immediate follows the operation, and a result of "-" means an
+unmasked exception was raised.
 """
 
 import random
@@ -21,7 +26,7 @@ from fractions import Fraction
 from math import isqrt
 from pathlib import Path
 
-OUT = Path(__file__).resolve().parent / "float_vectors.txt"
+HERE = Path(__file__).resolve().parent
 IE, DE, ZE, OE, UE, PE = 1, 2, 4, 8, 16, 32
 NEAREST, DOWN, UP, ZERO = range(4)
 
@@ -131,7 +136,11 @@ def finish(fmt, sign, e, locator, control):
     unbounded = quantize(n, side, Fraction(2) ** (e - fmt.frac), sign, mode)
     tiny = unbounded < Fraction(2) ** fmt.emin
     quantum = Fraction(2) ** (max(e, fmt.emin) - fmt.frac)
+    inexact = side is not None
     n, side = locator(quantum)
+    if tiny and not control.get("um", True):
+        # No result. Precision is open if only denormalizing is inexact.
+        return None if inexact != (side is not None) else (0, UE | (PE if inexact else 0))
     result = quantize(n, side, quantum, sign, mode)
     if tiny and ftz:
         if side is None:
@@ -140,6 +149,8 @@ def finish(fmt, sign, e, locator, control):
     if side is not None:
         flags |= PE | (UE if tiny else 0)
     if result >= Fraction(2) ** (fmt.emax + 1):
+        if not control.get("om", True):
+            return 0, OE | (PE if inexact else 0)
         infinite = mode == NEAREST or (mode == UP and not sign) or (mode == DOWN and sign)
         return (fmt.inf if infinite else fmt.inf - 1) + (fmt.top if sign else 0), OE | PE
     return fmt.encode(sign, result), flags
@@ -286,6 +297,69 @@ def to_int(fmt, v, bits, truncate, control):
     return r % 2 ** bits, 0 if side is None else PE
 
 
+def integral(fmt, v, imm, control):
+    """ROUND: mode in imm 0-1 or, by bit 2, MXCSR; bit 3 hides inexactness."""
+    v = prepare(fmt, v, control)
+    if fmt.nan(v):
+        return v | fmt.quiet, IE if fmt.snan(v) else 0
+    if fmt.isinf(v) or fmt.mag(v) == 0:
+        return v, 0
+    x = fmt.value(v)
+    n, side = locate(abs(x), Fraction(1))
+    r = quantize(n, side, Fraction(1), x < 0, control["mode"] if imm // 4 % 2 else imm % 4)
+    return fmt.encode(fmt.neg(v), r), PE if side is not None and imm // 8 % 2 == 0 else 0
+
+
+def dot(fmt, a, b, imm, control, masks):
+    """Lanes of a DPPS or DPPD, and its flags; None instead of lanes if an
+    exception outside `masks` was raised. None if a rule is left open."""
+    flags = 0
+
+    def step(results):
+        """Flags of one step, and whether it stops the instruction."""
+        raised = 0
+        for _, f in results:
+            raised |= f
+        early = raised & (IE | DE | ZE)
+        if early & ~masks:
+            return early, True
+        return raised, bool(raised & ~masks)
+
+    count = len(a)
+    results = []
+    for i in range(count):
+        out = binary("mul", fmt, a[i], b[i], control) if imm // 2 ** (4 + i) % 2 else (0, 0)
+        if out is None:
+            return None
+        results.append(out)
+    raised, stop = step(results)
+    flags |= raised
+    if stop:
+        alone = 0
+        for out in results:
+            f, ended = step([out])
+            alone |= f
+            if ended:
+                break
+        return (None, flags) if alone == flags else None
+    while len(results) > 1:
+        pairs = [(results[i][0], results[i + 1][0]) for i in range(0, len(results), 2)]
+        results = []
+        for x, y in pairs:
+            if fmt.nan(x) and fmt.nan(y) and x != y:
+                return None
+            out = binary("add", fmt, x, y, control)
+            if out is None:
+                return None
+            f, stop = step([out])
+            flags |= f
+            if stop:
+                return None, flags
+            results.append(out)
+    total = results[0][0]
+    return [total if imm // 2 ** i % 2 else 0 for i in range(count)], flags
+
+
 def from_int(fmt, v, bits, control):
     x = v - 2 ** bits if v >= 2 ** (bits - 1) else v
     return rounded(fmt, Fraction(x), control) if x else (0, 0)
@@ -423,18 +497,63 @@ def build():
         x = widen(S, D, v, {"mode": NEAREST, "daz": False, "ftz": False})[0]
         return 0, x ^ (rng.choice([0, 1, 1 << 28, (1 << 28) + 1, (1 << 29) - 1]) if D.mag(x) else 0)
     emit("cvtsd2ss", narrowing, lambda a, b, c: widen(D, S, b, c), 260)
+    for fmt, s in ((S, "ss"), (D, "sd")):
+        for imm in (*range(16), 244):
+            emit(f"round{s}{imm}", lambda fmt=fmt: (0, near_int(fmt, fmt.frac + 2, rng)),
+                 lambda a, b, c, fmt=fmt, imm=imm: integral(fmt, b, imm, c), 48)
+    return "".join(lines)
+
+
+def build_dots():
+    """Every immediate of DPPS and DPPD, some with one exception unmasked."""
+    rng = random.Random(0x444F5453)
+    lines = []
+
+    def lane(fmt):
+        if rng.random() < 0.7:  # near one, so that sums round and cancel
+            value = (fmt.emax + rng.randrange(-3, 4)) << fmt.frac
+            value += rng.randrange(1 << fmt.frac) if rng.random() < 0.5 else 0
+            return value + (fmt.top if rng.random() < 0.5 else 0)
+        return operands(fmt, rng)
+
+    def number(fmt, lanes):
+        return sum(v << (fmt.bits * i) for i, v in enumerate(lanes))
+
+    for fmt, name in ((S, "dpps"), (D, "dppd")):
+        count = 128 // fmt.bits
+        for imm in range(256):
+            done = 0
+            while done < 14:
+                mode = rng.randrange(4)
+                control = {"mode": mode, "daz": rng.random() < 0.2, "ftz": rng.random() < 0.2}
+                masks = 0x3F - (rng.choice([IE, DE, OE, UE, PE]) if done >= 8 else 0)
+                control["om"], control["um"] = bool(masks & OE), bool(masks & UE)
+                mxcsr = masks << 7 | mode << 13 | control["daz"] << 6 | control["ftz"] << 15
+                a = [lane(fmt) for _ in range(count)]
+                b = [lane(fmt) for _ in range(count)]
+                if rng.random() < 0.15 and done >= 8:  # near the ends of the range
+                    scale = rng.choice([1, fmt.emax * 2 - 2])
+                    a = [v % (1 << fmt.frac) + (scale << fmt.frac) for v in a]
+                if rng.random() < 0.2:  # products that cancel exactly
+                    a[1], b[1] = a[0], b[0] ^ fmt.top
+                out = dot(fmt, a, b, imm, control, masks)
+                if out is None:
+                    continue
+                result = "-" if out[0] is None else f"{number(fmt, out[0]):x}"
+                lines.append(f"{name} {imm:x} {mxcsr:x} {number(fmt, a):x} {number(fmt, b):x} {result} {out[1]:x}\n")
+                done += 1
     return "".join(lines)
 
 
 def main(argv):
     if len(argv) != 2 or argv[1] not in ("generate", "--check"):
         sys.exit("usage: float_reference.py generate|--check")
-    text = build()
-    if argv[1] == "generate":
-        OUT.write_text(text)
-    elif OUT.read_text() != text:
-        sys.exit("float_vectors.txt is out of date")
-    print(f"{text.count(chr(10))} vectors")
+    for name, text in (("float_vectors.txt", build()), ("dot_vectors.txt", build_dots())):
+        if argv[1] == "generate":
+            (HERE / name).write_text(text)
+        elif (HERE / name).read_text() != text:
+            sys.exit(f"{name} is out of date")
+        print(f"{name}: {text.count(chr(10))} vectors")
 
 
 if __name__ == "__main__":

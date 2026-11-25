@@ -16,3 +16,4 @@ xenora-ref = { path = "../ref" }
 xenora-shader = { path = "../shader" }
 xenora-loader = { path = "../loader" }
 xenora-import-gen = { path = "../import-gen" }
+sha2 = "0.10"

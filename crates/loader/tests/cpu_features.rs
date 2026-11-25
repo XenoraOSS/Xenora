@@ -9,12 +9,14 @@
 //! engines refuse. The witness must be removed before its bit can be set.
 //!
 //! Bit positions and the feature each instruction belongs to are from the
-//! Intel SDM Vol. 2, CPUID and the instruction entries. Encodings were
+//! Intel SDM Vol. 2, CPUID and the instruction entries. A feature whose own
+//! instructions all run stays clear while one it builds on is clear, and has
+//! its instruction list checked instead. Encodings were
 //! assembled with `clang -target x86_64-apple-macos` and read with `objdump`.
 
 use xenora_loader::cpu::{
-    CPUID_CMOV, CPUID_LONG_MODE, CPUID_LZCNT, CPUID_POPCNT, CpuState, ExitReason, Interpreter,
-    RFlags, cpuid,
+    CPUID_CMOV, CPUID_LAHF_SAHF, CPUID_LONG_MODE, CPUID_LZCNT, CPUID_POPCNT, CpuState, ExitReason,
+    Interpreter, RFlags, cpuid,
 };
 use xenora_loader::dbt::DbtEngine;
 use xenora_loader::memory::{GuestMemory, MemoryPermissions};
@@ -79,9 +81,9 @@ fn every_leaf_returns_its_documented_values() {
         (1, 0xFFFF_FFFF, [0, 0, 0x0080_0000, 0x0000_8000]),
         // Highest extended leaf.
         (0x8000_0000, 0, [0x8000_0001, 0, 0, 0]),
-        // LZCNT is ECX bit 5 and long mode is EDX bit 29.
-        (0x8000_0001, 0, [0, 0, 0x0000_0020, 0x2000_0000]),
-        (0x8000_0001, 7, [0, 0, 0x0000_0020, 0x2000_0000]),
+        // LAHF/SAHF is ECX bit 0, LZCNT ECX bit 5 and long mode EDX bit 29.
+        (0x8000_0001, 0, [0, 0, 0x0000_0021, 0x2000_0000]),
+        (0x8000_0001, 7, [0, 0, 0x0000_0021, 0x2000_0000]),
         // Everything else, above or between the highest leaves, is zeros.
         (2, 0, [0; 4]),
         (4, 0, [0; 4]),
@@ -129,8 +131,14 @@ fn every_leaf_returns_its_documented_values() {
         .collect();
     assert_eq!(vendor, b"Xenora guest");
     assert_eq!(
-        (CPUID_POPCNT, CPUID_CMOV, CPUID_LZCNT, CPUID_LONG_MODE),
-        (1 << 23, 1 << 15, 1 << 5, 1 << 29)
+        (
+            CPUID_POPCNT,
+            CPUID_CMOV,
+            CPUID_LAHF_SAHF,
+            CPUID_LZCNT,
+            CPUID_LONG_MODE
+        ),
+        (1 << 23, 1 << 15, 1, 1 << 5, 1 << 29)
     );
 }
 
@@ -189,6 +197,10 @@ fn reported_features_have_all_their_instructions_in_the_fixtures() {
             decodable(&format!("{name} {high}, {}", memory(bits)));
         }
     }
+    // LAHF and SAHF have one form each and no operands.
+    assert_ne!(cpuid(0x8000_0001, 0)[ECX] & CPUID_LAHF_SAHF, 0);
+    decodable("lahf");
+    decodable("sahf");
     // Long mode: 64-bit operands and the registers only it has.
     assert_ne!(cpuid(0x8000_0001, 0)[EDX] & CPUID_LONG_MODE, 0);
     decodable("add r9, r12");
@@ -215,10 +227,9 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
             1,
             &[0x66, 0x0F, 0x3A, 0x44, 0xC1, 0x00],
         ), // pclmulqdq xmm0, xmm1, 0
-        ("SSSE3", 1, ECX, 9, &[0x66, 0x0F, 0x38, 0x00, 0xC1]), // pshufb xmm0, xmm1
+        ("SSSE3", 1, ECX, 9, &[0x0F, 0x38, 0x00, 0xC1]), // pshufb mm0, mm1
         ("FMA", 1, ECX, 12, &[0xC4, 0xE2, 0x71, 0x98, 0xC2]), // vfmadd132ps xmm0, xmm1, xmm2
         ("CMPXCHG16B", 1, ECX, 13, &[0x48, 0x0F, 0xC7, 0x0E]), // cmpxchg16b [rsi]
-        ("SSE4.1", 1, ECX, 19, &[0x66, 0x0F, 0x38, 0x40, 0xC1]), // pmulld xmm0, xmm1
         ("SSE4.2", 1, ECX, 20, &[0xF2, 0x0F, 0x38, 0xF1, 0xC1]), // crc32 eax, ecx
         ("MOVBE", 1, ECX, 22, &[0x0F, 0x38, 0xF0, 0x06]), // movbe eax, [rsi]
         ("AESNI", 1, ECX, 25, &[0x66, 0x0F, 0x38, 0xDC, 0xC1]), // aesenc xmm0, xmm1
@@ -232,7 +243,6 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),     // rdseed eax
         ("ADX", 7, EBX, 19, &[0x66, 0x0F, 0x38, 0xF6, 0xC1]), // adcx eax, ecx
         ("SHA", 7, EBX, 29, &[0x0F, 0x38, 0xC9, 0xC1]),  // sha1msg1 xmm0, xmm1
-        ("LAHF/SAHF", 0x8000_0001, ECX, 0, &[0x9F]),     // lahf
         ("PREFETCHW", 0x8000_0001, ECX, 8, &[0x0F, 0x0D, 0x0E]), // prefetchw [rsi]
         ("SYSCALL/SYSRET", 0x8000_0001, EDX, 11, &[0x48, 0x0F, 0x07]), // sysretq
         ("RDTSCP", 0x8000_0001, EDX, 27, &[0x0F, 0x01, 0xF9]), // rdtscp
@@ -256,6 +266,44 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
             assert_eq!(state, cpu, "{feature} on the {engine}");
         }
     }
+}
+
+/// SDM Vol. 1, 12.12.2: an application checks for SSE, SSE2, SSE3 and SSSE3 before
+/// SSE4.1. Those are not complete, so the bit stays clear although every SSE4.1
+/// instruction runs. Each has a fixture that the tests of
+/// `x86_vector.rs` or `x86_float.rs` run in both engines.
+#[test]
+fn sse4_1_is_complete_but_unreported_while_its_prerequisites_are() {
+    let fixtures = [
+        include_str!("x86/vector.txt"),
+        include_str!("x86/float.txt"),
+    ]
+    .concat();
+    let has = |name: &str, memory: bool| {
+        fixtures.lines().any(|line| {
+            let text = line.split_once(" | ").unwrap().1;
+            text.split(' ').next() == Some(name) && text.contains(" ptr ") == memory
+        })
+    };
+    // Every instruction the SDM assigns to the feature. MOVNTDQA has no register
+    // form; PEXTRW belongs to it only as a store.
+    let names = "blendpd blendps blendvpd blendvps dppd dpps extractps insertps mpsadbw packusdw \
+                 pblendvb pblendw pcmpeqq pextrb pextrd pextrq phminposuw pinsrb pinsrd pinsrq \
+                 pmaxsb pmaxsd pmaxud pmaxuw pminsb pminsd pminud pminuw pmovsxbw pmovsxbd \
+                 pmovsxbq pmovsxwd pmovsxwq pmovsxdq pmovzxbw pmovzxbd pmovzxbq pmovzxwd \
+                 pmovzxwq pmovzxdq pmuldq pmulld ptest roundpd roundps roundsd roundss";
+    for name in names.split_whitespace() {
+        assert!(has(name, false) && has(name, true), "{name}");
+    }
+    assert!(has("movntdqa", true) && has("pextrw", true));
+
+    let [_, _, ecx, edx] = cpuid(1, 0);
+    let prerequisites = [edx >> 25, edx >> 26, ecx, ecx >> 9].map(|bit| bit & 1);
+    assert_eq!(
+        (prerequisites, ecx >> 19 & 1),
+        ([0; 4], 0),
+        "SSE, SSE2, SSE3 and SSSE3 come before SSE4.1"
+    );
 }
 
 #[test]

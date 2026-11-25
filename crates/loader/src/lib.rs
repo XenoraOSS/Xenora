@@ -8,11 +8,13 @@
 pub mod arm64;
 pub mod cpu;
 pub mod dbt;
+pub(crate) mod exceptions;
 pub mod graphics;
 pub mod import_table;
 pub mod imports;
 pub mod jit;
 pub mod memory;
+pub mod output_path;
 pub mod pe;
 pub mod probe;
 pub mod reloc;

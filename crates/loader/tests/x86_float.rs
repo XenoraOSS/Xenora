@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! SSE and SSE2 floating-point tests.
+//! SSE, SSE2 and SSE4.1 floating-point tests.
 //!
 //! Expected values come from `tests/x86/float_vectors.txt`, computed with exact
 //! fractions by `tests/x86/float_reference.py` from the Intel SDM rules, and, for
@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use xenora_loader::cpu::{CpuState, ExecutionResult, ExitReason, Interpreter, Mxcsr, RFlags};
 use xenora_loader::dbt::DbtEngine;
 use xenora_loader::memory::{GuestMemory, MemoryPermissions};
-use xenora_loader::softfloat::{self, Arithmetic, Control, F32, F64, Format};
+use xenora_loader::softfloat::{self, Arithmetic, Control, F32, F64, Format, Rounding};
 
 const ENTRY: u64 = 0x1000;
 const DATA: u64 = 0x2000;
@@ -131,6 +131,17 @@ fn instruction(name: &str) -> (String, Kind) {
         let bits = if format == "ss" { 32 } else { 64 };
         return (
             format!("cmp{format} xmm3, xmm9, {code}"),
+            Kind::Scalar {
+                source: bits,
+                result: bits,
+            },
+        );
+    }
+    if let Some(rest) = name.strip_prefix("round") {
+        let (format, code) = rest.split_at(2);
+        let bits = width(format);
+        return (
+            format!("round{format} xmm3, xmm9, {code}"),
             Kind::Scalar {
                 source: bits,
                 result: bits,
@@ -452,6 +463,196 @@ fn unmasked_underflow_reports_an_exact_denormal_result() {
     }
 }
 
+struct Dot {
+    name: &'static str,
+    imm: u8,
+    mxcsr: u32,
+    a: u128,
+    b: u128,
+    /// `None` if an unmasked exception stops the instruction.
+    result: Option<u128>,
+    flags: u32,
+}
+
+fn dots() -> Vec<Dot> {
+    include_str!("x86/dot_vectors.txt")
+        .lines()
+        .map(|line| {
+            let parts: Vec<&str> = line.split(' ').collect();
+            let hex = |index: usize| u128::from_str_radix(parts[index], 16).unwrap();
+            Dot {
+                name: parts[0],
+                imm: hex(1) as u8,
+                mxcsr: hex(2) as u32,
+                a: hex(3),
+                b: hex(4),
+                result: (parts[5] != "-").then(|| hex(5)),
+                flags: hex(6) as u32,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn dot_products_match_for_every_immediate() {
+    let code = fixture();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut stopped = 0;
+    for dot in dots() {
+        for operand in ["xmm9", "xmmword ptr [rsi + 4*rdi + 16]"] {
+            let mut code = code[format!("{} xmm3, {operand}, 255", dot.name).as_str()].clone();
+            *code.last_mut().unwrap() = dot.imm;
+            for native in [false, true] {
+                let (cpu, mut memory) = load(&code, dot.mxcsr, dot.a, dot.b, 0);
+                let result = run(native, &cpu, &mut memory, 1);
+                let what = format!("{} {:#x} {:x} {:x}", dot.name, dot.imm, dot.a, dot.b);
+                let mut wanted = cpu.clone();
+                wanted.mxcsr = Mxcsr(dot.mxcsr | dot.flags);
+                if let Some(value) = dot.result {
+                    assert_eq!(result.exit_reason, ExitReason::StepLimitExceeded, "{what}");
+                    wanted.xmm[3] = value;
+                    wanted.rip += code.len() as u64;
+                } else {
+                    assert_eq!(result.exit_reason, ExitReason::SimdException, "{what}");
+                    assert_eq!(result.instructions_executed, 0);
+                    stopped += 1;
+                }
+                assert_eq!(result.final_state, wanted, "{what}");
+            }
+        }
+        seen.insert((dot.name, dot.imm));
+    }
+    assert_eq!(seen.len(), 512);
+    assert!(stopped > 1000, "{stopped}");
+}
+
+/// The sum of lanes 0 and 1 is inexact, and that of lanes 2 and 3 is infinity
+/// minus infinity. The SDM calls the exception handler between them.
+#[test]
+fn each_addition_of_a_dot_product_raises_its_own_exceptions() {
+    let mut code = fixture()["dpps xmm3, xmm9, 255"].clone();
+    *code.last_mut().unwrap() = 0xF1;
+    let a = 0xFF80_0000_7F80_0000_3080_0000_3F80_0000u128;
+    let ones = 0x3F80_0000_3F80_0000_3F80_0000_3F80_0000u128;
+    for (mxcsr, flags, stops) in [
+        (0x1F80, 1 | 1 << 5, false),
+        (0x0F80, 1 << 5, true),     // precision stops at the first addition
+        (0x1F00, 1 | 1 << 5, true), // invalid at the second, after the first
+    ] {
+        for native in [false, true] {
+            let (cpu, mut memory) = load(&code, mxcsr, a, ones, 0);
+            let result = run(native, &cpu, &mut memory, 1);
+            assert_eq!(result.exit_reason == ExitReason::SimdException, stops);
+            assert_eq!(result.final_state.mxcsr.0, mxcsr | flags, "{mxcsr:x}");
+            if stops {
+                assert_eq!(result.final_state.xmm, cpu.xmm);
+            } else {
+                // The default NaN in lane 0 only.
+                assert_eq!(result.final_state.xmm[3], 0xFFC0_0000);
+            }
+        }
+    }
+}
+
+/// The destination may also be the source.
+#[test]
+fn a_dot_product_of_a_register_with_itself_is_the_sum_of_squares() {
+    let code = fixture();
+    // 1, 2, 3 and 4 in single precision; 3 and 4 in double.
+    let singles = 0x4080_0000_4040_0000_4000_0000_3F80_0000u128;
+    let doubles = 0x4010_0000_0000_0000_4008_0000_0000_0000u128;
+    for (name, value, wanted) in [
+        ("dpps", singles, 0x41F0_0000_41F0_0000_41F0_0000_41F0_0000), // 30
+        ("dppd", doubles, 0x4039_0000_0000_0000_4039_0000_0000_0000), // 25
+    ] {
+        for native in [false, true] {
+            let code = &code[format!("{name} xmm3, xmm3, 255").as_str()];
+            let (cpu, mut memory) = load(code, NEAREST, value, 0, 0);
+            let result = run(native, &cpu, &mut memory, 1);
+            assert_eq!(result.final_state.xmm[3], wanted, "{name}");
+            assert_eq!(result.final_state.mxcsr.0, NEAREST, "{name}");
+        }
+    }
+}
+
+/// SDM, ROUNDSS and Table 4-21: a denormal rounds to zero or one and signals only
+/// precision, or with DAZ is a zero first and signals nothing.
+#[test]
+fn rounding_a_denormal_signals_no_denormal_operand() {
+    let code = fixture();
+    for (mxcsr, imm, value, wanted, flags) in [
+        (NEAREST, 2, 1u32, 0x3F80_0000u32, 1 << 5),
+        (NEAREST, 1, 0x8000_0001, 0xBF80_0000, 1 << 5),
+        (NEAREST, 3, 0x8000_0001, 0x8000_0000, 1 << 5),
+        (NEAREST, 10, 1, 0x3F80_0000, 0),
+        (NEAREST | 1 << 6, 2, 1, 0, 0),
+        (NEAREST | 1 << 6, 1, 0x8000_0001, 0x8000_0000, 0),
+        // A suppressed exception does not trap, and no denormal one exists.
+        (0, 10, 1, 0x3F80_0000, 0),
+        (0, 9, 0x8000_0001, 0xBF80_0000, 0),
+        // Flush-to-zero concerns tiny results, and an integral value is none.
+        (NEAREST | 1 << 15, 2, 1, 0x3F80_0000, 1 << 5),
+    ] {
+        let code = &code[format!("roundss xmm3, xmm9, {imm}").as_str()];
+        for native in [false, true] {
+            let (cpu, mut memory) = load(code, mxcsr, FILLER, u128::from(value), 0);
+            let result = run(native, &cpu, &mut memory, 1);
+            let wanted = merge(FILLER, u64::from(wanted), 32, 0);
+            assert_eq!(result.final_state.xmm[3], wanted, "{imm} {value:x}");
+            assert_eq!(result.final_state.mxcsr.0, mxcsr | flags, "{imm} {value:x}");
+        }
+    }
+}
+
+/// An instruction that can raise an unmasked exception leaves the block there, so
+/// the flags before it are not dead, whatever overwrites them later.
+#[test]
+fn flags_before_an_unmasked_exception_are_kept() {
+    const SIGNALING: u128 = 0x7F80_0001_7F80_0001_7F80_0001_7F80_0001;
+    const SIGNALING_WIDE: u128 = 0x7FF0_0000_0000_0001_7FF0_0000_0000_0001;
+    // FFFFFFFF + 1 carries out of every position and leaves zero.
+    let added = RFlags {
+        cf: true,
+        zf: true,
+        sf: false,
+        of: false,
+        pf: true,
+        af: true,
+    };
+    let mut stopped = std::collections::BTreeSet::new();
+    for (text, case) in fixture() {
+        // add eax, ecx; the form; add edx, edx; hlt
+        let code = [&[0x01, 0xC8][..], &case, &[0x01, 0xD2, 0xF4]].concat();
+        for value in [SIGNALING, SIGNALING_WIDE] {
+            for native in [false, true] {
+                let (mut cpu, mut memory) = load(&code, 0, value, value, 0x0123_4567_89AB_CDEF);
+                (cpu.gpr[0], cpu.gpr[1], cpu.gpr[2]) = (0xFFFF_FFFF, 1, 1);
+                let result = run(native, &cpu, &mut memory, 8);
+                if result.exit_reason == ExitReason::SimdException {
+                    assert_eq!(result.final_state.flags, added, "{text} native {native}");
+                    assert_eq!(result.final_state.rip, ENTRY + 2, "{text}");
+                    stopped.insert((text.split(' ').next().unwrap(), native));
+                }
+            }
+        }
+    }
+    // Every operation but CVTSI2SD from 32 bits and CVTDQ2PD can signal, and a
+    // signaling NaN or an inexact integer makes each of them do it.
+    let names: std::collections::BTreeSet<&str> = fixture()
+        .into_keys()
+        .map(|text| text.split(' ').next().unwrap())
+        .collect();
+    for name in names {
+        for native in [false, true] {
+            assert_eq!(
+                stopped.contains(&(name, native)),
+                name != "cvtdq2pd",
+                "{name}"
+            );
+        }
+    }
+}
+
 #[test]
 fn misaligned_packed_operands_fault() {
     for (text, code) in fixture() {
@@ -547,6 +748,32 @@ fn nearest_rounding_agrees_with_host_hardware() {
         if single >= 0.0 {
             let ours = softfloat::square_root(F32, u64::from(single.to_bits()), &control).bits;
             assert_eq!(ours as u32, single.sqrt().to_bits());
+        }
+        let small = f32::from_bits(a as u32 ^ b as u32);
+        let modes = [
+            Rounding::Nearest,
+            Rounding::Down,
+            Rounding::Up,
+            Rounding::Zero,
+        ];
+        let hosts = [x.round_ties_even(), x.floor(), x.ceil(), x.trunc()];
+        for (mode, host) in modes.into_iter().zip(hosts) {
+            let ours = softfloat::round_to_integral(F64, a, mode, &control);
+            assert!(x.is_nan() || ours.bits == host.to_bits(), "{mode:?} {a:x}");
+        }
+        let hosts = [
+            small.round_ties_even(),
+            small.floor(),
+            small.ceil(),
+            small.trunc(),
+        ];
+        for (mode, host) in modes.into_iter().zip(hosts) {
+            let bits = u64::from(small.to_bits());
+            let ours = softfloat::round_to_integral(F32, bits, mode, &control);
+            assert!(
+                small.is_nan() || ours.bits as u32 == host.to_bits(),
+                "{mode:?} {bits:x}"
+            );
         }
         if !x.is_nan() {
             let ours = softfloat::convert(F64, F32, a, &control).bits;

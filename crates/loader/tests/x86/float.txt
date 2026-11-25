@@ -28,6 +28,40 @@ f3 41 0f c2 d9 06 | cmpss xmm3, xmm9, 6
 f3 0f c2 5c be 10 06 | cmpss xmm3, dword ptr [rsi + 4*rdi + 16], 6
 f3 41 0f c2 d9 07 | cmpss xmm3, xmm9, 7
 f3 0f c2 5c be 10 07 | cmpss xmm3, dword ptr [rsi + 4*rdi + 16], 7
+66 41 0f 3a 0a d9 00 | roundss xmm3, xmm9, 0
+66 0f 3a 0a 5c be 10 00 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 0
+66 41 0f 3a 0a d9 01 | roundss xmm3, xmm9, 1
+66 0f 3a 0a 5c be 10 01 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 1
+66 41 0f 3a 0a d9 02 | roundss xmm3, xmm9, 2
+66 0f 3a 0a 5c be 10 02 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 2
+66 41 0f 3a 0a d9 03 | roundss xmm3, xmm9, 3
+66 0f 3a 0a 5c be 10 03 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 3
+66 41 0f 3a 0a d9 04 | roundss xmm3, xmm9, 4
+66 0f 3a 0a 5c be 10 04 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 4
+66 41 0f 3a 0a d9 05 | roundss xmm3, xmm9, 5
+66 0f 3a 0a 5c be 10 05 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 5
+66 41 0f 3a 0a d9 06 | roundss xmm3, xmm9, 6
+66 0f 3a 0a 5c be 10 06 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 6
+66 41 0f 3a 0a d9 07 | roundss xmm3, xmm9, 7
+66 0f 3a 0a 5c be 10 07 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 7
+66 41 0f 3a 0a d9 08 | roundss xmm3, xmm9, 8
+66 0f 3a 0a 5c be 10 08 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 8
+66 41 0f 3a 0a d9 09 | roundss xmm3, xmm9, 9
+66 0f 3a 0a 5c be 10 09 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 9
+66 41 0f 3a 0a d9 0a | roundss xmm3, xmm9, 10
+66 0f 3a 0a 5c be 10 0a | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 10
+66 41 0f 3a 0a d9 0b | roundss xmm3, xmm9, 11
+66 0f 3a 0a 5c be 10 0b | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 11
+66 41 0f 3a 0a d9 0c | roundss xmm3, xmm9, 12
+66 0f 3a 0a 5c be 10 0c | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 12
+66 41 0f 3a 0a d9 0d | roundss xmm3, xmm9, 13
+66 0f 3a 0a 5c be 10 0d | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 13
+66 41 0f 3a 0a d9 0e | roundss xmm3, xmm9, 14
+66 0f 3a 0a 5c be 10 0e | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 14
+66 41 0f 3a 0a d9 0f | roundss xmm3, xmm9, 15
+66 0f 3a 0a 5c be 10 0f | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 15
+66 41 0f 3a 0a d9 f4 | roundss xmm3, xmm9, 244
+66 0f 3a 0a 5c be 10 f4 | roundss xmm3, dword ptr [rsi + 4*rdi + 16], 244
 f2 41 0f 58 d9 | addsd xmm3, xmm9
 f2 0f 58 5c be 10 | addsd xmm3, qword ptr [rsi + 4*rdi + 16]
 f2 41 0f 5c d9 | subsd xmm3, xmm9
@@ -58,6 +92,40 @@ f2 41 0f c2 d9 06 | cmpsd xmm3, xmm9, 6
 f2 0f c2 5c be 10 06 | cmpsd xmm3, qword ptr [rsi + 4*rdi + 16], 6
 f2 41 0f c2 d9 07 | cmpsd xmm3, xmm9, 7
 f2 0f c2 5c be 10 07 | cmpsd xmm3, qword ptr [rsi + 4*rdi + 16], 7
+66 41 0f 3a 0b d9 00 | roundsd xmm3, xmm9, 0
+66 0f 3a 0b 5c be 10 00 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 0
+66 41 0f 3a 0b d9 01 | roundsd xmm3, xmm9, 1
+66 0f 3a 0b 5c be 10 01 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 1
+66 41 0f 3a 0b d9 02 | roundsd xmm3, xmm9, 2
+66 0f 3a 0b 5c be 10 02 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 2
+66 41 0f 3a 0b d9 03 | roundsd xmm3, xmm9, 3
+66 0f 3a 0b 5c be 10 03 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 3
+66 41 0f 3a 0b d9 04 | roundsd xmm3, xmm9, 4
+66 0f 3a 0b 5c be 10 04 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 4
+66 41 0f 3a 0b d9 05 | roundsd xmm3, xmm9, 5
+66 0f 3a 0b 5c be 10 05 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 5
+66 41 0f 3a 0b d9 06 | roundsd xmm3, xmm9, 6
+66 0f 3a 0b 5c be 10 06 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 6
+66 41 0f 3a 0b d9 07 | roundsd xmm3, xmm9, 7
+66 0f 3a 0b 5c be 10 07 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 7
+66 41 0f 3a 0b d9 08 | roundsd xmm3, xmm9, 8
+66 0f 3a 0b 5c be 10 08 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 8
+66 41 0f 3a 0b d9 09 | roundsd xmm3, xmm9, 9
+66 0f 3a 0b 5c be 10 09 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 9
+66 41 0f 3a 0b d9 0a | roundsd xmm3, xmm9, 10
+66 0f 3a 0b 5c be 10 0a | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 10
+66 41 0f 3a 0b d9 0b | roundsd xmm3, xmm9, 11
+66 0f 3a 0b 5c be 10 0b | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 11
+66 41 0f 3a 0b d9 0c | roundsd xmm3, xmm9, 12
+66 0f 3a 0b 5c be 10 0c | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 12
+66 41 0f 3a 0b d9 0d | roundsd xmm3, xmm9, 13
+66 0f 3a 0b 5c be 10 0d | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 13
+66 41 0f 3a 0b d9 0e | roundsd xmm3, xmm9, 14
+66 0f 3a 0b 5c be 10 0e | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 14
+66 41 0f 3a 0b d9 0f | roundsd xmm3, xmm9, 15
+66 0f 3a 0b 5c be 10 0f | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 15
+66 41 0f 3a 0b d9 f4 | roundsd xmm3, xmm9, 244
+66 0f 3a 0b 5c be 10 f4 | roundsd xmm3, qword ptr [rsi + 4*rdi + 16], 244
 41 0f 58 d9 | addps xmm3, xmm9
 0f 58 5c be 10 | addps xmm3, xmmword ptr [rsi + 4*rdi + 16]
 41 0f 5c d9 | subps xmm3, xmm9
@@ -88,6 +156,40 @@ f2 0f c2 5c be 10 07 | cmpsd xmm3, qword ptr [rsi + 4*rdi + 16], 7
 0f c2 5c be 10 06 | cmpps xmm3, xmmword ptr [rsi + 4*rdi + 16], 6
 41 0f c2 d9 07 | cmpps xmm3, xmm9, 7
 0f c2 5c be 10 07 | cmpps xmm3, xmmword ptr [rsi + 4*rdi + 16], 7
+66 41 0f 3a 08 d9 00 | roundps xmm3, xmm9, 0
+66 0f 3a 08 5c be 10 00 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 0
+66 41 0f 3a 08 d9 01 | roundps xmm3, xmm9, 1
+66 0f 3a 08 5c be 10 01 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 1
+66 41 0f 3a 08 d9 02 | roundps xmm3, xmm9, 2
+66 0f 3a 08 5c be 10 02 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 2
+66 41 0f 3a 08 d9 03 | roundps xmm3, xmm9, 3
+66 0f 3a 08 5c be 10 03 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 3
+66 41 0f 3a 08 d9 04 | roundps xmm3, xmm9, 4
+66 0f 3a 08 5c be 10 04 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 4
+66 41 0f 3a 08 d9 05 | roundps xmm3, xmm9, 5
+66 0f 3a 08 5c be 10 05 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 5
+66 41 0f 3a 08 d9 06 | roundps xmm3, xmm9, 6
+66 0f 3a 08 5c be 10 06 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 6
+66 41 0f 3a 08 d9 07 | roundps xmm3, xmm9, 7
+66 0f 3a 08 5c be 10 07 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 7
+66 41 0f 3a 08 d9 08 | roundps xmm3, xmm9, 8
+66 0f 3a 08 5c be 10 08 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 8
+66 41 0f 3a 08 d9 09 | roundps xmm3, xmm9, 9
+66 0f 3a 08 5c be 10 09 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 9
+66 41 0f 3a 08 d9 0a | roundps xmm3, xmm9, 10
+66 0f 3a 08 5c be 10 0a | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 10
+66 41 0f 3a 08 d9 0b | roundps xmm3, xmm9, 11
+66 0f 3a 08 5c be 10 0b | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 11
+66 41 0f 3a 08 d9 0c | roundps xmm3, xmm9, 12
+66 0f 3a 08 5c be 10 0c | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 12
+66 41 0f 3a 08 d9 0d | roundps xmm3, xmm9, 13
+66 0f 3a 08 5c be 10 0d | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 13
+66 41 0f 3a 08 d9 0e | roundps xmm3, xmm9, 14
+66 0f 3a 08 5c be 10 0e | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 14
+66 41 0f 3a 08 d9 0f | roundps xmm3, xmm9, 15
+66 0f 3a 08 5c be 10 0f | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 15
+66 41 0f 3a 08 d9 f4 | roundps xmm3, xmm9, 244
+66 0f 3a 08 5c be 10 f4 | roundps xmm3, xmmword ptr [rsi + 4*rdi + 16], 244
 66 41 0f 58 d9 | addpd xmm3, xmm9
 66 0f 58 5c be 10 | addpd xmm3, xmmword ptr [rsi + 4*rdi + 16]
 66 41 0f 5c d9 | subpd xmm3, xmm9
@@ -118,6 +220,46 @@ f2 0f c2 5c be 10 07 | cmpsd xmm3, qword ptr [rsi + 4*rdi + 16], 7
 66 0f c2 5c be 10 06 | cmppd xmm3, xmmword ptr [rsi + 4*rdi + 16], 6
 66 41 0f c2 d9 07 | cmppd xmm3, xmm9, 7
 66 0f c2 5c be 10 07 | cmppd xmm3, xmmword ptr [rsi + 4*rdi + 16], 7
+66 41 0f 3a 09 d9 00 | roundpd xmm3, xmm9, 0
+66 0f 3a 09 5c be 10 00 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 0
+66 41 0f 3a 09 d9 01 | roundpd xmm3, xmm9, 1
+66 0f 3a 09 5c be 10 01 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 1
+66 41 0f 3a 09 d9 02 | roundpd xmm3, xmm9, 2
+66 0f 3a 09 5c be 10 02 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 2
+66 41 0f 3a 09 d9 03 | roundpd xmm3, xmm9, 3
+66 0f 3a 09 5c be 10 03 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 3
+66 41 0f 3a 09 d9 04 | roundpd xmm3, xmm9, 4
+66 0f 3a 09 5c be 10 04 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 4
+66 41 0f 3a 09 d9 05 | roundpd xmm3, xmm9, 5
+66 0f 3a 09 5c be 10 05 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 5
+66 41 0f 3a 09 d9 06 | roundpd xmm3, xmm9, 6
+66 0f 3a 09 5c be 10 06 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 6
+66 41 0f 3a 09 d9 07 | roundpd xmm3, xmm9, 7
+66 0f 3a 09 5c be 10 07 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 7
+66 41 0f 3a 09 d9 08 | roundpd xmm3, xmm9, 8
+66 0f 3a 09 5c be 10 08 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 8
+66 41 0f 3a 09 d9 09 | roundpd xmm3, xmm9, 9
+66 0f 3a 09 5c be 10 09 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 9
+66 41 0f 3a 09 d9 0a | roundpd xmm3, xmm9, 10
+66 0f 3a 09 5c be 10 0a | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 10
+66 41 0f 3a 09 d9 0b | roundpd xmm3, xmm9, 11
+66 0f 3a 09 5c be 10 0b | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 11
+66 41 0f 3a 09 d9 0c | roundpd xmm3, xmm9, 12
+66 0f 3a 09 5c be 10 0c | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 12
+66 41 0f 3a 09 d9 0d | roundpd xmm3, xmm9, 13
+66 0f 3a 09 5c be 10 0d | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 13
+66 41 0f 3a 09 d9 0e | roundpd xmm3, xmm9, 14
+66 0f 3a 09 5c be 10 0e | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 14
+66 41 0f 3a 09 d9 0f | roundpd xmm3, xmm9, 15
+66 0f 3a 09 5c be 10 0f | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 15
+66 41 0f 3a 09 d9 f4 | roundpd xmm3, xmm9, 244
+66 0f 3a 09 5c be 10 f4 | roundpd xmm3, xmmword ptr [rsi + 4*rdi + 16], 244
+66 41 0f 3a 40 d9 ff | dpps xmm3, xmm9, 255
+66 0f 3a 40 5c be 10 ff | dpps xmm3, xmmword ptr [rsi + 4*rdi + 16], 255
+66 0f 3a 40 db ff | dpps xmm3, xmm3, 255
+66 41 0f 3a 41 d9 ff | dppd xmm3, xmm9, 255
+66 0f 3a 41 5c be 10 ff | dppd xmm3, xmmword ptr [rsi + 4*rdi + 16], 255
+66 0f 3a 41 db ff | dppd xmm3, xmm3, 255
 41 0f 2f d9 | comiss xmm3, xmm9
 0f 2f 5c be 10 | comiss xmm3, dword ptr [rsi + 4*rdi + 16]
 41 0f 2e d9 | ucomiss xmm3, xmm9

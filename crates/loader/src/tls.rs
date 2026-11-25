@@ -233,6 +233,22 @@ fn read_callbacks(bytes: &[u8], pe: &ParsedPe, address: u64) -> Result<Vec<u64>,
 /// Bytes reserved at `thread_tls_base` for the thread's TLS pointer array.
 const TLS_ARRAY_SIZE: usize = 0x1000;
 
+/// Bytes read per step when a template is checked and then copied into its
+/// block.
+const TEMPLATE_COPY_CHUNK: usize = 4096;
+
+/// Smallest template copied into the zeroed block instead of a staging buffer.
+///
+/// Release timings of original synthetic templates on an Apple M2 Pro put the
+/// point where a second buffer dominates at 64 KiB. Below that, one read into
+/// a staging buffer is as fast or faster.
+const DIRECT_TEMPLATE_MIN: usize = 64 * 1024;
+
+/// Templates at least this big keep the single staged read. On the same
+/// machine, proving the bytes readable and then copying them was no faster
+/// than the staging buffer once the template reached 1 MiB.
+const DIRECT_TEMPLATE_LIMIT: usize = 1024 * 1024;
+
 /// Set up TLS runtime state in guest memory:
 /// 1. Assign TLS index 0 at `index_address`.
 /// 2. Map the thread's TLS pointer array at `thread_tls_base`.
@@ -244,6 +260,12 @@ const TLS_ARRAY_SIZE: usize = 0x1000;
 /// TLS pointer. Compiled code loads that pointer, indexes it by the module's
 /// TLS index to find the data block, and then adds a variable's offset, so the
 /// array and the data are separate regions.
+///
+/// The block is the template followed by `SizeOfZeroFill` zero bytes. A
+/// template of at least 64 KiB and below 1 MiB is proved readable and then
+/// copied into a zeroed block. Every other size is read once into a staging
+/// buffer that initializes the block. Either way, a template that cannot be
+/// read leaves the pointer array unmapped.
 pub fn setup_tls(
     tls: &TlsDirectory,
     loaded_base: u64,
@@ -278,11 +300,19 @@ pub fn setup_tls(
     let total_size = template_size + (tls.size_of_zero_fill as usize);
 
     if total_size > 0 {
-        // Read template bytes from image
-        let mut template_data = vec![0u8; template_size];
-        if template_size > 0 {
-            memory.read_bytes(actual_start, &mut template_data)?;
-        }
+        let direct = (DIRECT_TEMPLATE_MIN..DIRECT_TEMPLATE_LIMIT).contains(&template_size);
+        // The read happens before anything is mapped, so a missing or
+        // unreadable template does not leave a pointer array behind.
+        let staged = if direct {
+            prove_template_readable(memory, actual_start, template_size)?;
+            None
+        } else {
+            let mut staged = vec![0u8; template_size];
+            if template_size > 0 {
+                memory.read_bytes(actual_start, &mut staged)?;
+            }
+            Some(staged)
+        };
 
         // Allocate the pointer array and the per-thread TLS block.
         let block_base = thread_tls_base
@@ -295,16 +325,59 @@ pub fn setup_tls(
             TLS_ARRAY_SIZE,
             MemoryPermissions::READ_WRITE,
         )?;
-        memory.map_region_with_data(
-            block_base,
-            map_size,
-            MemoryPermissions::READ_WRITE,
-            &template_data,
-        )?;
+        if let Some(staged) = staged.as_deref() {
+            memory.map_region_with_data(
+                block_base,
+                map_size,
+                MemoryPermissions::READ_WRITE,
+                staged,
+            )?;
+        } else {
+            memory.map_region(block_base, map_size, MemoryPermissions::READ_WRITE)?;
+            copy_template(memory, actual_start, block_base, template_size)?;
+        }
         // Slot 0 belongs to the index assigned above.
         memory.write_u64(thread_tls_base, block_base)?;
     }
 
+    Ok(())
+}
+
+/// Read every template byte, discarding the contents.
+///
+/// Failure here means the template is not available. Callers map the block
+/// only after this returns.
+fn prove_template_readable(memory: &GuestMemory, addr: u64, len: usize) -> Result<(), TlsError> {
+    let mut chunk = [0u8; TEMPLATE_COPY_CHUNK];
+    let mut offset = 0usize;
+    while offset < len {
+        let n = (len - offset).min(TEMPLATE_COPY_CHUNK);
+        let at = addr
+            .checked_add(offset as u64)
+            .ok_or(MemoryError::Overflow)?;
+        memory.read_bytes(at, &mut chunk[..n])?;
+        offset += n;
+    }
+    Ok(())
+}
+
+/// Copy `len` bytes from `src` to `dst`. `dst` is already zeroed, which is the
+/// template's `SizeOfZeroFill` and the rounded tail of the block.
+fn copy_template(memory: &mut GuestMemory, src: u64, dst: u64, len: usize) -> Result<(), TlsError> {
+    let mut chunk = [0u8; TEMPLATE_COPY_CHUNK];
+    let mut offset = 0usize;
+    while offset < len {
+        let n = (len - offset).min(TEMPLATE_COPY_CHUNK);
+        let from = src
+            .checked_add(offset as u64)
+            .ok_or(MemoryError::Overflow)?;
+        let to = dst
+            .checked_add(offset as u64)
+            .ok_or(MemoryError::Overflow)?;
+        memory.read_bytes(from, &mut chunk[..n])?;
+        memory.write_bytes(to, &chunk[..n])?;
+        offset += n;
+    }
     Ok(())
 }
 
@@ -392,6 +465,8 @@ mod tests {
 
     use super::*;
     use crate::pe::PeSection;
+    use std::hint::black_box;
+    use std::time::Instant;
 
     const IMAGE_BASE: u64 = 0x1_4000_0000;
     const SECTION_RVA: u32 = 0x1000;
@@ -678,6 +753,360 @@ mod tests {
             // No callback, no frame: the stack is not looked at.
             let none = execute_tls_callbacks(&[], 0, 0, stack_top, &mut cpu, &mut memory, &mut dbt);
             assert_eq!(none, Ok(0));
+        }
+    }
+
+    /// Bytes that do not repeat every 256 or every 4096 bytes, so a chunk
+    /// copied from the wrong offset cannot match.
+    fn synthetic_template(len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|index| {
+                let mixed = index ^ (index >> 8) ^ (index >> 16);
+                mixed.wrapping_mul(131).wrapping_add(17) as u8
+            })
+            .collect()
+    }
+
+    /// Image template at `template_at`, with `sentinel` 0xA5 bytes after it, and
+    /// a writable index that does not start at zero.
+    fn template_memory(
+        template_at: u64,
+        template: &[u8],
+        sentinel: usize,
+        index_at: u64,
+    ) -> GuestMemory {
+        let mut image = template.to_vec();
+        image.extend(std::iter::repeat_n(0xA5, sentinel));
+        let map = (image.len() + 0xFFF) & !0xFFF;
+        image.resize(map, 0);
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region_with_data(template_at, map, MemoryPermissions::READ_ONLY, &image)
+            .unwrap();
+        memory
+            .map_region_with_data(index_at, 0x1000, MemoryPermissions::READ_WRITE, &[0xFF; 8])
+            .unwrap();
+        memory
+    }
+
+    fn directory_at(
+        template_at: u64,
+        template_len: u64,
+        index_at: u64,
+        zero_fill: u32,
+    ) -> TlsDirectory {
+        TlsDirectory {
+            raw_data_start_va: template_at,
+            raw_data_end_va: template_at + template_len,
+            index_address: index_at,
+            size_of_zero_fill: zero_fill,
+            ..TlsDirectory::default()
+        }
+    }
+
+    fn assert_block(
+        memory: &GuestMemory,
+        thread: u64,
+        index: u64,
+        template: &[u8],
+        zero_fill: usize,
+    ) {
+        assert_eq!(memory.read_u32(index).unwrap(), 0);
+        let block = memory.read_u64(thread).unwrap();
+        assert_eq!(block, thread + 0x1000, "the data block is the next page");
+        // The block is mapped up to the next page boundary and no further.
+        let mapped = (template.len() + zero_fill + 0xFFF) & !0xFFF;
+        let mut got = vec![0xEEu8; mapped];
+        memory.read_bytes(block, &mut got).unwrap();
+        assert_eq!(&got[..template.len()], template);
+        assert!(got[template.len()..].iter().all(|byte| *byte == 0));
+        let end = block + mapped as u64;
+        assert_eq!(memory.read_u8(end), Err(MemoryError::UnmappedAddress(end)));
+    }
+
+    const TEMPLATE_AT: u64 = 0x2_0020_0000;
+    const INDEX_AT: u64 = 0x2_0000_1000;
+    const THREAD_AT: u64 = 0x5_0000_0000;
+
+    #[test]
+    fn a_small_template_is_copied_and_zero_fill_does_not_take_the_following_bytes() {
+        let template = synthetic_template(48);
+        let mut memory = template_memory(TEMPLATE_AT, &template, 16, INDEX_AT);
+        setup_tls(
+            &directory_at(TEMPLATE_AT, template.len() as u64, INDEX_AT, 16),
+            IMAGE_BASE,
+            IMAGE_BASE,
+            &mut memory,
+            THREAD_AT,
+        )
+        .unwrap();
+        assert_block(&memory, THREAD_AT, INDEX_AT, &template, 16);
+        let mut tail = [0u8; 16];
+        memory
+            .read_bytes(TEMPLATE_AT + template.len() as u64, &mut tail)
+            .unwrap();
+        assert_eq!(tail, [0xA5; 16]);
+        let block = memory.read_u64(THREAD_AT).unwrap();
+        memory.write_u64(block + 8, 0x0102_0304_0506_0708).unwrap();
+        let mut image = [0u8; 8];
+        memory.read_bytes(TEMPLATE_AT + 8, &mut image).unwrap();
+        assert_eq!(image, template[8..16]);
+    }
+
+    #[test]
+    fn the_staged_and_direct_copy_boundaries_keep_every_template_byte() {
+        for len in [
+            DIRECT_TEMPLATE_MIN - 1,
+            DIRECT_TEMPLATE_MIN,
+            DIRECT_TEMPLATE_MIN + TEMPLATE_COPY_CHUNK + 100,
+            DIRECT_TEMPLATE_LIMIT - 1,
+            DIRECT_TEMPLATE_LIMIT,
+        ] {
+            let template = synthetic_template(len);
+            let mut memory = template_memory(TEMPLATE_AT, &template, 24, INDEX_AT);
+            setup_tls(
+                &directory_at(TEMPLATE_AT, template.len() as u64, INDEX_AT, 24),
+                IMAGE_BASE,
+                IMAGE_BASE,
+                &mut memory,
+                THREAD_AT,
+            )
+            .unwrap();
+            assert_block(&memory, THREAD_AT, INDEX_AT, &template, 24);
+            let mut tail = [0u8; 24];
+            memory
+                .read_bytes(TEMPLATE_AT + template.len() as u64, &mut tail)
+                .unwrap();
+            assert_eq!(tail, [0xA5; 24], "len {len}");
+        }
+    }
+
+    #[test]
+    fn a_rebased_direct_copy_reads_the_loaded_image() {
+        let template = synthetic_template(DIRECT_TEMPLATE_MIN);
+        let preferred = 0x1_4000_0000u64;
+        let loaded = preferred + 0x80_0000;
+        let template_at = preferred + 0x20_0000;
+        let index_at = preferred + 0x1000;
+        let mut memory =
+            template_memory(template_at + 0x80_0000, &template, 0, index_at + 0x80_0000);
+        setup_tls(
+            &directory_at(template_at, template.len() as u64, index_at, 8),
+            loaded,
+            preferred,
+            &mut memory,
+            THREAD_AT,
+        )
+        .unwrap();
+        assert_block(&memory, THREAD_AT, index_at + 0x80_0000, &template, 8);
+    }
+
+    #[test]
+    fn an_unreadable_template_maps_no_pointer_array() {
+        for len in [32usize, DIRECT_TEMPLATE_MIN, DIRECT_TEMPLATE_MIN + 50] {
+            let mut missing = GuestMemory::new();
+            missing
+                .map_region_with_data(INDEX_AT, 0x1000, MemoryPermissions::READ_WRITE, &[0xFF; 8])
+                .unwrap();
+            let missing_result = setup_tls(
+                &directory_at(TEMPLATE_AT, len as u64, INDEX_AT, 0),
+                IMAGE_BASE,
+                IMAGE_BASE,
+                &mut missing,
+                THREAD_AT,
+            );
+            assert_eq!(
+                missing_result,
+                Err(TlsError::Memory(MemoryError::UnmappedAddress(TEMPLATE_AT))),
+                "{len}"
+            );
+            assert_eq!(missing.read_u32(INDEX_AT).unwrap(), 0);
+            assert!(matches!(
+                missing.read_u64(THREAD_AT),
+                Err(MemoryError::UnmappedAddress(_))
+            ));
+
+            let mut denied = GuestMemory::new();
+            denied
+                .map_region(TEMPLATE_AT, len.max(0x1000), MemoryPermissions::NO_ACCESS)
+                .unwrap();
+            denied
+                .map_region_with_data(INDEX_AT, 0x1000, MemoryPermissions::READ_WRITE, &[0xFF; 8])
+                .unwrap();
+            let denied_result = setup_tls(
+                &directory_at(TEMPLATE_AT, len as u64, INDEX_AT, 0),
+                IMAGE_BASE,
+                IMAGE_BASE,
+                &mut denied,
+                THREAD_AT,
+            );
+            assert_eq!(
+                denied_result,
+                Err(TlsError::Memory(MemoryError::PermissionViolation {
+                    address: TEMPLATE_AT,
+                    required: "read",
+                })),
+                "{len}"
+            );
+            assert_eq!(denied.read_u32(INDEX_AT).unwrap(), 0);
+            assert!(matches!(
+                denied.read_u64(THREAD_AT),
+                Err(MemoryError::UnmappedAddress(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn a_direct_copy_template_that_runs_out_of_its_mapping_maps_nothing() {
+        let len = DIRECT_TEMPLATE_MIN + 100;
+        let mut memory = GuestMemory::new();
+        // Only the first chunk is mapped. The rest of the template is not.
+        memory
+            .map_region_with_data(
+                TEMPLATE_AT,
+                TEMPLATE_COPY_CHUNK,
+                MemoryPermissions::READ_ONLY,
+                &synthetic_template(TEMPLATE_COPY_CHUNK),
+            )
+            .unwrap();
+        memory
+            .map_region_with_data(INDEX_AT, 0x1000, MemoryPermissions::READ_WRITE, &[0xFF; 8])
+            .unwrap();
+        let result = setup_tls(
+            &directory_at(TEMPLATE_AT, len as u64, INDEX_AT, 0),
+            IMAGE_BASE,
+            IMAGE_BASE,
+            &mut memory,
+            THREAD_AT,
+        );
+        // The same first unreadable byte the single staged read reports.
+        assert_eq!(
+            result,
+            Err(TlsError::Memory(MemoryError::UnmappedAddress(
+                TEMPLATE_AT + TEMPLATE_COPY_CHUNK as u64
+            )))
+        );
+        assert_eq!(memory.read_u32(INDEX_AT).unwrap(), 0);
+        assert!(matches!(
+            memory.read_u64(THREAD_AT),
+            Err(MemoryError::UnmappedAddress(_))
+        ));
+    }
+
+    #[test]
+    fn an_empty_template_and_zero_fill_only_assigns_the_index() {
+        let mut memory = template_memory(TEMPLATE_AT, &[], 0, INDEX_AT);
+        setup_tls(
+            &directory_at(TEMPLATE_AT, 0, INDEX_AT, 0),
+            IMAGE_BASE,
+            IMAGE_BASE,
+            &mut memory,
+            THREAD_AT,
+        )
+        .unwrap();
+        assert_eq!(memory.read_u32(INDEX_AT).unwrap(), 0);
+        assert!(matches!(
+            memory.read_u64(THREAD_AT),
+            Err(MemoryError::UnmappedAddress(_))
+        ));
+    }
+
+    #[test]
+    fn a_zero_fill_only_block_is_zero_and_separate_from_the_array() {
+        let mut memory = template_memory(TEMPLATE_AT, &[], 0, INDEX_AT);
+        setup_tls(
+            &directory_at(TEMPLATE_AT, 0, INDEX_AT, 24),
+            IMAGE_BASE,
+            IMAGE_BASE,
+            &mut memory,
+            THREAD_AT,
+        )
+        .unwrap();
+        assert_block(&memory, THREAD_AT, INDEX_AT, &[], 24);
+    }
+
+    /// Byte pattern from the before/after timing runs. It is not the pattern
+    /// the correctness tests use to catch a chunk copied from the wrong offset.
+    fn timed_template(len: usize) -> Vec<u8> {
+        (0..len)
+            .map(|index| (index.wrapping_mul(131).wrapping_add(17)) as u8)
+            .collect()
+    }
+
+    fn timed_guest(template_len: usize, zero_fill: u32) -> (GuestMemory, TlsDirectory) {
+        let template = timed_template(template_len);
+        let mut memory = GuestMemory::new();
+        if template_len > 0 {
+            let map = (template_len + 0xFFF) & !0xFFF;
+            memory
+                .map_region_with_data(TEMPLATE_AT, map, MemoryPermissions::READ_ONLY, &template)
+                .unwrap();
+        }
+        memory
+            .map_region_with_data(INDEX_AT, 0x1000, MemoryPermissions::READ_WRITE, &[0xFF; 8])
+            .unwrap();
+        (
+            memory,
+            directory_at(TEMPLATE_AT, template_len as u64, INDEX_AT, zero_fill),
+        )
+    }
+
+    #[test]
+    #[ignore = "manual TLS template timing run; release build on an otherwise idle host"]
+    fn tls_template_initialization_profile() {
+        // Sizes, zero fill and batch counts from the interleaved before/after runs.
+        let cases = [
+            (64usize, 0u32, 80usize),
+            (4096, 0, 40),
+            (65535, 0, 20),
+            (65536, 128, 16),
+            (262144, 0, 6),
+            (786432, 0, 4),
+            (1048576, 0, 4),
+            (0, 1048576, 4),
+        ];
+        for (template_len, zero_fill, batch) in cases {
+            let (mut memory, directory) = timed_guest(template_len, zero_fill);
+            setup_tls(&directory, IMAGE_BASE, IMAGE_BASE, &mut memory, THREAD_AT).unwrap();
+            if template_len > 0 {
+                let template = timed_template(template_len);
+                let block = memory.read_u64(THREAD_AT).unwrap();
+                let mut byte = [0u8; 1];
+                memory.read_bytes(block, &mut byte).unwrap();
+                assert_eq!(byte[0], template[0]);
+                memory
+                    .read_bytes(block + template_len as u64 - 1, &mut byte)
+                    .unwrap();
+                assert_eq!(byte[0], template[template_len - 1]);
+            }
+
+            let mut samples = Vec::new();
+            for run in 0..33 {
+                let mut guests: Vec<_> = (0..batch)
+                    .map(|_| timed_guest(template_len, zero_fill))
+                    .collect();
+                let start = Instant::now();
+                for (memory, directory) in &mut guests {
+                    setup_tls(directory, IMAGE_BASE, IMAGE_BASE, memory, THREAD_AT).unwrap();
+                    black_box(memory);
+                }
+                if run >= 2 {
+                    let per_ns = start.elapsed().as_secs_f64() * 1e9 / batch as f64;
+                    samples.push(per_ns);
+                }
+            }
+            samples.sort_by(f64::total_cmp);
+            let n = samples.len();
+            let mean = samples.iter().sum::<f64>() / n as f64;
+            let sample_variance = samples
+                .iter()
+                .map(|sample| (sample - mean).powi(2))
+                .sum::<f64>()
+                / (n - 1) as f64;
+            println!(
+                "template={template_len} zero_fill={zero_fill} batch={batch} n={n} median_ns={:.1} sample_variance_ns2={sample_variance:.1}",
+                samples[n / 2]
+            );
         }
     }
 }

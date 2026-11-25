@@ -400,6 +400,57 @@ impl CallbackTask for ExitFunctions {
     }
 }
 
+/// `exit`: calls the functions registered with `atexit` and `_crt_atexit`,
+/// most recently registered first, and then ends the guest process.
+///
+/// It takes one function at a time from the shared list. A function that is
+/// registered while `exit` runs is therefore called next, before the older
+/// ones that have not run yet, as ISO C requires (7.22.4.2, 7.22.4.4). A
+/// registered function that calls `exit` again, which ISO C leaves undefined,
+/// starts a second task on the same list: the remaining functions run once
+/// each and the process ends with the later status.
+struct Exit {
+    state: Arc<ServicesState>,
+    status: u32,
+}
+
+impl Exit {
+    fn next(&mut self) -> Result<CallbackStep, ExitReason> {
+        let function = self
+            .state
+            .atexit
+            .lock()
+            .expect("guest atexit functions")
+            .pop();
+        match function {
+            Some(entry) => Ok(CallbackStep::Call {
+                entry,
+                args: [0; 4],
+            }),
+            None => Err(ExitReason::ProcessExit(
+                self.state.exit_process(self.status),
+            )),
+        }
+    }
+
+    fn start(mut self) -> Result<CallbackStart, ExitReason> {
+        match self.next()? {
+            CallbackStep::Call { entry, args } => Ok(CallbackStart::Call {
+                task: Box::new(self),
+                entry,
+                args,
+            }),
+            CallbackStep::Return(value) => Ok(CallbackStart::Return(value)),
+        }
+    }
+}
+
+impl CallbackTask for Exit {
+    fn resume(&mut self, _: u64, _: u64, _: &mut GuestMemory) -> Result<CallbackStep, ExitReason> {
+        self.next()
+    }
+}
+
 fn register_exit_tables(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
     registry.register(UCRT, "_initialize_onexit_table", |args, _, mem| {
         let table = args.rcx;
@@ -472,6 +523,24 @@ fn register_exit_tables(registry: &mut ImportRegistry, state: &Arc<ServicesState
         let pending = std::mem::take(&mut *s.atexit.lock().expect("guest atexit functions"));
         Ok(ExitFunctions { pending }.start())
     });
+
+    // exit does not return. It is partial: no stream is flushed, because
+    // there are none, and thread-local destructors are not run.
+    let s = Arc::clone(state);
+    registry.register_callback_task(
+        UCRT,
+        "exit",
+        ServiceStatus::Partial,
+        move |args, _, _, _| {
+            // The status is an int, the low half of the first argument.
+            Exit {
+                state: Arc::clone(&s),
+                status: args.rcx as u32,
+            }
+            .start()
+        },
+    );
+    registry.alias(CRT_RUNTIME_API, UCRT, "exit");
 
     for symbol in [
         "_initialize_onexit_table",

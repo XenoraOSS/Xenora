@@ -2,7 +2,8 @@
 //
 // Native shell over the versioned C interface. "Run trusted fixture" executes the
 // bundled trusted PE fixture (x86-64 translated to ARM64; its draw request is rendered
-// by native Metal) and shows the verified read-back frame. No other executable can run.
+// by native Metal) and shows the verified read-back frame. Any other executable runs
+// through the bundled `xenora run` worker (ProgramRun.swift).
 
 import AppKit
 import AVFoundation
@@ -411,12 +412,24 @@ final class FrameModel: ObservableObject {
     @Published var runningTextured = false
     @Published var audioVfsFrame: AudioVfsFrame?
     @Published var runningAudioVfs = false
+    /// Host wall time of the latest run of each fixture, measured here, for the HUD.
+    @Published var frameMs: Double?
+    @Published var texturedMs: Double?
+    @Published var audioVfsMs: Double?
+
+    private static func timed<T: Sendable>(_ body: @escaping @Sendable () -> T) async -> (T, Double) {
+        await Task.detached {
+            let started = Date()
+            let value = body()
+            return (value, Date().timeIntervalSince(started) * 1000)
+        }.value
+    }
 
     func run() {
         running = true
         Task {
             // The fixture blocks while it executes and renders, so keep it off the main thread.
-            frame = await Task.detached { GuestFrame.run() }.value
+            (frame, frameMs) = await Self.timed { GuestFrame.run() }
             running = false
         }
     }
@@ -424,7 +437,7 @@ final class FrameModel: ObservableObject {
     func runTextured() {
         runningTextured = true
         Task {
-            texturedFrame = await Task.detached { TexturedFrame.run() }.value
+            (texturedFrame, texturedMs) = await Self.timed { TexturedFrame.run() }
             runningTextured = false
         }
     }
@@ -432,200 +445,8 @@ final class FrameModel: ObservableObject {
     func runAudioVfs() {
         runningAudioVfs = true
         Task {
-            audioVfsFrame = await Task.detached { AudioVfsFrame.run() }.value
+            (audioVfsFrame, audioVfsMs) = await Self.timed { AudioVfsFrame.run() }
             runningAudioVfs = false
-        }
-    }
-}
-
-/// Persistent guest rendering model (Gate 3, #266; Gate 4, #276).
-@MainActor
-final class FrameLoopModel: ObservableObject {
-    @Published var state: UInt32 = UInt32(XENORA_LOOP_NONE)
-    @Published var completed: UInt32 = 0
-    @Published var frameId: UInt32 = XENORA_NO_FRAME
-    @Published var image: CGImage?
-    @Published var errorMessage: String?
-    @Published var isInteractive: Bool = false
-    @Published private(set) var controller: DetectedController?
-
-    private var session: xenora_session = 0
-    private var pollTask: Task<Void, Never>?
-
-    deinit {
-        pollTask?.cancel()
-        if session != 0 {
-            _ = xenora_session_destroy(session)
-        }
-    }
-
-    var isRunning: Bool { state == UInt32(XENORA_LOOP_RUNNING) }
-    var isPaused: Bool { state == UInt32(XENORA_LOOP_PAUSED) }
-    var canStart: Bool {
-        session == 0 || state == UInt32(XENORA_LOOP_NONE) || state == UInt32(XENORA_LOOP_FINISHED)
-            || state == UInt32(XENORA_LOOP_STOPPED) || state == UInt32(XENORA_LOOP_FAILED)
-    }
-
-    var stateDescription: String {
-        switch state {
-        case UInt32(XENORA_LOOP_NONE): return "Idle"
-        case UInt32(XENORA_LOOP_RUNNING): return "Running"
-        case UInt32(XENORA_LOOP_PAUSED): return "Paused"
-        case UInt32(XENORA_LOOP_FINISHED): return "Finished"
-        case UInt32(XENORA_LOOP_STOPPED): return "Stopped"
-        case UInt32(XENORA_LOOP_FAILED): return "Failed"
-        default: return "Unknown (\(state))"
-        }
-    }
-
-    func start(frameCount: UInt32 = 300) {
-        errorMessage = nil
-        if session != 0 {
-            _ = xenora_session_destroy(session)
-            session = 0
-        }
-        var newSession: xenora_session = 0
-        let createStatus = xenora_session_create(XENORA_ABI_VERSION, &newSession)
-        guard createStatus == XENORA_OK else {
-            errorMessage = "Failed to create session (status \(createStatus))"
-            return
-        }
-        session = newSession
-        let startStatus = xenora_session_start_frame_loop(session, frameCount)
-        guard startStatus == XENORA_OK else {
-            errorMessage = "Failed to start frame loop (status \(startStatus))"
-            _ = xenora_session_destroy(session)
-            session = 0
-            return
-        }
-        isInteractive = false
-        state = UInt32(XENORA_LOOP_RUNNING)
-        completed = 0
-        frameId = XENORA_NO_FRAME
-        image = nil
-        startPolling()
-    }
-
-    func startInteractive(frameCount: UInt32 = 300) {
-        errorMessage = nil
-        if session != 0 {
-            _ = xenora_session_destroy(session)
-            session = 0
-        }
-        var newSession: xenora_session = 0
-        let createStatus = xenora_session_create(XENORA_ABI_VERSION, &newSession)
-        guard createStatus == XENORA_OK else {
-            errorMessage = "Failed to create session (status \(createStatus))"
-            return
-        }
-        session = newSession
-        let startStatus = xenora_session_start_interactive_loop(session, frameCount)
-        guard startStatus == XENORA_OK else {
-            errorMessage = "Failed to start interactive loop (status \(startStatus))"
-            _ = xenora_session_destroy(session)
-            session = 0
-            return
-        }
-        isInteractive = true
-        controller = nil
-        state = UInt32(XENORA_LOOP_RUNNING)
-        completed = 0
-        frameId = XENORA_NO_FRAME
-        image = nil
-        startPolling()
-    }
-
-    func sendInput(buttons: UInt32) {
-        sendInput(buttons: buttons, x: 0, y: 0, connected: true)
-    }
-
-    private func sendInput(
-        buttons: UInt32, x: Int16, y: Int16, connected: Bool,
-        leftTrigger: Float = 0, rightTrigger: Float = 0
-    ) {
-        guard session != 0 else { return }
-        let state = xenora_input_state(
-            buttons: buttons,
-            stick_x: x,
-            stick_y: y,
-            mouse_dx: 0,
-            mouse_dy: 0,
-            mouse_buttons: 0,
-            connected: connected ? 1 : 0,
-            reserved: 0
-        )
-        var input = xenora_controller_input(
-            state: state, left_trigger: UInt16((leftTrigger * 65535).rounded()),
-            right_trigger: UInt16((rightTrigger * 65535).rounded())
-        )
-        _ = xenora_session_send_controller_input(session, &input)
-    }
-
-    private func updateGameController() {
-        let next = pollGameController()
-        guard next != controller else { return }
-        controller = next
-        let snapshot = next?.snapshot
-        sendInput(buttons: snapshot?.buttons ?? 0, x: snapshot?.x ?? 0, y: snapshot?.y ?? 0,
-                  connected: next != nil, leftTrigger: snapshot?.leftTrigger ?? 0,
-                  rightTrigger: snapshot?.rightTrigger ?? 0)
-    }
-
-    func pause() {
-        guard session != 0 else { return }
-        _ = xenora_session_pause_frame_loop(session)
-    }
-
-    func resume() {
-        guard session != 0 else { return }
-        _ = xenora_session_resume_frame_loop(session)
-    }
-
-    func stop() {
-        guard session != 0 else { return }
-        _ = xenora_session_stop_frame_loop(session)
-    }
-
-    private func startPolling() {
-        pollTask?.cancel()
-        pollTask = Task { [weak self] in
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 16_000_000)
-                guard let self = self, self.session != 0 else { break }
-                if self.isInteractive {
-                    self.updateGameController()
-                }
-                var st: UInt32 = 0
-                var comp: UInt32 = 0
-                var fId: UInt32 = 0
-                var rgba = [UInt8](repeating: 0, count: Int(XENORA_FIXTURE_FRAME_WIDTH * XENORA_FIXTURE_FRAME_HEIGHT * 4))
-                let code = rgba.withUnsafeMutableBufferPointer { buffer in
-                    xenora_session_frame_loop_status(
-                        self.session, &st, &comp, &fId, buffer.baseAddress, UInt64(buffer.count))
-                }
-                guard code == XENORA_OK else { break }
-                self.state = st
-                self.completed = comp
-                self.frameId = fId
-                if fId != XENORA_NO_FRAME, let provider = CGDataProvider(data: Data(rgba) as CFData) {
-                    self.image = CGImage(
-                        width: Int(XENORA_FIXTURE_FRAME_WIDTH),
-                        height: Int(XENORA_FIXTURE_FRAME_HEIGHT),
-                        bitsPerComponent: 8,
-                        bitsPerPixel: 32,
-                        bytesPerRow: Int(XENORA_FIXTURE_FRAME_WIDTH) * 4,
-                        space: CGColorSpaceCreateDeviceRGB(),
-                        bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
-                        provider: provider,
-                        decode: nil,
-                        shouldInterpolate: false,
-                        intent: .defaultIntent
-                    )
-                }
-                if st != UInt32(XENORA_LOOP_RUNNING) && st != UInt32(XENORA_LOOP_PAUSED) {
-                    break
-                }
-            }
         }
     }
 }
@@ -635,16 +456,62 @@ final class FrameLoopModel: ObservableObject {
 final class InspectionModel: ObservableObject {
     static let shared = InspectionModel()
     @Published var fileName: String?
+    /// The inspected file, which the Run action runs.
+    @Published var url: URL?
     @Published var report = ""
     @Published var status: Int32 = Int32(XENORA_OK)
     @Published var busy = false
     @Published var importing = false
+    /// Why the last file selection could not be used, shown until the next selection.
+    @Published var selectionError: String?
+
+    /// Shows the read-only file importer, from the button or File > Open Executable….
+    func requestImport() {
+        selectionError = nil
+        importing = true
+    }
+
+    /// Handles the importer's completion. A cancelled picker is not a failure.
+    func importFinished(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            inspect(url)
+        case .failure(let error):
+            if let cocoa = error as? CocoaError, cocoa.code == .userCancelled {
+                return
+            }
+            selectionError = "The selected file could not be opened: \(error.localizedDescription)"
+        }
+    }
+
+    /// Reads and reports one file off the main thread. Replaceable only for the
+    /// `--smoke-inspection-order` check.
+    private let reader: @Sendable (URL) -> (Int32, String)
+    /// Number of the latest `inspect` call. Only that call may publish a result.
+    private var latestRequest: UInt64 = 0
+
+    init(reader: @escaping @Sendable (URL) -> (Int32, String) = InspectionModel.run) {
+        self.reader = reader
+    }
+
+    var failed: Bool { !busy && fileName != nil && status != Int32(XENORA_OK) }
 
     func inspect(_ url: URL) {
+        latestRequest &+= 1
+        let request = latestRequest
+        selectionError = nil
         fileName = url.lastPathComponent
+        self.url = url
+        ProgramRunModel.shared.clear()
+        report = ""
+        status = Int32(XENORA_OK)
         busy = true
+        let reader = reader
         Task {
-            let (newStatus, newReport) = await Task.detached { InspectionModel.run(url) }.value
+            let (newStatus, newReport) = await Task.detached { reader(url) }.value
+            // A newer selection owns the published state, including `busy`;
+            // an older read that finishes late is discarded.
+            guard request == latestRequest else { return }
             status = newStatus
             report = newReport
             busy = false
@@ -691,11 +558,18 @@ struct InspectorView: View {
     var body: some View {
         Section("Executable inspection (read-only)") {
             HStack {
-                Button("Open Executable…") { model.importing = true }
+                Button("Open Executable…") { model.requestImport() }
                 Text("or drop a file on this window").foregroundStyle(.secondary)
+            }
+            if let error = model.selectionError {
+                Text(error).foregroundStyle(.red)
             }
             if let name = model.fileName {
                 LabeledContent("File", value: model.busy ? "\(name) (inspecting…)" : name)
+                if model.failed {
+                    Text("Inspection of \(name) failed (status \(model.status)).")
+                        .foregroundStyle(.red)
+                }
                 ScrollView {
                     Text(model.report)
                         .font(.system(.caption, design: .monospaced))
@@ -704,7 +578,7 @@ struct InspectorView: View {
                 }
                 .frame(minHeight: 160, maxHeight: 320)
             }
-            Text("Opened files are inspected only. Running them is not available.")
+            Text("Inspection is read-only; nothing in the file runs until you choose Run below.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -716,12 +590,25 @@ struct ContentView: View {
     @ObservedObject var model: FrameModel
     @ObservedObject var loop: FrameLoopModel
     @ObservedObject var inspection = InspectionModel.shared
+    @ObservedObject var programRun = ProgramRunModel.shared
+    @ObservedObject var hud = HudSettings.shared
     private var frame: GuestFrame? { model.frame }
+
+    private func ms(_ value: Double?) -> String {
+        value.map { String(format: "host run %.1f ms", $0) } ?? "host run -"
+    }
     private var running: Bool { model.running }
 
     var body: some View {
         Form {
             InspectorView(model: inspection)
+            ProgramRunView(url: inspection.url, model: programRun, hud: hud)
+            Section("Display") {
+                Toggle("Show Metal HUD", isOn: $hud.enabled)
+                Text("Overlays the Metal device, frame size, frame counters and host-measured timings on guest frames. Program runs get startup stage traces instead, because they have no draw path yet.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
             Section("Guest display") {
                 if let image = frame?.image {
                     Image(decorative: image, scale: 1)
@@ -729,6 +616,7 @@ struct ContentView: View {
                         .interpolation(.none)
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 240)
+                        .metalHud(hud.enabled, ["\(frame!.width)x\(frame!.height) offscreen, 1 draw", ms(model.frameMs)])
                         .accessibilityLabel("Guest frame, \(frame!.width) by \(frame!.height) pixels")
                     Text("Guest code ran, its draw was rendered by native Metal, and all \(frame!.width * frame!.height) pixels matched the fixture shader's output.")
                         .font(.callout)
@@ -743,6 +631,7 @@ struct ContentView: View {
                         .interpolation(.none)
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 160)
+                        .metalHud(hud.enabled, ["2x2 textured", ms(model.texturedMs)])
                         .accessibilityLabel("Textured guest frame, 2 by 2 pixels")
                     Text("Textured fixture ran: persistent texture created, dynamically updated, rendered on Metal, and retired.")
                         .font(.callout)
@@ -754,6 +643,7 @@ struct ContentView: View {
                         .interpolation(.none)
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: .infinity, minHeight: 80, maxHeight: 160)
+                        .metalHud(hud.enabled, ["2x2 audio/VFS", ms(model.audioVfsMs)])
                         .accessibilityLabel("Audio/VFS guest frame, 2 by 2 pixels")
                     Text("Audio/VFS fixture ran: asset.bin loaded through sandboxed VFS, \(model.audioVfsFrame!.samples) audio samples queued (\(model.audioVfsFrame!.totalAudioBytes) bytes), texture rendered on Metal.")
                         .font(.callout)
@@ -775,16 +665,21 @@ struct ContentView: View {
                         .interpolation(.none)
                         .aspectRatio(contentMode: .fit)
                         .frame(maxWidth: .infinity, minHeight: 120, maxHeight: 240)
+                        .metalHud(hud.enabled, [
+                            "\(XENORA_FIXTURE_FRAME_WIDTH)x\(XENORA_FIXTURE_FRAME_HEIGHT) frame #\(loop.frameId), \(loop.completed) completed",
+                            loop.hostFps.map { String(format: "%.1f frames/s (host)", $0) } ?? "frames/s -",
+                        ])
                         .accessibilityLabel("Guest frame #\(loop.frameId)")
                     Text("Frame #\(loop.frameId) (\(loop.completed) completed) • \(loop.stateDescription)")
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                } else if let error = loop.errorMessage {
-                    Text(error).foregroundStyle(.red)
                 } else if loop.state != UInt32(XENORA_LOOP_NONE) {
                     Text("State: \(loop.stateDescription) • \(loop.completed) completed")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                }
+                if let error = loop.errorMessage {
+                    Text(error).foregroundStyle(.red)
                 }
                 HStack {
                     Button("Start 300 frames") { loop.start(frameCount: 300) }
@@ -818,12 +713,12 @@ struct ContentView: View {
             LabeledContent("Interface version", value: "\(probe.abiVersion)")
             LabeledContent("Trusted fixture sections", value: "\(probe.sections)")
             LabeledContent("Trusted fixture entry RVA", value: String(format: "0x%X", probe.entryRVA))
-            Text("Only the bundled trusted fixtures (single-frame, frame-loop, and interactive guest) can run. Presentation uses read-back Metal frames. Arbitrary executables are not available yet.")
+            Text("The bundled fixtures run in the app. Other executables run through the bundled xenora runner and show their output; they do not draw yet. Presentation uses read-back Metal frames.")
                 .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
         .fileImporter(isPresented: $inspection.importing, allowedContentTypes: [.item]) { result in
-            if case .success(let url) = result { inspection.inspect(url) }
+            inspection.importFinished(result)
         }
         .dropDestination(for: URL.self) { urls, _ in
             guard let url = urls.first, url.isFileURL else { return false }
@@ -836,11 +731,22 @@ struct ContentView: View {
 
 struct XenoraApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
+    @ObservedObject var hud = HudSettings.shared
     let model = FrameModel()
     let loop = FrameLoopModel()
 
     var body: some Scene {
         WindowGroup("Xenora") { ContentView(model: model, loop: loop) }
+            .commands {
+                CommandGroup(after: .newItem) {
+                    Button("Open Executable…") { InspectionModel.shared.requestImport() }
+                        .keyboardShortcut("o")
+                }
+                CommandGroup(after: .toolbar) {
+                    Toggle("Show Metal HUD", isOn: $hud.enabled)
+                        .keyboardShortcut("h", modifiers: [.command, .shift])
+                }
+            }
     }
 }
 
@@ -1007,6 +913,152 @@ if CommandLine.arguments.contains("--smoke-frame") {
     let frame = GuestFrame.run()
     print(frame.summary)
     exit(frame.status == XENORA_OK ? 0 : 1)
+}
+
+// `--smoke-inspection-order` checks that only the latest selection publishes an
+// inspection result. Files are never read: an injected reader answers after a delay
+// named by the file. It needs no GPU.
+if CommandLine.arguments.contains("--smoke-inspection-order") {
+    let reader: @Sendable (URL) -> (Int32, String) = { url in
+        // "<delay in ms>-<ok|fail>-<tag>"
+        let parts = url.lastPathComponent.split(separator: "-")
+        Thread.sleep(forTimeInterval: Double(parts[0])! / 1000)
+        let status = parts[1] == "ok" ? Int32(XENORA_OK) : Int32(XENORA_INVALID_ARGUMENT)
+        return (status, "report \(url.lastPathComponent)")
+    }
+    func file(_ name: String) -> URL { URL(fileURLWithPath: "/nonexistent/\(name)") }
+    func pause(_ ms: UInt64) async { try? await Task.sleep(nanoseconds: ms * 1_000_000) }
+
+    Task { @MainActor in
+        var failures: [String] = []
+        @MainActor func expect(_ model: InspectionModel, _ name: String, busy: Bool, report: String, ok: Bool, _ label: String) {
+            let actual = "file=\(model.fileName ?? "-") busy=\(model.busy) status=\(model.status) report=\(model.report)"
+            if model.fileName != name || model.busy != busy || model.report != report
+                || (model.status == Int32(XENORA_OK)) != ok {
+                failures.append("\(label): \(actual)")
+            }
+        }
+        // A slow first read finishing after a fast second one, with either outcome.
+        for (first, second, ok) in [("400-ok-a", "0-ok-b", true), ("400-fail-a", "0-ok-b", true),
+                                    ("400-ok-a", "0-fail-b", false)] {
+            let model = InspectionModel(reader: reader)
+            model.inspect(file(first))
+            model.inspect(file(second))
+            await pause(700)
+            expect(model, second, busy: false, report: "report \(second)", ok: ok, "\(first) then \(second)")
+        }
+        // An older read that finishes first must not clear the newer request's busy state.
+        let model = InspectionModel(reader: reader)
+        model.inspect(file("100-ok-a"))
+        model.inspect(file("500-fail-b"))
+        await pause(300)
+        expect(model, "500-fail-b", busy: true, report: "", ok: true, "while the newer read runs")
+        await pause(500)
+        expect(model, "500-fail-b", busy: false, report: "report 500-fail-b", ok: false, "after the newer read")
+        for failure in failures { print("smoke-inspection-order: FAILED \(failure)") }
+        print("smoke-inspection-order: \(failures.isEmpty ? "ok" : "\(failures.count) failed")")
+        exit(failures.isEmpty ? 0 : 1)
+    }
+    dispatchMain()
+}
+
+// `--smoke-import-result` checks how a file-importer result reaches the inspector:
+// a cancelled picker shows nothing, a failure is shown, and a new selection clears it.
+// No file is opened or read.
+if CommandLine.arguments.contains("--smoke-import-result") {
+    let ok = MainActor.assumeIsolated { () -> Bool in
+        var failures: [String] = []
+        let model = InspectionModel()
+        model.importFinished(.failure(CocoaError(.userCancelled)))
+        if model.selectionError != nil || model.fileName != nil { failures.append("cancel shows a message") }
+        model.importFinished(.failure(CocoaError(.fileReadNoPermission)))
+        if model.selectionError == nil || model.fileName != nil { failures.append("failure is not shown") }
+        model.requestImport()
+        if model.selectionError != nil || !model.importing { failures.append("reopening keeps the old message") }
+        model.importFinished(.failure(CocoaError(.fileReadNoPermission)))
+        model.inspect(URL(fileURLWithPath: "/nonexistent/import-result-check"))
+        if model.selectionError != nil || model.fileName != "import-result-check" {
+            failures.append("a new selection keeps the old message")
+        }
+        for failure in failures { print("smoke-import-result: FAILED \(failure)") }
+        return failures.isEmpty
+    }
+    print("smoke-import-result: \(ok ? "ok" : "failed")")
+    exit(ok ? 0 : 1)
+}
+
+// `--smoke-run-program <file> <exit status> <last stage or -> <stderr text> [-- <args>]` runs a
+// file through the bundled worker with tracing on, as the Run button does with the
+// HUD on, and checks what the app would show. It needs no GPU for a program run.
+if let flag = CommandLine.arguments.firstIndex(of: "--smoke-run-program") {
+    let values = CommandLine.arguments
+    guard flag + 4 < values.count, let expectedExit = Int32(values[flag + 2]) else {
+        print("smoke-run-program: usage: --smoke-run-program <file> <exit> <stage|-> <stderr text>")
+        exit(2)
+    }
+    let file = URL(fileURLWithPath: values[flag + 1])
+    let expectedStage = values[flag + 3] == "-" ? nil : values[flag + 3]
+    let programArguments = values.firstIndex(of: "--").map { Array(values[($0 + 1)...]) } ?? []
+    var failures: [String] = []
+    let traced = ProgramRunner.run(file, trace: true, programArguments: programArguments)
+    if traced.exitStatus != expectedExit { failures.append("exit \(String(describing: traced.exitStatus))") }
+    if traced.lastStage != expectedStage { failures.append("stage \(traced.lastStage ?? "none")") }
+    if !traced.standardError.contains(values[flag + 4]) { failures.append("stderr \(traced.standardError)") }
+    // Without the HUD the same run is untraced.
+    let plain = ProgramRunner.run(file, trace: false, programArguments: programArguments)
+    if plain.exitStatus != expectedExit || plain.lastStage != nil { failures.append("untraced run differs") }
+    // A missing runner is reported, not crashed on.
+    let missing = ProgramRunner.run(file, trace: false, worker: nil)
+    if missing.launchError == nil { failures.append("missing runner not reported") }
+    for failure in failures { print("smoke-run-program: FAILED \(failure)") }
+    print("smoke-run-program: \(traced.summary) \(failures.isEmpty ? "ok" : "failed")")
+    exit(failures.isEmpty ? 0 : 1)
+}
+
+// `--smoke-hud` checks that the Metal HUD setting is off by default, persists, and
+// turns tracing on for program runs. It needs no GPU and opens no window.
+if CommandLine.arguments.contains("--smoke-hud") {
+    let ok = MainActor.assumeIsolated { () -> Bool in
+        let suite = "local.xenora.smoke-hud.\(ProcessInfo.processInfo.processIdentifier)"
+        guard let defaults = UserDefaults(suiteName: suite) else { return false }
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var failures: [String] = []
+        let first = HudSettings(defaults: defaults)
+        if first.enabled { failures.append("on by default") }
+        first.enabled = true
+        if !HudSettings(defaults: defaults).enabled { failures.append("on does not persist") }
+        first.enabled = false
+        if HudSettings(defaults: defaults).enabled { failures.append("off does not persist") }
+        let file = URL(fileURLWithPath: "/nonexistent/program.exe")
+        let on = ProgramRunner.arguments(for: file, trace: true, programArguments: ["a b", "c"])
+        if on != ["run", "--experimental", "--trace", "--pe", file.path, "--", "a b", "c"] {
+            failures.append("traced arguments \(on)")
+        }
+        let off = ProgramRunner.arguments(for: file, trace: false, programArguments: [])
+        if off != ["run", "--experimental", "--pe", file.path] { failures.append("plain arguments \(off)") }
+        if ProgramRunner.lastStage(in: "x\ntrace stage=mapped base=1\ntrace stage=relocated n=0\nrun failed") != "relocated" {
+            failures.append("stage parsing")
+        }
+        for failure in failures { print("smoke-hud: FAILED \(failure)") }
+        return failures.isEmpty
+    }
+    print("smoke-hud: \(ok ? "ok" : "failed")")
+    exit(ok ? 0 : 1)
+}
+
+// Keep injected status failures separate from the actual Metal fixtures.
+if let check = CommandLine.arguments.first(where: {
+    $0 == "--smoke-loop-lifecycle" || $0 == "--smoke-native-loop-lifecycle"
+}) {
+    Task { @MainActor in
+        let failures = check == "--smoke-loop-lifecycle"
+            ? await checkFrameLoopFailures()
+            : await checkNativeFrameLoop()
+        for failure in failures { print("\(check): FAILED \(failure)") }
+        print("\(check): \(failures.isEmpty ? "ok" : "failed")")
+        exit(failures.isEmpty ? 0 : 1)
+    }
+    dispatchMain()
 }
 
 // `--smoke` prints the probe and exits without opening a window, for scripts and CI.

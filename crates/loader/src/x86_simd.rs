@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Semantic primitives for the SSE and SSE2 moves and packed integer forms.
+//! Semantic primitives for the SSE to SSE4.1 moves and packed integer forms.
 //!
-//! Lane 0 is the least significant. Every instruction is all-or-nothing and none
-//! changes RFLAGS. Floating-point arithmetic is in [`crate::x86_float`].
+//! Lane 0 is the least significant. Every instruction is all-or-nothing and only
+//! PTEST changes RFLAGS. Floating-point arithmetic is in [`crate::x86_float`].
 
-use crate::cpu::{CpuState, ExitReason, Mxcsr};
+use crate::cpu::{CpuState, ExitReason, Mxcsr, RFlags};
 use crate::memory::GuestMemory;
 use crate::x86_decode::{Encoding, Insn, RegOperand, RmOperand};
 use crate::x86_exec::{
@@ -129,6 +129,75 @@ fn shift_bytes(value: u128, count: u64, left: bool) -> u128 {
     }
 }
 
+/// Combine neighbouring lanes: those of `a` give the low half of the result,
+/// those of `b` the high half. `f` gets the lower lane first.
+fn horizontal(a: u128, b: u128, bits: u32, f: impl Fn(i64, i64) -> i64) -> u128 {
+    let half = 64 / bits;
+    build(bits, |index| {
+        let source = if index < half { a } else { b };
+        let at = 2 * (index % half);
+        let value = |at| signed(lane(source, bits, at), bits);
+        f(value(at), value(at + 1)) as u64
+    })
+}
+
+/// `low` with `high` above it, shifted right by `count` bytes. Zeros follow.
+fn align_right(high: u128, low: u128, count: u64) -> u128 {
+    match count {
+        0 => low,
+        1..=15 => low >> (8 * count) | high << (128 - 8 * count),
+        _ => shift_bytes(high, count - 16, false),
+    }
+}
+
+/// Widen the low lanes of `value` from `from` to `to` bits.
+fn widen(value: u128, from: u32, to: u32, sign: bool) -> u128 {
+    build(to, |index| match lane(value, from, index) {
+        low if sign => signed(low, from) as u64,
+        low => low,
+    })
+}
+
+/// Eight sums of four byte differences. A block of `b` chosen by the two low bits
+/// of `imm` is compared with `a` from byte 0 or, by bit 2, byte 4 onwards.
+fn sums_of_differences(a: u128, b: u128, imm: u64) -> u128 {
+    let (from_a, from_b) = ((imm as u32 >> 2 & 1) * 4, (imm as u32 & 3) * 4);
+    build(16, |index| {
+        (0..4)
+            .map(|at| lane(a, 8, from_a + index + at).abs_diff(lane(b, 8, from_b + at)))
+            .sum()
+    })
+}
+
+/// Lanes of `source` where the immediate has a bit set, else of `old`.
+fn blend(old: u128, source: u128, bits: u32, imm: u64) -> u128 {
+    build(bits, |index| {
+        let chosen = imm >> index & 1 != 0;
+        lane(if chosen { source } else { old }, bits, index)
+    })
+}
+
+/// INSERTPS: `value` in the lane of bits 5:4, then zeros by bits 3:0.
+fn insert_single(old: u128, value: u64, imm: u64) -> u128 {
+    build(32, |index| {
+        if imm >> index & 1 != 0 {
+            0
+        } else if u64::from(index) == imm >> 4 & 3 {
+            value
+        } else {
+            lane(old, 32, index)
+        }
+    })
+}
+
+/// The smallest word and, above it, the index of its first occurrence.
+fn smallest_word(value: u128) -> u128 {
+    let least = (0..8).map(|index| (lane(value, 16, index), index)).min();
+    least.map_or(0, |(word, index)| {
+        u128::from(word) | u128::from(index) << 16
+    })
+}
+
 /// Result of a two-source packed operation.
 fn packed(op: Op, a: u128, b: u128) -> u128 {
     match op {
@@ -172,6 +241,57 @@ fn packed(op: Op, a: u128, b: u128) -> u128 {
             let product = |at| signed(lane(a, 16, at), 16) * signed(lane(b, 16, at), 16);
             (product(2 * index) + product(2 * index + 1)) as u64
         }),
+        Op::Pshufb => build(8, |index| match lane(b, 8, index) {
+            control if control & 0x80 != 0 => 0,
+            control => lane(a, 8, (control & 15) as u32),
+        }),
+        Op::Phaddw => horizontal(a, b, 16, |x, y| x + y),
+        Op::Phaddd => horizontal(a, b, 32, |x, y| x + y),
+        Op::Phaddsw => horizontal(a, b, 16, |x, y| saturate(x + y, 16)),
+        Op::Phsubw => horizontal(a, b, 16, |x, y| x - y),
+        Op::Phsubd => horizontal(a, b, 32, |x, y| x - y),
+        Op::Phsubsw => horizontal(a, b, 16, |x, y| saturate(x - y, 16)),
+        // Unsigned destination bytes by signed source bytes.
+        Op::Pmaddubsw => build(16, |index| {
+            let product = |at| lane(a, 8, at) as i64 * signed(lane(b, 8, at), 8);
+            saturate(product(2 * index) + product(2 * index + 1), 16) as u64
+        }),
+        Op::Psignb => map_signed(a, b, 8, |x, y| x * y.signum()),
+        Op::Psignw => map_signed(a, b, 16, |x, y| x * y.signum()),
+        Op::Psignd => map_signed(a, b, 32, |x, y| x * y.signum()),
+        Op::Pmulhrsw => map_signed(a, b, 16, |x, y| (((x * y) >> 14) + 1) >> 1),
+        // The most negative value has no positive counterpart and stays.
+        Op::Pabsb => map_signed(0, b, 8, |_, y| y.abs()),
+        Op::Pabsw => map_signed(0, b, 16, |_, y| y.abs()),
+        Op::Pabsd => map_signed(0, b, 32, |_, y| y.abs()),
+        Op::Pmuldq => build(64, |index| {
+            let low = |value| signed(lane(value, 32, 2 * index), 32);
+            (low(a) * low(b)) as u64
+        }),
+        Op::Pmulld => map(a, b, 32, u64::wrapping_mul),
+        Op::Pcmpeqq => map(a, b, 64, |x, y| all_ones(x == y)),
+        Op::Packusdw => pack(a, b, 32, saturate_unsigned),
+        Op::Pminsb => map_signed(a, b, 8, i64::min),
+        Op::Pmaxsb => map_signed(a, b, 8, i64::max),
+        Op::Pminsd => map_signed(a, b, 32, i64::min),
+        Op::Pmaxsd => map_signed(a, b, 32, i64::max),
+        Op::Pminuw => map(a, b, 16, u64::min),
+        Op::Pmaxuw => map(a, b, 16, u64::max),
+        Op::Pminud => map(a, b, 32, u64::min),
+        Op::Pmaxud => map(a, b, 32, u64::max),
+        Op::Phminposuw => smallest_word(b),
+        Op::Pmovsxbw => widen(b, 8, 16, true),
+        Op::Pmovsxbd => widen(b, 8, 32, true),
+        Op::Pmovsxbq => widen(b, 8, 64, true),
+        Op::Pmovsxwd => widen(b, 16, 32, true),
+        Op::Pmovsxwq => widen(b, 16, 64, true),
+        Op::Pmovsxdq => widen(b, 32, 64, true),
+        Op::Pmovzxbw => widen(b, 8, 16, false),
+        Op::Pmovzxbd => widen(b, 8, 32, false),
+        Op::Pmovzxbq => widen(b, 8, 64, false),
+        Op::Pmovzxwd => widen(b, 16, 32, false),
+        Op::Pmovzxwq => widen(b, 16, 64, false),
+        Op::Pmovzxdq => widen(b, 32, 64, false),
         Op::Psadbw => build(64, |half| {
             (0..8)
                 .map(|at| lane(a, 8, 8 * half + at).abs_diff(lane(b, 8, 8 * half + at)))
@@ -302,13 +422,53 @@ pub(crate) fn execute(
                 }
             }
         }
-        (Op::Pinsrw, _) => {
+        // The immediate selects a lane of the operand's width, modulo their number.
+        (_, Encoding::XmmGprImm) => {
+            let width = insn.rm_size;
             let value = match rm_operand(insn)? {
-                RmOperand::Reg(source) => read_reg(cpu, source, 2),
-                RmOperand::Mem(operand) => read_mem(memory, address(cpu, &operand), 2)?,
+                RmOperand::Reg(source) => read_reg(cpu, source, width.max(4)),
+                RmOperand::Mem(operand) => read_mem(memory, address(cpu, &operand), width)?,
             };
-            let shift = 16 * (insn.imm & 7);
-            cpu.xmm[reg] = cpu.xmm[reg] & !(0xFFFF << shift) | u128::from(value) << shift;
+            let bits = 8 * u64::from(width);
+            let shift = bits * (insn.imm & (128 / bits - 1));
+            let mask = low_mask(width);
+            let value = (u128::from(value) & mask) << shift;
+            cpu.xmm[reg] = cpu.xmm[reg] & !(mask << shift) | value;
+        }
+        (_, Encoding::GprXmmImm) => {
+            let width = insn.rm_size;
+            let bits = 8 * u32::from(width);
+            let value = lane(cpu.xmm[reg], bits, insn.imm as u32 & (128 / bits - 1));
+            match rm_operand(insn)? {
+                // The rest of the register is cleared.
+                RmOperand::Reg(target) => write_reg(cpu, target, width.max(4), value),
+                RmOperand::Mem(operand) => {
+                    write_mem(memory, address(cpu, &operand), width, value)?;
+                }
+            }
+        }
+        (Op::Ptest, _) => {
+            let source = read_rm(cpu, memory, insn)?;
+            let value = cpu.xmm[reg];
+            cpu.flags = RFlags {
+                zf: value & source == 0,
+                cf: !value & source == 0,
+                ..RFlags::default()
+            };
+        }
+        // The sign bits of XMM0's lanes select the source.
+        (Op::Pblendvb | Op::Blendvps | Op::Blendvpd, _) => {
+            let bits = match insn.op {
+                Op::Pblendvb => 8,
+                Op::Blendvps => 32,
+                _ => 64,
+            };
+            let source = read_rm(cpu, memory, insn)?;
+            let (old, control) = (cpu.xmm[reg], cpu.xmm[0]);
+            cpu.xmm[reg] = build(bits, |index| {
+                let chosen = lane(control, bits, index) >> (bits - 1) != 0;
+                lane(if chosen { source } else { old }, bits, index)
+            });
         }
         (Op::Pextrw, _) => {
             let value = lane(read_rm(cpu, memory, insn)?, 16, (insn.imm & 7) as u32);
@@ -349,7 +509,14 @@ pub(crate) fn execute(
             cpu.xmm[reg] = cpu.xmm[reg] & !mask | source & mask;
         }
         (
-            Op::Movaps | Op::Movups | Op::Movdqa | Op::Movdqu | Op::Movss | Op::Movsd | Op::Movq,
+            Op::Movaps
+            | Op::Movups
+            | Op::Movdqa
+            | Op::Movdqu
+            | Op::Movntdqa
+            | Op::Movss
+            | Op::Movsd
+            | Op::Movq,
             Encoding::XmmRm,
         ) => {
             cpu.xmm[reg] = read_rm(cpu, memory, insn)? & low_mask(insn.rm_size);
@@ -388,6 +555,16 @@ pub(crate) fn execute(
                 Op::Pshuflw => shuffle_16(source, imm, 0),
                 Op::Pshufhw => shuffle_16(source, imm, 4),
                 Op::Shufps => shuffle_32(old, source, imm),
+                Op::Palignr => align_right(old, source, imm),
+                Op::Pblendw => blend(old, source, 16, imm),
+                Op::Blendps => blend(old, source, 32, imm),
+                Op::Blendpd => blend(old, source, 64, imm),
+                Op::Insertps => {
+                    // A memory source has one lane.
+                    let from = if in_memory { 0 } else { imm as u32 >> 6 & 3 };
+                    insert_single(old, lane(source, 32, from), imm)
+                }
+                Op::Mpsadbw => sums_of_differences(old, source, imm),
                 _ => build(64, |index| {
                     let from = if index == 0 { old } else { source };
                     lane(from, 64, (imm >> index & 1) as u32)

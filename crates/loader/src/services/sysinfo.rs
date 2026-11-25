@@ -430,8 +430,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     // and returns zero rather than WAIT_IO_COMPLETION.
     for symbol in ["Sleep", "SleepEx"] {
         let s = Arc::clone(state);
-        registry.register(KERNEL32, symbol, move |args, _, _| {
+        registry.register(KERNEL32, symbol, move |args, cpu, _| {
             let millis = args.rcx as u32;
+            let attached = s.hooks.is_attached();
+            if attached {
+                return s.sleep_thread(cpu.gs_base, millis);
+            }
             if millis == INFINITE || millis > MAX_SLEEP_MILLIS {
                 return Err(ExitReason::IllegalInstruction(0xFE));
             }

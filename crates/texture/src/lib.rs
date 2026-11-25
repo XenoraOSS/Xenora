@@ -10,6 +10,7 @@
 mod bc;
 mod bc6h;
 mod bc7;
+mod footprint;
 pub mod sampler;
 mod upload;
 pub use bc::{
@@ -19,6 +20,9 @@ pub use bc6h::{
     BC6H_SUPPORTED_MODES, Bc6hError, bc6h_mode, decode_bc6h_sfloat, decode_bc6h_ufloat,
 };
 pub use bc7::{BC7_SUPPORTED_MODES, bc7_mode, decode_bc7};
+pub use footprint::{
+    BcCopyAlignment, BcFootprint, BcFormat, BcTextureDesc, BcTextureLayout, PackedBcUpload,
+};
 pub use sampler::{AddressMode, FilterMode, SamplerDesc, SamplerError, TextureMetadata};
 pub use upload::{
     Bc1Subresource, Bc1Upload, Bc1UploadDesc, BcAlphaFormat, BcAlphaUpload, BcAlphaUploadDesc,

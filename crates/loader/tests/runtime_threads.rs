@@ -20,7 +20,7 @@ use xenora_loader::services::{Clock, MockClock, ServicesState, register_standard
 const BASE: u64 = 0x1_4000_0000;
 const TEXT_RVA: u32 = 0x1000;
 const TEXT_RAW: usize = 0x200;
-const TEXT_LEN: usize = 0x4000;
+const TEXT_LEN: usize = 0x6000;
 const IDATA_RVA: u32 = 0x8000;
 const IDATA_RAW: usize = TEXT_RAW + TEXT_LEN;
 const IDATA_LEN: usize = 0x2000;
@@ -481,7 +481,16 @@ fn the_process_ends_with_its_main_thread_but_not_with_exit_thread() {
 
 #[test]
 fn scheduling_is_deterministic_and_bounded() {
-    for main in ["main_racy", "main_mutex", "main_isolated", "main_churn"] {
+    for main in [
+        "main_racy",
+        "main_mutex",
+        "main_isolated",
+        "main_churn",
+        "main_section",
+        "main_srw",
+        "main_queue",
+        "main_sleep",
+    ] {
         for quantum in [1, 64, 1024] {
             let (first, second) = (
                 run_with(main, quantum, BUDGET),
@@ -588,13 +597,17 @@ fn a_signal_after_the_deadline_is_not_taken_by_the_expired_wait() {
     }
 }
 
-/// Run `main_continued_wait` until `budget` is spent.
-fn first_part(budget: usize) -> (Guest, ScheduleReport) {
-    let mut guest = guest("main_continued_wait");
+/// Run `main` until `budget` is spent.
+fn first_part_of(main: &str, budget: usize) -> (Guest, ScheduleReport) {
+    let mut guest = guest(main);
     let report = Scheduler::new(Arc::clone(&guest.state), 1024)
         .run(&mut guest.engine, &mut guest.memory, &guest.cpu, budget)
         .unwrap();
     (guest, report)
+}
+
+fn first_part(budget: usize) -> (Guest, ScheduleReport) {
+    first_part_of("main_continued_wait", budget)
 }
 
 /// Smallest budget with which the wait has been called.
@@ -843,7 +856,15 @@ fn threads_can_be_ended_in_every_state() {
 
 #[test]
 fn every_small_budget_stops_cleanly() {
-    for main in ["main_limit", "main_mutex", "main_fifo"] {
+    for main in [
+        "main_limit",
+        "main_mutex",
+        "main_fifo",
+        "main_section",
+        "main_queue",
+        "main_srw",
+        "main_once",
+    ] {
         for quantum in [1, 64, 1024] {
             for budget in (1..1500).step_by(29) {
                 let run = run_with(main, quantum, budget);
@@ -919,6 +940,10 @@ fn service_calls_that_end_a_turn_are_counted() {
         ("main_fifo", 10),
         ("main_churn", 100),
         ("main_exits_first", 3),
+        ("main_section", 800),
+        ("main_queue", 400),
+        ("main_once", 10),
+        ("main_sleep", 5),
     ] {
         for quantum in QUANTA {
             let run = run_with(main, quantum, BUDGET);
@@ -930,4 +955,284 @@ fn service_calls_that_end_a_turn_are_counted() {
             );
         }
     }
+}
+
+/// Stopped by an operation the runtime refuses, in the main thread.
+fn refused(main: &str) -> Run {
+    let run = run(main);
+    assert!(
+        matches!(
+            run.report.outcome,
+            Outcome::Fault {
+                thread: MAIN_ID,
+                reason: ExitReason::IllegalInstruction(0xFE),
+                ..
+            }
+        ),
+        "{:?}",
+        run.report.outcome
+    );
+    run
+}
+
+#[test]
+fn critical_sections_exclude_threads_that_yield_inside() {
+    for quantum in QUANTA {
+        let run = run_with("main_section", quantum, BUDGET).halted();
+        assert_eq!(run.memory.read_u64(COUNTER).unwrap(), 400);
+        // Every wait ended, nobody met another thread inside, and the section
+        // is free: LockCount is -1 and it has no owner.
+        assert_eq!(run.outs(4), [0, 0, FAILED, 0], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn blocked_threads_enter_a_critical_section_in_order() {
+    for quantum in QUANTA {
+        let run = run_with("main_section_order", quantum, BUDGET).halted();
+        assert_eq!(run.outs(6), [0, 0, 1, 2, 3, 0], "quantum {quantum}");
+    }
+    for quantum in [256, 1024, 1_000_000] {
+        let run = run_with("main_section_handoff", quantum, BUDGET).halted();
+        assert_eq!(run.outs(2), [0, 1], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn a_lock_nobody_can_release_is_reported_as_a_deadlock() {
+    for main in ["main_orphaned_section", "main_recursive_srw"] {
+        let run = run(main);
+        let blocked = vec![MAIN_ID];
+        let suspended = Vec::new();
+        assert_eq!(
+            run.report.outcome,
+            Outcome::Deadlock { blocked, suspended },
+            "{main}"
+        );
+        assert_eq!(run.out(0), 1);
+    }
+}
+
+#[test]
+fn slim_locks_share_readers_and_exclude_writers() {
+    for quantum in QUANTA {
+        let run = run_with("main_srw", quantum, BUDGET).halted();
+        assert_eq!(run.memory.read_u64(COUNTER).unwrap(), 100);
+        assert_eq!((run.out(0), run.out(1)), (0, 0), "quantum {quantum}");
+        assert!((2..=3).contains(&run.out(2)), "{}", run.out(2));
+        assert_eq!(run.out(3), 1);
+    }
+}
+
+#[test]
+fn overlapping_readers_do_not_keep_a_writer_out() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_writer_progress", quantum, BUDGET).halted();
+        // Without a queue the readers would run all 600 of their rounds.
+        assert!((1..100).contains(&run.out(0)), "{}", run.out(0));
+        assert_eq!(run.out(1), 0);
+    }
+}
+
+#[test]
+fn a_writer_that_cannot_run_does_not_hold_up_readers() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_waiting_writer", quantum, BUDGET).halted();
+        assert_eq!(run.outs(8), [0, 0, 0, 1, 1, 0, 2, 0], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn slim_lock_waiters_go_in_the_order_they_came() {
+    for quantum in [256, 1024, 1_000_000] {
+        let run = run_with("main_srw_order", quantum, BUDGET).halted();
+        assert_eq!(run.outs(6), [0, 0, 1, 2, 3, 0], "quantum {quantum}");
+        let run = run_with("main_woken_writer_place", quantum, BUDGET).halted();
+        assert_eq!(run.outs(2), [1, 0], "quantum {quantum}");
+        let run = run_with("main_woken_writer", quantum, BUDGET).halted();
+        assert_eq!(run.outs(4), [0, 0, 0, 1], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn condition_variables_lose_no_item() {
+    for quantum in QUANTA {
+        let run = run_with("main_queue", quantum, BUDGET).halted();
+        assert_eq!(run.out(0), 0);
+        // Two producers each add 1 to 60.
+        assert_eq!(run.memory.read_u64(COUNTER).unwrap(), 2 * 60 * 61 / 2);
+        assert_eq!(run.out(8), 0, "quantum {quantum}");
+    }
+}
+
+#[test]
+fn a_condition_sleep_that_times_out_holds_its_lock_again() {
+    for quantum in QUANTA {
+        let run = run_with("main_condition_timeout", quantum, BUDGET).halted();
+        assert_eq!(
+            run.outs(10),
+            [0, 1460, 1, 0, 0, 1460, 0, 0, 0, 0],
+            "quantum {quantum}"
+        );
+        assert_eq!(run.clock.performance_count(), 1_000_000);
+    }
+}
+
+#[test]
+fn condition_variables_wake_the_oldest_sleeper_or_all() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_wake_order", quantum, BUDGET).halted();
+        assert_eq!(
+            run.outs(10),
+            [1, 0, 1, 2, 2, 0, 11, 31, 41, 51],
+            "quantum {quantum}"
+        );
+    }
+}
+
+#[test]
+fn a_woken_sleeper_queues_behind_threads_already_waiting_for_the_lock() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_woken_order", quantum, BUDGET).halted();
+        assert_eq!(run.outs(3), [0, 2, 11], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn a_wake_up_goes_to_a_sleep_that_has_not_timed_out() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_late_wake", quantum, BUDGET).halted();
+        assert_eq!(run.outs(4), [0, 1460, 0, 21], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn waiting_for_the_lock_is_not_part_of_the_timeout() {
+    for quantum in QUANTA {
+        let run = run_with("main_slow_reacquire", quantum, BUDGET).halted();
+        assert_eq!((run.out(0), run.out(2)), (1, 258), "quantum {quantum}");
+        assert_eq!(run.clock.performance_count(), 2_000_000);
+        let run = run_with("main_slow_timeout", quantum, BUDGET).halted();
+        assert_eq!(run.outs(3), [0, 1460, 258], "quantum {quantum}");
+        assert_eq!(run.clock.performance_count(), 2_000_000);
+    }
+}
+
+#[test]
+fn a_condition_sleep_in_a_section_entered_twice_is_refused() {
+    assert_eq!(refused("main_sleep_entered_twice").out(0), 1);
+}
+
+#[test]
+fn shared_sleepers_wait_for_the_writer_that_woke_them() {
+    for quantum in QUANTA {
+        let run = run_with("main_shared_sleepers", quantum, BUDGET).halted();
+        assert_eq!(run.outs(2), [0, 0], "quantum {quantum}");
+        assert_eq!(run.memory.read_u64(COUNTER).unwrap(), 3);
+    }
+}
+
+#[test]
+fn one_time_initialization_runs_once_and_the_others_wait() {
+    for quantum in QUANTA {
+        let run = run_with("main_once", quantum, BUDGET).halted();
+        assert_eq!(run.outs(6), [0x1230, 0x1230, 0x1230, 0x1230, 0, 1]);
+        assert_eq!(run.clock.performance_count(), 50_000);
+    }
+    for quantum in [64, 1024, 1_000_000] {
+        // The first attempt fails; one waiter runs the initializer again.
+        let run = run_with("main_once_retried", quantum, BUDGET).halted();
+        assert_eq!(run.outs(6), [0, 0x1240, 0x1240, 0x1240, 0, 2]);
+        assert_eq!(run.clock.performance_count(), 100_000);
+    }
+}
+
+#[test]
+fn a_begun_initialization_holds_up_other_threads() {
+    for quantum in QUANTA {
+        let run = run_with("main_once_begin", quantum, BUDGET).halted();
+        assert_eq!(run.outs(5), [1, 0, 0x440, 258, 1], "quantum {quantum}");
+        // Failure hands the initialization to the waiter.
+        let run = run_with("main_once_begin_failed", quantum, BUDGET).halted();
+        assert_eq!(run.outs(6), [1, 1, 0, 1, 0, 0x880], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn a_failed_initialization_goes_to_the_waiter_first() {
+    for quantum in [256, 1024, 1_000_000] {
+        let run = run_with("main_once_handed_over", quantum, BUDGET).halted();
+        assert_eq!(run.outs(6), [1, 1, 0, 1, 0, 0x880], "quantum {quantum}");
+        // The first thread fails and calls again at once, but the second one
+        // was waiting.
+        let run = run_with("main_once_callback_handed_over", quantum, BUDGET).halted();
+        assert_eq!(run.outs(6), [0, 32, 32, 16, 32, 2], "quantum {quantum}");
+    }
+    assert_eq!(refused("main_once_begun_twice").out(0), 1);
+}
+
+#[test]
+fn sleep_delays_only_the_calling_thread() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_sleep", quantum, BUDGET).halted();
+        assert_eq!(run.outs(5), [0, 0, 10, 20, 30], "quantum {quantum}");
+        assert_eq!(run.clock.performance_count(), 450_000);
+    }
+    for quantum in QUANTA {
+        assert_eq!(
+            run_with("main_sleep_zero", quantum, BUDGET).halted().out(0),
+            1
+        );
+    }
+    let run = run("main_long_sleep").halted();
+    assert_eq!(run.clock.performance_count(), 150_000_000);
+}
+
+#[test]
+fn an_infinite_sleep_ends_only_with_its_thread() {
+    let run = run("main_sleep_forever");
+    let blocked = vec![MAIN_ID];
+    let suspended = Vec::new();
+    assert_eq!(run.report.outcome, Outcome::Deadlock { blocked, suspended });
+    assert_eq!(run.outs(2), [258, 0]);
+    assert_eq!(run.clock.performance_count(), 400_000);
+}
+
+#[test]
+fn a_continued_run_keeps_the_rest_of_a_sleep() {
+    let blocks = (1..200)
+        .find(|&budget| {
+            let (guest, _) = first_part_of("main_continued_sleep", budget);
+            guest.engine.metrics.service_calls >= 1
+        })
+        .unwrap();
+    let (mut guest, report) = first_part_of("main_continued_sleep", blocks);
+    assert_eq!(report.outcome, Outcome::BudgetExhausted);
+    // One tick is left.
+    guest.clock.advance(9_999_999);
+    let report = Scheduler::new(Arc::clone(&guest.state), 1024)
+        .run(&mut guest.engine, &mut guest.memory, &report.main, BUDGET)
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Halted);
+    assert_eq!(guest.clock.performance_count(), 10_000_000);
+}
+
+#[test]
+fn a_continued_run_keeps_a_condition_sleep() {
+    let blocks = (1..200)
+        .find(|&budget| {
+            let (guest, _) = first_part_of("main_continued_condition", budget);
+            guest.engine.metrics.service_calls >= 3
+        })
+        .unwrap();
+    let (mut guest, report) = first_part_of("main_continued_condition", blocks);
+    assert_eq!(report.outcome, Outcome::BudgetExhausted);
+    guest.clock.advance(9_999_999);
+    let report = Scheduler::new(Arc::clone(&guest.state), 1024)
+        .run(&mut guest.engine, &mut guest.memory, &report.main, BUDGET)
+        .unwrap();
+    assert_eq!(report.outcome, Outcome::Halted);
+    assert_eq!(guest.clock.performance_count(), 10_000_000);
+    let out = |index: u64| guest.memory.read_u64(SHARED + 8 * index).unwrap();
+    assert_eq!((out(0), out(1), out(2)), (0, 1460, 1));
 }

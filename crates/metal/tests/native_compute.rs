@@ -425,6 +425,121 @@ fn compute_pipeline_cache_bounds_key_bytes_without_rejecting_maximum_source() {
 }
 
 #[test]
+fn compute_buffer_pool_reuses_and_reinitializes_storage() {
+    let context = context();
+    let source = fixture("output[id] = input[id] + 1u;");
+    let first = native(context.run_words_profiled(&source, "fixture", &[10, 20]));
+    assert_eq!(first.output, [11, 21]);
+    assert_eq!(context.buffer_allocations(), 2);
+    assert_eq!(context.idle_buffer_count(), 2);
+    assert_eq!(context.idle_buffer_bytes(), 16);
+
+    let second = native(context.run_words_profiled(&source, "fixture", &[30, 40]));
+    assert_eq!(second.output, [31, 41]);
+    assert_eq!(context.buffer_allocations(), 2);
+    assert_eq!(context.idle_buffer_count(), 2);
+
+    // The third dispatch intentionally leaves output[1] untouched. Reusing the
+    // output buffer must restore the original poison rather than expose [31].
+    let partial = fixture("if (id == 0u) { output[id] = input[id] + 1u; }");
+    let third = native(context.run_words_profiled(&partial, "fixture", &[50, 60]));
+    assert_eq!(third.output, [51, 0xA5A5_A5A5]);
+    assert_eq!(context.buffer_allocations(), 2);
+    assert_eq!(context.idle_buffer_count(), 2);
+}
+
+#[test]
+fn compute_buffer_pool_never_reuses_gated_in_flight_storage() {
+    let context = context();
+    let source = fixture("output[id] = input[id] ^ 5u;");
+    let (first, gate) = native(context.submit_words_gated(&source, "fixture", &[7]));
+    assert_eq!(context.buffer_allocations(), 2);
+    assert_eq!(context.idle_buffer_count(), 0);
+
+    let second = native(context.submit_words(&source, "fixture", &[11]));
+    assert_eq!(context.buffer_allocations(), 4);
+    assert_eq!(context.idle_buffer_count(), 0);
+    gate.open();
+
+    assert_eq!(native(context.wait(first)).output, [2]);
+    assert_eq!(native(context.wait(second)).output, [14]);
+    assert_eq!(context.buffer_allocations(), 4);
+    assert_eq!(context.idle_buffer_count(), 4);
+    assert_eq!(context.idle_buffer_bytes(), 16);
+
+    let third = native(context.run_words(&source, "fixture", &[29]));
+    assert_eq!(third, [24]);
+    assert_eq!(context.buffer_allocations(), 4);
+    assert_eq!(context.idle_buffer_count(), 4);
+}
+
+#[test]
+fn compute_buffer_pool_is_bounded_by_count_and_bytes() {
+    let context = context();
+    let source = fixture("output[id] = input[id] ^ 1u;");
+    for words in 1..=20 {
+        let input = vec![0x1020_3040; words];
+        let output = native(context.run_words(&source, "fixture", &input));
+        assert_eq!(output, vec![0x1020_3041; words]);
+    }
+    assert_eq!(context.buffer_allocations(), 40);
+    assert_eq!(context.idle_buffer_count(), 32);
+    assert!(context.idle_buffer_bytes() <= 1024 * 1024);
+}
+
+#[test]
+fn failed_compute_submissions_do_not_consume_pooled_buffers() {
+    let context = context();
+    let source = fixture("output[id] = input[id] + 1u;");
+    assert_eq!(
+        native(context.run_words(&source, "fixture", &[4, 5])),
+        [5, 6]
+    );
+    let allocations = context.buffer_allocations();
+    let idle = context.idle_buffer_count();
+
+    let error = context
+        .run_words("not valid MSL", "fixture", &[4])
+        .expect_err("invalid source must fail");
+    assert_eq!(error.operation, "newLibraryWithSource");
+    let error = context
+        .run_words(&source, "fixture", &[])
+        .expect_err("empty input must fail");
+    assert_eq!(error.operation, "dispatch bounds");
+    let error = context
+        .run_words_with_group_width(&source, "fixture", &[4], 0)
+        .expect_err("zero width must fail");
+    assert_eq!(error.operation, "threadgroup width");
+
+    assert_eq!(context.buffer_allocations(), allocations);
+    assert_eq!(context.idle_buffer_count(), idle);
+}
+
+#[test]
+fn concurrent_compute_submissions_share_the_bounded_buffer_pool() {
+    let context = context();
+    let source = fixture("output[id] = input[id] ^ 5u;");
+    let start = std::sync::Barrier::new(4);
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = (1_u32..=4)
+            .map(|input| {
+                let (context, source, start) = (&context, &source, &start);
+                scope.spawn(move || {
+                    start.wait();
+                    native(context.run_words(source, "fixture", &[input]))
+                })
+            })
+            .collect();
+        for (input, worker) in (1_u32..=4).zip(workers) {
+            assert_eq!(worker.join().unwrap(), [input ^ 5]);
+        }
+    });
+    assert!(context.buffer_allocations() <= 8);
+    assert!(context.idle_buffer_count() <= 8);
+    assert!(context.idle_buffer_bytes() <= 1024 * 1024);
+}
+
+#[test]
 fn compute_pipeline_cache_evicts_oldest_unused_key_and_keeps_pending_work_alive() {
     let context = context();
     // Seventeen entries in one source fit in Metal's input limit and exceed

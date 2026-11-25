@@ -71,6 +71,13 @@ pub fn get_api_sets_for_canonical(canonical: &str) -> &'static [&'static str] {
             "api-ms-win-crt-filesystem-l1-1-0.dll",
             "api-ms-win-crt-locale-l1-1-0.dll",
             "api-ms-win-crt-environment-l1-1-0.dll",
+            // The API set a program built with the mingw-w64 UCRT runtime
+            // imports `memcpy` and `__C_specific_handler` from. That it
+            // forwards to ucrtbase.dll is inferred from its name and from
+            // Microsoft's "Universal CRT deployment" page, which says the
+            // Universal CRT ships as ucrtbase.dll plus `api-ms-win-*.dll`
+            // forwarders. No document naming this set was found.
+            "api-ms-win-crt-private-l1-1-0.dll",
         ],
         _ => &[],
     }

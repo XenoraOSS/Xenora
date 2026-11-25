@@ -45,6 +45,12 @@ IMPORT void ReleaseSRWLockExclusive(void *);
 IMPORT void ReleaseSRWLockShared(void *);
 IMPORT u32 TryAcquireSRWLockExclusive(void *);
 IMPORT u32 TryAcquireSRWLockShared(void *);
+IMPORT void Sleep(u32);
+IMPORT int SleepConditionVariableCS(void *, void *, u32);
+IMPORT int SleepConditionVariableSRW(void *, void *, u32, u32);
+IMPORT void WakeConditionVariable(void *);
+IMPORT void WakeAllConditionVariable(void *);
+IMPORT int InitOnceExecuteOnce(void *, int (*)(void *, void *, void **), void *, void **);
 IMPORT int InitOnceBeginInitialize(void *, u32, int *, void **);
 IMPORT int InitOnceComplete(void *, u32, void *);
 IMPORT int DuplicateHandle(HANDLE, HANDLE, HANDLE, HANDLE *, u32, int, u32);
@@ -64,6 +70,7 @@ struct shared {
     volatile u32 tls;
     volatile u32 flag;
     u64 section[5], srw, once;
+    u64 cond, other_cond;
 };
 #define S ((struct shared *)0x50000)
 
@@ -803,4 +810,579 @@ void main_ends_in_a_wait(void) {
 void main_nested(void) {
     NESTED();
     S->out[1] = WaitForSingleObject(spawn(collatz, 97), INFINITE);
+}
+
+// Returns the old value, so the compiler emits LOCK XADD.
+__attribute__((noinline, used)) static u64 add(volatile u64 *at, u64 value) {
+    return __atomic_fetch_add(at, value, __ATOMIC_SEQ_CST);
+}
+
+// --- critical sections that block ------------------------------------------
+#define SECTION ((void *)S->section)
+static u32 increments(void *unused) {
+    for (int i = 0; i < 100; i++) {
+        EnterCriticalSection(SECTION);
+        EnterCriticalSection(SECTION);
+        if (S->flag) S->out[1]++;
+        S->flag = 1;
+        u64 value = S->counter;
+        SwitchToThread();
+        S->counter = value + 1;
+        S->flag = 0;
+        LeaveCriticalSection(SECTION);
+        LeaveCriticalSection(SECTION);
+    }
+    return 0;
+}
+void main_section(void) {
+    InitializeCriticalSection(SECTION);
+    for (int i = 0; i < 4; i++) S->handles[i] = spawn(increments, 0);
+    S->out[0] = WaitForMultipleObjects(4, S->handles, 1, INFINITE);
+    S->out[2] = (u32)S->section[1]; // LockCount
+    S->out[3] = S->section[2];      // OwningThread
+}
+
+static u32 queues(void *place) {
+    EnterCriticalSection(SECTION);
+    S->slots[S->counter++] = (u64)place;
+    LeaveCriticalSection(SECTION);
+    return 0;
+}
+static u32 keeps(void *unused) {
+    EnterCriticalSection(SECTION);
+    WaitForSingleObject(S->a, INFINITE);
+    LeaveCriticalSection(SECTION);
+    return 0;
+}
+// Blocked threads enter in the order they came, and before the thread that left.
+void main_section_order(void) {
+    S->a = CreateEventA(0, 1, 0, 0);
+    InitializeCriticalSection(SECTION);
+    EnterCriticalSection(SECTION);
+    for (u64 i = 0; i < 3; i++) {
+        S->handles[i] = spawn(queues, i + 1);
+        settle();
+    }
+    S->handles[3] = spawn(keeps, 0);
+    settle();
+    S->out[0] = S->counter;
+    LeaveCriticalSection(SECTION);
+    S->out[1] = WaitForMultipleObjects(3, S->handles, 1, INFINITE);
+    for (u64 i = 0; i < 3; i++) S->out[2 + i] = S->slots[i];
+    settle();
+    S->out[5] = TryEnterCriticalSection(SECTION);
+    SetEvent(S->a);
+    EnterCriticalSection(SECTION);
+    S->out[6] = WaitForSingleObject(S->handles[3], 0);
+}
+void main_section_handoff(void) {
+    S->a = CreateEventA(0, 1, 0, 0);
+    InitializeCriticalSection(SECTION);
+    EnterCriticalSection(SECTION);
+    HANDLE thread = spawn(keeps, 0);
+    settle();
+    LeaveCriticalSection(SECTION);
+    S->out[0] = TryEnterCriticalSection(SECTION);
+    SetEvent(S->a);
+    join(thread);
+    S->out[1] = TryEnterCriticalSection(SECTION);
+}
+
+static u32 ends_inside(void *unused) { EnterCriticalSection(SECTION); return 0; }
+void main_orphaned_section(void) {
+    InitializeCriticalSection(SECTION);
+    join(spawn(ends_inside, 0));
+    S->out[0] = 1;
+    EnterCriticalSection(SECTION);
+}
+void main_recursive_srw(void) {
+    AcquireSRWLockExclusive(&S->srw);
+    S->out[0] = 1;
+    AcquireSRWLockExclusive(&S->srw);
+}
+
+// --- slim locks that block -------------------------------------------------
+static u32 reads(void *unused) {
+    for (int i = 0; i < 50; i++) {
+        AcquireSRWLockShared(&S->srw);
+        if (S->flag) S->out[1]++;
+        u64 value = S->counter;
+        u64 readers = add(&S->slots[0], 1) + 1;
+        if (readers > S->out[2]) S->out[2] = readers;
+        SwitchToThread();
+        if (S->counter != value) S->out[1]++;
+        add(&S->slots[0], -1ull);
+        ReleaseSRWLockShared(&S->srw);
+    }
+    return 0;
+}
+static u32 writes(void *unused) {
+    for (int i = 0; i < 50; i++) {
+        AcquireSRWLockExclusive(&S->srw);
+        if (S->flag || S->slots[0]) S->out[1]++;
+        S->flag = 1;
+        u64 value = S->counter;
+        SwitchToThread();
+        S->counter = value + 1;
+        S->flag = 0;
+        ReleaseSRWLockExclusive(&S->srw);
+    }
+    return 0;
+}
+void main_srw(void) {
+    for (int i = 0; i < 3; i++) S->handles[i] = spawn(reads, 0);
+    for (int i = 3; i < 5; i++) S->handles[i] = spawn(writes, 0);
+    S->out[0] = WaitForMultipleObjects(5, S->handles, 1, INFINITE);
+    S->out[3] = TryAcquireSRWLockExclusive(&S->srw) & 0xFF;
+}
+
+static u32 overlaps(void *offset) {
+    for (u64 i = 0; i < (u64)offset; i++) SwitchToThread();
+    for (int i = 0; i < 300 && !S->flag; i++) {
+        AcquireSRWLockShared(&S->srw);
+        add(&S->counter, 1);
+        for (int turn = 0; turn < 6; turn++) SwitchToThread();
+        ReleaseSRWLockShared(&S->srw);
+    }
+    return 0;
+}
+static u32 writes_once(void *unused) {
+    AcquireSRWLockExclusive(&S->srw);
+    S->flag = 1;
+    S->out[0] = S->counter;
+    ReleaseSRWLockExclusive(&S->srw);
+    return 0;
+}
+void main_writer_progress(void) {
+    S->handles[0] = spawn(overlaps, 0);
+    S->handles[1] = spawn(overlaps, 3);
+    for (int i = 0; i < 20; i++) SwitchToThread();
+    S->handles[2] = spawn(writes_once, 0);
+    S->out[1] = WaitForMultipleObjects(3, S->handles, 1, INFINITE);
+}
+
+static u32 reads_once(void *unused) {
+    AcquireSRWLockShared(&S->srw);
+    S->counter++;
+    ReleaseSRWLockShared(&S->srw);
+    return 0;
+}
+// A waiting writer holds up new readers, unless it is suspended or has ended.
+void main_waiting_writer(void) {
+    AcquireSRWLockShared(&S->srw);
+    HANDLE writer = spawn(writes_once, 0);
+    settle();
+    HANDLE reader = spawn(reads_once, 0);
+    settle();
+    S->out[1] = S->counter;
+    SuspendThread(writer);
+    S->out[2] = WaitForSingleObject(reader, INFINITE);
+    S->out[3] = S->counter;
+    ResumeThread(writer);
+    reader = spawn(reads_once, 0);
+    settle();
+    S->out[4] = S->counter;
+    TerminateThread(writer, 0);
+    S->out[5] = WaitForSingleObject(reader, INFINITE);
+    S->out[6] = S->counter;
+    S->out[7] = S->flag;
+    ReleaseSRWLockShared(&S->srw);
+}
+
+static u32 reads_in_order(void *place) {
+    AcquireSRWLockShared(&S->srw);
+    S->slots[S->counter++] = (u64)place;
+    ReleaseSRWLockShared(&S->srw);
+    return 0;
+}
+static u32 writes_in_order(void *place) {
+    AcquireSRWLockExclusive(&S->srw);
+    S->slots[S->counter++] = (u64)place;
+    ReleaseSRWLockExclusive(&S->srw);
+    while (!S->flag) SwitchToThread();
+    return 0;
+}
+// Waiters go in the order they came, before the thread that released the lock,
+// and only wait for writers of their own lock that still wait.
+void main_srw_order(void) {
+    AcquireSRWLockExclusive(&S->srw);
+    S->handles[0] = spawn(reads_in_order, 1);
+    settle();
+    S->handles[1] = spawn(writes_in_order, 2);
+    settle();
+    S->handles[2] = spawn(reads_in_order, 3);
+    settle();
+    AcquireSRWLockShared(&S->other_cond); // another lock
+    S->out[0] = S->counter;
+    ReleaseSRWLockExclusive(&S->srw);
+    S->out[1] = TryAcquireSRWLockExclusive(&S->srw) & 0xFF;
+    settle();
+    for (int i = 0; i < 3; i++) S->out[2 + i] = S->slots[i];
+    AcquireSRWLockShared(&S->srw); // the writer is alive but no longer waits
+    S->flag = 1;
+    S->out[5] = WaitForMultipleObjects(3, S->handles, 1, INFINITE);
+}
+
+static u32 sleeps_exclusive(void *unused) {
+    AcquireSRWLockExclusive(&S->srw);
+    SleepConditionVariableSRW(&S->cond, &S->srw, INFINITE, 0);
+    S->flag = 1;
+    S->out[0] = S->counter;
+    ReleaseSRWLockExclusive(&S->srw);
+    return 0;
+}
+// A woken writer waits for its lock like any other.
+void main_woken_writer(void) {
+    S->handles[0] = spawn(sleeps_exclusive, 0);
+    settle();
+    AcquireSRWLockShared(&S->srw);
+    WakeConditionVariable(&S->cond);
+    S->handles[1] = spawn(reads_once, 0);
+    settle();
+    WakeConditionVariable(&S->cond); // already awake, and keeps its place
+    settle();
+    S->out[1] = S->counter;
+    ReleaseSRWLockShared(&S->srw);
+    S->out[2] = WaitForMultipleObjects(2, S->handles, 1, INFINITE);
+    S->out[3] = S->counter;
+}
+
+// Its place is the time it woke, not the time it fell asleep.
+void main_woken_writer_place(void) {
+    S->handles[0] = spawn(sleeps_exclusive, 0);
+    settle();
+    AcquireSRWLockExclusive(&S->srw);
+    S->handles[1] = spawn(reads_once, 0);
+    settle();
+    WakeConditionVariable(&S->cond);
+    settle();
+    ReleaseSRWLockExclusive(&S->srw);
+    S->out[1] = WaitForMultipleObjects(2, S->handles, 1, INFINITE);
+}
+
+// --- condition variables ---------------------------------------------------
+#define ITEMS 60
+static u32 produces(void *unused) {
+    for (u64 i = 1; i <= ITEMS; i++) {
+        EnterCriticalSection(SECTION);
+        while (S->out[8] == 4) SleepConditionVariableCS(&S->cond, SECTION, INFINITE);
+        S->slots[(S->out[9] + S->out[8]++) & 3] = i;
+        LeaveCriticalSection(SECTION);
+        WakeAllConditionVariable(&S->other_cond);
+    }
+    return 0;
+}
+static u32 consumes(void *unused) {
+    for (u64 i = 1; i <= ITEMS; i++) {
+        EnterCriticalSection(SECTION);
+        while (S->out[8] == 0) SleepConditionVariableCS(&S->other_cond, SECTION, INFINITE);
+        u64 value = S->slots[S->out[9] & 3];
+        S->out[9]++;
+        S->out[8]--;
+        SwitchToThread();
+        S->counter += value;
+        LeaveCriticalSection(SECTION);
+        WakeAllConditionVariable(&S->cond);
+    }
+    return 0;
+}
+void main_queue(void) {
+    InitializeCriticalSection(SECTION);
+    for (int i = 0; i < 4; i++) S->handles[i] = spawn(i & 1 ? produces : consumes, 0);
+    S->out[0] = WaitForMultipleObjects(4, S->handles, 1, INFINITE);
+}
+
+static u32 tries(void *unused) {
+    S->out[4] = TryEnterCriticalSection(SECTION);
+    return 0;
+}
+void main_condition_timeout(void) {
+    InitializeCriticalSection(SECTION);
+    EnterCriticalSection(SECTION);
+    WakeConditionVariable(&S->cond); // nobody sleeps, so it is not remembered
+    S->out[0] = SleepConditionVariableCS(&S->cond, SECTION, 50);
+    S->out[1] = GetLastError();
+    S->out[2] = (u32)(S->section[1] >> 32); // RecursionCount
+    SetLastError(0);
+    S->out[3] = SleepConditionVariableCS(&S->cond, SECTION, 0);
+    S->out[5] = GetLastError();
+    join(spawn(tries, 0));
+    LeaveCriticalSection(SECTION);
+    AcquireSRWLockShared(&S->srw);
+    S->out[6] = SleepConditionVariableSRW(&S->cond, &S->srw, 30, 1);
+    S->out[7] = TryAcquireSRWLockExclusive(&S->srw) & 0xFF;
+    ReleaseSRWLockShared(&S->srw);
+    AcquireSRWLockExclusive(&S->srw);
+    S->out[8] = SleepConditionVariableSRW(&S->cond, &S->srw, 20, 0);
+    S->out[9] = TryAcquireSRWLockShared(&S->srw) & 0xFF;
+    ReleaseSRWLockExclusive(&S->srw);
+}
+
+static u32 sleeps_on(void *place) {
+    EnterCriticalSection(SECTION);
+    u64 result = SleepConditionVariableCS(&S->cond, SECTION, INFINITE);
+    S->slots[S->counter++] = (u64)place * 10 + result;
+    LeaveCriticalSection(SECTION);
+    return 0;
+}
+void main_wake_order(void) {
+    InitializeCriticalSection(SECTION);
+    for (u64 i = 0; i < 5; i++) {
+        S->handles[i] = spawn(sleeps_on, i + 1);
+        settle();
+    }
+    S->out[0] = TryEnterCriticalSection(SECTION); // the sleepers released it
+    WakeConditionVariable(&S->cond);
+    settle();
+    S->out[1] = S->counter; // awake, but the section is taken
+    LeaveCriticalSection(SECTION);
+    settle();
+    S->out[2] = S->counter;
+    TerminateThread(S->handles[1], 0);
+    WakeConditionVariable(&S->cond); // the third, now that the second has ended
+    settle();
+    S->out[3] = S->counter;
+    WakeAllConditionVariable(&S->other_cond);
+    settle();
+    S->out[4] = S->counter;
+    WakeAllConditionVariable(&S->cond);
+    S->handles[1] = S->handles[4];
+    S->out[5] = WaitForMultipleObjects(4, S->handles, 1, INFINITE);
+    for (u64 i = 0; i < 4; i++) S->out[6 + i] = S->slots[i];
+}
+
+static u32 takes_turn(void *place) {
+    EnterCriticalSection(SECTION);
+    S->slots[S->counter++] = (u64)place;
+    LeaveCriticalSection(SECTION);
+    return 0;
+}
+// A woken thread queues behind those already waiting for the section, and a
+// suspended one can be woken.
+void main_woken_order(void) {
+    InitializeCriticalSection(SECTION);
+    S->handles[0] = spawn(sleeps_on, 1);
+    settle();
+    EnterCriticalSection(SECTION);
+    S->handles[1] = spawn(takes_turn, 2);
+    settle();
+    SuspendThread(S->handles[0]);
+    WakeConditionVariable(&S->cond);
+    ResumeThread(S->handles[0]);
+    LeaveCriticalSection(SECTION);
+    S->out[0] = WaitForMultipleObjects(2, S->handles, 1, INFINITE);
+    S->out[1] = S->slots[0];
+    S->out[2] = S->slots[1];
+}
+
+static u32 sleeps_shortly(void *unused) {
+    EnterCriticalSection(SECTION);
+    S->out[0] = SleepConditionVariableCS(&S->cond, SECTION, 50);
+    S->out[1] = GetLastError();
+    LeaveCriticalSection(SECTION);
+    return 0;
+}
+// A sleep that has timed out takes no wake-up; a woken one does not time out.
+void main_late_wake(void) {
+    InitializeCriticalSection(SECTION);
+    S->handles[0] = spawn(sleeps_shortly, 0);
+    settle();
+    S->handles[1] = spawn(sleeps_on, 2);
+    settle();
+    ADVANCE(100);
+    WakeConditionVariable(&S->cond);
+    S->out[2] = WaitForMultipleObjects(2, S->handles, 1, INFINITE);
+    S->out[3] = S->slots[0];
+}
+void main_slow_reacquire(void) {
+    S->a = CreateEventA(0, 1, 0, 0);
+    InitializeCriticalSection(SECTION);
+    HANDLE thread = spawn(sleeps_shortly, 0);
+    settle();
+    EnterCriticalSection(SECTION);
+    WakeConditionVariable(&S->cond);
+    S->out[2] = WaitForSingleObject(S->a, 200);
+    LeaveCriticalSection(SECTION);
+    join(thread);
+}
+void main_slow_timeout(void) {
+    S->a = CreateEventA(0, 1, 0, 0);
+    InitializeCriticalSection(SECTION);
+    HANDLE thread = spawn(sleeps_shortly, 0);
+    settle();
+    EnterCriticalSection(SECTION);
+    S->out[2] = WaitForSingleObject(S->a, 200);
+    WakeConditionVariable(&S->cond); // too late
+    LeaveCriticalSection(SECTION);
+    join(thread);
+}
+void main_sleep_entered_twice(void) {
+    InitializeCriticalSection(SECTION);
+    EnterCriticalSection(SECTION);
+    EnterCriticalSection(SECTION);
+    S->out[0] = 1;
+    SleepConditionVariableCS(&S->cond, SECTION, 10);
+}
+static u32 sleeps_shared(void *unused) {
+    AcquireSRWLockShared(&S->srw);
+    while (!S->flag) SleepConditionVariableSRW(&S->cond, &S->srw, INFINITE, 1);
+    add(&S->counter, 1);
+    ReleaseSRWLockShared(&S->srw);
+    return 0;
+}
+void main_shared_sleepers(void) {
+    for (int i = 0; i < 3; i++) S->handles[i] = spawn(sleeps_shared, 0);
+    settle();
+    AcquireSRWLockExclusive(&S->srw);
+    S->flag = 1;
+    WakeAllConditionVariable(&S->cond);
+    settle();
+    S->out[0] = S->counter;
+    ReleaseSRWLockExclusive(&S->srw);
+    S->out[1] = WaitForMultipleObjects(3, S->handles, 1, INFINITE);
+}
+
+// --- one-time initialization that blocks -----------------------------------
+static int initializes(void *once, void *fail_first, void **context) {
+    u64 run = add(&S->counter, 1);
+    Sleep(5);
+    if (fail_first && run == 0) return 0;
+    *context = THREAD(0x1230 + run * 16);
+    return 1;
+}
+static u32 runs_once(void *place) {
+    void *context = 0;
+    u64 fail_first = (u64)place >> 8;
+    int done = InitOnceExecuteOnce(&S->once, initializes, THREAD(fail_first), &context);
+    S->out[(u64)place & 0xFF] = done ? (u64)context : 0;
+    return 0;
+}
+static void once_threads(u64 fail_first) {
+    for (u64 i = 0; i < 4; i++) S->handles[i] = spawn(runs_once, fail_first << 8 | i);
+    S->out[4] = WaitForMultipleObjects(4, S->handles, 1, INFINITE);
+    S->out[5] = S->counter;
+}
+void main_once(void) { once_threads(0); }
+void main_once_retried(void) { once_threads(1); }
+
+static u32 begins(void *unused) {
+    int pending = 7;
+    void *context = 0;
+    S->out[0] = InitOnceBeginInitialize(&S->once, 0, &pending, &context);
+    S->out[1] = pending;
+    S->out[2] = (u64)context;
+    if (pending) InitOnceComplete(&S->once, 0, THREAD(0x880));
+    return 0;
+}
+void main_once_begin(void) {
+    int pending = 0;
+    void *context = 0;
+    InitOnceBeginInitialize(&S->once, 0, &pending, 0);
+    HANDLE thread = spawn(begins, 0);
+    settle();
+    S->out[3] = WaitForSingleObject(thread, 0);
+    S->out[4] = InitOnceComplete(&S->once, 0, THREAD(0x440));
+    join(thread);
+}
+void main_once_begin_failed(void) {
+    int pending = 0;
+    void *context = 0;
+    InitOnceBeginInitialize(&S->once, 0, &pending, 0);
+    HANDLE thread = spawn(begins, 0);
+    settle();
+    InitOnceComplete(&S->once, 4, 0);
+    join(thread);
+    S->out[3] = InitOnceBeginInitialize(&S->once, 0, &pending, &context);
+    S->out[4] = pending;
+    S->out[5] = (u64)context;
+}
+// The waiter has the initialization before the caller can begin it again.
+void main_once_handed_over(void) {
+    int pending = 0;
+    void *context = 0;
+    InitOnceBeginInitialize(&S->once, 0, &pending, 0);
+    HANDLE thread = spawn(begins, 0);
+    settle();
+    InitOnceComplete(&S->once, 4, 0);
+    S->out[3] = InitOnceBeginInitialize(&S->once, 0, &pending, &context);
+    S->out[4] = pending;
+    S->out[5] = (u64)context;
+    join(thread);
+}
+void main_once_begun_twice(void) {
+    int pending = 0;
+    InitOnceBeginInitialize(&S->once, 0, &pending, 0);
+    S->out[0] = 1;
+    InitOnceBeginInitialize(&S->once, 0, &pending, 0);
+}
+
+static int names_itself(void *once, void *place, void **context) {
+    u64 run = add(&S->counter, 1);
+    S->slots[run] = (u64)place;
+    Sleep(5);
+    *context = place;
+    return run != 0;
+}
+static u32 runs_until_done(void *place) {
+    void *context = 0;
+    while (!InitOnceExecuteOnce(&S->once, names_itself, place, &context)) {}
+    S->out[(u64)place >> 4] = (u64)context;
+    return 0;
+}
+void main_once_callback_handed_over(void) {
+    for (u64 i = 0; i < 2; i++) S->handles[i] = spawn(runs_until_done, 16 * (i + 1));
+    S->out[0] = WaitForMultipleObjects(2, S->handles, 1, INFINITE);
+    S->out[3] = S->slots[0];
+    S->out[4] = S->slots[1];
+    S->out[5] = S->counter;
+}
+
+// --- Sleep -----------------------------------------------------------------
+static u32 naps(void *milliseconds) {
+    Sleep((u32)(u64)milliseconds);
+    S->slots[S->counter++] = (u64)milliseconds;
+    return 0;
+}
+void main_sleep(void) {
+    S->handles[0] = spawn(naps, 30);
+    S->handles[1] = spawn(naps, 10);
+    S->handles[2] = spawn(naps, 20);
+    settle();
+    S->out[0] = S->counter;
+    S->out[1] = WaitForMultipleObjects(3, S->handles, 1, INFINITE);
+    for (int i = 0; i < 3; i++) S->out[2 + i] = S->slots[i];
+    Sleep(7);
+    Sleep(8);
+}
+static u32 counts(void *unused) {
+    S->counter = 1;
+    return 0;
+}
+void main_sleep_zero(void) {
+    HANDLE thread = spawn(counts, 0);
+    Sleep(0);
+    S->out[0] = S->counter;
+    join(thread);
+}
+void main_sleep_forever(void) {
+    HANDLE thread = spawn(naps, INFINITE);
+    settle();
+    S->out[0] = WaitForSingleObject(thread, 40);
+    TerminateThread(thread, 0);
+    S->out[1] = WaitForSingleObject(thread, 0);
+    Sleep(INFINITE);
+}
+void main_long_sleep(void) {
+    Sleep(15000);
+}
+void main_continued_condition(void) {
+    InitializeCriticalSection(SECTION);
+    EnterCriticalSection(SECTION);
+    S->out[0] = SleepConditionVariableCS(&S->cond, SECTION, 1000);
+    S->out[1] = GetLastError();
+    S->out[2] = (u32)(S->section[1] >> 32); // RecursionCount
+}
+void main_continued_sleep(void) {
+    Sleep(1000);
+    S->out[0] = 258;
 }

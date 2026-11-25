@@ -8,7 +8,7 @@
 //! `ERROR_NOT_SUPPORTED`, no thread object exists, and waits behave as they do
 //! for a single thread.
 
-use super::events::{SYNCHRONIZE, Waitable};
+use super::events::{INFINITE, SYNCHRONIZE, TICKS_PER_MILLI, Waitable};
 use super::{
     CURRENT_THREAD, ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER,
     ERROR_NOACCESS, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, GuestObject, KERNEL32, PAGE_SIZE,
@@ -38,6 +38,10 @@ const THREAD_SUSPEND_RESUME: u32 = 2;
 /// Rights that exist only on worker thread objects.
 pub(super) const WORKER_RIGHTS: u32 = THREAD_TERMINATE | THREAD_SUSPEND_RESUME;
 const ERROR_SIGNAL_REFUSED: u32 = 156;
+const THREAD_SET_INFORMATION: u32 = 0x20;
+const THREAD_QUERY_INFORMATION: u32 = 0x40;
+/// Size of GROUP_AFFINITY: a KAFFINITY mask, a WORD group, three reserved WORDs.
+const GROUP_AFFINITY_SIZE: usize = 16;
 
 /// Each thread slot holds a guard page, the stack, a guard page and the TEB.
 const THREAD_AREA: u64 = 0x0000_0006_0000_0000;
@@ -119,21 +123,129 @@ pub(super) struct PendingWait {
     pub(super) deadline: Option<u64>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SrwMode {
+    Exclusive,
+    Shared,
+}
+
+/// Lock a condition-variable sleep released and takes back.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SleepLock {
+    Section(u64),
+    Srw(u64, SrwMode),
+}
+
+/// How far a condition-variable sleep has come.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SleepPhase {
+    Asleep,
+    Woken,
+    TimedOut,
+}
+
+/// Condition-variable sleep of a thread.
+#[derive(Clone, Copy)]
+pub(super) struct ConditionSleep {
+    pub(super) variable: u64,
+    pub(super) lock: SleepLock,
+    pub(super) deadline: Option<u64>,
+    pub(super) phase: SleepPhase,
+    /// Place among the sleepers, and among the lock waiters once awake.
+    pub(super) ticket: u64,
+}
+
+/// What the call a thread is blocked in has to remember between retries.
+pub(super) enum Pending {
+    Objects(PendingWait),
+    Srw {
+        lock: u64,
+        mode: SrwMode,
+        ticket: u64,
+    },
+    Condition(ConditionSleep),
+    /// No deadline sleeps until the thread is terminated.
+    Sleep(Option<u64>),
+}
+
+impl Pending {
+    /// Time at which the thread runs again unless something else wakes it.
+    fn deadline(&self) -> Option<u64> {
+        match self {
+            Self::Objects(wait) => wait.deadline,
+            Self::Condition(sleep) if sleep.phase == SleepPhase::Asleep => sleep.deadline,
+            Self::Sleep(deadline) => *deadline,
+            Self::Srw { .. } | Self::Condition(_) => None,
+        }
+    }
+
+    /// Slim lock this thread waits to own exclusively, and its place.
+    fn exclusive_wait(&self) -> Option<(u64, u64)> {
+        match *self {
+            Self::Srw {
+                lock,
+                mode: SrwMode::Exclusive,
+                ticket,
+            } => Some((lock, ticket)),
+            Self::Condition(ConditionSleep {
+                lock: SleepLock::Srw(lock, SrwMode::Exclusive),
+                phase: SleepPhase::Woken | SleepPhase::TimedOut,
+                ticket,
+                ..
+            }) => Some((lock, ticket)),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ThreadTable {
     pub(crate) threads: BTreeMap<u32, GuestThread>,
     /// Ready threads in the order they run.
     pub(crate) queue: VecDeque<u32>,
-    pub(super) waits: BTreeMap<u64, PendingWait>,
+    pub(super) waits: BTreeMap<u64, Pending>,
     /// Main thread wait of a run that stopped on its budget, and the context
     /// that continues it.
-    continued: Option<(CpuState, PendingWait)>,
+    continued: Option<(CpuState, Pending)>,
     slots: BTreeSet<u64>,
     last_id: u32,
-    pub(crate) sequence: u64,
+    sequence: u64,
 }
 
 impl ThreadTable {
+    pub(crate) fn ticket(&mut self) -> u64 {
+        self.sequence += 1;
+        self.sequence
+    }
+
+    /// End a condition-variable sleep. The thread now queues for its lock, behind
+    /// the threads already waiting for it.
+    pub(super) fn end_sleep(&mut self, teb: u64, phase: SleepPhase) {
+        let place = self.ticket();
+        if let Some(Pending::Condition(sleep)) = self.waits.get_mut(&teb) {
+            (sleep.phase, sleep.ticket) = (phase, place);
+        }
+        if let Some(thread) = self.threads.values_mut().find(|t| t.teb == teb)
+            && thread.run != RunState::Ready
+        {
+            thread.run = RunState::Blocked(place);
+        }
+    }
+
+    /// Whether another thread that can run waits, since before `ticket`, to own
+    /// the slim lock exclusively.
+    pub(super) fn writer_waits(&self, lock: u64, teb: u64, ticket: u64) -> bool {
+        self.threads.values().any(|thread| {
+            thread.teb != teb
+                && thread.suspend == 0
+                && self
+                    .waits
+                    .get(&thread.teb)
+                    .and_then(Pending::exclusive_wait)
+                    .is_some_and(|(wanted, place)| wanted == lock && place < ticket)
+        })
+    }
+
     fn id_of(&self, teb: u64) -> Option<u32> {
         self.threads
             .iter()
@@ -152,7 +264,7 @@ impl ThreadTable {
         self.threads
             .values()
             .filter(|thread| thread.suspend == 0 && thread.run != RunState::Ready)
-            .filter_map(|thread| self.waits.get(&thread.teb)?.deadline)
+            .filter_map(|thread| self.waits.get(&thread.teb)?.deadline())
             .min()
     }
 }
@@ -285,6 +397,70 @@ impl ServicesState {
             memory.release_thread_region(base);
         }
         self.hooks.signal();
+    }
+
+    /// A lock or one-time initialization other threads may wait for changed.
+    pub(super) fn wake_blocked(&self) {
+        let table = self.threads.lock().expect("guest thread table");
+        if table.threads.values().any(|t| t.run != RunState::Ready) {
+            self.hooks.signal();
+        }
+    }
+
+    /// Clock value a timeout ends at, or `None` for an infinite one.
+    pub(super) fn deadline(&self, milliseconds: u32) -> Option<u64> {
+        (milliseconds != INFINITE).then(|| {
+            self.clock
+                .performance_count()
+                .saturating_add(u64::from(milliseconds) * TICKS_PER_MILLI)
+        })
+    }
+
+    /// Sleep only the calling guest thread. Zero gives up the rest of its turn.
+    pub(super) fn sleep_thread(&self, teb: u64, milliseconds: u32) -> Result<u64, ExitReason> {
+        let mut table = self.threads.lock().expect("guest thread table");
+        if let Some(Pending::Sleep(deadline)) = table.waits.get(&teb) {
+            if deadline.is_none_or(|deadline| self.clock.performance_count() < deadline) {
+                return Err(ExitReason::GuestBlocked);
+            }
+            table.waits.remove(&teb);
+            return Ok(0);
+        }
+        if milliseconds == 0 {
+            self.hooks.yield_turn();
+            return Ok(0);
+        }
+        table
+            .waits
+            .insert(teb, Pending::Sleep(self.deadline(milliseconds)));
+        Err(ExitReason::GuestBlocked)
+    }
+
+    /// Wake the oldest thread asleep on a condition variable, or all of them. A
+    /// sleep whose timeout has passed is over and takes no wake-up.
+    pub(super) fn wake_condition(&self, variable: u64, all: bool) {
+        let now = self.clock.performance_count();
+        let mut table = self.threads.lock().expect("guest thread table");
+        let mut asleep: Vec<(u64, u64)> = table
+            .waits
+            .iter()
+            .filter_map(|(&teb, pending)| match pending {
+                Pending::Condition(sleep)
+                    if sleep.variable == variable
+                        && sleep.phase == SleepPhase::Asleep
+                        && sleep.deadline.is_none_or(|deadline| now < deadline) =>
+                {
+                    Some((sleep.ticket, teb))
+                }
+                _ => None,
+            })
+            .collect();
+        asleep.sort_unstable();
+        asleep.truncate(if all { asleep.len() } else { 1 });
+        for (_, teb) in asleep {
+            table.end_sleep(teb, SleepPhase::Woken);
+            self.hooks.signal();
+        }
     }
 
     /// ID of the guest thread whose TEB is `teb`.
@@ -435,6 +611,101 @@ impl ServicesState {
         }
     }
 
+    /// Rights granted by any handle that names a thread, the main thread too.
+    fn thread_rights(&self, handle: u64) -> Result<u32, u32> {
+        if handle == CURRENT_THREAD {
+            return Ok(THREAD_ALL_ACCESS);
+        }
+        let objects = self.objects.lock().expect("guest object state");
+        match objects.handles.get(&handle) {
+            Some(GuestObject::Waitable { state, access })
+                if matches!(
+                    *state.lock().expect("guest waitable state"),
+                    Waitable::Thread { .. }
+                ) =>
+            {
+                Ok(*access)
+            }
+            Some(GuestObject::Thread(access)) => Ok(*access),
+            _ => Err(ERROR_INVALID_HANDLE),
+        }
+    }
+
+    /// Processors of group 0 the guest is shown. Every thread may run on all of
+    /// them, and no other affinity is modelled.
+    fn processor_mask(&self) -> u64 {
+        let processors = self.guest_profile.processors.clamp(1, 64);
+        u64::MAX >> (64 - processors)
+    }
+
+    fn group_affinity(&self) -> [u8; GROUP_AFFINITY_SIZE] {
+        let mut affinity = [0; GROUP_AFFINITY_SIZE];
+        affinity[..8].copy_from_slice(&self.processor_mask().to_le_bytes());
+        affinity
+    }
+
+    fn get_group_affinity(
+        &self,
+        teb: u64,
+        handle: u64,
+        output: u64,
+        memory: &mut GuestMemory,
+    ) -> Result<u64, ExitReason> {
+        let access = match self.thread_rights(handle) {
+            Ok(access) => access,
+            Err(error) => return self.fail(teb, error, 0),
+        };
+        if access & THREAD_QUERY_RIGHTS == 0 {
+            return self.fail(teb, ERROR_ACCESS_DENIED, 0);
+        }
+        if memory.write_bytes(output, &self.group_affinity()).is_err() {
+            return self.fail(teb, ERROR_NOACCESS, 0);
+        }
+        Ok(1)
+    }
+
+    fn set_group_affinity(
+        &self,
+        teb: u64,
+        handle: u64,
+        requested: u64,
+        previous: u64,
+        memory: &mut GuestMemory,
+    ) -> Result<u64, ExitReason> {
+        let access = match self.thread_rights(handle) {
+            Ok(access) => access,
+            Err(error) => return self.fail(teb, error, 0),
+        };
+        let needed = THREAD_SET_INFORMATION | THREAD_QUERY_INFORMATION;
+        if access & needed != needed {
+            return self.fail(teb, ERROR_ACCESS_DENIED, 0);
+        }
+        let mut affinity = [0; GROUP_AFFINITY_SIZE];
+        if memory.read_bytes(requested, &mut affinity).is_err() {
+            return self.fail(teb, ERROR_NOACCESS, 0);
+        }
+        let mask = u64::from_le_bytes(affinity[..8].try_into().expect("eight bytes"));
+        // One group exists. The mask must name processors of it, and the
+        // reserved words must be zero.
+        let group_valid = affinity[8..].iter().all(|&byte| byte == 0);
+        if !group_valid || mask == 0 || mask & !self.processor_mask() != 0 {
+            return self.fail(teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        // Restricting a thread to fewer processors has no meaning when guest
+        // threads take turns on one host thread, so it is refused, not ignored.
+        if mask != self.processor_mask() {
+            return self.fail(teb, ERROR_NOT_SUPPORTED, 0);
+        }
+        if previous != 0
+            && memory
+                .write_bytes(previous, &self.group_affinity())
+                .is_err()
+        {
+            return self.fail(teb, ERROR_NOACCESS, 0);
+        }
+        Ok(1)
+    }
+
     /// Change another thread's suspend count and return the previous one.
     fn change_suspend(&self, teb: u64, handle: u64, resume: bool) -> Result<u64, ExitReason> {
         const FAILED: u64 = u32::MAX as u64;
@@ -553,6 +824,44 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         Ok(1)
     });
 
+    // The bounds of the calling thread's stack, from its TEB: the high limit is
+    // StackBase and the low limit is the bottom of the mapped stack, which is
+    // also the reservation (stacks are committed whole). It returns nothing, so
+    // an output the guest cannot write stops it with a memory fault.
+    registry.register(
+        KERNEL32,
+        "GetCurrentThreadStackLimits",
+        move |args, cpu, memory| {
+            let high = memory
+                .read_u64_bypass(cpu.gs_base + TEB_STACK_BASE)
+                .map_err(ExitReason::MemoryFault)?;
+            let low = memory
+                .read_u64_bypass(cpu.gs_base + TEB_STACK_LIMIT)
+                .map_err(ExitReason::MemoryFault)?;
+            memory
+                .write_u64(args.rcx, low)
+                .and_then(|()| memory.write_u64(args.rdx, high))
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(0)
+        },
+    );
+
+    let s = Arc::clone(state);
+    registry.register(
+        KERNEL32,
+        "GetThreadGroupAffinity",
+        move |args, cpu, memory| s.get_group_affinity(cpu.gs_base, args.rcx, args.rdx, memory),
+    );
+
+    let s = Arc::clone(state);
+    registry.register(
+        KERNEL32,
+        "SetThreadGroupAffinity",
+        move |args, cpu, memory| {
+            s.set_group_affinity(cpu.gs_base, args.rcx, args.rdx, args.r8, memory)
+        },
+    );
+
     for (symbol, resume) in [("SuspendThread", false), ("ResumeThread", true)] {
         let s = Arc::clone(state);
         registry.register(KERNEL32, symbol, move |args, cpu, _| {
@@ -584,6 +893,14 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "SwitchToThread",
     ] {
         registry.alias(PROCESS_THREADS_V1, KERNEL32, symbol);
+        registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
+    }
+    // Registered on kernel32.dll only: no API-set alias is claimed for these.
+    for symbol in [
+        "GetCurrentThreadStackLimits",
+        "GetThreadGroupAffinity",
+        "SetThreadGroupAffinity",
+    ] {
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
     const _: () = assert!(THREAD_ALL_ACCESS & SYNCHRONIZE != 0);

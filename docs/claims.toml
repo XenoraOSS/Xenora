@@ -242,3 +242,33 @@ retrieved = "2026-11-22"
 architecture = "Xbox Series X, Hot Chips 32 architectural presentation"
 test = "Read slides 12 and 13. No console execution."
 uncertainty = "The slides do not specify opcode semantics, an ABI or a command packet layout."
+
+[[claim]]
+id = "CLAIM-GUEST-GRAPHICS-METAL"
+class = "A"
+claim = "An original guest PE32+ program drove the Xenora guest graphics command path through the loader and the ARM64 DBT at four optimisation levels, and the framebuffer it read back from native Metal matched the expected pixels byte for byte."
+sources = ["crates/loader/tests/guest_graphics_path.rs", "docs/runtime/guest-graphics.md"]
+retrieved = "2026-11-25"
+architecture = "Apple M4, macOS 27.2.1, Command Line Tools SDK 27.0, Rust 1.100.0, Homebrew clang 23.1.6"
+test = "cargo test --locked -p xenora-loader --test guest_graphics_path --features gpu-tests -- --nocapture"
+uncertainty = "One original guest program, one triangle per draw and an R8G8B8A8 render target of at most 64 by 64 pixels, on one Apple GPU. The guest reported backend 1 to prove the native Metal path produced the frame. No console hardware was observed and no commercial-title compatibility is claimed."
+
+[[claim]]
+id = "CLAIM-GUEST-TEXTURED-METAL"
+class = "A"
+claim = "An original guest PE32+ program bound its own texture and had a textured triangle sampled through the translated gfx1030 image_sample_lz stage on native Metal, and the framebuffer it read back matched the expected pixels byte for byte."
+sources = ["crates/loader/tests/guest_textured_path.rs", "docs/runtime/guest-graphics.md"]
+retrieved = "2026-11-25"
+architecture = "Apple M4, macOS 27.2.1, Command Line Tools SDK 27.0, Rust 1.100.0, Homebrew clang 23.1.6"
+test = "cargo test --locked -p xenora-loader --features gpu-tests --test guest_textured_path -- --nocapture"
+uncertainty = "One original guest program, a 2 by 2 R8G8B8A8 texture, one triangle and a point sampler on one Apple GPU. The deterministic software reference rasteriser and the native Metal path produced the same pixels. No console hardware was observed and no commercial-title compatibility is claimed."
+
+[[claim]]
+id = "CLAIM-GUEST-CPP-PATH"
+class = "A"
+claim = "An original mingw-w64 C++ guest program ran through the loader and the ARM64 dynamic binary translation at four optimisation levels, created a second guest thread, read a thread-local variable per thread, wrote and read back a file, and ended with its own exit status."
+sources = ["crates/loader/tests/guest_cpp_path.rs", "tests/compat_fixtures/guest_cpp.cpp"]
+retrieved = "2026-11-25"
+architecture = "Apple M4, macOS 27.2.1, Command Line Tools SDK 27.0, Rust 1.100.0, Homebrew mingw-w64 14.0.0"
+test = "cargo test --locked -p xenora-loader --test guest_cpp_path -- --nocapture"
+uncertainty = "One original guest program with one worker thread, built with -fno-rtti and -fno-exceptions, on one Apple host. C++ exceptions and stack unwinding are not implemented and are not exercised. No Xbox hardware was observed and no commercial-title compatibility is claimed."

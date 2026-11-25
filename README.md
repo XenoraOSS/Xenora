@@ -15,6 +15,36 @@ Xenora is still experimental. Verified work is restricted to independently autho
 
 ---
 
+## Run the native app
+
+Use an Apple Silicon Mac running macOS 14 or later. Install a native ARM64
+Rust toolchain at version 1.100 or later and select Xcode or its Command Line
+Tools with a macOS SDK and Swift 6 or later. The developer tools themselves
+may require a newer macOS version. The app build uses the checked-in
+synthetic fixtures. AMDGPU LLVM tools such as `llvm-mc`, `llvm-objcopy` and
+`llvm-objdump` are optional here and used when regenerating or checking
+fixture binaries.
+
+```sh
+git clone https://github.com/ranveersoni98/Xenora.git
+cd Xenora
+scripts/build-app.sh --check
+scripts/build-app.sh
+open build/Xenora.app
+```
+
+In the **Guest display** section, click **Run trusted fixture**. The app
+runs an original program supplied with Xenora and shows its 4×3 Metal
+frame. A build checks the app and bundled worker without rendering. To
+check the synthetic pixels on the GPU from a terminal, run:
+
+```sh
+build/Xenora.app/Contents/MacOS/Xenora --smoke-frame
+```
+
+Closing the app and running `scripts/build-app.sh` again rebuilds the same
+bundle. Commercial Xbox game execution is unsupported.
+
 ## What works today?
 
 Xenora has progressed from executing individual x86-64 instructions to running original PE32+ guest programs that interact with translated GPU workloads on Apple Silicon.
@@ -42,9 +72,9 @@ The latest verified milestones include **translated gfx1030 vertex and pixel sha
 | X15 — Executable compatibility | Static PE inspection reports sections, relocations, thread-local storage (TLS) callbacks, imports and entry-point instructions | Static probe implemented |
 | X16 — Guest memory and threading | Virtual memory mapping, thread scheduling, synchronization primitives and atomic operations | Implemented subset |
 | X17 — System services | Implement a tested subset of Xbox-compatible runtime APIs, memory services, filesystem access and application lifecycle | Implemented subset |
-| X18 — Graphics API translation | Translate supported Xbox graphics commands, resource descriptors, command queues, barriers and fences into Metal operations | Planned |
+| X18 — Graphics API translation | Translate supported graphics commands, resource descriptors, command queues, barriers and fences into Metal operations. A guest-callable command path with devices, queues, allocators, command lists, resources, draws and framebuffer readback is implemented; barriers, fences and Xbox-specific commands are not | Implemented subset |
 | X19 — Advanced GPU features | Indirect rendering, asynchronous compute, additional texture formats and ray-tracing compatibility research | Planned |
-| X20 — Integrated guest runtime | Connect CPU recompilation, executable loading, system services and graphics translation into one persistent runtime | Planned |
+| X20 — Integrated guest runtime | Connect CPU recompilation, executable loading, system services and graphics translation into one persistent runtime. One guest run now drives CPU execution, system services and graphics into a checked framebuffer, but no persistent runtime and no production CLI or app path exists yet | Implemented subset |
 | X21 — Application compatibility | Execute increasingly complex independently authored applications through the complete guest CPU and GPU pipeline | Planned |
 | X22 — First application boot | Establish a reproducible startup and error-reporting path for supported game-like applications | Planned |
 | X23 — Initial game compatibility | Investigate startup and execution of legally supported game software, identifying missing runtime and graphics behavior | Long-term goal |

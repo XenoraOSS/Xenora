@@ -172,31 +172,33 @@ fn probe_distinguishes_aliases_from_unavailable_services() {
 
     let report = probe_pe_bytes(&pe, &ProbeConfig::default()).unwrap();
     assert_eq!(report.imports.len(), 3);
-    let [alias, unsupported, unknown] = report.imports.as_slice() else {
+    let [alias, terminate, unknown] = report.imports.as_slice() else {
         unreachable!()
     };
     assert_eq!(alias.iat_rva, 0x1160);
     assert_eq!(alias.canonical_module.as_deref(), Some("kernel32.dll"));
     assert_eq!(alias.service_status, Some(ServiceStatus::Implemented));
-    assert!(!unsupported.is_supported);
+    // TerminateProcess is a partial service since #475.
+    assert!(terminate.is_supported);
+    assert_eq!(terminate.service_status, Some(ServiceStatus::Partial));
     assert!(!unknown.is_supported);
-    assert_eq!(unsupported.iat_rva, 0x1168);
+    assert_eq!(terminate.iat_rva, 0x1168);
     assert_eq!(unknown.iat_rva, 0x1170);
 
     let path = std::env::temp_dir().join(format!("xenora-probe-alias-{}", std::process::id()));
     run_probe_and_export(&pe, &path, &ProbeConfig::default()).unwrap();
     let csv = std::fs::read_to_string(path.join("imports.csv")).unwrap();
     assert!(csv.contains("true,implemented,true,\"kernel32.dll\",1"));
-    assert!(csv.contains("false,unsupported,false,\"\",1"));
+    assert!(csv.contains("true,partial,true,\"kernel32.dll\",1"));
     assert!(csv.contains("false,missing,false,\"\",1"));
     let missing = std::fs::read_to_string(path.join("missing_imports.csv")).unwrap();
-    assert_eq!(missing.lines().count(), 3);
+    assert_eq!(missing.lines().count(), 2);
     assert!(!missing.contains("GetCurrentProcess"));
     let json = std::fs::read_to_string(path.join("candidate_static_report.json")).unwrap();
     assert!(json.contains("\"distinct_import_keys\": 3"));
-    assert!(json.contains("\"canonical_registered_services\": 1"));
-    assert!(json.contains("\"unresolved_imports\": 2"));
-    assert!(json.contains("\"recognized_unsupported_slots\": 1"));
+    assert!(json.contains("\"canonical_registered_services\": 2"));
+    assert!(json.contains("\"unresolved_imports\": 1"));
+    assert!(json.contains("\"recognized_unsupported_slots\": 0"));
     std::fs::remove_dir_all(path).unwrap();
 }
 

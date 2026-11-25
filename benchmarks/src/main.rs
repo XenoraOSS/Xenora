@@ -162,10 +162,21 @@ struct BatchResult {
     pipelined: Stats,
 }
 
+mod startup;
+mod startup_report;
+
 fn main() -> Result<(), Box<dyn Error>> {
+    // Taken before anything else so a fresh startup child can report the time
+    // from its parent's spawn to `main`.
+    let entered = SystemTime::now();
+    let mut args = std::env::args().skip(1).peekable();
+    match args.peek().map(String::as_str) {
+        Some("startup") => return startup::run(args.skip(1)),
+        Some("startup-child") => return startup::child(entered, args.skip(1)),
+        _ => {}
+    }
     let mut output = PathBuf::from("benchmarks/results");
     let mut reps = DEFAULT_REPS;
-    let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--output" => {
@@ -179,7 +190,11 @@ fn main() -> Result<(), Box<dyn Error>> {
                     .map_err(|_| "--reps must be a positive integer")?;
             }
             "--help" | "-h" => {
-                println!("usage: xenora-bench [--output DIR] [--reps N]");
+                println!(
+                    "usage: xenora-bench [--output DIR] [--reps N]\n       \
+                     xenora-bench startup [--fixture NAME] [--words N] [--processes N] \
+                     [--reps N] [--output DIR]"
+                );
                 return Ok(());
             }
             other => return Err(format!("unknown argument {other}").into()),

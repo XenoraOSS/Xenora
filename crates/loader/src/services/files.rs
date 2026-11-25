@@ -1865,3 +1865,144 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
 }
+
+/// What a path names on the drive, for the C runtime's file streams.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum DriveEntry {
+    File,
+    Directory,
+    /// Nothing has this name. `parent` says whether its directory exists.
+    Missing {
+        parent: bool,
+    },
+}
+
+/// The drive as the C runtime's file streams (`crt_files.rs`) use it. They read
+/// and write the same files as the handle services above. A stream is not a
+/// handle: it takes no part in sharing, and a file it has open can be deleted
+/// or moved, after which its operations fail.
+impl super::ObjectState {
+    /// A narrow file name as the drive stores it: ASCII, either slash, any
+    /// case, with or without `C:\`. `None` for a name the drive rejects.
+    pub(super) fn drive_path(name: &[u8]) -> Option<String> {
+        if !name.is_ascii() {
+            return None;
+        }
+        let path = String::from_utf8_lossy(name)
+            .replace('/', "\\")
+            .to_ascii_lowercase();
+        let path = path.strip_prefix("c:\\").unwrap_or(&path).to_owned();
+        path.split('\\').all(valid_component).then_some(path)
+    }
+
+    fn drive_now(&self) -> u64 {
+        self.clock.as_ref().map_or(0, |clock| clock.now_filetime())
+    }
+
+    pub(super) fn drive_entry(&self, path: &str) -> DriveEntry {
+        if self.files.contains_key(path) {
+            DriveEntry::File
+        } else if self.directories.contains(path) {
+            DriveEntry::Directory
+        } else {
+            let parent = parent(path);
+            DriveEntry::Missing {
+                parent: parent.is_empty() || self.directories.contains(parent),
+            }
+        }
+    }
+
+    /// Create an empty file. False when the drive already holds as many files
+    /// as it can.
+    pub(super) fn drive_create(&mut self, path: &str) -> bool {
+        if self.files.len() >= MAX_FILES {
+            return false;
+        }
+        let file = SyntheticFile::new(self.drive_now());
+        self.files.insert(path.to_owned(), file);
+        true
+    }
+
+    pub(super) fn drive_file(&self, path: &str) -> Option<&[u8]> {
+        self.files.get(path).map(SyntheticFile::data)
+    }
+
+    /// Delete a file. False when it does not exist. Streams that have it
+    /// open keep their path, so their operations fail afterwards.
+    pub(super) fn drive_remove(&mut self, path: &str) -> bool {
+        self.files.remove(path).is_some()
+    }
+
+    /// Give a file a new name. The caller has checked that `from` is a file
+    /// and that `to` names nothing yet in an existing directory.
+    pub(super) fn drive_rename(&mut self, from: &str, to: &str) {
+        if let Some(data) = self.files.remove(from) {
+            self.files.insert(to.to_owned(), data);
+        }
+    }
+
+    /// Empty a file. False when it does not exist.
+    pub(super) fn drive_truncate(&mut self, path: &str) -> bool {
+        let now = self.drive_now();
+        let Some(file) = self.files.get_mut(path) else {
+            return false;
+        };
+        file.data.clear();
+        file.times[2] = now;
+        true
+    }
+
+    /// Write `bytes` at `position`, growing the file as needed. `None` when
+    /// the file does not exist; `Some(false)`, with nothing written, when the
+    /// write would pass the drive's size bound.
+    pub(super) fn drive_write(&mut self, path: &str, position: u64, bytes: &[u8]) -> Option<bool> {
+        let used: usize = self.files.values().map(|file| file.data.len()).sum();
+        let now = self.drive_now();
+        let file = self.files.get_mut(path)?;
+        let data = &mut file.data;
+        let Some(end) = position
+            .checked_add(bytes.len() as u64)
+            .filter(|end| *end <= MAX_BYTES as u64)
+        else {
+            return Some(false);
+        };
+        let (start, end) = (position as usize, end as usize);
+        let growth = end.saturating_sub(data.len());
+        if growth > MAX_BYTES - used {
+            return Some(false);
+        }
+        if growth != 0 {
+            data.resize(end, 0);
+        }
+        data[start..end].copy_from_slice(bytes);
+        if !bytes.is_empty() {
+            file.times[2] = now;
+        }
+        Some(true)
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn files_of_c_streams_carry_the_guest_time() {
+    use super::{MockClock, ObjectState};
+
+    let clock = Arc::new(MockClock::new(1000));
+    let mut drive = ObjectState {
+        clock: Some(clock.clone()),
+        ..ObjectState::default()
+    };
+    assert!(drive.drive_create("a.txt"));
+    assert_eq!(drive.files["a.txt"].times, [1000; 3]);
+    clock.advance(5);
+    assert_eq!(drive.drive_write("a.txt", 0, b""), Some(true));
+    assert_eq!(drive.files["a.txt"].times, [1000; 3]);
+    assert_eq!(drive.drive_write("a.txt", 2, b"x"), Some(true));
+    assert_eq!(drive.drive_file("a.txt"), Some(&b"\0\0x"[..]));
+    assert_eq!(drive.files["a.txt"].times, [1000, 1000, 1005]);
+    clock.advance(5);
+    assert!(drive.drive_truncate("a.txt"));
+    drive.drive_rename("a.txt", "b.txt");
+    assert_eq!(drive.files["b.txt"].times, [1000, 1000, 1010]);
+    assert!(!drive.drive_truncate("a.txt"));
+}

@@ -105,7 +105,7 @@ cargo clippy -p xenora-loader --lib -- -D warnings
 Relative to upstream `main`, the branch includes (among merges):
 
 - Host-backed guest drives (`host_files.rs`, `runtime_host_files.rs`) + security hardenings.
-- Large CRT surface: strings, ctype, locale, sprintf/snprintf, FILE streams (in-memory + **mount-backed fopen**), env get/set/`_putenv`, calendar time, `rand`/`srand`, `_stricmp` family, `atoi` family.
+- Large CRT surface: strings, ctype, locale, env get/set/`_putenv`, calendar time, `rand`/`srand`, `_stricmp` family, `atoi` family.
 - XAsync immediate + manual `XTaskQueue` work/completion ports.
 - Process-local Winsock UDP loopback + `sendto`/`recvfrom`.
 - Synthetic `GetModuleFileNameA`/`W`.
@@ -189,7 +189,7 @@ GitHub PR subscribe MCP returned 403 earlier; the local loop is the reliable pat
 | Area | Paths |
 | --- | --- |
 | Host mounts | `crates/loader/src/services/host_files.rs`, `files.rs`, `tests/runtime_host_files.rs` |
-| CRT | `crt.rs`, `crt_stdio.rs`, `crt_env.rs`, `crt_time.rs`, `crt_ctype.rs`, `crt_locale.rs`, `crt_callbacks.rs` |
+| CRT | `crt.rs`, `crt_env.rs`, `crt_time.rs`, `crt_ctype.rs`, `crt_locale.rs`, `crt_callbacks.rs` |
 | Winsock | `winsock.rs` |
 | Modules | `modules.rs` |
 | XAsync / queues | `gdk_async.rs`, `gdk_queue.rs` |
@@ -210,7 +210,6 @@ cd /Volumes/SSD/Xenora
 git fetch origin main
 git log --oneline HEAD..origin/main
 
-cargo test -p xenora-loader --lib crt_stdio::tests
 cargo test -p xenora-loader --test runtime_host_files
 cargo clippy -p xenora-loader --lib -- -D warnings
 cargo fmt -p xenora-loader -- --check

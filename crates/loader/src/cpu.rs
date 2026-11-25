@@ -85,6 +85,36 @@ impl Default for Mxcsr {
     }
 }
 
+/// x87 FPU control, status and tag words.
+///
+/// FNINIT is the only instruction that writes them and nothing reads them yet.
+/// The x87 data registers and every other x87 instruction are not modelled.
+/// The host's floating-point state is never involved.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct X87State {
+    pub control: u16,
+    pub status: u16,
+    pub tag: u16,
+}
+
+impl X87State {
+    /// What FINIT and FNINIT set (Intel SDM Vol. 2A, "FINIT/FNINIT"; Vol. 1,
+    /// 8.1.3 to 8.1.7): every exception masked, 64-bit precision, round to
+    /// nearest; no flag, top of stack 0; every register tagged empty.
+    pub const INIT: Self = Self {
+        control: 0x037F,
+        status: 0,
+        tag: 0xFFFF,
+    };
+}
+
+impl Default for X87State {
+    fn default() -> Self {
+        Self::INIT
+    }
+}
+
 /// x86-64 CPU state. Native DBT accesses the general registers and RIP by offset.
 #[repr(C)]
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -99,6 +129,9 @@ pub struct CpuState {
     pub mxcsr: Mxcsr,
     /// Direction flag: string instructions step RSI and RDI down when set.
     pub df: bool,
+    /// Starts as FNINIT leaves it. The value an operating system gives a new
+    /// thread is not modelled.
+    pub x87: X87State,
 }
 
 impl CpuState {
@@ -114,6 +147,7 @@ impl CpuState {
             xmm: [0; 16],
             mxcsr: Mxcsr::default(),
             df: false,
+            x87: X87State::INIT,
         }
     }
 
@@ -130,6 +164,8 @@ impl CpuState {
 pub const CPUID_CMOV: u32 = 1 << 15;
 /// CPUID leaf 1, ECX: POPCNT.
 pub const CPUID_POPCNT: u32 = 1 << 23;
+/// CPUID leaf 0x8000_0001, ECX: LAHF and SAHF in 64-bit mode.
+pub const CPUID_LAHF_SAHF: u32 = 1;
 /// CPUID leaf 0x8000_0001, ECX: LZCNT.
 pub const CPUID_LZCNT: u32 = 1 << 5;
 /// CPUID leaf 0x8000_0001, EDX: 64-bit mode.
@@ -150,7 +186,7 @@ pub fn cpuid(leaf: u32, _subleaf: u32) -> [u32; 4] {
         1 => [0, 0, CPUID_POPCNT, CPUID_CMOV],
         // Highest extended leaf.
         0x8000_0000 => [0x8000_0001, 0, 0, 0],
-        0x8000_0001 => [0, 0, CPUID_LZCNT, CPUID_LONG_MODE],
+        0x8000_0001 => [0, 0, CPUID_LAHF_SAHF | CPUID_LZCNT, CPUID_LONG_MODE],
         _ => [0; 4],
     }
 }
@@ -176,12 +212,19 @@ pub enum ExitReason {
     /// The guest ended its own process with this exit status. Only the guest
     /// stops; the host keeps running.
     ProcessExit(u32),
-    /// A service has to wait; it had no effect and runs again later.
+    /// A service has to wait; the same call runs again later.
     GuestBlocked,
     /// A service completed and asked the scheduler for a turn.
     GuestYield,
     /// The running guest thread ended itself.
     GuestThreadExited,
+    /// A raised exception reached the end of the stack with no handler
+    /// accepting it. Holds the exception code.
+    UnhandledException(u32),
+    /// Exception dispatch or unwinding stopped: malformed or unknown unwind
+    /// data, an invalid handler disposition, a target frame that is not on
+    /// the stack, or a request the dispatcher does not model.
+    InvalidUnwind,
 }
 
 impl fmt::Display for ExitReason {
@@ -198,6 +241,8 @@ impl fmt::Display for ExitReason {
             Self::GeneralProtection => write!(f, "guest general-protection fault"),
             Self::SimdException => write!(f, "guest SIMD floating-point exception"),
             Self::ProcessExit(status) => write!(f, "guest process exited with status {status}"),
+            Self::UnhandledException(code) => write!(f, "unhandled guest exception 0x{code:08x}"),
+            Self::InvalidUnwind => write!(f, "guest exception dispatch or unwind failed"),
             Self::ServiceAbiViolation => {
                 write!(f, "host service changed a nonvolatile guest register")
             }
@@ -212,7 +257,21 @@ impl std::error::Error for ExitReason {}
 
 #[cfg(test)]
 mod layout_tests {
-    use super::{CpuState, RFlags, Register};
+    use super::{CpuState, RFlags, Register, X87State};
+
+    /// Intel SDM Vol. 2A, "FINIT/FNINIT", Operation.
+    #[test]
+    fn a_new_guest_starts_with_the_x87_words_fninit_sets() {
+        let init = X87State {
+            control: 0x037F,
+            status: 0,
+            tag: 0xFFFF,
+        };
+        assert_eq!(X87State::INIT, init);
+        assert_eq!(X87State::default(), init);
+        assert_eq!(CpuState::default().x87, init);
+        assert_eq!(CpuState::new(0x1000, 0x2000).x87, init);
+    }
 
     /// The native translator addresses guest registers and RIP by raw byte
     /// offset. Keep these assertions next to the struct so a layout change
@@ -483,6 +542,8 @@ impl From<DecodeError<MemoryError>> for ExitReason {
         match error {
             DecodeError::Fetch(fault) => Self::MemoryFault(fault),
             DecodeError::Unsupported(byte) => Self::IllegalInstruction(byte),
+            // Intel SDM Vol. 3A, 7.15: exceeding the 15-byte limit is #GP(0).
+            DecodeError::TooLong => Self::GeneralProtection,
         }
     }
 }

@@ -54,7 +54,7 @@ fn built() -> &'static Path {
             .expect("run tests/compat_fixtures/build-gate-a1.sh");
         assert!(
             build.status.success(),
-            "the Gate A1 program did not build; it needs clang and an LLD:\n{}{}",
+            "the Gate A1 program did not build; it needs an ARM64 clang and an LLD, for example 'brew install llvm lld', or set LLD_LINK:\n{}{}",
             String::from_utf8_lossy(&build.stdout),
             String::from_utf8_lossy(&build.stderr)
         );

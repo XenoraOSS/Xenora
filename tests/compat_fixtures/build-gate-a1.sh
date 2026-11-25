@@ -9,8 +9,10 @@
 # Tools, all native to the host:
 #   CLANG     a clang that accepts --target=x86_64-pc-windows-msvc. Default:
 #             Homebrew LLVM if installed, otherwise the clang on PATH.
-#   LLD_LINK  an lld-link. Default: Homebrew lld if installed, otherwise the
-#             rust-lld that ships in the active Rust toolchain.
+#   LLD_LINK  an lld-link. Default: Homebrew lld, then the lld-link beside a
+#             Homebrew LLVM, then lld-link on PATH, then the rust-lld that
+#             ships in the active Rust toolchain. A Homebrew Rust installation
+#             does not include rust-lld, so install one of the others.
 #
 # The linker also makes the two import libraries, from the definition files
 # written below, so nothing from a Windows SDK or another C runtime is used.
@@ -28,15 +30,39 @@ fi
 flavor=
 linker=${LLD_LINK:-}
 if [ -z "$linker" ]; then
-    linker=/opt/homebrew/opt/lld/bin/lld-link
-    if [ ! -x "$linker" ]; then
-        host=$(rustc -vV | sed -n 's/^host: //p')
-        linker="$(rustc --print sysroot)/lib/rustlib/$host/bin/rust-lld"
+    prefixes="/opt/homebrew /usr/local"
+    if command -v brew >/dev/null 2>&1; then
+        prefixes="$(brew --prefix 2>/dev/null || true) $prefixes"
+    fi
+    for prefix in $prefixes; do
+        for candidate in "$prefix/opt/lld/bin/lld-link" "$prefix/opt/llvm/bin/lld-link"; do
+            if [ -z "$linker" ] && [ -x "$candidate" ]; then
+                linker=$candidate
+            fi
+        done
+    done
+fi
+if [ -z "$linker" ]; then
+    linker=$(command -v lld-link 2>/dev/null || true)
+fi
+if [ -z "$linker" ] && command -v rustc >/dev/null 2>&1; then
+    host=$(rustc -vV | sed -n 's/^host: //p')
+    candidate="$(rustc --print sysroot)/lib/rustlib/$host/bin/rust-lld"
+    if [ -x "$candidate" ]; then
+        linker=$candidate
         flavor="-flavor link"
     fi
 fi
+if [ -z "$linker" ]; then
+    echo "missing linker: install one with 'brew install llvm lld', or set LLD_LINK to an lld-link" >&2
+    exit 1
+fi
 for tool in "$clang" "$linker"; do
-    [ -x "$tool" ] || { echo "missing tool: $tool" >&2; exit 1; }
+    [ -x "$tool" ] || {
+        echo "missing tool: $tool" >&2
+        echo "install the Gate A1 toolchain with 'brew install llvm lld', or set CLANG and LLD_LINK" >&2
+        exit 1
+    }
 done
 # AGENTS.md: host tools and what they load must be ARM64, checked with file,
 # lipo -archs and otool -L. An @rpath library is looked up through the tool's
@@ -138,3 +164,9 @@ done
 build gate-a1-break O1 GATE_BREAK
 build gate-a1-return O1 GATE_RETURN
 build gate-a1-missing O1 GATE_MISSING
+
+# The CLI checks that a TLS exit is reported before any entry event.
+"$clang" --target=x86_64-pc-windows-msvc -c \
+    "$root/tests/compat_fixtures/gate_a1_tls_exit.s" -o gate-a1-tls-exit.obj
+link /entry:gate_entry /subsystem:console /nodefaultlib /timestamp:0 \
+    /base:0x150000000 /fixed /out:gate-a1-tls-exit.exe gate-a1-tls-exit.obj kernel32.lib

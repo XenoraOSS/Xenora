@@ -16,6 +16,11 @@
 use crate::memory::{GuestMemory, MemoryError};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+const MAX_FENCES: usize = 16;
+const MAX_QUEUE_WAITS: usize = 8;
+const MAX_FENCE_WAIT: Duration = Duration::from_secs(1);
 
 /// Generation-checked opaque guest graphics handle.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -104,6 +109,12 @@ pub struct ExecutionOutcome {
 pub enum GraphicsError {
     InvalidDeviceHandle,
     InvalidQueueHandle,
+    InvalidFenceHandle,
+    FenceLimitExceeded,
+    FenceTimeout {
+        requested: u64,
+        completed: u64,
+    },
     InvalidAllocatorHandle,
     InvalidCommandListHandle,
     InvalidResourceHandle,
@@ -120,10 +131,11 @@ pub enum GraphicsError {
     /// An index buffer format other than DXGI `R16_UINT` (57) or `R32_UINT` (42).
     InvalidIndexFormat(u32),
     /// An indexed draw reads past its index buffer or fetches a vertex,
-    /// after applying the base vertex, outside its vertex buffer.
+    /// after applying the base vertex, outside its vertex buffer, or a flat
+    /// draw reads its vertices outside the vertex buffer.
     IndexOutOfRange,
-    /// A descriptor heap, view, sampler, root signature or binding outside
-    /// the supported texture-binding subset. Nothing is drawn.
+    /// A descriptor heap, view, sampler, root signature, binding or draw
+    /// outside the supported subset. Nothing is drawn.
     Unsupported(&'static str),
 }
 
@@ -132,6 +144,17 @@ impl std::fmt::Display for GraphicsError {
         match self {
             Self::InvalidDeviceHandle => write!(f, "invalid or stale graphics device handle"),
             Self::InvalidQueueHandle => write!(f, "invalid or stale command queue handle"),
+            Self::InvalidFenceHandle => write!(f, "invalid or stale graphics fence handle"),
+            Self::FenceLimitExceeded => write!(f, "graphics fence or queue wait limit exceeded"),
+            Self::FenceTimeout {
+                requested,
+                completed,
+            } => {
+                write!(
+                    f,
+                    "graphics fence timed out waiting for {requested}; completed {completed}"
+                )
+            }
             Self::InvalidAllocatorHandle => write!(f, "invalid or stale command allocator handle"),
             Self::InvalidCommandListHandle => write!(f, "invalid or stale command list handle"),
             Self::InvalidResourceHandle => write!(f, "invalid or stale graphics resource handle"),
@@ -151,8 +174,8 @@ impl std::fmt::Display for GraphicsError {
             Self::InvalidIndexFormat(format) => {
                 write!(f, "unsupported index buffer format {format}")
             }
-            Self::IndexOutOfRange => write!(f, "indexed draw outside its index or vertex buffer"),
-            Self::Unsupported(what) => write!(f, "unsupported texture binding: {what}"),
+            Self::IndexOutOfRange => write!(f, "draw outside its index or vertex buffer"),
+            Self::Unsupported(what) => write!(f, "unsupported graphics operation: {what}"),
         }
     }
 }
@@ -180,6 +203,8 @@ pub struct ResourceDesc {
 #[derive(Clone, Debug)]
 pub struct GraphicsResource {
     pub handle: GraphicsHandle,
+    /// The device that created this resource.
+    pub device: GraphicsHandle,
     pub desc: ResourceDesc,
     pub state: ResourceStates,
     pub guest_backing_addr: Option<u64>,
@@ -462,12 +487,14 @@ pub struct RootSignatureDesc {
 /// one holding `s0`, at these root parameter indices.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct RootSignature {
+    /// The device that created this root signature.
+    device: GraphicsHandle,
     srv_parameter: u32,
     sampler_parameter: u32,
 }
 
 impl RootSignature {
-    fn from_desc(desc: &RootSignatureDesc) -> Result<Self, GraphicsError> {
+    fn from_desc(device: GraphicsHandle, desc: &RootSignatureDesc) -> Result<Self, GraphicsError> {
         if desc.static_sampler_count != 0 {
             return Err(GraphicsError::Unsupported("static samplers"));
         }
@@ -518,6 +545,7 @@ impl RootSignature {
         }
         match (srv, sampler) {
             (Some(srv_parameter), Some(sampler_parameter)) => Ok(Self {
+                device,
                 srv_parameter,
                 sampler_parameter,
             }),
@@ -550,6 +578,8 @@ struct TableBindings {
 /// A shader-visible descriptor heap.
 struct DescriptorHeap {
     handle: GraphicsHandle,
+    /// The device that created this heap.
+    device: GraphicsHandle,
     heap_type: DescriptorHeapType,
     slots: Vec<Option<Descriptor>>,
 }
@@ -643,6 +673,10 @@ pub enum GraphicsCommand {
 /// Command List in recording or closed state.
 pub struct GraphicsCommandList {
     pub handle: GraphicsHandle,
+    /// The device that created this command list.
+    pub device: GraphicsHandle,
+    /// The command allocator this list was created from.
+    pub allocator: GraphicsHandle,
     pub list_type: CommandListType,
     pub is_recording: bool,
     pub commands: Vec<GraphicsCommand>,
@@ -651,6 +685,8 @@ pub struct GraphicsCommandList {
 /// Command Allocator tracking command recording buffers.
 pub struct GraphicsCommandAllocator {
     pub handle: GraphicsHandle,
+    /// The device that created this allocator.
+    pub device: GraphicsHandle,
     pub list_type: CommandListType,
     pub is_reset: bool,
 }
@@ -658,8 +694,42 @@ pub struct GraphicsCommandAllocator {
 /// Command Queue for command list submission and execution.
 pub struct GraphicsCommandQueue {
     pub handle: GraphicsHandle,
+    /// The device that created this queue.
+    pub device: GraphicsHandle,
     pub list_type: CommandListType,
     pub submitted_lists: Vec<GraphicsHandle>,
+    fence_waits: Vec<(GraphicsHandle, u64)>,
+}
+
+/// A native fence operation. The adapter returns the completed value it
+/// observed. Queue signals and waits are encoded on the GPU. A host wait
+/// that reaches its deadline returns the last observed value.
+#[derive(Clone, Copy, Debug)]
+pub enum FenceOperation {
+    CompletedValue,
+    Signal(u64),
+    QueueWait { value: u64, timeout: Duration },
+    HostWait { value: u64, timeout: Duration },
+}
+
+pub type NativeFence = Box<dyn Fn(FenceOperation) -> Result<u64, GraphicsError> + Send + Sync>;
+type NativeFenceFactory = Box<dyn Fn(u64) -> Result<NativeFence, GraphicsError> + Send + Sync>;
+
+struct GraphicsFence {
+    device: GraphicsHandle,
+    // The software model executes serially, so a submitted signal has already
+    // completed. The native adapter reads its own shared event.
+    last_signal: u64,
+    native: Option<NativeFence>,
+}
+
+impl GraphicsFence {
+    fn completed_value(&self) -> Result<u64, GraphicsError> {
+        match &self.native {
+            Some(native) => native(FenceOperation::CompletedValue),
+            None => Ok(self.last_signal),
+        }
+    }
 }
 
 /// Custom backend renderer signature for testing or Metal dispatch.
@@ -678,6 +748,8 @@ pub struct FramePresentation {
     pub height: usize,
     pub pixels: Vec<u8>,
     pub frame_index: u64,
+    /// The number of draws the last executed command list performed.
+    pub draw_count: usize,
     pub backend: Option<GraphicsBackendId>,
 }
 
@@ -686,6 +758,8 @@ pub struct GraphicsContext {
     next_id: u32,
     devices: HashMap<GraphicsHandle, bool>,
     queues: HashMap<GraphicsHandle, GraphicsCommandQueue>,
+    fences: HashMap<GraphicsHandle, GraphicsFence>,
+    native_fences: Option<NativeFenceFactory>,
     allocators: HashMap<GraphicsHandle, GraphicsCommandAllocator>,
     command_lists: HashMap<GraphicsHandle, GraphicsCommandList>,
     resources: HashMap<GraphicsHandle, GraphicsResource>,
@@ -712,6 +786,8 @@ impl GraphicsContext {
             next_id: 1,
             devices: HashMap::new(),
             queues: HashMap::new(),
+            fences: HashMap::new(),
+            native_fences: None,
             allocators: HashMap::new(),
             command_lists: HashMap::new(),
             resources: HashMap::new(),
@@ -725,6 +801,19 @@ impl GraphicsContext {
     }
 
     /// Install a native Metal backend adapter.
+    /// Live object counts for the service tests: devices, queues, allocators,
+    /// command lists and resources. A creation that fails must not change them.
+    #[cfg(test)]
+    pub(crate) fn live_counts(&self) -> [usize; 5] {
+        [
+            self.devices.len(),
+            self.queues.len(),
+            self.allocators.len(),
+            self.command_lists.len(),
+            self.resources.len(),
+        ]
+    }
+
     pub fn set_metal_backend<F>(&mut self, renderer: F)
     where
         F: Fn(&[[f32; 4]; 3], (usize, usize), [u8; 4]) -> Result<Vec<u8>, GraphicsError>
@@ -785,11 +874,237 @@ impl GraphicsContext {
             handle,
             GraphicsCommandQueue {
                 handle,
+                device,
                 list_type,
                 submitted_lists: Vec::new(),
+                fence_waits: Vec::new(),
             },
         );
         Ok(handle)
+    }
+
+    /// Install the shared-event factory for the configured native renderer.
+    /// A context cannot switch fence backends while it owns live fences.
+    pub fn set_native_fence_factory(
+        &mut self,
+        factory: impl Fn(u64) -> Result<NativeFence, GraphicsError> + Send + Sync + 'static,
+    ) -> Result<(), GraphicsError> {
+        if !self.fences.is_empty() {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        self.native_fences = Some(Box::new(factory));
+        Ok(())
+    }
+
+    /// Create a device-owned timeline fence at the supplied initial value.
+    pub fn create_fence(
+        &mut self,
+        device: GraphicsHandle,
+        initial_value: u64,
+    ) -> Result<GraphicsHandle, GraphicsError> {
+        if !self.devices.contains_key(&device) {
+            return Err(GraphicsError::InvalidDeviceHandle);
+        }
+        if self.fences.len() >= MAX_FENCES {
+            return Err(GraphicsError::FenceLimitExceeded);
+        }
+        // D3D12 uses UINT64_MAX to report device removal.
+        if initial_value == u64::MAX {
+            return Err(GraphicsError::Unsupported("reserved fence value"));
+        }
+        let native = match self.backend_id {
+            GraphicsBackendId::SoftwareReference => None,
+            GraphicsBackendId::MetalNative => {
+                let factory = self
+                    .native_fences
+                    .as_ref()
+                    .ok_or(GraphicsError::NativeMetalRequired)?;
+                Some(factory(initial_value)?)
+            }
+        };
+        let handle = self.allocate_handle();
+        self.fences.insert(
+            handle,
+            GraphicsFence {
+                device,
+                last_signal: initial_value,
+                native,
+            },
+        );
+        Ok(handle)
+    }
+
+    pub fn destroy_fence(&mut self, fence: GraphicsHandle) -> Result<(), GraphicsError> {
+        self.fence(fence)?;
+        if self
+            .queues
+            .values()
+            .any(|queue| queue.fence_waits.iter().any(|(handle, _)| *handle == fence))
+        {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        self.fences.remove(&fence);
+        Ok(())
+    }
+
+    pub fn fence_completed_value(&self, fence: GraphicsHandle) -> Result<u64, GraphicsError> {
+        self.fence(fence)?.completed_value()
+    }
+
+    /// Block the host for at most the caller's budget (up to one second).
+    /// Zero is a poll. Times beyond the bound are explicitly unsupported.
+    pub fn wait_for_fence(
+        &self,
+        fence: GraphicsHandle,
+        value: u64,
+        timeout: Duration,
+    ) -> Result<(), GraphicsError> {
+        let fence = self.fence(fence)?;
+        if timeout > MAX_FENCE_WAIT || value == u64::MAX {
+            return Err(GraphicsError::Unsupported("fence wait value or timeout"));
+        }
+        let completed = fence.completed_value()?;
+        if completed >= value || timeout.is_zero() {
+            return Self::check_fence_value(value, completed);
+        }
+        let reached = match &fence.native {
+            Some(native) => native(FenceOperation::HostWait { value, timeout })?,
+            None => {
+                // No other thread can submit work to this context during a
+                // host wait in the deterministic reference implementation.
+                std::thread::sleep(timeout);
+                completed
+            }
+        };
+        Self::check_fence_value(value, reached)
+    }
+
+    /// Record an ordered dependency and return without waiting on the host.
+    /// In this synchronous graphics path the next execute or signal applies
+    /// the dependency. A not-yet-submitted signal makes that operation
+    /// retryable; the queue retains its dependency in that case.
+    pub fn queue_wait(
+        &mut self,
+        queue: GraphicsHandle,
+        fence: GraphicsHandle,
+        value: u64,
+    ) -> Result<(), GraphicsError> {
+        self.check_queue_fence(queue, fence)?;
+        if value == u64::MAX {
+            return Err(GraphicsError::Unsupported("reserved fence value"));
+        }
+        let waits = &mut self.queues.get_mut(&queue).unwrap().fence_waits;
+        if let Some((_, wanted)) = waits.iter_mut().find(|(handle, _)| *handle == fence) {
+            *wanted = (*wanted).max(value);
+        } else {
+            if waits.len() >= MAX_QUEUE_WAITS {
+                return Err(GraphicsError::FenceLimitExceeded);
+            }
+            waits.push((fence, value));
+        }
+        Ok(())
+    }
+
+    /// Signal after earlier work on this queue. The existing render backend
+    /// returns only after its draw and readback complete.
+    pub fn queue_signal(
+        &mut self,
+        queue: GraphicsHandle,
+        fence: GraphicsHandle,
+        value: u64,
+    ) -> Result<(), GraphicsError> {
+        self.check_queue_fence(queue, fence)?;
+        let timeline = self.fence(fence)?;
+        if value == u64::MAX || value < timeline.last_signal {
+            return Err(GraphicsError::Unsupported(
+                "reserved or decreasing fence signal",
+            ));
+        }
+        self.apply_queue_waits(queue, self.backend_id)?;
+        let timeline = self.fences.get_mut(&fence).unwrap();
+        if let Some(native) = &timeline.native {
+            native(FenceOperation::Signal(value))?;
+        }
+        timeline.last_signal = value;
+        Ok(())
+    }
+
+    fn fence(&self, fence: GraphicsHandle) -> Result<&GraphicsFence, GraphicsError> {
+        self.fences
+            .get(&fence)
+            .ok_or(GraphicsError::InvalidFenceHandle)
+    }
+
+    fn check_queue_fence(
+        &self,
+        queue: GraphicsHandle,
+        fence: GraphicsHandle,
+    ) -> Result<(), GraphicsError> {
+        let queue = self
+            .queues
+            .get(&queue)
+            .ok_or(GraphicsError::InvalidQueueHandle)?;
+        let fence = self.fence(fence)?;
+        if queue.device != fence.device {
+            return Err(GraphicsError::Unsupported(
+                "fence belongs to another device",
+            ));
+        }
+        if fence.native.is_some() != (self.backend_id == GraphicsBackendId::MetalNative) {
+            return Err(GraphicsError::Unsupported(
+                "fence belongs to another backend",
+            ));
+        }
+        Ok(())
+    }
+
+    fn check_fence_value(value: u64, completed: u64) -> Result<(), GraphicsError> {
+        if completed < value {
+            return Err(GraphicsError::FenceTimeout {
+                requested: value,
+                completed,
+            });
+        }
+        Ok(())
+    }
+
+    fn apply_queue_waits(
+        &mut self,
+        queue: GraphicsHandle,
+        backend: GraphicsBackendId,
+    ) -> Result<(), GraphicsError> {
+        let waits = &self
+            .queues
+            .get(&queue)
+            .ok_or(GraphicsError::InvalidQueueHandle)?
+            .fence_waits;
+        // Check all prerequisites before submitting any command. In
+        // particular, do not enqueue a Metal wait whose producer is missing.
+        for &(handle, value) in waits {
+            let fence = self.fence(handle)?;
+            if fence.native.is_some() != (backend == GraphicsBackendId::MetalNative) {
+                return Err(GraphicsError::Unsupported(
+                    "fence belongs to another backend",
+                ));
+            }
+            if fence.last_signal < value {
+                return Err(GraphicsError::FenceTimeout {
+                    requested: value,
+                    completed: fence.completed_value()?,
+                });
+            }
+        }
+        let started = Instant::now();
+        for &(handle, value) in waits {
+            let fence = self.fence(handle)?;
+            if let Some(native) = &fence.native {
+                let timeout = MAX_FENCE_WAIT.saturating_sub(started.elapsed());
+                let completed = native(FenceOperation::QueueWait { value, timeout })?;
+                Self::check_fence_value(value, completed)?;
+            }
+        }
+        self.queues.get_mut(&queue).unwrap().fence_waits.clear();
+        Ok(())
     }
 
     /// Create command allocator (`ID3D12Device::CreateCommandAllocator`).
@@ -806,6 +1121,7 @@ impl GraphicsContext {
             handle,
             GraphicsCommandAllocator {
                 handle,
+                device,
                 list_type,
                 is_reset: true,
             },
@@ -836,6 +1152,8 @@ impl GraphicsContext {
             handle,
             GraphicsCommandList {
                 handle,
+                device,
+                allocator,
                 list_type,
                 is_recording: true,
                 commands: Vec::new(),
@@ -867,6 +1185,7 @@ impl GraphicsContext {
             handle,
             GraphicsResource {
                 handle,
+                device,
                 desc,
                 state: initial_state,
                 guest_backing_addr: guest_addr,
@@ -1110,6 +1429,7 @@ impl GraphicsContext {
             handle,
             GraphicsResource {
                 handle,
+                device,
                 desc: ResourceDesc {
                     dimension: ResourceDimension::Texture2D,
                     width: u64::from(width),
@@ -1160,6 +1480,7 @@ impl GraphicsContext {
             handle.id,
             DescriptorHeap {
                 handle,
+                device,
                 heap_type,
                 slots: vec![None; num_descriptors as usize],
             },
@@ -1314,7 +1635,7 @@ impl GraphicsContext {
         if !self.devices.contains_key(&device) {
             return Err(GraphicsError::InvalidDeviceHandle);
         }
-        let root_signature = RootSignature::from_desc(desc)?;
+        let root_signature = RootSignature::from_desc(device, desc)?;
         let handle = self.allocate_handle();
         self.root_signatures.insert(handle, root_signature);
         Ok(handle)
@@ -1420,6 +1741,145 @@ impl GraphicsContext {
         Ok(())
     }
 
+    /// Destroy a guest device (`ID3D12Device` release). The device must have
+    /// no live child object: command queues, command allocators, command
+    /// lists, resources, descriptor heaps, root signatures or fences.
+    pub fn destroy_device(&mut self, device: GraphicsHandle) -> Result<(), GraphicsError> {
+        if !self.devices.contains_key(&device) {
+            return Err(GraphicsError::InvalidDeviceHandle);
+        }
+        let has_children = self.queues.values().any(|queue| queue.device == device)
+            || self.fences.values().any(|fence| fence.device == device)
+            || self
+                .allocators
+                .values()
+                .any(|allocator| allocator.device == device)
+            || self
+                .command_lists
+                .values()
+                .any(|list| list.device == device)
+            || self.resources.values().any(|res| res.device == device)
+            || self
+                .descriptor_heaps
+                .values()
+                .any(|heap| heap.device == device)
+            || self
+                .root_signatures
+                .values()
+                .any(|signature| signature.device == device);
+        if has_children {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        self.devices.remove(&device);
+        Ok(())
+    }
+
+    /// Destroy a command queue (`ID3D12CommandQueue` release). Every command
+    /// list the queue submitted must already be destroyed.
+    pub fn destroy_command_queue(&mut self, queue: GraphicsHandle) -> Result<(), GraphicsError> {
+        let cmd_queue = self
+            .queues
+            .get(&queue)
+            .ok_or(GraphicsError::InvalidQueueHandle)?;
+        if cmd_queue
+            .submitted_lists
+            .iter()
+            .any(|list| self.command_lists.contains_key(list))
+        {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        self.queues.remove(&queue);
+        Ok(())
+    }
+
+    /// Destroy a command allocator (`ID3D12CommandAllocator` release). Every
+    /// command list created from it must already be destroyed.
+    pub fn destroy_command_allocator(
+        &mut self,
+        allocator: GraphicsHandle,
+    ) -> Result<(), GraphicsError> {
+        if !self.allocators.contains_key(&allocator) {
+            return Err(GraphicsError::InvalidAllocatorHandle);
+        }
+        if self
+            .command_lists
+            .values()
+            .any(|list| list.allocator == allocator)
+        {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        self.allocators.remove(&allocator);
+        Ok(())
+    }
+
+    /// Destroy a command list (`ID3D12GraphicsCommandList` release). The list
+    /// must not still be recording.
+    pub fn destroy_command_list(&mut self, list: GraphicsHandle) -> Result<(), GraphicsError> {
+        let cmd_list = self
+            .command_lists
+            .get(&list)
+            .ok_or(GraphicsError::InvalidCommandListHandle)?;
+        if cmd_list.is_recording {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        self.command_lists.remove(&list);
+        // The queue that submitted the list no longer holds it.
+        for cmd_queue in self.queues.values_mut() {
+            cmd_queue
+                .submitted_lists
+                .retain(|submitted| *submitted != list);
+        }
+        Ok(())
+    }
+
+    /// Destroy a committed resource (`ID3D12Resource` release). No command
+    /// list that is still recording may reference it.
+    pub fn destroy_resource(&mut self, resource: GraphicsHandle) -> Result<(), GraphicsError> {
+        if !self.resources.contains_key(&resource) {
+            return Err(GraphicsError::InvalidResourceHandle);
+        }
+        let referenced = self.command_lists.values().any(|list| {
+            list.is_recording
+                && list
+                    .commands
+                    .iter()
+                    .any(|command| Self::command_references_resource(command, resource))
+        });
+        if referenced {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        self.resources.remove(&resource);
+        Ok(())
+    }
+
+    /// The bytes a resource stores, for a guest that reads back its contents.
+    pub fn resource_bytes(&self, resource: GraphicsHandle) -> Result<&[u8], GraphicsError> {
+        let res = self
+            .resources
+            .get(&resource)
+            .ok_or(GraphicsError::InvalidResourceHandle)?;
+        Ok(&res.data)
+    }
+
+    /// Whether a recorded command names a resource.
+    fn command_references_resource(command: &GraphicsCommand, resource: GraphicsHandle) -> bool {
+        match command {
+            GraphicsCommand::ResourceBarrier {
+                resource: named, ..
+            } => *named == resource,
+            GraphicsCommand::SetRenderTargets { color_target, .. } => {
+                color_target == &Some(resource)
+            }
+            GraphicsCommand::SetVertexBuffer {
+                resource: named, ..
+            } => *named == resource,
+            GraphicsCommand::SetIndexBuffer {
+                resource: named, ..
+            } => *named == resource,
+            _ => false,
+        }
+    }
+
     /// Execute command list on command queue using the configured backend.
     pub fn execute_command_list(
         &mut self,
@@ -1471,10 +1931,9 @@ impl GraphicsContext {
             Some(arc) => Some(arc.as_ref()),
             None => None,
         };
-        let cmd_queue = self
-            .queues
-            .get_mut(&queue)
-            .ok_or(GraphicsError::InvalidQueueHandle)?;
+        if !self.queues.contains_key(&queue) {
+            return Err(GraphicsError::InvalidQueueHandle);
+        }
         let cmd_list = self
             .command_lists
             .get(&list)
@@ -1487,7 +1946,13 @@ impl GraphicsContext {
             return Err(GraphicsError::EmptyCommandList);
         }
 
-        cmd_queue.submitted_lists.push(list);
+        self.apply_queue_waits(queue, backend_id)?;
+        let cmd_list = self.command_lists.get(&list).unwrap();
+        self.queues
+            .get_mut(&queue)
+            .unwrap()
+            .submitted_lists
+            .push(list);
 
         // State machine parsing recorded commands
         let mut viewport = (4usize, 3usize);
@@ -1673,8 +2138,21 @@ impl GraphicsContext {
                         rendered_output = Some(pixels);
                         continue;
                     }
-                    if *vertex_count_per_instance < 3 {
+                    // Zero instances, or fewer vertices than one triangle,
+                    // draw nothing. The flat path draws only the first
+                    // triangle of the view, once; anything else is rejected
+                    // rather than drawn as a different triangle.
+                    if *vertex_count_per_instance < 3 || *instance_count == 0 {
                         continue;
+                    }
+                    if *vertex_count_per_instance != 3
+                        || *instance_count != 1
+                        || *start_vertex_location != 0
+                        || *start_instance_location != 0
+                    {
+                        return Err(GraphicsError::Unsupported(
+                            "flat draw other than one instance of the view's first three vertices",
+                        ));
                     }
                     draw_count += 1;
                     let v_res_handle =
@@ -1684,15 +2162,10 @@ impl GraphicsContext {
                         .get(&v_res_handle)
                         .ok_or(GraphicsError::InvalidResourceHandle)?;
 
-                    // Read vertices from guest memory backing or resource data
-                    let mut raw_vtx = [0u8; 48]; // 3 * 4 * float32
-                    if let Some(guest_addr) = v_res.guest_backing_addr {
-                        memory.read_bytes(guest_addr + vertex_offset as u64, &mut raw_vtx)?;
-                    } else if v_res.data.len() >= vertex_offset + 48 {
-                        raw_vtx.copy_from_slice(&v_res.data[vertex_offset..vertex_offset + 48]);
-                    } else {
-                        return Err(GraphicsError::InvalidDescriptor);
-                    }
+                    // Three float4 positions, inside the resource whether it
+                    // is backed by guest memory or by its own bytes.
+                    let mut raw_vtx = [0u8; 48];
+                    Self::read_resource(v_res, memory, vertex_offset, &mut raw_vtx)?;
 
                     let mut vertices = [[0.0f32; 4]; 3];
                     for (i, row) in vertices.iter_mut().enumerate() {
@@ -1734,6 +2207,7 @@ impl GraphicsContext {
             pres.height = viewport.1;
             pres.pixels = out.clone();
             pres.frame_index += 1;
+            pres.draw_count = draw_count;
             pres.backend = Some(backend_id);
         }
 

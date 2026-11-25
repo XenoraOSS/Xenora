@@ -1,273 +1,597 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! C++ `type_info` and `std::exception` helpers exported by `vcruntime140.dll`.
+//! C++ runtime services for hosted guest programs.
 //!
-//! Compiled `typeid`, `type_info::operator==`, `type_info::before`,
-//! `type_info::hash_code` and `type_info::name` call these helpers with a
-//! pointer to the type descriptor's data: an 8-byte slot that caches the
-//! readable name, followed by the NUL-terminated decorated name such as
-//! `.?AVWidget@ui@@`. That layout is the publicly described MSVC RTTI type
-//! descriptor (virtual table pointer, spare word, name).
-//!
-//! * Equality and ordering compare decorated names byte by byte.
-//! * `__std_type_info_hash` is FNV-1a over the decorated name. The C++
-//!   standard only requires equal types to hash equally within one run; the
-//!   value is not claimed to match the one Microsoft's runtime computes.
-//! * `__std_type_info_name` undecorates plain class, struct, union and enum
-//!   names, including namespaces and nesting. Other decorations (templates,
-//!   back-references, anonymous namespaces, pointer and function types) stop
-//!   the guest rather than return a wrong name.
-//!
-//! `std::exception` keeps its message in an `__std_exception_data` record: the
-//! message pointer, then a one-byte flag saying whether the exception owns
-//! (and must free) that text. `__std_exception_copy` gives a copy its own
-//! duplicate of an owned message so `what()` stays equal after the original is
-//! destroyed, and shares a borrowed one. `__std_exception_destroy` frees an
-//! owned message and clears the record. Owned text lives on the CRT heap, so
-//! guest `malloc` and `free` interoperate with it.
+//! A mingw-w64 C++ program imports a handful of symbols from
+//! `libstdc++-6.dll`. Only the three that every such program needs are
+//! provided here: the two allocation operators and libstdc++'s length-error
+//! path. The allocation operators reuse the guest heap the C runtime's
+//! `malloc` and `free` already use, so a C++ guest and a C guest share one
+//! allocator instead of running two.
 
 use super::ServicesState;
-use crate::cpu::ExitReason;
-use crate::imports::{ImportRegistry, ServiceStatus};
+use super::crt;
+use crate::cpu::{CpuState, ExitReason};
+use crate::import_table::ImportName;
+use crate::imports::{ImportRegistry, ServiceHandler, ServiceStatus, Win64Args};
 use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
-const MODULE: &str = "vcruntime140.dll";
-/// Longest decorated name read from the guest.
-const MAX_NAME: usize = 4096;
-/// Longest exception message duplicated, in bytes.
-const MAX_MESSAGE: usize = 1 << 20;
+const MODULE: &str = "libstdc++-6.dll";
 
-fn fault(error: MemoryError) -> ExitReason {
-    ExitReason::MemoryFault(error)
-}
+/// The module GCC's emulated thread-local storage accessor is imported from.
+const EMUTLS_MODULE: &str = "libgcc_s_seh-1.dll";
 
-fn unsupported<T>() -> Result<T, ExitReason> {
-    Err(ExitReason::IllegalInstruction(0xFE))
-}
+/// `ENOMEM`, the C runtime's out-of-memory code.
+const ENOMEM: u32 = 12;
 
-/// The decorated name stored after the cached-name slot at `data`.
-fn decorated(memory: &GuestMemory, data: u64) -> Result<Vec<u8>, ExitReason> {
-    if data == 0 {
-        return Err(fault(MemoryError::UnmappedAddress(0)));
-    }
-    let start = data.checked_add(8).ok_or(fault(MemoryError::Overflow))?;
-    let mut name = Vec::new();
-    for offset in 0..MAX_NAME as u64 {
-        let byte = memory.read_u8(start + offset).map_err(fault)?;
-        if byte == 0 {
-            return Ok(name);
+/// The exit for a request the runtime does not model.
+const RUNTIME_LIMIT: ExitReason = ExitReason::IllegalInstruction(0xFE);
+
+/// `operator new(unsigned long long)`.
+///
+/// Allocates guest memory the way the C runtime's `malloc` does, through the
+/// shared guest heap. The block is not zeroed: only `new T()` value-
+/// initialises. A size of zero still yields a distinct, freeable block, as
+/// `malloc(0)` does. A failed allocation sets `errno` to `ENOMEM` and returns
+/// zero, which is the contract the C++ operator is defined in terms of.
+fn cxx_operator_new(
+    args: &Win64Args,
+    cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    let size = args.rcx.max(1) as usize;
+    match memory.map_heap_allocation(PROCESS_HEAP, size) {
+        Ok(address) => Ok(address),
+        Err(_) => {
+            crt::set_errno(memory, cpu.gs_base, ENOMEM)?;
+            Ok(0)
         }
-        name.push(byte);
     }
-    unsupported()
 }
 
-/// FNV-1a, 64-bit.
-fn hash(name: &[u8]) -> u64 {
-    name.iter().fold(0xcbf2_9ce4_8422_2325, |state, &byte| {
-        (state ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01b3)
-    })
-}
-
-/// The readable name of a plain class, struct, union or enum type, or `None`
-/// when the decoration uses anything else.
-pub fn undecorate(name: &[u8]) -> Option<String> {
-    let name = std::str::from_utf8(name).ok()?;
-    let rest = name.strip_prefix(".?A")?;
-    let (keyword, rest) = match rest.as_bytes().first()? {
-        b'V' => ("class", &rest[1..]),
-        b'U' => ("struct", &rest[1..]),
-        b'T' => ("union", &rest[1..]),
-        // `W4` is an enum with an int underlying type.
-        b'W' => ("enum", rest.strip_prefix("W4")?),
-        _ => return None,
-    };
-    let parts = rest.strip_suffix("@@")?;
-    let fragments: Vec<&str> = parts.split('@').collect();
-    let plain = |part: &&str| {
-        !part.is_empty()
-            && !part.as_bytes()[0].is_ascii_digit()
-            && part
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    };
-    if !fragments.iter().all(plain) {
-        return None;
+/// `operator delete(void*)`.
+///
+/// Releases a block through the same guest heap the C runtime's `free` uses.
+/// A null pointer does nothing. A pointer that is not a live guest allocation
+/// is reported as a guest memory fault, as the C runtime's `free` reports it.
+fn cxx_operator_delete(
+    args: &Win64Args,
+    _cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    let address = args.rcx;
+    if address == 0 || memory.release_heap_allocation(PROCESS_HEAP, address) {
+        return Ok(0);
     }
-    let qualified: Vec<&str> = fragments.into_iter().rev().collect();
-    Some(format!("{keyword} {}", qualified.join("::")))
+    Err(ExitReason::MemoryFault(MemoryError::UnmappedAddress(
+        address,
+    )))
 }
 
-/// Names allocated by `__std_type_info_name`, released by
-/// `__std_type_info_destroy_list`.
-#[derive(Default)]
-pub(super) struct TypeNames {
-    allocations: Vec<u64>,
+/// `std::__throw_length_error(char const*)`.
+///
+/// Xenora implements no C++ exception machinery, so this function must not
+/// return: it is a noreturn function, and returning from it is undefined
+/// behaviour. The guest is stopped with the runtime-limit fault instead. This
+/// is an explicit refusal, naming the reason the guest reached a libstdc++
+/// error path Xenora does not implement, and not a silent no-op.
+fn cxx_throw_length_error(
+    _args: &Win64Args,
+    _cpu: &mut CpuState,
+    _memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    Err(RUNTIME_LIMIT)
+}
+
+/// `__emutls_get_address(void*)`.
+///
+/// mingw-w64's C++ runtime uses GCC's emulated thread-local storage. For each
+/// thread-local variable the compiler emits a descriptor holding the size and
+/// the alignment of that variable and passes the descriptor's address here.
+/// The runtime returns the calling thread's block for that variable and
+/// allocates it on first use.
+///
+/// Two guest threads must never share a block, so the storage is keyed by the
+/// guest thread first and by the descriptor second. The block comes from the
+/// shared guest heap, so it is zeroed like every other guest allocation.
+///
+/// A null descriptor or a descriptor that is not readable, or whose size is
+/// zero, yields zero: there is no variable to address.
+fn cxx_emutls_get_address(
+    state: &Arc<ServicesState>,
+    args: &Win64Args,
+    cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    let descriptor = args.rcx;
+    if descriptor == 0 {
+        return Ok(0);
+    }
+    let mut size_bytes = [0u8; 8];
+    memory
+        .read_bytes(descriptor, &mut size_bytes)
+        .map_err(ExitReason::MemoryFault)?;
+    let size = u64::from_le_bytes(size_bytes);
+    if size == 0 {
+        return Ok(0);
+    }
+    let teb = cpu.gs_base;
+    let mut blocks = state.emutls.lock().expect("emulated thread-local storage");
+    let thread_blocks = blocks.entry(teb).or_default();
+    if let Some(address) = thread_blocks.get(&descriptor) {
+        return Ok(*address);
+    }
+    let address = memory
+        .map_heap_allocation(PROCESS_HEAP, size as usize)
+        .map_err(ExitReason::MemoryFault)?;
+    thread_blocks.insert(descriptor, address);
+    Ok(address)
+}
+
+/// `std::__cxx11::basic_string<...>::_M_dispose()`.
+///
+/// Frees the string's heap buffer when it does not keep its characters in
+/// its own local buffer. The layout is the one libstdc++ documents in
+/// `bits/basic_string.h`: the data pointer at offset 0, the length at offset
+/// 8, and then either the local buffer or the allocated capacity at offset
+/// 16. A string whose data pointer is its own local buffer frees nothing,
+/// and a string whose data pointer is zero frees nothing either.
+fn cxx_string_dispose(
+    args: &Win64Args,
+    _cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    let object = args.rcx;
+    if object == 0 {
+        return Ok(0);
+    }
+    let mut data_bytes = [0u8; 8];
+    memory
+        .read_bytes(object, &mut data_bytes)
+        .map_err(ExitReason::MemoryFault)?;
+    let data = u64::from_le_bytes(data_bytes);
+    // The local buffer follows the data pointer and the length.
+    let local = object + 16;
+    if data == 0 || data == local {
+        return Ok(0);
+    }
+    if memory.release_heap_allocation(PROCESS_HEAP, data) {
+        return Ok(0);
+    }
+    Err(ExitReason::MemoryFault(MemoryError::UnmappedAddress(data)))
+}
+
+/// `std::__cxx11::basic_string<...>::_S_copy(char*, char const*, size_t)`.
+///
+/// Copies characters with `char_traits<char>::copy`, which is a byte copy.
+fn cxx_string_copy(
+    args: &Win64Args,
+    _cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    let destination = args.rcx;
+    let source = args.rdx;
+    let mut remaining = args.r8 as usize;
+    // Copy in bounded pieces. The count comes from the guest, so it may name
+    // far more bytes than any mapping holds; reading it in pieces means the
+    // copy stops at the first unreadable byte instead of allocating a buffer
+    // of the size the guest asked for.
+    const PIECE: usize = 64 * 1024;
+    let mut source = source;
+    let mut destination = destination;
+    while remaining > 0 {
+        let take = remaining.min(PIECE);
+        let mut buffer = vec![0u8; take];
+        memory
+            .read_bytes(source, &mut buffer)
+            .map_err(ExitReason::MemoryFault)?;
+        memory
+            .write_bytes(destination, &buffer)
+            .map_err(ExitReason::MemoryFault)?;
+        source += take as u64;
+        destination += take as u64;
+        remaining -= take;
+    }
+    Ok(0)
+}
+
+/// `std::__throw_bad_alloc()`.
+///
+/// A noreturn function, like the length-error path above. Xenora implements
+/// no C++ exception machinery, so the guest is stopped with the runtime-limit
+/// fault rather than the function returning.
+fn cxx_throw_bad_alloc(
+    _args: &Win64Args,
+    _cpu: &mut CpuState,
+    _memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    Err(RUNTIME_LIMIT)
+}
+
+/// `std::__throw_logic_error(char const*)`.
+///
+/// A noreturn function; the guest is stopped with the runtime-limit fault.
+fn cxx_throw_logic_error(
+    _args: &Win64Args,
+    _cpu: &mut CpuState,
+    _memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    Err(RUNTIME_LIMIT)
+}
+
+/// `std::__throw_bad_array_new_length()`.
+///
+/// A noreturn function; the guest is stopped with the runtime-limit fault.
+fn cxx_throw_bad_array_new_length(
+    _args: &Win64Args,
+    _cpu: &mut CpuState,
+    _memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    Err(RUNTIME_LIMIT)
+}
+
+/// `std::__glibcxx_assert_fail(char const*, int, char const*, char const*)`.
+///
+/// libstdc++'s assertion failure. It is noreturn, so the guest is stopped
+/// with the runtime-limit fault. The file, line, function and expression the
+/// assertion failed on are named in the fault the runtime reports, but the
+/// fault type itself carries no text, so they are read here only to keep the
+/// guest's memory access checked.
+fn cxx_assert_fail(
+    args: &Win64Args,
+    _cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    for address in [args.rcx, args.r8, args.r9] {
+        if address == 0 {
+            continue;
+        }
+        let mut byte = [0u8; 1];
+        memory
+            .read_bytes(address, &mut byte)
+            .map_err(ExitReason::MemoryFault)?;
+    }
+    Err(RUNTIME_LIMIT)
 }
 
 pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
-    registry.register_with_status(
-        MODULE,
-        "__std_type_info_compare",
-        ServiceStatus::Implemented,
-        |args, _, memory| {
-            if args.rcx == args.rdx {
-                return Ok(0);
-            }
-            let left = decorated(memory, args.rcx)?;
-            let right = decorated(memory, args.rdx)?;
-            let result: i32 = match left.cmp(&right) {
-                std::cmp::Ordering::Less => -1,
-                std::cmp::Ordering::Equal => 0,
-                std::cmp::Ordering::Greater => 1,
-            };
-            Ok(u64::from(result as u32))
-        },
-    );
+    let handlers: [(&str, ServiceHandler); 3] = [
+        ("_Znwy", Box::new(cxx_operator_new)),
+        ("_ZdlPvy", Box::new(cxx_operator_delete)),
+        (
+            "_ZSt20__throw_length_errorPKc",
+            Box::new(cxx_throw_length_error),
+        ),
+    ];
+    for (symbol, handler) in handlers {
+        // A duplicate would mean another module already provides this export;
+        // the first registration wins rather than panicking the host.
+        if registry
+            .try_register(
+                MODULE,
+                ImportName::Name(symbol.to_owned()),
+                ServiceStatus::Implemented,
+                handler,
+            )
+            .is_err()
+        {
+            continue;
+        }
+        registry.set_status(MODULE, symbol, ServiceStatus::Implemented);
+    }
 
-    registry.register_with_status(
-        MODULE,
-        "__std_type_info_hash",
-        ServiceStatus::Partial,
-        |args, _, memory| Ok(hash(&decorated(memory, args.rcx)?)),
-    );
+    // The string helpers and the remaining error paths a C++ guest imports.
+    let extra: [(&str, ServiceHandler); 6] = [
+        (
+            "_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE10_M_disposeEv",
+            Box::new(cxx_string_dispose),
+        ),
+        (
+            "_ZNSt7__cxx1112basic_stringIcSt11char_traitsIcESaIcEE7_S_copyEPcPKcy",
+            Box::new(cxx_string_copy),
+        ),
+        ("_ZSt17__throw_bad_allocv", Box::new(cxx_throw_bad_alloc)),
+        (
+            "_ZSt19__throw_logic_errorPKc",
+            Box::new(cxx_throw_logic_error),
+        ),
+        (
+            "_ZSt28__throw_bad_array_new_lengthv",
+            Box::new(cxx_throw_bad_array_new_length),
+        ),
+        (
+            "_ZSt21__glibcxx_assert_failPKciS0_S0_",
+            Box::new(cxx_assert_fail),
+        ),
+    ];
+    for (symbol, handler) in extra {
+        if registry
+            .try_register(
+                MODULE,
+                ImportName::Name(symbol.to_owned()),
+                ServiceStatus::Implemented,
+                handler,
+            )
+            .is_err()
+        {
+            continue;
+        }
+        registry.set_status(MODULE, symbol, ServiceStatus::Implemented);
+    }
 
-    let names: Arc<Mutex<TypeNames>> = Arc::clone(&state.type_names);
-    registry.register_with_status(
-        MODULE,
-        "__std_type_info_name",
-        ServiceStatus::Partial,
-        move |args, _, memory| {
-            let cached = memory.read_u64(args.rcx).map_err(fault)?;
-            if cached != 0 {
-                return Ok(cached);
-            }
-            let Some(readable) = undecorate(&decorated(memory, args.rcx)?) else {
-                return unsupported();
-            };
-            let mut bytes = readable.into_bytes();
-            bytes.push(0);
-            let address = memory
-                .map_heap_allocation(PROCESS_HEAP, bytes.len())
-                .map_err(fault)?;
-            memory.write_bytes(address, &bytes).map_err(fault)?;
-            memory.write_u64(args.rcx, address).map_err(fault)?;
-            names.lock().expect("type names").allocations.push(address);
-            Ok(address)
-        },
-    );
-
-    let destroy = Arc::clone(&state.type_names);
-    registry.register_with_status(
-        MODULE,
-        "__std_type_info_destroy_list",
-        ServiceStatus::Partial,
-        move |_, _, memory| {
-            // Descriptors keep their cached pointers, as after the runtime
-            // unloads; nothing reads them once the list is destroyed.
-            for address in destroy.lock().expect("type names").allocations.drain(..) {
-                memory.release_heap_allocation(PROCESS_HEAP, address);
-            }
-            Ok(0)
-        },
-    );
-
-    registry.register_with_status(
-        MODULE,
-        "__std_exception_copy",
-        ServiceStatus::Partial,
-        |args, _, memory| {
-            let (from, to) = (args.rcx, args.rdx);
-            let text = memory.read_u64(from).map_err(fault)?;
-            let owned = memory.read_u8(from + 8).map_err(fault)? != 0;
-            if !owned || text == 0 {
-                memory.write_u64(to, text).map_err(fault)?;
-                memory.write_u8(to + 8, 0).map_err(fault)?;
-                return Ok(0);
-            }
-            let mut bytes = Vec::new();
-            loop {
-                let byte = memory.read_u8(text + bytes.len() as u64).map_err(fault)?;
-                bytes.push(byte);
-                if byte == 0 {
-                    break;
-                }
-                if bytes.len() > MAX_MESSAGE {
-                    return unsupported();
-                }
-            }
-            // An allocation failure leaves an empty record, so the copy
-            // reports the runtime's generic message rather than share text it
-            // does not own.
-            let Ok(copy) = memory.map_heap_allocation(PROCESS_HEAP, bytes.len()) else {
-                memory.write_u64(to, 0).map_err(fault)?;
-                memory.write_u8(to + 8, 0).map_err(fault)?;
-                return Ok(0);
-            };
-            memory.write_bytes(copy, &bytes).map_err(fault)?;
-            memory.write_u64(to, copy).map_err(fault)?;
-            memory.write_u8(to + 8, 1).map_err(fault)?;
-            Ok(0)
-        },
-    );
-
-    registry.register_with_status(
-        MODULE,
-        "__std_exception_destroy",
-        ServiceStatus::Partial,
-        |args, _, memory| {
-            let text = memory.read_u64(args.rcx).map_err(fault)?;
-            let owned = memory.read_u8(args.rcx + 8).map_err(fault)? != 0;
-            if owned && text != 0 && !memory.release_heap_allocation(PROCESS_HEAP, text) {
-                // Freeing memory the CRT heap never handed out is a guest bug.
-                return Err(fault(MemoryError::UnmappedAddress(text)));
-            }
-            memory.write_u64(args.rcx, 0).map_err(fault)?;
-            memory.write_u8(args.rcx + 8, 0).map_err(fault)?;
-            Ok(0)
-        },
-    );
+    // The emulated thread-local storage accessor lives in libgcc, not in
+    // libstdc++, and it needs the shared state to find the calling thread's
+    // block.
+    let emutls_state = Arc::clone(state);
+    let handler: ServiceHandler =
+        Box::new(move |args, cpu, memory| cxx_emutls_get_address(&emutls_state, args, cpu, memory));
+    if registry
+        .try_register(
+            EMUTLS_MODULE,
+            ImportName::Name("__emutls_get_address".to_owned()),
+            ServiceStatus::Implemented,
+            handler,
+        )
+        .is_ok()
+    {
+        registry.set_status(
+            EMUTLS_MODULE,
+            "__emutls_get_address",
+            ServiceStatus::Implemented,
+        );
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{hash, undecorate};
+    use super::*;
+    use crate::cpu::{CpuState, Register};
+    use crate::memory::MemoryPermissions;
+    use crate::services::MockClock;
 
+    fn call(
+        registry: &ImportRegistry,
+        symbol: &str,
+        cpu: &mut CpuState,
+        memory: &mut GuestMemory,
+    ) -> Result<u64, ExitReason> {
+        let service = registry
+            .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
+            .expect("registered C++ service");
+        (service.handler)(&Win64Args::new(cpu), cpu, memory)
+    }
+
+    fn registry() -> ImportRegistry {
+        let mut registry = ImportRegistry::new();
+        let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+        register(&mut registry, &state);
+        registry
+    }
+
+    /// The emulated thread-local accessor, resolved from its own module.
+    fn emutls(
+        registry: &ImportRegistry,
+        cpu: &mut CpuState,
+        memory: &mut GuestMemory,
+    ) -> Result<u64, ExitReason> {
+        let service = registry
+            .resolve(
+                EMUTLS_MODULE,
+                &ImportName::Name("__emutls_get_address".to_owned()),
+            )
+            .expect("registered emulated thread-local service");
+        (service.handler)(&Win64Args::new(cpu), cpu, memory)
+    }
+
+    /// A descriptor as the compiler emits it: the size and the alignment of
+    /// one thread-local variable.
+    fn descriptor(memory: &mut GuestMemory, address: u64, size: u64, align: u64) {
+        memory
+            .write_bytes(address, &size.to_le_bytes())
+            .expect("descriptor size");
+        memory
+            .write_bytes(address + 8, &align.to_le_bytes())
+            .expect("descriptor alignment");
+    }
+
+    /// Each guest thread owns its own block for a thread-local variable.
     #[test]
-    fn undecorates_plain_and_nested_type_names() {
-        let cases = [
-            (".?AVWidget@@", "class Widget"),
-            (".?AUPoint@geometry@@", "struct geometry::Point"),
-            (".?ATValue@@", "union Value"),
-            (".?AW4Color@ui@app@@", "enum app::ui::Color"),
-            (".?AVInner@Outer@@", "class Outer::Inner"),
-        ];
-        for (decorated, readable) in cases {
-            assert_eq!(undecorate(decorated.as_bytes()).as_deref(), Some(readable));
-        }
+    fn each_guest_thread_gets_its_own_emulated_thread_local_block() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+        let descriptor_address = 0x0001_0000;
+        memory
+            .map_region(descriptor_address, 0x1000, MemoryPermissions::READ_WRITE)
+            .expect("descriptor region");
+        descriptor(&mut memory, descriptor_address, 4, 4);
+
+        let mut main = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        main.set(Register::Rcx, descriptor_address);
+        let main_block = emutls(&registry, &mut main, &mut memory).expect("a block");
+        assert_ne!(main_block, 0);
+
+        // The same thread asks again and gets the same block.
+        let again = emutls(&registry, &mut main, &mut memory).expect("a block");
+        assert_eq!(again, main_block);
+
+        // Another guest thread gets its own.
+        let mut worker = CpuState {
+            gs_base: 0x20000,
+            ..CpuState::default()
+        };
+        worker.set(Register::Rcx, descriptor_address);
+        let worker_block = emutls(&registry, &mut worker, &mut memory).expect("a block");
+        assert_ne!(worker_block, 0);
+        assert_ne!(worker_block, main_block);
+
+        // Each thread keeps its own bytes.
+        memory
+            .write_bytes(main_block, &[1, 2, 3, 4])
+            .expect("the main block is writable");
+        memory
+            .write_bytes(worker_block, &[9, 9, 9, 9])
+            .expect("the worker block is writable");
+        let mut read_back = [0u8; 4];
+        memory
+            .read_bytes(main_block, &mut read_back)
+            .expect("the main block is readable");
+        assert_eq!(read_back, [1, 2, 3, 4]);
+        memory
+            .read_bytes(worker_block, &mut read_back)
+            .expect("the worker block is readable");
+        assert_eq!(read_back, [9, 9, 9, 9]);
+    }
+
+    /// A descriptor that names nothing, or a variable of no size, has no
+    /// block to address.
+    #[test]
+    fn a_null_or_empty_emulated_descriptor_has_no_block() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+        let empty = 0x0001_0000;
+        memory
+            .map_region(empty, 0x1000, MemoryPermissions::READ_WRITE)
+            .expect("descriptor region");
+        let mut cpu = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        cpu.set(Register::Rcx, empty);
+        assert_eq!(
+            emutls(&registry, &mut cpu, &mut memory).expect("no block"),
+            0
+        );
+
+        descriptor(&mut memory, empty, 0, 4);
+        assert_eq!(
+            emutls(&registry, &mut cpu, &mut memory).expect("no block"),
+            0
+        );
+    }
+
+    fn new_block(registry: &ImportRegistry, memory: &mut GuestMemory, size: u64) -> u64 {
+        let mut cpu = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        cpu.set(Register::Rcx, size);
+        call(registry, "_Znwy", &mut cpu, memory).expect("operator new succeeds")
     }
 
     #[test]
-    fn refuses_decorations_it_does_not_model() {
-        for decorated in [
-            ".?AV?$Box@H@@",       // template
-            ".?AVImpl@?A0x1234@@", // anonymous namespace
-            ".?AVA@1@@",           // back-reference
-            ".?AVWidget@",         // unterminated
-            ".PEAX",               // pointer type
-            ".?AW1Small@@",        // enum with a non-int underlying type
-            ".?AV@@",
-            "?AVWidget@@",
-        ] {
-            assert_eq!(undecorate(decorated.as_bytes()), None, "{decorated}");
-        }
+    fn operator_new_returns_a_distinct_writable_block() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+
+        let first = new_block(&registry, &mut memory, 64);
+        assert_ne!(first, 0);
+        let second = new_block(&registry, &mut memory, 64);
+        assert_ne!(second, 0);
+        assert_ne!(first, second);
+
+        memory
+            .write_bytes(first, &[0xA5; 64])
+            .expect("operator new returns writable memory");
+        let mut read_back = [0u8; 64];
+        memory
+            .read_bytes(first, &mut read_back)
+            .expect("operator new block is readable");
+        assert_eq!(read_back, [0xA5; 64]);
     }
 
     #[test]
-    fn hash_is_fnv1a() {
-        assert_eq!(hash(b""), 0xcbf2_9ce4_8422_2325);
-        assert_eq!(hash(b"a"), 0xaf63_dc4c_8601_ec8c);
-        assert_ne!(hash(b".?AVA@@"), hash(b".?AVB@@"));
+    fn operator_new_does_not_zero_guest_written_bytes() {
+        // The shared guest heap hands out zero-filled pages, so `new` and a
+        // value-initialising allocation look alike in this runtime. What this
+        // pins is that the service itself writes nothing into the block and
+        // never disturbs bytes the guest wrote.
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+
+        let first = new_block(&registry, &mut memory, 32);
+        memory
+            .write_bytes(first, &[0x5A; 32])
+            .expect("operator new returns writable memory");
+        let second = new_block(&registry, &mut memory, 32);
+        assert_ne!(first, second);
+        let mut read_back = [0u8; 32];
+        memory
+            .read_bytes(first, &mut read_back)
+            .expect("the first block is still mapped");
+        assert_eq!(read_back, [0x5A; 32]);
+    }
+
+    #[test]
+    fn operator_new_of_zero_bytes_returns_a_freeable_block() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+
+        let empty = new_block(&registry, &mut memory, 0);
+        assert_ne!(empty, 0);
+        let other = new_block(&registry, &mut memory, 16);
+        assert_ne!(empty, other);
+
+        let mut cpu = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        cpu.set(Register::Rcx, empty);
+        assert_eq!(
+            call(&registry, "_ZdlPvy", &mut cpu, &mut memory).expect("delete succeeds"),
+            0
+        );
+    }
+
+    #[test]
+    fn operator_delete_releases_the_block_and_ignores_null() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+
+        let block = new_block(&registry, &mut memory, 48);
+        let mut cpu = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        cpu.set(Register::Rcx, block);
+        assert_eq!(
+            call(&registry, "_ZdlPvy", &mut cpu, &mut memory).expect("delete succeeds"),
+            0
+        );
+        let mut read_back = [0u8; 8];
+        assert!(
+            memory.read_bytes(block, &mut read_back).is_err(),
+            "the released block is no longer mapped"
+        );
+
+        cpu.set(Register::Rcx, 0);
+        assert_eq!(
+            call(&registry, "_ZdlPvy", &mut cpu, &mut memory).expect("a null delete is harmless"),
+            0
+        );
+    }
+
+    #[test]
+    fn throw_length_error_stops_the_guest_instead_of_returning() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+        let mut cpu = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        cpu.set(Register::Rcx, 0x1000);
+
+        assert_eq!(
+            call(
+                &registry,
+                "_ZSt20__throw_length_errorPKc",
+                &mut cpu,
+                &mut memory
+            ),
+            Err(RUNTIME_LIMIT)
+        );
     }
 }

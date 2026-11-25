@@ -10,7 +10,7 @@
 //! the state unchanged. Flags that the architecture leaves undefined keep their
 //! previous value, which is permitted but not something guests may rely on.
 
-use crate::cpu::{CpuState, ExitReason, RFlags, Register, cpuid};
+use crate::cpu::{CpuState, ExitReason, RFlags, Register, X87State, cpuid};
 use crate::memory::GuestMemory;
 use crate::x86_decode::{Encoding, Insn, MemOperand, RegOperand, RmOperand, Segment};
 use crate::x86_simd;
@@ -690,6 +690,26 @@ pub fn execute(
                 next = insn.imm;
             }
         }
+        // The count is RCX, decremented without changing any flag; LOOPE and
+        // LOOPNE also test ZF (Intel SDM Vol. 2A, LOOP/LOOPcc).
+        Op::Loop | Op::Loope | Op::Loopne => {
+            let count = cpu.gpr[RCX].wrapping_sub(1);
+            cpu.gpr[RCX] = count;
+            let zf_holds = match insn.op {
+                Op::Loope => cpu.flags.zf,
+                Op::Loopne => !cpu.flags.zf,
+                _ => true,
+            };
+            if count != 0 && zf_holds {
+                next = insn.imm;
+            }
+        }
+        // JRCXZ reads RCX and changes nothing (Intel SDM Vol. 2A, Jcc).
+        Op::Jrcxz => {
+            if cpu.gpr[RCX] == 0 {
+                next = insn.imm;
+            }
+        }
         Op::Ret => {
             let sp = cpu.gpr[RSP];
             next = read_mem(memory, sp, 8)?;
@@ -700,6 +720,12 @@ pub fn execute(
         // instruction starts, on one host thread, so guest accesses are already
         // totally ordered and a fence has nothing further to enforce.
         Op::Lfence | Op::Mfence | Op::Sfence => {}
+        // The control, status and tag words take their initial values. The
+        // no-wait form checks no pending exception, and the data registers,
+        // which Xenora does not model, are left alone and only tagged empty
+        // (Intel SDM Vol. 2A, "FINIT/FNINIT"). FNINIT also clears the x87
+        // instruction and data pointers and last opcode, which are not modelled.
+        Op::Fninit => cpu.x87 = X87State::INIT,
         Op::Cpuid => {
             // The leaf is EAX and the subleaf ECX. Each result is a 32-bit
             // register write, so the upper halves are cleared.
@@ -742,6 +768,28 @@ pub fn execute(
         Op::Clc => cpu.flags.cf = false,
         Op::Stc => cpu.flags.cf = true,
         Op::Cmc => cpu.flags.cf = !cpu.flags.cf,
+        // AH = SF:ZF:0:AF:0:PF:1:CF (Intel SDM Vol. 2A, LAHF).
+        Op::Lahf => {
+            let f = cpu.flags;
+            let ah = u64::from(f.sf) << 7
+                | u64::from(f.zf) << 6
+                | u64::from(f.af) << 4
+                | u64::from(f.pf) << 2
+                | 1 << 1
+                | u64::from(f.cf);
+            cpu.gpr[RAX] = cpu.gpr[RAX] & !0xFF00 | ah << 8;
+        }
+        // SF, ZF, AF, PF and CF from AH bits 7, 6, 4, 2 and 0; OF is
+        // unchanged (Intel SDM Vol. 2B, SAHF).
+        Op::Sahf => {
+            let ah = (cpu.gpr[RAX] >> 8) as u8;
+            let flags = &mut cpu.flags;
+            flags.sf = ah & 0x80 != 0;
+            flags.zf = ah & 0x40 != 0;
+            flags.af = ah & 0x10 != 0;
+            flags.pf = ah & 0x04 != 0;
+            flags.cf = ah & 0x01 != 0;
+        }
         Op::Hlt => {
             cpu.rip = next;
             return Ok(Some(ExitReason::Halt));

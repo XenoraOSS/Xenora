@@ -5,7 +5,7 @@
 # reviewed Rust primitives (crates/loader/src/x86_exec.rs), never here.
 # Independence: tests/x86_integer.rs never reads this file.
 #
-# A form names its opcode map ("1" or "0f"), opcode byte, optional ModRM digit,
+# A form names its opcode map ("1", "0f", "0f38" or "0f3a"), opcode byte, optional ModRM digit,
 # operand encoding, operand size and immediate. Declaring a form makes it
 # decodable; a form counts as implemented only once its operation has semantics
 # and independent tests. Forms not listed here are rejected.
@@ -13,17 +13,26 @@
 # enc = "string" is a string instruction: its source is [RSI], which FS or GS
 # may override, its destination is [RDI], and it accepts the REP prefix (F3).
 #
-# lock = true accepts the LOCK prefix (F0) when the ModRM operand is memory.
-# Every other use of LOCK is rejected, as the architecture's #UD.
+# lock = true accepts the LOCK prefix (F0) when the ModRM operand is memory. A
+# group names the operations it accepts LOCK on, and the generator accepts it on
+# every ALU operation but CMP. Every other use of LOCK is rejected, as the
+# architecture's #UD.
 #
-# prefix is a mandatory prefix: "66", "f3" or "f2". SSE forms use size x (XMM)
+# rm = N requires the ModRM r/m field to be N. It needs register_only, so the
+# form matches exactly one ModRM byte. At most one form per opcode and digit.
+#
+# prefix is a mandatory prefix: "66", "f3" or "f2", and "66" in maps 0f38 and 0f3a. SSE forms use size x (XMM)
 # and give the ModRM operand width in src: x = 16 bytes, q = 8, d = 4, w = 2.
 # A 16-byte memory operand must be aligned unless unaligned = true.
 #
 # size: b = 8-bit, v = 16/32/64-bit by 0x66 and REX.W, q = 64-bit always,
 #       y = 32/64-bit only, n = no operand. imm: ib = signed 8-bit,
 #       iz = 16/32-bit sign-extended, iv = full operand size, iw = 16-bit,
-#       rel8/rel32 = signed branch offset.
+#       rel8/rel32 = signed branch offset, moffs = 64-bit absolute address.
+#
+# enc = "acc_moffs" and "moffs_acc" take no ModRM: the operands are the
+# accumulator and the memory at the moffs address, which FS or GS may override.
+# They decode as reg_rm and rm_reg would.
 
 schema = 1
 architecture = "x86-64"
@@ -90,6 +99,11 @@ leave = { ref = "sdm LEAVE" }
 call = { terminator = true, ref = "sdm CALL" }
 jmp = { terminator = true, ref = "sdm JMP" }
 jcc = { reads = "cf zf sf of pf", terminator = true, ref = "sdm Jcc" }
+# The count is RCX: the address-size prefix that would select ECX is rejected.
+loopne = { reads = "zf", terminator = true, ref = "sdm LOOP/LOOPcc" }
+loope = { reads = "zf", terminator = true, ref = "sdm LOOP/LOOPcc" }
+loop = { terminator = true, ref = "sdm LOOP/LOOPcc" }
+jrcxz = { terminator = true, ref = "sdm Jcc" }
 ret = { terminator = true, ref = "sdm RET" }
 nop = { ref = "sdm NOP" }
 hlt = { terminator = true, ref = "sdm HLT" }
@@ -97,9 +111,14 @@ syscall = { terminator = true, ref = "sdm SYSCALL" }
 clc = { writes = "cf", ref = "sdm CLC" }
 stc = { writes = "cf", ref = "sdm STC" }
 cmc = { reads = "cf", writes = "cf", ref = "sdm CMC" }
+# AH holds SF, ZF, AF, PF and CF; valid in 64-bit mode when CPUID
+# 8000_0001h ECX bit 0 is set.
+lahf = { reads = "cf zf sf pf af", ref = "sdm LAHF" }
+sahf = { writes = "cf zf sf pf af", ref = "sdm SAHF" }
 cpuid = { ref = "sdm CPUID" }
 cld = { ref = "sdm CLD" }
 std = { ref = "sdm STD" }
+fninit = { ref = "sdm FINIT/FNINIT" }
 # A REP form repeats by leaving RIP on itself, so these end a translated block.
 movs = { terminator = true, ref = "sdm MOVS/MOVSB/MOVSW/MOVSD/MOVSQ" }
 stos = { terminator = true, ref = "sdm STOS/STOSB/STOSW/STOSD/STOSQ" }
@@ -192,6 +211,70 @@ lfence = { ref = "sdm LFENCE" }
 mfence = { ref = "sdm MFENCE" }
 sfence = { ref = "sdm SFENCE" }
 stmxcsr = { ref = "sdm STMXCSR" }
+# SSSE3
+pshufb = { ref = "sdm PSHUFB" }
+phaddw = { ref = "sdm PHADDW/PHADDD" }
+phaddd = { ref = "sdm PHADDW/PHADDD" }
+phaddsw = { ref = "sdm PHADDSW" }
+pmaddubsw = { ref = "sdm PMADDUBSW" }
+phsubw = { ref = "sdm PHSUBW/PHSUBD" }
+phsubd = { ref = "sdm PHSUBW/PHSUBD" }
+phsubsw = { ref = "sdm PHSUBSW" }
+psignb = { ref = "sdm PSIGNB/PSIGNW/PSIGND" }
+psignw = { ref = "sdm PSIGNB/PSIGNW/PSIGND" }
+psignd = { ref = "sdm PSIGNB/PSIGNW/PSIGND" }
+pmulhrsw = { ref = "sdm PMULHRSW" }
+pabsb = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
+pabsw = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
+pabsd = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
+palignr = { ref = "sdm PALIGNR" }
+# SSE4.1, integer. PTEST writes ZF and CF and clears the other four.
+pblendvb = { ref = "sdm PBLENDVB" }
+ptest = { writes = "cf zf sf of pf af", ref = "sdm PTEST" }
+pmuldq = { ref = "sdm PMULDQ" }
+pcmpeqq = { ref = "sdm PCMPEQQ" }
+packusdw = { ref = "sdm PACKUSDW" }
+pminsb = { ref = "sdm PMINSB" }
+pminsd = { ref = "sdm PMINSD/PMINSQ" }
+pminuw = { ref = "sdm PMINUW" }
+pminud = { ref = "sdm PMINUD" }
+pmaxsb = { ref = "sdm PMAXSB/PMAXSW/PMAXSD/PMAXSQ" }
+pmaxsd = { ref = "sdm PMAXSB/PMAXSW/PMAXSD/PMAXSQ" }
+pmaxuw = { ref = "sdm PMAXUW" }
+pmaxud = { ref = "sdm PMAXUD" }
+pmulld = { ref = "sdm PMULLD" }
+phminposuw = { ref = "sdm PHMINPOSUW" }
+pmovsxbw = { ref = "sdm PMOVSX" }
+pmovzxbw = { ref = "sdm PMOVZX" }
+pmovsxbd = { ref = "sdm PMOVSX" }
+pmovzxbd = { ref = "sdm PMOVZX" }
+pmovsxbq = { ref = "sdm PMOVSX" }
+pmovzxbq = { ref = "sdm PMOVZX" }
+pmovsxwd = { ref = "sdm PMOVSX" }
+pmovzxwd = { ref = "sdm PMOVZX" }
+pmovsxwq = { ref = "sdm PMOVSX" }
+pmovzxwq = { ref = "sdm PMOVZX" }
+pmovsxdq = { ref = "sdm PMOVSX" }
+pmovzxdq = { ref = "sdm PMOVZX" }
+movntdqa = { ref = "sdm MOVNTDQA" }
+pblendw = { ref = "sdm PBLENDW" }
+mpsadbw = { ref = "sdm MPSADBW" }
+pextrb = { ref = "sdm PEXTRB/PEXTRD/PEXTRQ" }
+pextrd = { ref = "sdm PEXTRB/PEXTRD/PEXTRQ" }
+pinsrb = { ref = "sdm PINSRB/PINSRD/PINSRQ" }
+pinsrd = { ref = "sdm PINSRB/PINSRD/PINSRQ" }
+blendps = { ref = "sdm BLENDPS" }
+blendpd = { ref = "sdm BLENDPD" }
+blendvps = { ref = "sdm BLENDVPS" }
+blendvpd = { ref = "sdm BLENDVPD" }
+insertps = { ref = "sdm INSERTPS" }
+extractps = { ref = "sdm EXTRACTPS" }
+roundps = { faults = true, ref = "sdm ROUNDPS" }
+roundpd = { faults = true, ref = "sdm ROUNDPD" }
+roundss = { faults = true, ref = "sdm ROUNDSS" }
+roundsd = { faults = true, ref = "sdm ROUNDSD" }
+dpps = { faults = true, ref = "sdm DPPS" }
+dppd = { faults = true, ref = "sdm DPPD" }
 
 # Floating point. Every form can raise a SIMD floating-point exception.
 sqrtps = { faults = true, ref = "sdm SQRTPS" }
@@ -402,12 +485,14 @@ op = "xchg"
 opcode = 0x86
 enc = "rm_reg"
 size = "b"
+lock = true
 
 [[form]]
 op = "xchg"
 opcode = 0x87
 enc = "rm_reg"
 size = "v"
+lock = true
 
 # The accumulator with the register in the opcode. Opcode 0x90 is NOP; with
 # REX.B the decoder reads it as 0x91 with register 0, which is then r8. A row
@@ -479,6 +564,34 @@ enc = "reg_rm"
 size = "v"
 
 [[form]]
+op = "mov"
+opcode = 0xA0
+enc = "acc_moffs"
+size = "b"
+imm = "moffs"
+
+[[form]]
+op = "mov"
+opcode = 0xA1
+enc = "acc_moffs"
+size = "v"
+imm = "moffs"
+
+[[form]]
+op = "mov"
+opcode = 0xA2
+enc = "moffs_acc"
+size = "b"
+imm = "moffs"
+
+[[form]]
+op = "mov"
+opcode = 0xA3
+enc = "moffs_acc"
+size = "v"
+imm = "moffs"
+
+[[form]]
 op = "lea"
 opcode = 0x8D
 enc = "reg_rm"
@@ -511,6 +624,18 @@ op = "cdq"
 opcode = 0x99
 enc = "none"
 size = "v"
+
+[[form]]
+op = "sahf"
+opcode = 0x9E
+enc = "none"
+size = "n"
+
+[[form]]
+op = "lahf"
+opcode = 0x9F
+enc = "none"
+size = "n"
 
 [[form]]
 op = "mov"
@@ -562,6 +687,34 @@ op = "leave"
 opcode = 0xC9
 enc = "none"
 size = "q"
+
+[[form]]
+op = "loopne"
+opcode = 0xE0
+enc = "rel"
+size = "n"
+imm = "rel8"
+
+[[form]]
+op = "loope"
+opcode = 0xE1
+enc = "rel"
+size = "n"
+imm = "rel8"
+
+[[form]]
+op = "loop"
+opcode = 0xE2
+enc = "rel"
+size = "n"
+imm = "rel8"
+
+[[form]]
+op = "jrcxz"
+opcode = 0xE3
+enc = "rel"
+size = "n"
+imm = "rel8"
 
 [[form]]
 op = "call"
@@ -671,6 +824,18 @@ op = "std"
 opcode = 0xFD
 enc = "none"
 size = "n"
+
+# FNINIT is DB E3 and nothing else: the other register bytes of digit 4 are
+# different instructions (DB E2 is FNCLEX) and the memory forms are not x87
+# initialisation at all. No other x87 form is declared.
+[[form]]
+op = "fninit"
+opcode = 0xDB
+digit = 4
+enc = "rm_unread"
+size = "n"
+register_only = true
+rm = 3
 
 [[form]]
 op = "movzx"
@@ -816,19 +981,610 @@ enc = "rm_reg"
 size = "v"
 lock = true
 
+# SSSE3, XMM forms. The MMX forms, without 0x66, are not declared.
+[[form]]
+op = "pshufb"
+map = "0f38"
+prefix = "66"
+opcode = 0x00
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "phaddw"
+map = "0f38"
+prefix = "66"
+opcode = 0x01
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "phaddd"
+map = "0f38"
+prefix = "66"
+opcode = 0x02
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "phaddsw"
+map = "0f38"
+prefix = "66"
+opcode = 0x03
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmaddubsw"
+map = "0f38"
+prefix = "66"
+opcode = 0x04
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "phsubw"
+map = "0f38"
+prefix = "66"
+opcode = 0x05
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "phsubd"
+map = "0f38"
+prefix = "66"
+opcode = 0x06
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "phsubsw"
+map = "0f38"
+prefix = "66"
+opcode = 0x07
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "psignb"
+map = "0f38"
+prefix = "66"
+opcode = 0x08
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "psignw"
+map = "0f38"
+prefix = "66"
+opcode = 0x09
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "psignd"
+map = "0f38"
+prefix = "66"
+opcode = 0x0A
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmulhrsw"
+map = "0f38"
+prefix = "66"
+opcode = 0x0B
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pabsb"
+map = "0f38"
+prefix = "66"
+opcode = 0x1C
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pabsw"
+map = "0f38"
+prefix = "66"
+opcode = 0x1D
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pabsd"
+map = "0f38"
+prefix = "66"
+opcode = 0x1E
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "palignr"
+map = "0f3a"
+prefix = "66"
+opcode = 0x0F
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+# SSE4.1, integer. The source of PBLENDVB is selected by XMM0.
+[[form]]
+op = "pblendvb"
+map = "0f38"
+prefix = "66"
+opcode = 0x10
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "ptest"
+map = "0f38"
+prefix = "66"
+opcode = 0x17
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmuldq"
+map = "0f38"
+prefix = "66"
+opcode = 0x28
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pcmpeqq"
+map = "0f38"
+prefix = "66"
+opcode = 0x29
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "packusdw"
+map = "0f38"
+prefix = "66"
+opcode = 0x2B
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pminsb"
+map = "0f38"
+prefix = "66"
+opcode = 0x38
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pminsd"
+map = "0f38"
+prefix = "66"
+opcode = 0x39
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pminuw"
+map = "0f38"
+prefix = "66"
+opcode = 0x3A
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pminud"
+map = "0f38"
+prefix = "66"
+opcode = 0x3B
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmaxsb"
+map = "0f38"
+prefix = "66"
+opcode = 0x3C
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmaxsd"
+map = "0f38"
+prefix = "66"
+opcode = 0x3D
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmaxuw"
+map = "0f38"
+prefix = "66"
+opcode = 0x3E
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmaxud"
+map = "0f38"
+prefix = "66"
+opcode = 0x3F
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmulld"
+map = "0f38"
+prefix = "66"
+opcode = 0x40
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "phminposuw"
+map = "0f38"
+prefix = "66"
+opcode = 0x41
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "pmovsxbw"
+map = "0f38"
+prefix = "66"
+opcode = 0x20
+enc = "xmm_rm"
+size = "x"
+src = "q"
+
+[[form]]
+op = "pmovzxbw"
+map = "0f38"
+prefix = "66"
+opcode = 0x30
+enc = "xmm_rm"
+size = "x"
+src = "q"
+
+[[form]]
+op = "pmovsxbd"
+map = "0f38"
+prefix = "66"
+opcode = 0x21
+enc = "xmm_rm"
+size = "x"
+src = "d"
+
+[[form]]
+op = "pmovzxbd"
+map = "0f38"
+prefix = "66"
+opcode = 0x31
+enc = "xmm_rm"
+size = "x"
+src = "d"
+
+[[form]]
+op = "pmovsxbq"
+map = "0f38"
+prefix = "66"
+opcode = 0x22
+enc = "xmm_rm"
+size = "x"
+src = "w"
+
+[[form]]
+op = "pmovzxbq"
+map = "0f38"
+prefix = "66"
+opcode = 0x32
+enc = "xmm_rm"
+size = "x"
+src = "w"
+
+[[form]]
+op = "pmovsxwd"
+map = "0f38"
+prefix = "66"
+opcode = 0x23
+enc = "xmm_rm"
+size = "x"
+src = "q"
+
+[[form]]
+op = "pmovzxwd"
+map = "0f38"
+prefix = "66"
+opcode = 0x33
+enc = "xmm_rm"
+size = "x"
+src = "q"
+
+[[form]]
+op = "pmovsxwq"
+map = "0f38"
+prefix = "66"
+opcode = 0x24
+enc = "xmm_rm"
+size = "x"
+src = "d"
+
+[[form]]
+op = "pmovzxwq"
+map = "0f38"
+prefix = "66"
+opcode = 0x34
+enc = "xmm_rm"
+size = "x"
+src = "d"
+
+[[form]]
+op = "pmovsxdq"
+map = "0f38"
+prefix = "66"
+opcode = 0x25
+enc = "xmm_rm"
+size = "x"
+src = "q"
+
+[[form]]
+op = "pmovzxdq"
+map = "0f38"
+prefix = "66"
+opcode = 0x35
+enc = "xmm_rm"
+size = "x"
+src = "q"
+
+[[form]]
+op = "movntdqa"
+map = "0f38"
+prefix = "66"
+opcode = 0x2A
+enc = "xmm_rm"
+size = "x"
+src = "x"
+memory_only = true
+
+[[form]]
+op = "pblendw"
+map = "0f3a"
+prefix = "66"
+opcode = 0x0E
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+[[form]]
+op = "mpsadbw"
+map = "0f3a"
+prefix = "66"
+opcode = 0x42
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+# A lane of XMM to or from a general register or memory. The D forms are Q with
+# REX.W. This PEXTRW, unlike the one in map 0F, can store to memory.
+[[form]]
+op = "pextrb"
+map = "0f3a"
+prefix = "66"
+opcode = 0x14
+enc = "gpr_xmm_imm"
+size = "x"
+src = "b"
+imm = "ub"
+
+[[form]]
+op = "pextrw"
+map = "0f3a"
+prefix = "66"
+opcode = 0x15
+enc = "gpr_xmm_imm"
+size = "x"
+src = "w"
+imm = "ub"
+
+[[form]]
+op = "pextrd"
+map = "0f3a"
+prefix = "66"
+opcode = 0x16
+enc = "gpr_xmm_imm"
+size = "y"
+imm = "ub"
+
+[[form]]
+op = "pinsrb"
+map = "0f3a"
+prefix = "66"
+opcode = 0x20
+enc = "xmm_gpr_imm"
+size = "x"
+src = "b"
+imm = "ub"
+
+[[form]]
+op = "pinsrd"
+map = "0f3a"
+prefix = "66"
+opcode = 0x22
+enc = "xmm_gpr_imm"
+size = "y"
+imm = "ub"
+
+[[form]]
+op = "roundps"
+map = "0f3a"
+prefix = "66"
+opcode = 0x08
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+[[form]]
+op = "roundpd"
+map = "0f3a"
+prefix = "66"
+opcode = 0x09
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+[[form]]
+op = "roundss"
+map = "0f3a"
+prefix = "66"
+opcode = 0x0A
+enc = "xmm_rm_imm"
+size = "x"
+src = "d"
+imm = "ub"
+
+[[form]]
+op = "roundsd"
+map = "0f3a"
+prefix = "66"
+opcode = 0x0B
+enc = "xmm_rm_imm"
+size = "x"
+src = "q"
+imm = "ub"
+
+[[form]]
+op = "blendps"
+map = "0f3a"
+prefix = "66"
+opcode = 0x0C
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+[[form]]
+op = "blendpd"
+map = "0f3a"
+prefix = "66"
+opcode = 0x0D
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+[[form]]
+op = "blendvps"
+map = "0f38"
+prefix = "66"
+opcode = 0x14
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "blendvpd"
+map = "0f38"
+prefix = "66"
+opcode = 0x15
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "extractps"
+map = "0f3a"
+prefix = "66"
+opcode = 0x17
+enc = "gpr_xmm_imm"
+size = "x"
+src = "d"
+imm = "ub"
+
+[[form]]
+op = "insertps"
+map = "0f3a"
+prefix = "66"
+opcode = 0x21
+enc = "xmm_rm_imm"
+size = "x"
+src = "d"
+imm = "ub"
+
+[[form]]
+op = "dpps"
+map = "0f3a"
+prefix = "66"
+opcode = 0x40
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+[[form]]
+op = "dppd"
+map = "0f3a"
+prefix = "66"
+opcode = 0x41
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
 # Groups whose digits select an operation: [opcode, size, immediate, encoding].
 [[group]]
 map = "0f"
 opcodes = [[0xBA, "v", "ib", "rm_imm"]]
 digits = { 4 = "bt", 5 = "bts", 6 = "btr", 7 = "btc" }
+lock = ["bts", "btr", "btc"]
 
 [[group]]
 opcodes = [[0xF6, "b", "", "rm"], [0xF7, "v", "", "rm"]]
 digits = { 2 = "not", 3 = "neg", 4 = "mul", 5 = "imul", 6 = "div", 7 = "idiv" }
+lock = ["not", "neg"]
 
 [[group]]
 opcodes = [[0xFE, "b", "", "rm"], [0xFF, "v", "", "rm"]]
 digits = { 0 = "inc", 1 = "dec" }
+lock = ["inc", "dec"]
 
 [[group]]
 opcodes = [[0xC0, "b", "ib", "rm_imm"], [0xC1, "v", "ib", "rm_imm"], [0xD0, "b", "", "rm_one"], [0xD1, "v", "", "rm_one"], [0xD2, "b", "", "rm_cl"], [0xD3, "v", "", "rm_cl"]]

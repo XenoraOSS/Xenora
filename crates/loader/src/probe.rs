@@ -23,7 +23,6 @@ use crate::x86_table::Op;
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 use std::fmt::Write as _;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -1175,9 +1174,6 @@ pub fn run_probe_and_export<O: AsRef<Path>>(
 ) -> Result<ProbeReport, Box<dyn std::error::Error>> {
     let report = probe_pe_bytes(bytes, config)?;
 
-    let out = output_dir.as_ref();
-    fs::create_dir_all(out)?;
-
     // 1. imports.csv
     let mut imports_csv = String::from(
         "module,symbol_or_ordinal,iat_rva,import_table,category,registered_binding,implementation_status,is_alias,canonical_module,startup_priority,startup_cluster,trusted_runner_binding,import_kind\n",
@@ -1260,8 +1256,6 @@ pub fn run_probe_and_export<O: AsRef<Path>>(
     let delay_error = report
         .delay_import_error
         .map_or_else(|| "none".to_string(), |error| error.to_string());
-    fs::write(out.join("imports.csv"), imports_csv)?;
-    fs::write(out.join("missing_imports.csv"), missing_csv)?;
 
     let implemented = counts.get("implemented").copied().unwrap_or_default();
     let partial = counts.get("partial").copied().unwrap_or_default();
@@ -1290,7 +1284,6 @@ pub fn run_probe_and_export<O: AsRef<Path>>(
             insn.notes
         );
     }
-    fs::write(out.join("cpu_coverage.csv"), cpu_csv)?;
 
     // 3. candidate_static_report.json
     let mut json = String::new();
@@ -1351,7 +1344,6 @@ pub fn run_probe_and_export<O: AsRef<Path>>(
             .map(|i| format!("0x{:08x}", i.rva))
             .unwrap_or_else(|| "none".to_string())
     );
-    fs::write(out.join("candidate_static_report.json"), json)?;
 
     // 4. candidate_static_report.md
     let mut md = String::new();
@@ -1485,8 +1477,6 @@ pub fn run_probe_and_export<O: AsRef<Path>>(
         let _ = writeln!(md, "- **Reason**: `{}`", insn.notes);
     }
 
-    fs::write(out.join("candidate_static_report.md"), md)?;
-
     let mut matrix = String::from(
         "# Runtime import coverage\n\n         Priorities reflect startup prerequisites and shared runtime dependencies. Static imports do not establish call order.\n\n         | Priority | Cluster | IAT slots | Unresolved |\n         | --- | --- | ---: | ---: |\n",
     );
@@ -1515,16 +1505,26 @@ pub fn run_probe_and_export<O: AsRef<Path>>(
         "\nRegistered slots include {implemented} implemented, {partial} partial, and {stubs} stubs. They reference {} canonical registered services through {aliases} alias slots. The {missing} unresolved slots include {unsupported} explicitly tracked unsupported APIs and {unknown} other missing handlers.",
         canonical_bindings.len()
     );
-    fs::write(out.join("runtime_gap_matrix.md"), matrix)?;
 
-    // Preserve existing report filenames for scripts that consume them.
-    fs::write(
-        out.join("x15_priority_backlog.md"),
-        "# Runtime priorities\n\nSee [runtime import coverage](runtime_gap_matrix.md) and the per-import priorities in [imports.csv](imports.csv).\n",
-    )?;
-    fs::write(
-        out.join("test_commands.txt"),
-        "This static report only inspects PE bytes. It contains no execution or test-run evidence.\n",
+    // Keep the existing filenames for scripts that consume probe reports.
+    crate::output_path::publish_batch(
+        output_dir.as_ref(),
+        &[
+            ("imports.csv", &imports_csv),
+            ("missing_imports.csv", &missing_csv),
+            ("cpu_coverage.csv", &cpu_csv),
+            ("candidate_static_report.json", &json),
+            ("candidate_static_report.md", &md),
+            ("runtime_gap_matrix.md", &matrix),
+            (
+                "x15_priority_backlog.md",
+                "# Runtime priorities\n\nSee [runtime import coverage](runtime_gap_matrix.md) and the per-import priorities in [imports.csv](imports.csv).\n",
+            ),
+            (
+                "test_commands.txt",
+                "This static report only inspects PE bytes. It contains no execution or test-run evidence.\n",
+            ),
+        ],
     )?;
 
     Ok(report)

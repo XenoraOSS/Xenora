@@ -127,16 +127,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         Ok(name)
     });
 
-    let localeconv = Arc::clone(state);
-    registry.register(UCRT, "localeconv", move |_, _, memory| {
-        let (block, _) = ensure_c_locale(&localeconv, memory)?;
-        Ok(block + STRING_BYTES as u64)
-    });
-
-    for symbol in ["setlocale", "localeconv"] {
-        registry.alias(LOCALE_API, UCRT, symbol);
-        registry.set_status(UCRT, symbol, ServiceStatus::Partial);
-    }
+    registry.alias(LOCALE_API, UCRT, "setlocale");
+    registry.set_status(UCRT, "setlocale", ServiceStatus::Partial);
 }
 
 #[cfg(test)]
@@ -179,11 +171,5 @@ mod tests {
         memory.write_bytes(bad, b"en_US\0").unwrap();
         cpu.set(Register::Rdx, bad);
         assert_eq!(call("setlocale", &mut cpu, &mut memory), 0);
-        let lconv = call("localeconv", &mut cpu, &mut memory);
-        assert_ne!(lconv, 0);
-        let decimal = memory.read_u64(lconv).unwrap();
-        let mut point = [0u8; 2];
-        memory.read_bytes(decimal, &mut point).unwrap();
-        assert_eq!(&point, b".\0");
     }
 }

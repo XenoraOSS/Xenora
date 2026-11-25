@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 20 |
-| Generated adapters | 20 |
-| Unique handler implementations | 20 |
-| Implemented | 7 |
-| Partial | 13 |
-| Stub | 0 |
-| Conformance-tested through guest dispatch | 20 |
-| API-set aliases (not services) | 20 |
+| Services with a declared ABI | 114 |
+| Generated adapters | 114 |
+| Unique handler implementations | 114 |
+| Implemented | 22 |
+| Partial | 90 |
+| Stub | 2 |
+| Conformance-tested through guest dispatch | 114 |
+| API-set aliases (not services) | 114 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -30,11 +30,105 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `kernel32.dll!SetThreadPriority` | `(thread: handle, priority: i32) -> bool32` | partial | 0 with ERROR_INVALID_HANDLE, ERROR_ACCESS_DENIED, ERROR_NOT_SUPPORTED or ERROR_INVALID_PARAMETER |
 | `kernel32.dll!CloseHandle` | `(object: handle) -> bool32` | partial | 0 with ERROR_INVALID_HANDLE |
 | `kernel32.dll!GetSystemTimeAsFileTime` | `(time: out<8>) -> void` | implemented | guest fault on an invalid pointer |
+| `ucrtbase.dll!__acrt_iob_func` | `(index: u32) -> ptr` | partial | stops the guest for an index above 2 or when the streams cannot be allocated |
+| `ucrtbase.dll!__stdio_common_vfprintf` | `(options: u64, stream: ptr, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null stream or format or an invalid format; stops the guest for what is not modelled |
+| `ucrtbase.dll!__stdio_common_vsprintf` | `(options: u64, buffer: ptr, count: u64, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null format or a null buffer with a nonzero count, or an invalid format; -1 without errno for a legacy truncation; stops the guest when both behaviour bits are set or for what is not modelled |
+| `ucrtbase.dll!__stdio_common_vsprintf_s` | `(options: u64, buffer: ptr, count: u64, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null buffer, a zero count, a null or invalid format, or ERANGE when the text does not fit, and the buffer becomes empty; the invalid parameter handler is not modelled, so execution always continues |
+| `ucrtbase.dll!__stdio_common_vfprintf_s` | `(options: u64, stream: ptr, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null stream or format or an invalid format; identical to the plain form here because %n is always invalid |
+| `ucrtbase.dll!putchar` | `(character: i32) -> i32` | implemented | never: writing stdout cannot fail, as the output is captured |
+| `ucrtbase.dll!fwrite` | `(buffer: ptr, size: u64, count: u64, stream: ptr) -> u64` | partial | 0 with errno EINVAL for a null buffer or stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
+| `ucrtbase.dll!fputs` | `(text: ptr, stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null string or stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
+| `ucrtbase.dll!fflush` | `(stream: ptr) -> i32` | partial | stops the guest for a pointer that is no stream |
+| `ucrtbase.dll!setvbuf` | `(stream: ptr, buffer: ptr, mode: i32, size: u64) -> i32` | partial | -1 with errno EINVAL for a null stream, an unknown mode or a size outside 2 to INT_MAX; stops the guest for a pointer that is no stream |
+| `ucrtbase.dll!fopen` | `(name: ptr, mode: ptr) -> ptr` | partial | null with errno EINVAL, ENOENT, EACCES, EMFILE, ENOSPC or ENOMEM |
+| `ucrtbase.dll!fclose` | `(stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null stream; stops the guest for a standard stream or a pointer that is no stream |
+| `ucrtbase.dll!fgets` | `(buffer: ptr, count: i32, stream: ptr) -> ptr` | partial | null at end of file; null with errno EINVAL or EBADF; stops the guest for a pointer that is no stream |
+| `ucrtbase.dll!getchar` | `() -> i32` | implemented | EOF at end of input; the input is what the host supplied, never interactive |
+| `ucrtbase.dll!feof` | `(stream: ptr) -> i32` | partial | the indicator of the standard input only; other streams report 0; -1 with errno EINVAL for a null stream |
+| `ucrtbase.dll!_ftelli64` | `(stream: ptr) -> u64` | partial | -1 with errno EINVAL for a null stream, or EBADF after its file was deleted; stops the guest for a standard stream or a pointer that is no stream |
+| `ucrtbase.dll!_fseeki64` | `(stream: ptr, offset: u64, origin: i32) -> i32` | partial | -1 with errno EINVAL for a null stream, an unknown origin or a position before the start, or EBADF after its file was deleted; stops the guest for a standard stream or a pointer that is no stream |
+| `ucrtbase.dll!fgetpos` | `(stream: ptr, position: ptr) -> i32` | partial | -1 with errno EINVAL for a null argument; stops the guest for a standard stream, a pointer that is no stream, or a position it cannot write |
+| `ucrtbase.dll!fsetpos` | `(stream: ptr, position: ptr) -> i32` | partial | -1 with errno EINVAL for a null argument or a negative position; stops the guest for a standard stream, a pointer that is no stream, or a position it cannot read |
+| `ucrtbase.dll!remove` | `(name: ptr) -> i32` | implemented | -1 with errno ENOENT for a missing or rejected name, EACCES for a directory, EINVAL for a null or empty name |
+| `ucrtbase.dll!rename` | `(from: ptr, to: ptr) -> i32` | partial | -1 with errno ENOENT when the old name holds nothing, EACCES when the new name exists or its directory does not, EINVAL for a null or rejected name; stops the guest for a directory |
+| `ucrtbase.dll!perror` | `(message: ptr) -> void` | partial | never |
+| `ucrtbase.dll!fputc` | `(character: i32, stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
+| `ucrtbase.dll!strerror` | `(code: i32) -> ptr` | partial | never; the message is valid until the next call |
+| `ucrtbase.dll!localeconv` | `() -> ptr` | partial | stops the guest when the block cannot be allocated |
+| `ucrtbase.dll!mbrtowc` | `(output: ptr, count: u64, character: i32, state: ptr) -> u64` | partial | (size_t)-1 for a byte that is not a character of the C locale; errno is not set |
+| `ucrtbase.dll!wcrtomb` | `(output: ptr, character: u32, state: ptr) -> u64` | partial | (size_t)-1 for a wide character the C locale cannot represent; errno is not set |
+| `ucrtbase.dll!_lock_file` | `(stream: ptr, mode: i32) -> i32` | partial | -1 with errno EBADF for a null stream; stops the guest for a pointer that is no stream |
+| `ucrtbase.dll!_unlock_file` | `(stream: ptr) -> i32` | partial | -1 with errno EBADF for a null stream; stops the guest for a pointer that is no stream |
 | `kernel32.dll!GetLastError` | `() -> u32` | partial | never |
 | `kernel32.dll!SetLastError` | `(code: u32) -> void` | partial | never |
+| `ucrtbase.dll!__p___argc` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
+| `ucrtbase.dll!__p___argv` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
+| `ucrtbase.dll!__p__environ` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
+| `ucrtbase.dll!_configure_narrow_argv` | `(mode: i32) -> i32` | partial | EINVAL for a mode other than 0, 1 or 2; stops the guest when the table cannot be allocated |
+| `ucrtbase.dll!_initialize_narrow_environment` | `() -> i32` | partial | stops the guest when the table cannot be allocated |
 | `kernel32.dll!VirtualAlloc` | `(address: ptr, size: u64, kind: u32, protect: u32) -> ptr` | partial | 0 with ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ERROR_INVALID_ADDRESS or ERROR_NOT_ENOUGH_MEMORY |
 | `kernel32.dll!VirtualFree` | `(address: ptr, size: u64, kind: u32) -> bool32` | partial | 0 with ERROR_NOT_SUPPORTED, ERROR_INVALID_PARAMETER or ERROR_INVALID_ADDRESS |
+| `kernel32.dll!VirtualProtect` | `(address: ptr, size: u64, protect: u32, old: out<4>) -> bool32` | stub | always: stops the guest with the runtime-limit fault; no protection changes |
+| `kernel32.dll!VirtualQuery` | `(address: ptr, information: out<48>, length: u64) -> u64` | stub | always: stops the guest with the runtime-limit fault; nothing is written |
 | `ucrtbase.dll!sqrt` | `(x: f64) -> f64` | partial | NaN for a negative argument; errno is not set |
 | `ucrtbase.dll!sqrtf` | `(x: f32) -> f32` | partial | NaN for a negative argument; errno is not set |
 | `ucrtbase.dll!fabs` | `(x: f64) -> f64` | implemented | never |
 | `ucrtbase.dll!fabsf` | `(x: f32) -> f32` | implemented | never |
+| `ucrtbase.dll!acos` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!asin` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!atan` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!atan2` | `(x: f64, y: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!atan2f` | `(x: f32, y: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!cbrt` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!ceil` | `(x: f64) -> f64` | implemented | never |
+| `ucrtbase.dll!ceilf` | `(x: f32) -> f32` | implemented | never |
+| `ucrtbase.dll!copysign` | `(x: f64, y: f64) -> f64` | implemented | never |
+| `ucrtbase.dll!cos` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!cosf` | `(x: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!cosh` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!erf` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!exp` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!expf` | `(x: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!exp2` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!expm1` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!fdim` | `(x: f64, y: f64) -> f64` | partial | NaN for a domain error; errno is not set |
+| `ucrtbase.dll!floor` | `(x: f64) -> f64` | implemented | never |
+| `ucrtbase.dll!floorf` | `(x: f32) -> f32` | implemented | never |
+| `ucrtbase.dll!fmax` | `(x: f64, y: f64) -> f64` | implemented | never |
+| `ucrtbase.dll!fmin` | `(x: f64, y: f64) -> f64` | implemented | never |
+| `ucrtbase.dll!fmod` | `(x: f64, y: f64) -> f64` | partial | NaN for a domain error; errno is not set |
+| `ucrtbase.dll!fmodf` | `(x: f32, y: f32) -> f32` | partial | NaN for a domain error; errno is not set |
+| `ucrtbase.dll!frexp` | `(x: f64, exponent: out<4>) -> f64` | implemented | stops the guest with a memory fault when exponent is not writable |
+| `ucrtbase.dll!hypot` | `(x: f64, y: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!llround` | `(x: f64) -> u64` | partial | LLONG_MIN for a NaN or an out-of-range result; errno is not set |
+| `ucrtbase.dll!log` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!logf` | `(x: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!log10` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!log1p` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!log2` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!lround` | `(x: f64) -> i32` | partial | LONG_MIN for a NaN or an out-of-range result; errno is not set |
+| `ucrtbase.dll!modf` | `(x: f64, integral: out<8>) -> f64` | implemented | stops the guest with a memory fault when integral is not writable |
+| `ucrtbase.dll!nearbyint` | `(x: f64) -> f64` | partial | rounds to nearest, ties to even, whatever the guest MXCSR says; errno is not set |
+| `ucrtbase.dll!pow` | `(x: f64, y: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!powf` | `(x: f32, y: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!remainder` | `(x: f64, y: f64) -> f64` | partial | NaN for a domain error; errno is not set |
+| `ucrtbase.dll!rint` | `(x: f64) -> f64` | partial | rounds to nearest, ties to even, whatever the guest MXCSR says; errno is not set |
+| `ucrtbase.dll!round` | `(x: f64) -> f64` | implemented | never |
+| `ucrtbase.dll!roundf` | `(x: f32) -> f32` | implemented | never |
+| `ucrtbase.dll!sin` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!sinf` | `(x: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!sinh` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!tan` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!tanf` | `(x: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!tanh` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!tgamma` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
+| `ucrtbase.dll!trunc` | `(x: f64) -> f64` | implemented | never |
+| `ucrtbase.dll!_set_app_type` | `(kind: i32) -> void` | partial | never |
+| `ucrtbase.dll!_set_new_mode` | `(mode: i32) -> i32` | partial | -1 with errno EINVAL for a mode other than 0 or 1 |
+| `ucrtbase.dll!_configthreadlocale` | `(request: i32) -> i32` | partial | -1 with errno EINVAL for a request other than 0, 1 or 2 |
+| `ucrtbase.dll!__setusermatherr` | `(handler: ptr) -> void` | partial | never |
+| `ucrtbase.dll!_set_invalid_parameter_handler` | `(handler: ptr) -> ptr` | partial | never |
+| `ucrtbase.dll!__p__fmode` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
+| `ucrtbase.dll!__p__commode` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
+| `ucrtbase.dll!signal` | `(signal: i32, handler: ptr) -> ptr` | partial | SIG_ERR with errno EINVAL for a signal the documentation does not list |
+| `kernel32.dll!SetUnhandledExceptionFilter` | `(filter: ptr) -> ptr` | partial | never |

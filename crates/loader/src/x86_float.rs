@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! SSE and SSE2 floating-point instructions over [`crate::softfloat`].
+//! SSE, SSE2 and SSE4.1 floating-point instructions over [`crate::softfloat`].
 //!
 //! Exceptions accumulate in MXCSR. If any is unmasked the instruction has no
 //! other effect and exits with [`ExitReason::SimdException`]; pre-computation
@@ -9,8 +9,8 @@
 use crate::cpu::{CpuState, ExitReason, RFlags};
 use crate::memory::GuestMemory;
 use crate::softfloat::{
-    Arithmetic, Control, F32, F64, Format, Outcome, PRE_COMPUTATION, arithmetic, compare, convert,
-    from_integer, square_root, to_integer,
+    Arithmetic, Control, F32, F64, Format, Outcome, PRE_COMPUTATION, PRECISION, Rounding,
+    arithmetic, compare, convert, from_integer, round_to_integral, square_root, to_integer,
 };
 use crate::x86_decode::{Insn, RmOperand};
 use crate::x86_exec::{address, read_mem, read_reg, rm_operand, write_reg};
@@ -49,12 +49,13 @@ enum Kind {
     Arithmetic(Arithmetic),
     SquareRoot,
     Compare,
+    Round,
 }
 
 /// Operation, format and whether only the low lane is involved.
 fn classify(op: Op) -> Option<(Kind, Format, bool)> {
     use Arithmetic::{Add, Div, Max, Min, Mul, Sub};
-    use Kind::{Arithmetic as A, Compare, SquareRoot};
+    use Kind::{Arithmetic as A, Compare, Round, SquareRoot};
     Some(match op {
         Op::Addps => (A(Add), F32, false),
         Op::Addpd => (A(Add), F64, false),
@@ -88,6 +89,10 @@ fn classify(op: Op) -> Option<(Kind, Format, bool)> {
         Op::Cmppd => (Compare, F64, false),
         Op::Cmpss => (Compare, F32, true),
         Op::Cmpsd => (Compare, F64, true),
+        Op::Roundps => (Round, F32, false),
+        Op::Roundpd => (Round, F64, false),
+        Op::Roundss => (Round, F32, true),
+        Op::Roundsd => (Round, F64, true),
         _ => return None,
     })
 }
@@ -130,6 +135,58 @@ fn predicate(format: Format, a: u64, b: u64, code: u64, control: &Control) -> Ou
     }
 }
 
+/// ROUND: bit 2 of the immediate takes the mode from MXCSR instead of bits 1:0,
+/// and bit 3 suppresses the precision exception. The other bits are ignored.
+fn round_by(format: Format, value: u64, imm: u64, control: &Control) -> Outcome {
+    let rounding = if imm & 4 != 0 {
+        control.rounding
+    } else {
+        Rounding::from_bits(imm)
+    };
+    let mut outcome = round_to_integral(format, value, rounding, control);
+    if imm & 8 != 0 {
+        outcome.flags &= !PRECISION;
+    }
+    outcome
+}
+
+/// DPPS and DPPD: products of the lanes chosen by the high immediate bits, summed
+/// in pairs, in the result lanes chosen by the low ones. A lane not chosen is +0.
+///
+/// The multiplications raise their exceptions together, then each addition before
+/// the next, where the operation sections of the Intel SDM call the handler.
+fn dot_product(
+    cpu: &mut CpuState,
+    format: Format,
+    a: u128,
+    b: u128,
+    imm: u64,
+    control: &Control,
+) -> Result<u128, ExitReason> {
+    let mut count = 128 / format.bits;
+    let mut raised = Raised::default();
+    let mut terms = [0; 4];
+    for index in (0..count).filter(|index| imm >> (4 + index) & 1 != 0) {
+        let (x, y) = (lane(a, format.bits, index), lane(b, format.bits, index));
+        terms[index as usize] = raised.take(arithmetic(Arithmetic::Mul, format, x, y, control));
+    }
+    raised.commit(cpu)?;
+    while count > 1 {
+        count /= 2;
+        for index in 0..count as usize {
+            let (x, y) = (terms[2 * index], terms[2 * index + 1]);
+            let mut raised = Raised::default();
+            terms[index] = raised.take(arithmetic(Arithmetic::Add, format, x, y, control));
+            raised.commit(cpu)?;
+        }
+    }
+    let mut result = 0;
+    for index in (0..128 / format.bits).filter(|index| imm >> index & 1 != 0) {
+        insert(&mut result, terms[0], format.bits, index);
+    }
+    Ok(result)
+}
+
 fn low_bits(bits: u32) -> u128 {
     (1 << bits) - 1
 }
@@ -164,6 +221,7 @@ pub(crate) fn execute(
                 Kind::SquareRoot => square_root(format, b, &control),
                 // Legacy encodings define only predicates 0-7.
                 Kind::Compare => predicate(format, a, b, insn.imm & 7, &control),
+                Kind::Round => round_by(format, b, insn.imm, &control),
             };
             insert(&mut result, raised.take(outcome), format.bits, index);
         }
@@ -194,6 +252,12 @@ pub(crate) fn execute(
     }
 
     match insn.op {
+        Op::Dpps | Op::Dppd => {
+            let format = if insn.op == Op::Dpps { F32 } else { F64 };
+            let source = read_rm(cpu, memory, insn)?;
+            let old = cpu.xmm[reg];
+            cpu.xmm[reg] = dot_product(cpu, format, old, source, insn.imm, &control)?;
+        }
         Op::Cvtsi2ss | Op::Cvtsi2sd => {
             let value = match rm_operand(insn)? {
                 RmOperand::Reg(source) => read_reg(cpu, source, insn.size),

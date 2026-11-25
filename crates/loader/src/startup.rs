@@ -78,9 +78,92 @@ pub fn run_synthetic_startup(
 pub fn run_synthetic_startup_with_observer(
     bytes: &[u8],
     layout: StartupLayout,
+    imports: ImportRegistry,
+    entry_budget: usize,
+    observe: impl FnMut(StartupEvent),
+) -> Result<StartupResult, Box<dyn std::error::Error>> {
+    run_startup_with(
+        bytes,
+        layout,
+        imports,
+        entry_budget,
+        observe,
+        |engine, memory, entry_cpu, budget| {
+            let mut entry_cpu = entry_cpu.clone();
+            engine.run(&mut entry_cpu, memory, budget)
+        },
+    )
+}
+
+/// Run a trusted synthetic fixture with the entry point driven by the
+/// deterministic cooperative scheduler.
+///
+/// The scheduler runs one guest thread at a time, so a guest that creates a
+/// thread with `CreateThread` runs to completion with every thread taking
+/// turns. The entry point and the threads it creates share one instruction
+/// budget.
+///
+/// The state must be the one the import registry was built with: the
+/// scheduler finds the guest's threads through it.
+pub fn run_synthetic_startup_scheduled(
+    bytes: &[u8],
+    layout: StartupLayout,
+    imports: ImportRegistry,
+    state: std::sync::Arc<crate::services::ServicesState>,
+    entry_budget: usize,
+    quantum: usize,
+) -> Result<StartupResult, Box<dyn std::error::Error>> {
+    run_startup_with(
+        bytes,
+        layout,
+        imports,
+        entry_budget,
+        |_| {},
+        move |engine, memory, entry_cpu, budget| match crate::scheduler::Scheduler::new(
+            std::sync::Arc::clone(&state),
+            quantum,
+        )
+        .run(engine, memory, entry_cpu, budget)
+        {
+            Ok(report) => ExecutionResult {
+                instructions_executed: report.instructions,
+                final_state: report.main,
+                exit_reason: scheduled_exit_reason(report.outcome),
+            },
+            Err(reason) => ExecutionResult {
+                instructions_executed: 0,
+                final_state: entry_cpu.clone(),
+                exit_reason: reason,
+            },
+        },
+    )
+}
+
+/// The guest's exit reason from the scheduler's report of how the run ended.
+fn scheduled_exit_reason(outcome: crate::scheduler::Outcome) -> ExitReason {
+    use crate::scheduler::Outcome;
+    match outcome {
+        Outcome::Halted => ExitReason::Halt,
+        Outcome::AllThreadsExited => ExitReason::Halt,
+        Outcome::BudgetExhausted => ExitReason::StepLimitExceeded,
+        Outcome::Deadlock { .. } => ExitReason::GuestBlocked,
+        Outcome::Fault { reason, .. } => reason,
+    }
+}
+
+/// The shared startup, with the entry point left to the caller to run.
+fn run_startup_with(
+    bytes: &[u8],
+    layout: StartupLayout,
     mut imports: ImportRegistry,
     entry_budget: usize,
     mut observe: impl FnMut(StartupEvent),
+    run_entry: impl FnOnce(
+        &mut DbtEngine,
+        &mut crate::memory::GuestMemory,
+        &CpuState,
+        usize,
+    ) -> ExecutionResult,
 ) -> Result<StartupResult, Box<dyn std::error::Error>> {
     if !layout.stack_top.is_multiple_of(16) {
         return Err(std::io::Error::new(
@@ -116,6 +199,18 @@ pub fn run_synthetic_startup_with_observer(
     observe(StartupEvent::Relocated {
         applied_dir64: relocations.applied_dir64,
     });
+    memory.main_image = Some(crate::memory::MainImage {
+        base: layout.image_base,
+        size: pe.size_of_image,
+        entry_point: image.entry_point,
+    });
+    crate::exceptions::register_exception_directory(
+        bytes,
+        layout.image_base,
+        pe.size_of_image,
+        memory,
+    )
+    .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidData, why))?;
     let bound_imports = imports.bind_imports(&pe, bytes, layout.image_base, memory)?;
     observe(StartupEvent::ImportsBound {
         count: bound_imports,
@@ -204,7 +299,7 @@ pub fn run_synthetic_startup_with_observer(
     memory.write_u64_bypass(layout.stack_top - 40, crate::imports::ENTRY_RETURN)?;
     let mut entry_cpu = CpuState::new(image.entry_point, layout.stack_top - 40);
     entry_cpu.gs_base = teb_base;
-    let execution = engine.run(&mut entry_cpu, memory, entry_budget);
+    let execution = run_entry(&mut engine, memory, &entry_cpu, entry_budget);
     Ok(StartupResult {
         image,
         relocations,

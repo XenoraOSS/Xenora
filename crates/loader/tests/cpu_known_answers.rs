@@ -41,6 +41,8 @@
 //!   `f=*` and `keep=` require the initial value. A case without `f=` on the
 //!   left runs with all flags clear and again with all flags set.
 //! * `mx=` is MXCSR; `mx=~20:1b88` ignores the bits in `20`. `=?` ignores a value.
+//! * `fcw=`, `fsw=` and `ftw=` are the x87 control, status and tag words. Every
+//!   case starts with all three away from their FNINIT values.
 //! * Symbols: `D` writable data, `U` the unmapped page after it, `R` read-only
 //!   data, `S` stack, `C` code, `FSB` and `GSB` segment bases.
 //! * Faults: `DE`, `GP`, `UD`, `XM`, and page faults `PFR`, `PFW`, `PFX` with
@@ -50,7 +52,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
-use xenora_loader::cpu::{CpuState, ExitReason, Interpreter, Mxcsr, RFlags};
+use xenora_loader::cpu::{CpuState, ExitReason, Interpreter, Mxcsr, RFlags, X87State};
 use xenora_loader::dbt::{DbtEngine, is_native};
 use xenora_loader::memory::{GuestMemory, MemoryError, MemoryPermissions};
 use xenora_loader::x86_decode::decode;
@@ -598,6 +600,15 @@ const FLAG_MOVES: &str = r"
   SDM 2A LAHF
 lahf: rax=8877665544332211 f=CPASO => rax=8877665544339711 f=*
 lahf_zero: rax=8877665544332211 f=Z => rax=8877665544334211 f=*
+lahf_carry_only: rax=ffffffffffffffff f=C => rax=ffffffffffff03ff f=*
+lahf_parity_only: rax=ffffffffffffffff f=P => rax=ffffffffffff06ff f=*
+lahf_adjust_only: rax=ffffffffffffffff f=A => rax=ffffffffffff12ff f=*
+lahf_sign_only: rax=ffffffffffffffff f=S => rax=ffffffffffff82ff f=*
+lahf_does_not_store_of: rax=ffffffffffffffff f=O => rax=ffffffffffff02ff f=*
+@ rex.w lahf
+  489f
+  SDM 2A LAHF; 2A 2.2.1.2
+lahf_rex_w_changes_nothing: rax=ffffffffffffffff f=CO => rax=ffffffffffff03ff f=*
 @ sahf; lahf
   9e 9f
   SDM 2B SAHF
@@ -606,6 +617,12 @@ sahf_ignores_bits_1_3_5: rax=ff00 f=O => rax=d700 f=CPAZSO
   9e
   SDM 2B SAHF
 sahf_clear_keeps_of: rax=2800 f=OC => f=cpazsO
+sahf_carry_only: rax=100 f=O => f=CpazsO
+sahf_parity_only: rax=400 f=O => f=cPazsO
+sahf_adjust_only: rax=1000 f=O => f=cpAzsO
+sahf_zero_only: rax=4000 f=O => f=cpaZsO
+sahf_sign_only: rax=8000 f=O => f=cpazSO
+sahf_reads_only_ah: rax=ffffffffffff00ff f=CPAZS => f=cpazso
 @ stc
   f9
   SDM 2B STC
@@ -1082,6 +1099,8 @@ cmov_all_unsigned_below_signed_greater: rax=1 rbx=80000000 => rcx=1 r8=1 r9=0 r1
   b800000000 e305 b801000000 90
   SDM 2A Jcc
 jrcxz_tests_all_64_bits: rcx=100000000 => rax=1 f=*
+jrcxz_sees_bit_63: rcx=8000000000000000 => rax=1 f=*
+jrcxz_taken_at_zero_keeps_rcx: rcx=0 => rax=0 rcx=0 f=*
 @ mov eax, 0; jecxz 1f; mov eax, 1; 1: nop
   b800000000 67e305 b801000000 90
   SDM 2A Jcc
@@ -1094,6 +1113,24 @@ loop_decrements_rcx_without_flags: rax=0 rcx=3 => rax=3 rcx=0 f=*
   488d4001 e0fa
   SDM 2A LOOP
 loopne_stops_on_zero_flag: rax=0 rcx=5 f=Z => rax=1 rcx=4 f=*
+@ mov eax, 0; loop 1f; mov eax, 1; 1: nop
+  b800000000 e205 b801000000 90
+  SDM 2A LOOP
+loop_from_zero_wraps_and_branches: rcx=0 => rax=0 rcx=ffffffffffffffff f=*
+loop_at_one_falls_through: rcx=1 => rax=1 rcx=0 f=*
+loop_counts_all_64_bits: rcx=100000000 => rax=0 rcx=ffffffff f=*
+@ mov eax, 0; loope 1f; mov eax, 1; 1: nop
+  b800000000 e105 b801000000 90
+  SDM 2A LOOP
+loope_taken_with_zf: rcx=2 f=Z => rax=0 rcx=1 f=*
+loope_not_taken_without_zf: rcx=2 f=CPASO => rax=1 rcx=1 f=*
+loope_count_expires_with_zf: rcx=1 f=Z => rax=1 rcx=0 f=*
+@ mov eax, 0; loopne 1f; mov eax, 1; 1: nop
+  b800000000 e005 b801000000 90
+  SDM 2A LOOP
+loopne_taken_without_zf: rcx=2 f=CPASO => rax=0 rcx=1 f=*
+loopne_not_taken_with_zf: rcx=2 f=Z => rax=1 rcx=1 f=*
+loopne_count_expires_without_zf: rcx=1 => rax=1 rcx=0 f=*
 ";
 
 const STACK_AND_CALLS: &str = r"
@@ -1435,6 +1472,84 @@ c6_reg_field_1_is_ud: rdi=D m0=aaaaaaaa => ! UD
 c7_reg_field_1_is_ud: rdi=D m0=aaaaaaaa => ! UD
 ";
 
+/// MOV between the accumulator and a 64-bit absolute address, `A0`-`A3`
+/// (#428). The address follows the opcode in place of ModRM, eight bytes with
+/// the default address size, and FS or GS may override the segment.
+const MOV_MOFFS: &str = r"
+@ movabs rax, [0x500000]
+  48a10000500000000000
+  SDM 2B MOV; 2A 2.2.1.4
+mov_moffs64_load: rax=0 m0=0102030405060708 => rax=0807060504030201 f=*
+@ movabs [0x500003], al
+  a20300500000000000
+  SDM 2B MOV; 2A 2.2.1.4
+mov_moffs8_store: rax=77 m0=00000000 => m0=00000077 f=*
+@ movabs al, byte ptr [0x500001]
+  a00100500000000000
+  SDM 2B MOV; 1 3.4.1.1
+moffs8_load_keeps_upper_bits: rax=1122334455667788 m0=00ab => rax=11223344556677ab f=*
+@ movabs ax, word ptr [0x500000]
+  66a10000500000000000
+  SDM 2B MOV; 1 3.4.1.1
+moffs16_load_keeps_upper_bits: rax=1122334455667788 m0=3412 => rax=1122334455661234 f=*
+@ movabs eax, dword ptr [0x500000]
+  a10000500000000000
+  SDM 2B MOV; 1 3.4.1.1
+moffs32_load_zero_extends: rax=ffffffffffffffff m0=78563412 => rax=12345678 f=*
+@ movabs byte ptr [0x500003], al
+  a20300500000000000
+  SDM 2B MOV
+moffs8_store_writes_one_byte: rax=ffffffffffffff5a m0=1111111111 => m0=1111115a11 f=*
+@ movabs word ptr [0x500002], ax
+  66a30200500000000000
+  SDM 2B MOV
+moffs16_store: rax=1122334455667788 m0=0000000000000000 => m0=0000887700000000 f=*
+@ movabs dword ptr [0x500004], eax
+  a30400500000000000
+  SDM 2B MOV
+moffs32_store: rax=1122334455667788 m0=0000000000000000 => m0=0000000088776655 f=*
+@ movabs qword ptr [0x500001], rax
+  48a30100500000000000
+  SDM 2B MOV
+moffs64_store_unaligned: rax=1122334455667788 m0=ff00000000000000ff => m0=ff8877665544332211 f=*
+@ .byte 0x49,0xa1,0x00,0x00,0x50,0x00,0x00,0x00,0x00,0x00
+  49a10000500000000000
+  SDM 2A 2.2.1.2; 2B MOV
+moffs_rex_b_selects_no_register: rax=0 r8=5 m0=0102030405060708 => rax=0807060504030201 f=*
+@ movabs rax, qword ptr fs:[0x28]
+  6448a12800000000000000
+  SDM 3A 3.4.4; 2B MOV
+fs_moffs64_load: rax=0 fs28=0102030405060708 => rax=0807060504030201 f=*
+@ movabs eax, dword ptr gs:[0x10]
+  65a11000000000000000
+  SDM 3A 3.4.4; 2B MOV
+gs_moffs32_load: rax=ffffffffffffffff gs10=78563412 => rax=12345678 f=*
+@ movabs byte ptr gs:[0xfffffffffffffff0], al
+  65a2f0ffffffffffffff
+  SDM 3A 3.4.4; 2B MOV
+gs_moffs8_store_wraps_below_the_base: rax=5a gsbase=GSB+20 gs10=00 => gs10=5a f=*
+@ movabs eax, dword ptr [0x502000]
+  !a10020500000000000
+  SDM 3A 7.15 Interrupt 14
+moffs_load_unmapped: rax=5 => ! PFR U
+@ movabs byte ptr [0x520000], al
+  !a20000520000000000
+  SDM 3A 7.15 Interrupt 14
+moffs_store_readonly_page: rax=5a => ! PFW R
+@ movabs rax, qword ptr [0x501ffc]
+  !48a1fc1f500000000000
+  SDM 3A 5.7 (the address with no translation); 3A 7.15 Interrupt 14
+moffs_load_crossing_into_unmapped_page: rax=5 => ! PFR U
+@ movabs rax, qword ptr [0x800000000000]
+  !48a10000000000800000
+  SDM 1 3.3.7.1; 2B MOV
+moffs_noncanonical_load_faults: rax=5 => ! GP
+@ movabs qword ptr [0x800000000000], rax
+  !48a30000000000800000
+  SDM 1 3.3.7.1; 2B MOV
+moffs_noncanonical_store_faults: rax=5 => ! GP
+";
+
 const DECODING: &str = r"
 @ mov eax, [ebx]
   678b03
@@ -1492,14 +1607,6 @@ lock_on_cmp_is_ud: rdi=D => ! UD
   !488dc3
   SDM 2A LEA
 lea_register_source_is_ud: => ! UD
-@ movabs rax, [0x500000]
-  48a10000500000000000
-  SDM 2B MOV; 2A 2.2.1.4
-mov_moffs64_load: rax=0 m0=0102030405060708 => rax=0807060504030201 f=*
-@ movabs [0x500003], al
-  a20300500000000000
-  SDM 2B MOV; 2A 2.2.1.4
-mov_moffs8_store: rax=77 m0=00000000 => m0=00000077 f=*
 @ add qword ptr fs:[rax+rbx*2+0x100], 0x11223344
   64488184580001000044332211
   SDM 3A 3.4.4; 2A 2.2.1
@@ -1531,6 +1638,36 @@ fences_change_no_register_or_flag: rax=1122334455667788 rbx=99aabbccddeeff00 => 
   0faef5 0faeeb 0faeff
   SDM 2B MFENCE; 2B LFENCE; 2B SFENCE (the r/m field is ignored)
 fences_ignore_the_rm_field: rax=1122334455667788 => f=*
+";
+
+/// FNINIT, the only x87 instruction (#378). The three words it sets are all the
+/// x87 state there is: no data register, pointer or last opcode is modelled, and
+/// nothing can read the words back yet, so the cases look at guest state.
+const X87_INIT: &str = r"
+@ fninit
+  dbe3
+  SDM 2A FINIT/FNINIT (Operation); 1 8.1.5 (control word 037FH); 1 8.1.7 (tag FFFFH)
+fninit_sets_control_status_and_tag: fcw=0040 fsw=3a41 ftw=0000 => fcw=037f fsw=0 ftw=ffff f=*
+fninit_from_every_bit_set: fcw=ffff fsw=ffff ftw=0000 => fcw=037f fsw=0 ftw=ffff f=*
+fninit_from_every_bit_clear: fcw=0 fsw=0 ftw=0 => fcw=037f fsw=0 ftw=ffff f=*
+fninit_twice_is_the_same: fcw=037f fsw=0 ftw=ffff => fcw=037f fsw=0 ftw=ffff f=*
+fninit_from_the_harness_default: => fcw=037f fsw=0 ftw=ffff f=*
+@ fninit
+  dbe3
+  SDM 2A FINIT/FNINIT (the x87 words only; Flags Affected: C0 to C3 cleared, which are status-word bits)
+fninit_keeps_registers_flags_xmm_and_mxcsr: rax=1122334455667788 rbx=99aabbccddeeff00 x3=q:0123456789abcdef,fedcba9876543210 mx=5fbf => fcw=037f fsw=0 ftw=ffff f=*
+@ mov [rdi], rax; fninit; mov rbx, [rdi]
+  488907 dbe3 488b1f
+  SDM 2A FINIT/FNINIT
+fninit_touches_no_memory: rdi=D rax=1122334455667788 m0=0000000000000000 => rbx=1122334455667788 m0=8877665544332211 fcw=037f fsw=0 ftw=ffff f=*
+@ fninit; add al, bl
+  dbe3 00d8
+  SDM 2A FINIT/FNINIT; 2A ADD
+fninit_then_integer_code_runs_on: rax=7f rbx=1 => rax=80 fcw=037f fsw=0 ftw=ffff f=cpAzSO
+@ add al, bl
+  00d8
+  SDM 2A ADD (no x87 state is named)
+integer_code_keeps_the_x87_words: rax=7f rbx=1 fcw=1a2b fsw=3c4d ftw=5e6f => rax=80 f=cpAzSO
 ";
 
 const MEMORY_FAULTS: &str = r"
@@ -2814,11 +2951,23 @@ dpps_mask: x1=d:3f800000,40000000,40400000,40800000 x2=d:3f800000,3f800000,3f800
 movddup_movsldup_movshdup: x2=d:7f800001,2,3,4 => x1=d:7f800001,2,7f800001,2 x3=d:7f800001,7f800001,3,3 x4=d:2,2,4,4 f=*
 ";
 
-const DEFECT_OVERLONG_INSTRUCTION: &str = r"
+const INSTRUCTION_LENGTH: &str = r"
 @ .byte 0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x01,0xd8
   !666666666666666666666666666601d8
   SDM 3A 7.15 Interrupt 13 (instruction length over 15 bytes)
 sixteen_byte_redundant_operand_size_prefixes: => ! GP
+@ .byte 0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x05,0x34,0x12
+  666666666666666666666666053412
+  SDM 2A 2.2.1 (15-byte limit); 2A ADD
+fifteen_bytes_ending_in_the_immediate_execute: rax=ffffffffffff0001 => rax=ffffffffffff1235 f=cPazso
+@ .byte 0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x05,0x34,0x12
+  !66666666666666666666666666053412
+  SDM 3A 7.15 Interrupt 13 (instruction length over 15 bytes)
+sixteenth_byte_in_the_immediate_is_gp: rax=1 => ! GP
+@ mov eax, 1; .byte 0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x66,0x05,0x34,0x12
+  b801000000 !66666666666666666666666666053412
+  SDM 3A 7.15 Interrupt 13 (instruction length over 15 bytes)
+overlong_after_an_instruction_retires_it_first: rax=ffffffffffffffff => rax=1 ! GP
 ";
 
 const PAGE_CROSSING: &str = r"
@@ -2873,8 +3022,10 @@ const GROUPS: &[(&str, &str)] = &[
     ("stack_and_calls", STACK_AND_CALLS),
     ("strings", STRINGS),
     ("fs_gs", FS_GS),
+    ("mov_moffs", MOV_MOFFS),
     ("decoding", DECODING),
     ("fences", FENCES),
+    ("x87_init", X87_INIT),
     ("memory_faults", MEMORY_FAULTS),
     ("straddling_fault_address", STRADDLING_FAULT_ADDRESS),
     ("noncanonical_address", NONCANONICAL_ADDRESS),
@@ -2889,7 +3040,7 @@ const GROUPS: &[(&str, &str)] = &[
     ("fp_packed_and_sticky", FP_PACKED_AND_STICKY),
     ("fp_mxcsr_and_unmasked", FP_MXCSR_AND_UNMASKED),
     ("fp_beyond_sse2", FP_BEYOND_SSE2),
-    ("defect_overlong_instruction", DEFECT_OVERLONG_INSTRUCTION),
+    ("instruction_length", INSTRUCTION_LENGTH),
     ("exact_unmasked_overflow", EXACT_UNMASKED_OVERFLOW),
     ("page_crossing", PAGE_CROSSING),
 ];
@@ -2915,46 +3066,18 @@ const UNSUPPORTED: &[(&str, usize)] = &[
     ("cmpxchg8b_not_equal", 0),
     ("crc32c_byte_and_qword_forms_agree", 0),
     ("crc32c_check_string", 0),
-    ("dpps_mask", 0),
     ("enter_leave_round_trip", 0),
     ("fifteen_byte_instruction_executes", 0),
     ("fs_addr32_truncates_before_adding_base", 0),
     ("haddps_hsubpd_addsubps", 0),
-    ("insertps_zero_mask", 0),
     ("jecxz_tests_low_32_bits", 1),
-    ("jrcxz_tests_all_64_bits", 1),
-    ("lahf", 0),
-    ("lahf_zero", 0),
     ("lea64_addr32_truncates_effective_address", 0),
-    ("lock_btc_memory", 0),
     ("lodsd_zero_extends", 1),
     ("lodsd_zero_extends_df_clear", 0),
     ("lodsw_preserves_upper48", 1),
-    ("loop_decrements_rcx_without_flags", 1),
-    ("loopne_stops_on_zero_flag", 1),
     ("maskmovdqu_selects_bytes", 0),
-    ("mov_moffs64_load", 0),
-    ("mov_moffs8_store", 0),
     ("movddup_movsldup_movshdup", 0),
-    ("mpsadbw", 0),
-    ("pabs_min_is_unchanged", 0),
-    ("packusdw", 0),
-    ("palignr", 0),
-    ("pblendvb_uses_xmm0_msb", 0),
-    ("pblendw_blendps", 0),
-    ("pcmpeqq_pcmpgtq", 0),
-    ("pextr_pinsr_sse41", 0),
-    ("phaddsw_pmaddubsw_saturate", 0),
-    ("phaddw_phaddd_phsubw", 0),
-    ("phminposuw", 0),
-    ("pmin_pmax_sse41", 0),
-    ("pmovsx_pmovzx", 0),
-    ("pmulhrsw", 0),
-    ("pmulld_pmuldq", 0),
-    ("pshufb", 0),
-    ("psign", 0),
-    ("ptest_carry_when_source_is_subset", 0),
-    ("ptest_flags", 0),
+    ("pcmpeqq_pcmpgtq", 1),
     ("push16_moves_rsp_by_two", 0),
     ("pushfq_popfq_status_round_trip", 0),
     ("rcpps_special_values", 0),
@@ -2970,11 +3093,6 @@ const UNSUPPORTED: &[(&str, usize)] = &[
     ("repne_scasb_finds_byte", 1),
     ("repne_scasb_finds_byte_df_clear", 0),
     ("repne_scasd_exhausts_count", 1),
-    ("roundps_uses_mxcsr_rc", 0),
-    ("roundsd_suppress_precision", 0),
-    ("roundss_imm_modes", 0),
-    ("sahf_clear_keeps_of", 0),
-    ("sahf_ignores_bits_1_3_5", 0),
 ];
 
 // ---------------------------------------------------------------------------
@@ -3219,6 +3337,13 @@ fn initial_cpu() -> CpuState {
     }
     cpu.fs_base = FS_BASE;
     cpu.gs_base = GS_BASE;
+    // None of the three is what FNINIT sets, so a reset is always visible and
+    // an instruction that wrongly resets one is caught by any case.
+    cpu.x87 = X87State {
+        control: 0x0c40,
+        status: 0x2b05,
+        tag: 0x5a5a,
+    };
     cpu
 }
 
@@ -3279,6 +3404,13 @@ fn apply(text: &str, expected: &mut Expected) {
             expected.cpu.rip = value(data);
         } else if key == "gsbase" {
             expected.cpu.gs_base = value(data);
+        } else if let Some(word) = match key {
+            "fcw" => Some(&mut expected.cpu.x87.control),
+            "fsw" => Some(&mut expected.cpu.x87.status),
+            "ftw" => Some(&mut expected.cpu.x87.tag),
+            _ => None,
+        } {
+            *word = u16::try_from(value(data)).expect("a 16-bit x87 word");
         } else if key == "mx" {
             if data == "?" {
                 expected.mxcsr_mask = 0;
@@ -3513,6 +3645,9 @@ fn check(case: &Case, engine: Engine, initial_flags: u8) -> Result<(), String> {
     if (cpu.fs_base, cpu.gs_base) != (want.cpu.fs_base, want.cpu.gs_base) {
         text.push_str(" segment base changed;");
     }
+    if cpu.x87 != want.cpu.x87 {
+        let _ = write!(text, " x87={:04x?} want {:04x?};", cpu.x87, want.cpu.x87);
+    }
     let memory_text = Image::store(&memory).differences(&want.image);
     if !memory_text.is_empty() {
         let _ = write!(text, " memory{memory_text};");
@@ -3646,6 +3781,11 @@ fn fs_gs() {
 }
 
 #[test]
+fn mov_moffs() {
+    check_group(MOV_MOFFS);
+}
+
+#[test]
 fn decoding() {
     check_group(DECODING);
 }
@@ -3653,6 +3793,11 @@ fn decoding() {
 #[test]
 fn fences() {
     check_group(FENCES);
+}
+
+#[test]
+fn x87_init() {
+    check_group(X87_INIT);
 }
 
 #[test]
@@ -3726,9 +3871,8 @@ fn fp_beyond_sse2() {
 }
 
 #[test]
-#[ignore = "known defect (#155): an instruction over 15 bytes is illegal, not #GP"]
-fn defect_overlong_instruction() {
-    check_group(DEFECT_OVERLONG_INSTRUCTION);
+fn instruction_length() {
+    check_group(INSTRUCTION_LENGTH);
 }
 
 #[test]
@@ -5629,10 +5773,9 @@ fn interpreter_executes_modified_code_after_a_jump() {
     assert_eq!(self_modified_result(Engine::Interpreter), wanted);
 }
 
-/// Known defect: the DBT keeps running the block it translated before the store.
+/// The DBT must not keep running the block it translated before the store (#84).
 #[test]
-#[ignore = "known defect (#155): the DBT keeps translated blocks after the guest rewrites their code"]
-fn defect_dbt_executes_modified_code_after_a_jump() {
+fn dbt_executes_modified_code_after_a_jump() {
     for engine in [Engine::Dbt, Engine::DbtStepped] {
         let wanted = (1, 2, ExitReason::Halt);
         assert_eq!(self_modified_result(engine), wanted, "{engine:?}");

@@ -1084,6 +1084,8 @@ f3 4c 0f bd 54 be 10 | lzcnt r10, qword ptr [rsi + 4*rdi + 16]
 c6 44 be 10 5a | mov byte ptr [rsi + 4*rdi + 16], 0x5a
 41 86 d9 | xchg bl, r9b
 86 54 be 10 | xchg byte ptr [rsi + 4*rdi + 16], dl
+a0 20 20 00 00 00 00 00 00 | movabs al, byte ptr [0x2020]
+a2 20 20 00 00 00 00 00 00 | movabs byte ptr [0x2020], al
 66 44 89 cb | mov bx, r9w
 66 44 8b 54 be 10 | mov r10w, word ptr [rsi + 4*rdi + 16]
 66 89 54 be 10 | mov word ptr [rsi + 4*rdi + 16], dx
@@ -1091,6 +1093,8 @@ c6 44 be 10 5a | mov byte ptr [rsi + 4*rdi + 16], 0x5a
 66 c7 44 be 10 5a 00 | mov word ptr [rsi + 4*rdi + 16], 0x5a
 66 41 87 d9 | xchg bx, r9w
 66 87 54 be 10 | xchg word ptr [rsi + 4*rdi + 16], dx
+66 a1 20 20 00 00 00 00 00 00 | movabs ax, word ptr [0x2020]
+66 a3 20 20 00 00 00 00 00 00 | movabs word ptr [0x2020], ax
 44 89 cb | mov ebx, r9d
 44 8b 54 be 10 | mov r10d, dword ptr [rsi + 4*rdi + 16]
 89 54 be 10 | mov dword ptr [rsi + 4*rdi + 16], edx
@@ -1098,6 +1102,8 @@ c6 44 be 10 5a | mov byte ptr [rsi + 4*rdi + 16], 0x5a
 c7 44 be 10 5a 00 00 00 | mov dword ptr [rsi + 4*rdi + 16], 0x5a
 41 87 d9 | xchg ebx, r9d
 87 54 be 10 | xchg dword ptr [rsi + 4*rdi + 16], edx
+a1 20 20 00 00 00 00 00 00 | movabs eax, dword ptr [0x2020]
+a3 20 20 00 00 00 00 00 00 | movabs dword ptr [0x2020], eax
 4c 89 cb | mov rbx, r9
 4c 8b 54 be 10 | mov r10, qword ptr [rsi + 4*rdi + 16]
 48 89 54 be 10 | mov qword ptr [rsi + 4*rdi + 16], rdx
@@ -1105,6 +1111,8 @@ c7 44 be 10 5a 00 00 00 | mov dword ptr [rsi + 4*rdi + 16], 0x5a
 48 c7 44 be 10 5a 00 00 00 | mov qword ptr [rsi + 4*rdi + 16], 0x5a
 49 87 d9 | xchg rbx, r9
 48 87 54 be 10 | xchg qword ptr [rsi + 4*rdi + 16], rdx
+48 a1 20 20 00 00 00 00 00 00 | movabs rax, qword ptr [0x2020]
+48 a3 20 20 00 00 00 00 00 00 | movabs qword ptr [0x2020], rax
 0f c0 cb | xadd bl, cl
 45 0f c0 e1 | xadd r9b, r12b
 0f c0 d0 | xadd al, dl
@@ -1167,6 +1175,158 @@ f0 48 0f b1 44 be 10 | lock cmpxchg qword ptr [rsi + 4*rdi + 16], rax
 0f b0 dc | cmpxchg ah, bl
 0f b0 f1 | cmpxchg cl, dh
 0f b0 6c be 10 | cmpxchg byte ptr [rsi + 4*rdi + 16], ch
+f0 00 54 be 10 | lock add byte ptr [rsi + 4*rdi + 16], dl
+f0 44 00 64 be 10 | lock add byte ptr [rsi + 4*rdi + 16], r12b
+f0 80 44 be 10 7f | lock add byte ptr [rsi + 4*rdi + 16], 0x7f
+f0 80 44 be 10 fd | lock add byte ptr [rsi + 4*rdi + 16], -3
+f0 08 54 be 10 | lock or byte ptr [rsi + 4*rdi + 16], dl
+f0 44 08 64 be 10 | lock or byte ptr [rsi + 4*rdi + 16], r12b
+f0 80 4c be 10 7f | lock or byte ptr [rsi + 4*rdi + 16], 0x7f
+f0 80 4c be 10 fd | lock or byte ptr [rsi + 4*rdi + 16], -3
+f0 10 54 be 10 | lock adc byte ptr [rsi + 4*rdi + 16], dl
+f0 44 10 64 be 10 | lock adc byte ptr [rsi + 4*rdi + 16], r12b
+f0 80 54 be 10 7f | lock adc byte ptr [rsi + 4*rdi + 16], 0x7f
+f0 80 54 be 10 fd | lock adc byte ptr [rsi + 4*rdi + 16], -3
+f0 18 54 be 10 | lock sbb byte ptr [rsi + 4*rdi + 16], dl
+f0 44 18 64 be 10 | lock sbb byte ptr [rsi + 4*rdi + 16], r12b
+f0 80 5c be 10 7f | lock sbb byte ptr [rsi + 4*rdi + 16], 0x7f
+f0 80 5c be 10 fd | lock sbb byte ptr [rsi + 4*rdi + 16], -3
+f0 20 54 be 10 | lock and byte ptr [rsi + 4*rdi + 16], dl
+f0 44 20 64 be 10 | lock and byte ptr [rsi + 4*rdi + 16], r12b
+f0 80 64 be 10 7f | lock and byte ptr [rsi + 4*rdi + 16], 0x7f
+f0 80 64 be 10 fd | lock and byte ptr [rsi + 4*rdi + 16], -3
+f0 28 54 be 10 | lock sub byte ptr [rsi + 4*rdi + 16], dl
+f0 44 28 64 be 10 | lock sub byte ptr [rsi + 4*rdi + 16], r12b
+f0 80 6c be 10 7f | lock sub byte ptr [rsi + 4*rdi + 16], 0x7f
+f0 80 6c be 10 fd | lock sub byte ptr [rsi + 4*rdi + 16], -3
+f0 30 54 be 10 | lock xor byte ptr [rsi + 4*rdi + 16], dl
+f0 44 30 64 be 10 | lock xor byte ptr [rsi + 4*rdi + 16], r12b
+f0 80 74 be 10 7f | lock xor byte ptr [rsi + 4*rdi + 16], 0x7f
+f0 80 74 be 10 fd | lock xor byte ptr [rsi + 4*rdi + 16], -3
+f0 fe 44 be 10 | lock inc byte ptr [rsi + 4*rdi + 16]
+f0 fe 4c be 10 | lock dec byte ptr [rsi + 4*rdi + 16]
+f0 f6 5c be 10 | lock neg byte ptr [rsi + 4*rdi + 16]
+f0 f6 54 be 10 | lock not byte ptr [rsi + 4*rdi + 16]
+f0 86 54 be 10 | lock xchg byte ptr [rsi + 4*rdi + 16], dl
+66 f0 01 54 be 10 | lock add word ptr [rsi + 4*rdi + 16], dx
+66 f0 44 01 64 be 10 | lock add word ptr [rsi + 4*rdi + 16], r12w
+66 f0 81 44 be 10 34 12 | lock add word ptr [rsi + 4*rdi + 16], 0x1234
+66 f0 83 44 be 10 fd | lock add word ptr [rsi + 4*rdi + 16], -3
+66 f0 09 54 be 10 | lock or word ptr [rsi + 4*rdi + 16], dx
+66 f0 44 09 64 be 10 | lock or word ptr [rsi + 4*rdi + 16], r12w
+66 f0 81 4c be 10 34 12 | lock or word ptr [rsi + 4*rdi + 16], 0x1234
+66 f0 83 4c be 10 fd | lock or word ptr [rsi + 4*rdi + 16], -3
+66 f0 11 54 be 10 | lock adc word ptr [rsi + 4*rdi + 16], dx
+66 f0 44 11 64 be 10 | lock adc word ptr [rsi + 4*rdi + 16], r12w
+66 f0 81 54 be 10 34 12 | lock adc word ptr [rsi + 4*rdi + 16], 0x1234
+66 f0 83 54 be 10 fd | lock adc word ptr [rsi + 4*rdi + 16], -3
+66 f0 19 54 be 10 | lock sbb word ptr [rsi + 4*rdi + 16], dx
+66 f0 44 19 64 be 10 | lock sbb word ptr [rsi + 4*rdi + 16], r12w
+66 f0 81 5c be 10 34 12 | lock sbb word ptr [rsi + 4*rdi + 16], 0x1234
+66 f0 83 5c be 10 fd | lock sbb word ptr [rsi + 4*rdi + 16], -3
+66 f0 21 54 be 10 | lock and word ptr [rsi + 4*rdi + 16], dx
+66 f0 44 21 64 be 10 | lock and word ptr [rsi + 4*rdi + 16], r12w
+66 f0 81 64 be 10 34 12 | lock and word ptr [rsi + 4*rdi + 16], 0x1234
+66 f0 83 64 be 10 fd | lock and word ptr [rsi + 4*rdi + 16], -3
+66 f0 29 54 be 10 | lock sub word ptr [rsi + 4*rdi + 16], dx
+66 f0 44 29 64 be 10 | lock sub word ptr [rsi + 4*rdi + 16], r12w
+66 f0 81 6c be 10 34 12 | lock sub word ptr [rsi + 4*rdi + 16], 0x1234
+66 f0 83 6c be 10 fd | lock sub word ptr [rsi + 4*rdi + 16], -3
+66 f0 31 54 be 10 | lock xor word ptr [rsi + 4*rdi + 16], dx
+66 f0 44 31 64 be 10 | lock xor word ptr [rsi + 4*rdi + 16], r12w
+66 f0 81 74 be 10 34 12 | lock xor word ptr [rsi + 4*rdi + 16], 0x1234
+66 f0 83 74 be 10 fd | lock xor word ptr [rsi + 4*rdi + 16], -3
+66 f0 ff 44 be 10 | lock inc word ptr [rsi + 4*rdi + 16]
+66 f0 ff 4c be 10 | lock dec word ptr [rsi + 4*rdi + 16]
+66 f0 f7 5c be 10 | lock neg word ptr [rsi + 4*rdi + 16]
+66 f0 f7 54 be 10 | lock not word ptr [rsi + 4*rdi + 16]
+66 f0 87 54 be 10 | lock xchg word ptr [rsi + 4*rdi + 16], dx
+66 f0 0f ba 6c be 10 0f | lock bts word ptr [rsi + 4*rdi + 16], 15
+66 f0 0f ba 6c be 10 03 | lock bts word ptr [rsi + 4*rdi + 16], 3
+66 f0 0f ba 74 be 10 0f | lock btr word ptr [rsi + 4*rdi + 16], 15
+66 f0 0f ba 74 be 10 03 | lock btr word ptr [rsi + 4*rdi + 16], 3
+66 f0 0f ba 7c be 10 0f | lock btc word ptr [rsi + 4*rdi + 16], 15
+66 f0 0f ba 7c be 10 03 | lock btc word ptr [rsi + 4*rdi + 16], 3
+f0 01 54 be 10 | lock add dword ptr [rsi + 4*rdi + 16], edx
+f0 44 01 64 be 10 | lock add dword ptr [rsi + 4*rdi + 16], r12d
+f0 81 44 be 10 78 56 34 12 | lock add dword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 83 44 be 10 fd | lock add dword ptr [rsi + 4*rdi + 16], -3
+f0 09 54 be 10 | lock or dword ptr [rsi + 4*rdi + 16], edx
+f0 44 09 64 be 10 | lock or dword ptr [rsi + 4*rdi + 16], r12d
+f0 81 4c be 10 78 56 34 12 | lock or dword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 83 4c be 10 fd | lock or dword ptr [rsi + 4*rdi + 16], -3
+f0 11 54 be 10 | lock adc dword ptr [rsi + 4*rdi + 16], edx
+f0 44 11 64 be 10 | lock adc dword ptr [rsi + 4*rdi + 16], r12d
+f0 81 54 be 10 78 56 34 12 | lock adc dword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 83 54 be 10 fd | lock adc dword ptr [rsi + 4*rdi + 16], -3
+f0 19 54 be 10 | lock sbb dword ptr [rsi + 4*rdi + 16], edx
+f0 44 19 64 be 10 | lock sbb dword ptr [rsi + 4*rdi + 16], r12d
+f0 81 5c be 10 78 56 34 12 | lock sbb dword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 83 5c be 10 fd | lock sbb dword ptr [rsi + 4*rdi + 16], -3
+f0 21 54 be 10 | lock and dword ptr [rsi + 4*rdi + 16], edx
+f0 44 21 64 be 10 | lock and dword ptr [rsi + 4*rdi + 16], r12d
+f0 81 64 be 10 78 56 34 12 | lock and dword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 83 64 be 10 fd | lock and dword ptr [rsi + 4*rdi + 16], -3
+f0 29 54 be 10 | lock sub dword ptr [rsi + 4*rdi + 16], edx
+f0 44 29 64 be 10 | lock sub dword ptr [rsi + 4*rdi + 16], r12d
+f0 81 6c be 10 78 56 34 12 | lock sub dword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 83 6c be 10 fd | lock sub dword ptr [rsi + 4*rdi + 16], -3
+f0 31 54 be 10 | lock xor dword ptr [rsi + 4*rdi + 16], edx
+f0 44 31 64 be 10 | lock xor dword ptr [rsi + 4*rdi + 16], r12d
+f0 81 74 be 10 78 56 34 12 | lock xor dword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 83 74 be 10 fd | lock xor dword ptr [rsi + 4*rdi + 16], -3
+f0 ff 44 be 10 | lock inc dword ptr [rsi + 4*rdi + 16]
+f0 ff 4c be 10 | lock dec dword ptr [rsi + 4*rdi + 16]
+f0 f7 5c be 10 | lock neg dword ptr [rsi + 4*rdi + 16]
+f0 f7 54 be 10 | lock not dword ptr [rsi + 4*rdi + 16]
+f0 87 54 be 10 | lock xchg dword ptr [rsi + 4*rdi + 16], edx
+f0 0f ba 6c be 10 1f | lock bts dword ptr [rsi + 4*rdi + 16], 31
+f0 0f ba 6c be 10 03 | lock bts dword ptr [rsi + 4*rdi + 16], 3
+f0 0f ba 74 be 10 1f | lock btr dword ptr [rsi + 4*rdi + 16], 31
+f0 0f ba 74 be 10 03 | lock btr dword ptr [rsi + 4*rdi + 16], 3
+f0 0f ba 7c be 10 1f | lock btc dword ptr [rsi + 4*rdi + 16], 31
+f0 0f ba 7c be 10 03 | lock btc dword ptr [rsi + 4*rdi + 16], 3
+f0 48 01 54 be 10 | lock add qword ptr [rsi + 4*rdi + 16], rdx
+f0 4c 01 64 be 10 | lock add qword ptr [rsi + 4*rdi + 16], r12
+f0 48 81 44 be 10 78 56 34 12 | lock add qword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 48 83 44 be 10 fd | lock add qword ptr [rsi + 4*rdi + 16], -3
+f0 48 09 54 be 10 | lock or qword ptr [rsi + 4*rdi + 16], rdx
+f0 4c 09 64 be 10 | lock or qword ptr [rsi + 4*rdi + 16], r12
+f0 48 81 4c be 10 78 56 34 12 | lock or qword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 48 83 4c be 10 fd | lock or qword ptr [rsi + 4*rdi + 16], -3
+f0 48 11 54 be 10 | lock adc qword ptr [rsi + 4*rdi + 16], rdx
+f0 4c 11 64 be 10 | lock adc qword ptr [rsi + 4*rdi + 16], r12
+f0 48 81 54 be 10 78 56 34 12 | lock adc qword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 48 83 54 be 10 fd | lock adc qword ptr [rsi + 4*rdi + 16], -3
+f0 48 19 54 be 10 | lock sbb qword ptr [rsi + 4*rdi + 16], rdx
+f0 4c 19 64 be 10 | lock sbb qword ptr [rsi + 4*rdi + 16], r12
+f0 48 81 5c be 10 78 56 34 12 | lock sbb qword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 48 83 5c be 10 fd | lock sbb qword ptr [rsi + 4*rdi + 16], -3
+f0 48 21 54 be 10 | lock and qword ptr [rsi + 4*rdi + 16], rdx
+f0 4c 21 64 be 10 | lock and qword ptr [rsi + 4*rdi + 16], r12
+f0 48 81 64 be 10 78 56 34 12 | lock and qword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 48 83 64 be 10 fd | lock and qword ptr [rsi + 4*rdi + 16], -3
+f0 48 29 54 be 10 | lock sub qword ptr [rsi + 4*rdi + 16], rdx
+f0 4c 29 64 be 10 | lock sub qword ptr [rsi + 4*rdi + 16], r12
+f0 48 81 6c be 10 78 56 34 12 | lock sub qword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 48 83 6c be 10 fd | lock sub qword ptr [rsi + 4*rdi + 16], -3
+f0 48 31 54 be 10 | lock xor qword ptr [rsi + 4*rdi + 16], rdx
+f0 4c 31 64 be 10 | lock xor qword ptr [rsi + 4*rdi + 16], r12
+f0 48 81 74 be 10 78 56 34 12 | lock xor qword ptr [rsi + 4*rdi + 16], 0x12345678
+f0 48 83 74 be 10 fd | lock xor qword ptr [rsi + 4*rdi + 16], -3
+f0 48 ff 44 be 10 | lock inc qword ptr [rsi + 4*rdi + 16]
+f0 48 ff 4c be 10 | lock dec qword ptr [rsi + 4*rdi + 16]
+f0 48 f7 5c be 10 | lock neg qword ptr [rsi + 4*rdi + 16]
+f0 48 f7 54 be 10 | lock not qword ptr [rsi + 4*rdi + 16]
+f0 48 87 54 be 10 | lock xchg qword ptr [rsi + 4*rdi + 16], rdx
+f0 48 0f ba 6c be 10 3f | lock bts qword ptr [rsi + 4*rdi + 16], 63
+f0 48 0f ba 6c be 10 03 | lock bts qword ptr [rsi + 4*rdi + 16], 3
+f0 48 0f ba 74 be 10 3f | lock btr qword ptr [rsi + 4*rdi + 16], 63
+f0 48 0f ba 74 be 10 03 | lock btr qword ptr [rsi + 4*rdi + 16], 3
+f0 48 0f ba 7c be 10 3f | lock btc qword ptr [rsi + 4*rdi + 16], 63
+f0 48 0f ba 7c be 10 03 | lock btc qword ptr [rsi + 4*rdi + 16], 3
+f0 00 6c be 10 | lock add byte ptr [rsi + 4*rdi + 16], ch
+f0 86 64 be 10 | lock xchg byte ptr [rsi + 4*rdi + 16], ah
 88 dc | mov ah, bl
 88 ea | mov dl, ch
 b7 21 | mov bh, 0x21
@@ -1185,6 +1345,8 @@ b7 21 | mov bh, 0x21
 f8 | clc
 f9 | stc
 f5 | cmc
+9f | lahf
+9e | sahf
 90 | nop
 0f a2 | cpuid
 0f 1f 40 08 | nop dword ptr [rax + 8]
@@ -1192,6 +1354,7 @@ f3 90 | pause
 0f ae e8 | lfence
 0f ae f0 | mfence
 0f ae f8 | sfence
+db e3 | fninit
 0f c3 5c be 10 | movnti dword ptr [rsi + 4*rdi + 16], ebx
 48 0f c3 5c be 10 | movnti qword ptr [rsi + 4*rdi + 16], rbx
 44 0f c3 4c be 10 | movnti dword ptr [rsi + 4*rdi + 16], r9d

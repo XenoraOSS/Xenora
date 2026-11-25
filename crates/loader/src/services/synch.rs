@@ -3,11 +3,12 @@
 //! Critical sections, slim reader/writer locks, condition variables, one-time
 //! initialization, interlocked singly linked lists and thread-local storage.
 //!
-//! Ownership is keyed by the calling guest TEB. These objects do not block
-//! through the guest scheduler yet, so an operation that would have to wait for
-//! another guest thread stops the guest with the runtime-limit fault instead of
-//! pretending to synchronize.
+//! Ownership is keyed by the calling guest TEB. An operation that has to wait
+//! for another guest thread blocks through the attached scheduler. Without one
+//! it stops the guest with the runtime-limit fault instead of pretending to
+//! synchronize. The synchronization state is locked before the thread table.
 
+use super::threads::{ConditionSleep, Pending, SleepLock, SleepPhase, SrwMode};
 use super::{
     ERROR_INVALID_PARAMETER, ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, KERNEL32, ServicesState,
 };
@@ -66,6 +67,15 @@ const FLS_OUT_OF_INDEXES: u64 = u32::MAX as u64;
 
 fn unsupported<T>() -> Result<T, ExitReason> {
     Err(ExitReason::IllegalInstruction(0xFE))
+}
+
+/// Wait for another guest thread: through the scheduler, or not at all.
+fn blocked<T>(state: &ServicesState) -> Result<T, ExitReason> {
+    if state.hooks.is_attached() {
+        Err(ExitReason::GuestBlocked)
+    } else {
+        unsupported()
+    }
 }
 
 fn fault(error: MemoryError) -> ExitReason {
@@ -135,6 +145,7 @@ impl CallbackTask for InitOnceExecution {
             .lock()
             .expect("guest synchronization state");
         synch.init_once_pending.remove(&self.once);
+        self.state.wake_blocked();
         if !succeeded || produced & INIT_ONCE_CTX_RESERVED_MASK != 0 {
             memory.write_u64(self.once, 0).map_err(fault)?;
             drop(synch);
@@ -289,7 +300,10 @@ fn leave_section(
     if section.recursion == 0 {
         section.owner = None;
     }
-    mirror_section(memory, address, section, thread_id)
+    mirror_section(memory, address, section, thread_id)?;
+    drop(synch);
+    state.wake_blocked();
+    Ok(())
 }
 
 /// Check that a pointer-sized synchronization object is readable and writable.
@@ -300,12 +314,6 @@ fn check_word(memory: &mut GuestMemory, address: u64) -> Result<u64, ExitReason>
     let value = memory.read_u64(address).map_err(fault)?;
     memory.write_u64(address, value).map_err(fault)?;
     Ok(value)
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum SrwMode {
-    Exclusive,
-    Shared,
 }
 
 /// Acquire without blocking. Returns false when the lock is unavailable.
@@ -369,7 +377,67 @@ fn release_srw(
     if lock.is_free() {
         synch.srw.remove(&address);
     }
+    drop(synch);
+    state.wake_blocked();
     Ok(())
+}
+
+/// Acquire a slim lock, or block the calling guest thread until it is available.
+/// A reader waits behind a writer that was waiting first, so a stream of
+/// overlapping readers cannot keep a writer out.
+fn acquire_srw(
+    state: &ServicesState,
+    memory: &mut GuestMemory,
+    address: u64,
+    teb: u64,
+    mode: SrwMode,
+) -> Result<u64, ExitReason> {
+    let ticket = {
+        let table = state.threads.lock().expect("guest thread table");
+        match table.waits.get(&teb) {
+            Some(Pending::Srw { ticket, .. }) => Some(*ticket),
+            _ => None,
+        }
+    };
+    if take_srw(state, memory, address, teb, mode, ticket)? {
+        if ticket.is_some() {
+            let mut table = state.threads.lock().expect("guest thread table");
+            table.waits.remove(&teb);
+        }
+        return Ok(0);
+    }
+    if !state.hooks.is_attached() {
+        return unsupported();
+    }
+    if ticket.is_none() {
+        let mut table = state.threads.lock().expect("guest thread table");
+        let pending = Pending::Srw {
+            lock: address,
+            mode,
+            ticket: table.ticket(),
+        };
+        table.waits.insert(teb, pending);
+    }
+    Err(ExitReason::GuestBlocked)
+}
+
+/// Acquire without blocking, behind any writer that has waited longer. No ticket
+/// means the caller has not waited yet.
+fn take_srw(
+    state: &ServicesState,
+    memory: &mut GuestMemory,
+    address: u64,
+    teb: u64,
+    mode: SrwMode,
+    ticket: Option<u64>,
+) -> Result<bool, ExitReason> {
+    let behind = mode == SrwMode::Shared
+        && state
+            .threads
+            .lock()
+            .expect("guest thread table")
+            .writer_waits(address, teb, ticket.unwrap_or(u64::MAX));
+    Ok(!behind && try_acquire_srw(state, memory, address, teb, mode)?)
 }
 
 fn holds_srw(state: &ServicesState, address: u64, teb: u64, mode: SrwMode) -> bool {
@@ -456,8 +524,7 @@ fn register_critical_sections(registry: &mut ImportRegistry, state: &Arc<Service
     let s = Arc::clone(state);
     registry.register(KERNEL32, "EnterCriticalSection", move |args, cpu, mem| {
         if !enter_section(&s, mem, args.rcx, cpu.gs_base)? {
-            // Another guest thread owns it; waiting needs the guest scheduler.
-            return unsupported();
+            return blocked(&s);
         }
         Ok(0)
     });
@@ -542,11 +609,7 @@ fn register_srw_and_conditions(registry: &mut ImportRegistry, state: &Arc<Servic
     ] {
         let s = Arc::clone(state);
         registry.register(KERNEL32, acquire, move |args, cpu, mem| {
-            // SRW locks are not recursive, so a held lock would block or deadlock.
-            if !try_acquire_srw(&s, mem, args.rcx, cpu.gs_base, mode)? {
-                return unsupported();
-            }
-            Ok(0)
+            acquire_srw(&s, mem, args.rcx, cpu.gs_base, mode)
         });
         let s = Arc::clone(state);
         registry.register(KERNEL32, try_acquire, move |args, cpu, mem| {
@@ -570,10 +633,14 @@ fn register_srw_and_conditions(registry: &mut ImportRegistry, state: &Arc<Servic
         mem.write_u64(args.rcx, 0).map_err(fault)?;
         Ok(0)
     });
-    // No guest thread can be waiting, because a sleep never blocks.
-    for symbol in ["WakeConditionVariable", "WakeAllConditionVariable"] {
-        registry.register(KERNEL32, symbol, |args, _, mem| {
+    for (symbol, all) in [
+        ("WakeConditionVariable", false),
+        ("WakeAllConditionVariable", true),
+    ] {
+        let s = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, _, mem| {
             check_word(mem, args.rcx)?;
+            s.wake_condition(args.rcx, all);
             Ok(0)
         });
     }
@@ -583,18 +650,26 @@ fn register_srw_and_conditions(registry: &mut ImportRegistry, state: &Arc<Servic
         KERNEL32,
         "SleepConditionVariableCS",
         move |args, cpu, mem| {
+            if let Some(result) = resume_sleep(&s, mem, cpu.gs_base) {
+                return result;
+            }
             check_word(mem, args.rcx)?;
-            let owned = {
+            let timeout = args.r8 as u32;
+            let recursion = {
                 let synch = s.synch.lock().expect("guest synchronization state");
                 synch
                     .sections
                     .get(&args.rdx)
-                    .is_some_and(|section| section.owner == Some(cpu.gs_base))
+                    .filter(|section| section.owner == Some(cpu.gs_base))
+                    .map(|section| section.recursion)
             };
-            if !owned {
+            // A sleep releases one entry, so another one would keep the section
+            // owned while its owner sleeps.
+            if recursion.is_none_or(|count| timeout != 0 && count != 1) {
                 return unsupported();
             }
-            sleep_result(&s, cpu.gs_base, args.r8 as u32)
+            let lock = SleepLock::Section(args.rdx);
+            sleep_condition(&s, mem, cpu.gs_base, args.rcx, lock, timeout)
         },
     );
 
@@ -603,6 +678,9 @@ fn register_srw_and_conditions(registry: &mut ImportRegistry, state: &Arc<Servic
         KERNEL32,
         "SleepConditionVariableSRW",
         move |args, cpu, mem| {
+            if let Some(result) = resume_sleep(&s, mem, cpu.gs_base) {
+                return result;
+            }
             check_word(mem, args.rcx)?;
             let flags = args.r9 as u32;
             if flags & !CONDITION_VARIABLE_LOCKMODE_SHARED != 0 {
@@ -616,7 +694,8 @@ fn register_srw_and_conditions(registry: &mut ImportRegistry, state: &Arc<Servic
             if !holds_srw(&s, args.rdx, cpu.gs_base, mode) {
                 return unsupported();
             }
-            sleep_result(&s, cpu.gs_base, args.r8 as u32)
+            let lock = SleepLock::Srw(args.rdx, mode);
+            sleep_condition(&s, mem, cpu.gs_base, args.rcx, lock, args.r8 as u32)
         },
     );
 
@@ -644,14 +723,88 @@ fn register_srw_and_conditions(registry: &mut ImportRegistry, state: &Arc<Servic
     }
 }
 
-/// A zero timeout releases and reacquires the lock within one service call, so
-/// no other guest thread can observe it, then reports the timeout. Longer sleeps
-/// would block.
-fn sleep_result(state: &ServicesState, teb: u64, timeout: u32) -> Result<u64, ExitReason> {
+/// Release the lock and sleep on a condition variable. A zero timeout releases
+/// and reacquires the lock within one service call, so no other guest thread can
+/// observe it, then reports the timeout.
+fn sleep_condition(
+    state: &ServicesState,
+    memory: &mut GuestMemory,
+    teb: u64,
+    variable: u64,
+    lock: SleepLock,
+    timeout: u32,
+) -> Result<u64, ExitReason> {
     if timeout == 0 {
-        state.fail(teb, ERROR_TIMEOUT, 0)
-    } else {
-        state.fail(teb, ERROR_NOT_SUPPORTED, 0)
+        return state.fail(teb, ERROR_TIMEOUT, 0);
+    }
+    if !state.hooks.is_attached() {
+        return state.fail(teb, ERROR_NOT_SUPPORTED, 0);
+    }
+    match lock {
+        SleepLock::Section(address) => leave_section(state, memory, address, teb)?,
+        SleepLock::Srw(address, mode) => release_srw(state, memory, address, teb, mode)?,
+    }
+    let mut table = state.threads.lock().expect("guest thread table");
+    let sleep = ConditionSleep {
+        variable,
+        lock,
+        deadline: state.deadline(timeout),
+        phase: SleepPhase::Asleep,
+        ticket: table.ticket(),
+    };
+    table.waits.insert(teb, Pending::Condition(sleep));
+    Err(ExitReason::GuestBlocked)
+}
+
+/// Continue the condition-variable sleep this thread is blocked in, if any. It
+/// ends, woken or timed out, only with the lock held again.
+fn resume_sleep(
+    state: &ServicesState,
+    memory: &mut GuestMemory,
+    teb: u64,
+) -> Option<Result<u64, ExitReason>> {
+    let sleep = {
+        let mut table = state.threads.lock().expect("guest thread table");
+        let Some(Pending::Condition(sleep)) = table.waits.get(&teb) else {
+            return None;
+        };
+        let mut sleep = *sleep;
+        if sleep.phase == SleepPhase::Asleep {
+            let now = state.clock.performance_count();
+            if sleep.deadline.is_none_or(|deadline| now < deadline) {
+                return Some(Err(ExitReason::GuestBlocked));
+            }
+            sleep.phase = SleepPhase::TimedOut;
+            table.end_sleep(teb, sleep.phase);
+        }
+        sleep
+    };
+    let taken = match sleep.lock {
+        SleepLock::Section(address) => enter_section(state, memory, address, teb),
+        SleepLock::Srw(address, mode) => {
+            take_srw(state, memory, address, teb, mode, Some(sleep.ticket))
+        }
+    };
+    match taken {
+        Err(reason) => return Some(Err(reason)),
+        Ok(false) => return Some(Err(ExitReason::GuestBlocked)),
+        Ok(true) => {}
+    }
+    let mut table = state.threads.lock().expect("guest thread table");
+    table.waits.remove(&teb);
+    drop(table);
+    Some(match sleep.phase {
+        SleepPhase::TimedOut => state.fail(teb, ERROR_TIMEOUT, 0),
+        SleepPhase::Asleep | SleepPhase::Woken => Ok(1),
+    })
+}
+
+/// Block until another thread's one-time initialization ends. Waiting for the
+/// calling thread's own, or for one the runtime did not begin, is a guest error.
+fn wait_for_once<T>(state: &ServicesState, owner: Option<&u64>, teb: u64) -> Result<T, ExitReason> {
+    match owner {
+        Some(&owner) if owner != teb => blocked(state),
+        _ => unsupported(),
     }
 }
 
@@ -708,8 +861,9 @@ fn register_init_once(registry: &mut ImportRegistry, state: &Arc<ServicesState>)
                     synch.init_once_pending.insert(once, teb);
                     Ok(1)
                 }
-                // Pending in another thread would block; pending in this thread
-                // or an unrecognized value is a guest error.
+                INIT_ONCE_PENDING if value == INIT_ONCE_PENDING => {
+                    wait_for_once(&s, synch.init_once_pending.get(&once), teb)
+                }
                 _ => unsupported(),
             }
         },
@@ -741,6 +895,8 @@ fn register_init_once(registry: &mut ImportRegistry, state: &Arc<ServicesState>)
         };
         mem.write_u64(once, next).map_err(fault)?;
         synch.init_once_pending.remove(&once);
+        drop(synch);
+        s.wake_blocked();
         Ok(1)
     });
 
@@ -759,11 +915,13 @@ fn register_init_once(registry: &mut ImportRegistry, state: &Arc<ServicesState>)
                 }
                 return Ok(CallbackStart::Return(1));
             }
+            let mut synch = s.synch.lock().expect("guest synchronization state");
+            if value == INIT_ONCE_PENDING {
+                return wait_for_once(&s, synch.init_once_pending.get(&once), teb);
+            }
             if value != 0 {
-                // Another thread's pending initialization would block.
                 return unsupported();
             }
-            let mut synch = s.synch.lock().expect("guest synchronization state");
             if synch.init_once_pending.len() >= MAX_PENDING_INIT_ONCE {
                 return unsupported();
             }

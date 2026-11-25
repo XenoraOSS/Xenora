@@ -281,43 +281,34 @@ impl SymbolDb {
 
     fn populate_crt_stdio(&mut self) {
         let m = "api-ms-win-crt-stdio-l1-1-0.dll";
-        for module in [m, "ucrtbase.dll"] {
-            for symbol in [
-                "sprintf",
-                "snprintf",
-                "fopen",
-                "fclose",
-                "fread",
-                "fwrite",
-                "fseek",
-                "ftell",
-                "feof",
-                "ferror",
-                "rewind",
-                "__acrt_iob_func",
-                "fprintf",
-                "printf",
-                "fputc",
-                "putc",
-                "puts",
-                "fgetc",
-                "getc",
-                "ungetc",
-            ] {
-                self.ins(module, symbol, Classification::StandardService);
-            }
-        }
         for (sym, libc) in &[
+            ("fclose", "fclose"),
             ("fflush", "fflush"),
+            ("fgetc", "fgetc"),
             ("fgetpos", "fgetpos"),
+            ("fopen", "fopen"),
+            ("fputc", "fputc"),
             ("fputs", "fputs"),
+            ("fread", "fread"),
+            ("fseek", "fseek"),
             ("fsetpos", "fsetpos"),
+            ("ftell", "ftell"),
+            ("fwrite", "fwrite"),
+            ("getc", "getc"),
+            ("putc", "putc"),
+            ("puts", "puts"),
+            ("rewind", "rewind"),
             ("remove", "remove"),
             ("rename", "rename"),
             ("setvbuf", "setvbuf"),
+            ("ungetc", "ungetc"),
             ("vsprintf", "vsprintf"),
             ("vsnprintf", "vsnprintf"),
             ("vfprintf", "vfprintf"),
+            ("sprintf", "sprintf"),
+            ("snprintf", "snprintf"),
+            ("fprintf", "fprintf"),
+            ("printf", "printf"),
             ("sscanf", "sscanf"),
             ("fscanf", "fscanf"),
             ("scanf", "scanf"),
@@ -336,6 +327,7 @@ impl SymbolDb {
             "__stdio_common_vswprintf_s",
             "__stdio_common_vswscanf",
             "__stdio_common_vsnwprintf_s",
+            "__acrt_iob_func",
         ] {
             self.win32_stub(
                 m,
@@ -693,7 +685,6 @@ impl SymbolDb {
                     "gmtime_s",
                     "localtime_s",
                     "rand",
-                    "rand_s",
                     "srand",
                     "time",
                 ][..],

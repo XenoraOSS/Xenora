@@ -58,6 +58,11 @@ cargo test --locked -p xenora-loader --features gpu-tests --test dbt_render --no
 timeout 30s cargo test --locked -p xenora-loader --features gpu-tests --test dbt_render -- \
     --nocapture --test-threads=1
 
+# A synthetic guest loop is checked on the CPU and its words are dispatched to Metal (#147).
+cargo test --locked -p xenora-loader --features gpu-tests --test mixed_workload --no-run
+timeout 30s cargo test --locked -p xenora-loader --features gpu-tests --test mixed_workload -- \
+    --nocapture --test-threads=1
+
 cargo test --locked -p xenora-loader --features gpu-tests --test runtime_x15 --no-run
 timeout 30s cargo test --locked -p xenora-loader --features gpu-tests --test runtime_x15 -- \
     test_fixture_c_service_to_metal_framebuffer --exact --nocapture --test-threads=1

@@ -17,6 +17,8 @@ reproducible tests, not by estimated game compatibility percentages.
 | --- | --- | --- | --- | --- | --- | --- |
 | native-compute | arm64 macOS | implemented | initial-native-suite-passed | verified on Apple M5 | A | Trusted MSL with bounded word buffers and an original native offscreen rendering test on Apple M5. |
 | synthetic-gfx1030 | gfx1030 Wave32 | three-fixture-demo-implemented | three-way-output-passed | verified on Apple M5 | A, B | Synthetic memory contract, statically resolved forward control flow, exact positive normal FP32 only. |
+| guest-graphics-path | arm64 macOS | implemented | guest-frame-readback-passed | verified on Apple M4 | A | One triangle per draw, one instance, a float4 position plus an optional float4 texture coordinate per vertex, R8G8B8A8 render targets and textures of at most 64 by 64 pixels, a point sampler with clamp addressing, synchronous execution and no guest-visible fence. Constant buffers, upload and readback heaps, render target views and depth views are not yet exposed to the guest. |
+| guest-cpp-path | arm64 macOS | implemented | guest-cpp-program-passed | not-applicable | A | C++ exceptions and stack unwinding are not implemented and are not exercised; the program is built with -fno-exceptions and -fno-rtti. One worker thread, one guest at a time under the deterministic cooperative scheduler, and a bounded command-line and file environment. |
 | xbox-execution | Xbox Series X\|S | unsupported | untested | unverified | U | Game execution, proprietary guest containers and full guest execution-mask divergence are unsupported. The console launch ABI is unknown. |
 <!-- status:features:end -->
 

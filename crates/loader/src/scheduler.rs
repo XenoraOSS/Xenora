@@ -7,9 +7,9 @@
 //! clock always interleave the same way. Guest threads never run concurrently,
 //! so nothing here relies on a guest memory-ordering model.
 //!
-//! A service that has to wait returns [`ExitReason::GuestBlocked`] without any
-//! effect and with RIP still on its trampoline. The scheduler runs that call
-//! again when something it may wait for has changed, oldest waiter first.
+//! A service that has to wait returns [`ExitReason::GuestBlocked`] with RIP
+//! still on its trampoline. The scheduler runs that call again when something it
+//! may wait for has changed, oldest waiter first, until it completes.
 
 use crate::cpu::{CpuState, ExitReason};
 use crate::dbt::DbtEngine;
@@ -145,8 +145,7 @@ impl Scheduler {
             Stop::Ended => Turn::Continue,
             Stop::Blocked => {
                 let mut table = self.state.threads.lock().expect("guest thread table");
-                table.sequence += 1;
-                let sequence = table.sequence;
+                let sequence = table.ticket();
                 if let Some(thread) = table.threads.get_mut(&id) {
                     thread.run = RunState::Blocked(sequence);
                 }

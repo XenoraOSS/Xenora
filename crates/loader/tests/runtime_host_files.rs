@@ -18,7 +18,6 @@ use xenora_loader::services::{MockClock, ServicesState};
 
 const KERNEL32: &str = "kernel32.dll";
 const FILE_API: &str = "api-ms-win-core-file-l1-1-0.dll";
-const UCRT: &str = "ucrtbase.dll";
 
 const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "GetLastError"),
@@ -50,10 +49,6 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "DeleteFileW"),
     (KERNEL32, "MoveFileW"),
     (FILE_API, "MoveFileExW"),
-    (UCRT, "fopen"),
-    (UCRT, "fclose"),
-    (UCRT, "fread"),
-    (UCRT, "fwrite"),
 ];
 
 const GENERIC_READ: u64 = 0x8000_0000;
@@ -1094,44 +1089,8 @@ fn writable_mounts_bound_how_large_guest_writes_make_files() {
     assert_eq!(guest.call("CloseHandle", &[file]), 1);
 }
 
-#[test]
-fn crt_fopen_writes_through_a_writable_host_mount() {
-    let tree = Tree::new("crt-fopen");
-    std::fs::create_dir_all(tree.path("root")).unwrap();
-    let mount = HostMount::new('D', &tree.path("root"), true).unwrap();
-    let mut guest = guest_with(vec![mount]);
-    let path = BUFFER;
-    let mode_w = BUFFER + 0x40;
-    let mode_r = BUFFER + 0x50;
-    let payload = BUFFER + 0x60;
-    let out = BUFFER + 0x80;
-    guest.memory.write_bytes(path, b"D:\\crt.bin\0").unwrap();
-    guest.memory.write_bytes(mode_w, b"wb\0").unwrap();
-    guest.memory.write_bytes(mode_r, b"rb\0").unwrap();
-    guest.memory.write_bytes(payload, b"stdio\0").unwrap();
-    let file = guest.call("fopen", &[path, mode_w]);
-    assert_ne!(file, 0);
-    assert_eq!(guest.call("fwrite", &[payload, 1, 5, file]), 5);
-    assert_eq!(guest.call("fclose", &[file]), 0);
-    assert_eq!(std::fs::read(tree.path("root/crt.bin")).unwrap(), b"stdio");
-    let reader = guest.call("fopen", &[path, mode_r]);
-    assert_ne!(reader, 0);
-    assert_eq!(guest.call("fread", &[out, 1, 5, reader]), 5);
-    let mut got = [0u8; 5];
-    guest.memory.read_bytes(out, &mut got).unwrap();
-    assert_eq!(&got, b"stdio");
-    assert_eq!(guest.call("fclose", &[reader]), 0);
-
-    // A writable stream reaches the host when it is closed, not before.
-    let file = guest.call("fopen", &[path, mode_w]);
-    assert_eq!(guest.call("fwrite", &[payload, 1, 3, file]), 3);
-    assert_eq!(std::fs::read(tree.path("root/crt.bin")).unwrap(), b"");
-    assert_eq!(guest.call("fclose", &[file]), 0);
-    assert_eq!(std::fs::read(tree.path("root/crt.bin")).unwrap(), b"std");
-}
-
 /// A mount quota bounds the net bytes and entries guest operations add,
-/// across Win32 file calls, GetTempFileNameW and CRT streams. Exceeding it
+/// across Win32 file calls and GetTempFileNameW. Exceeding it
 /// fails like a full volume: ERROR_DISK_FULL (112) and no host change.
 #[test]
 fn mount_quota_bounds_net_bytes_and_entries_added_by_the_guest() {
@@ -1183,13 +1142,6 @@ fn mount_quota_bounds_net_bytes_and_entries_added_by_the_guest() {
     );
     assert_eq!(guest.error(), 112);
     assert_eq!(std::fs::read_dir(root.join("dir")).unwrap().count(), 0);
-    // Clear of COUNT and FIND_DATA, which later calls overwrite.
-    let path = OTHER_PATH + 0x100;
-    let mode = OTHER_PATH + 0x140;
-    guest.memory.write_bytes(path, b"G:\\crt.bin\0").unwrap();
-    guest.memory.write_bytes(mode, b"wb\0").unwrap();
-    assert_eq!(guest.call("fopen", &[path, mode]), 0);
-    assert!(!root.join("crt.bin").exists());
     // Opening an existing file needs no new entry.
     let old = open(&mut guest, r"G:\old.bin", rw, 0, OPEN_EXISTING);
     assert_ne!(old, INVALID);
@@ -1213,17 +1165,11 @@ fn mount_quota_bounds_net_bytes_and_entries_added_by_the_guest() {
     assert_eq!(guest.call("CloseHandle", &[b]), 1);
     assert_eq!(guest.call("CloseHandle", &[old]), 1);
 
-    // Removing the directory frees an entry, so a CRT stream may create a
-    // file, but writing past the byte budget fails at fclose.
+    // Removing the directory frees its entry.
     put_path(&mut guest, PATH, r"G:\dir");
     assert_eq!(guest.call("RemoveDirectoryW", &[PATH]), 1);
-    let payload = OTHER_PATH + 0x180;
-    guest.memory.write_bytes(payload, b"z").unwrap();
-    let stream = guest.call("fopen", &[path, mode]);
-    assert_ne!(stream, 0);
-    assert_eq!(guest.call("fwrite", &[payload, 1, 1, stream]), 1);
-    assert_eq!(guest.call("fclose", &[stream]) as u32, u32::MAX);
-    assert_eq!(std::fs::metadata(root.join("crt.bin")).unwrap().len(), 0);
+    put_path(&mut guest, PATH, r"G:\dir2");
+    assert_eq!(guest.call("CreateDirectoryW", &[PATH, 0]), 1);
 }
 
 /// MoveFileW renames files and directories within one writable mount,

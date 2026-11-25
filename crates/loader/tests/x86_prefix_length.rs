@@ -178,7 +178,7 @@ fn interpreter_rejects_overlong_segment_prefix_run() {
         .unwrap();
     let cpu = CpuState::new(ENTRY, 0);
     let result = Interpreter::new(cpu, &mut memory, 8).run();
-    assert_eq!(result.exit_reason, ExitReason::IllegalInstruction(0x65));
+    assert_eq!(result.exit_reason, ExitReason::GeneralProtection);
     assert_eq!(result.instructions_executed, 0);
     assert_eq!(result.final_state.rip, ENTRY);
 }
@@ -195,9 +195,61 @@ fn dbt_rejects_overlong_segment_prefix_run() {
     let result = DbtEngine::new(1024 * 1024)
         .expect("JIT memory allocation")
         .run(&mut cpu, &mut memory, 8);
-    assert!(
-        matches!(result.exit_reason, ExitReason::IllegalInstruction(_)),
-        "expected IllegalInstruction, got {:?}",
-        result.exit_reason
-    );
+    assert_eq!(result.exit_reason, ExitReason::GeneralProtection);
+    assert_eq!(result.instructions_executed, 0);
+    assert_eq!(cpu.rip, ENTRY);
+}
+
+/// Runs `prefixes` bytes of 0x66 that end exactly at the end of a mapped page,
+/// with nothing mapped after it, on both engines.
+fn run_prefixes_at_page_end(prefixes: usize) -> [(ExitReason, u64, u64); 2] {
+    const PAGE: u64 = 0x2000;
+    const PAGE_LEN: usize = 0x1000;
+    let mut data = vec![0x90; PAGE_LEN];
+    data[PAGE_LEN - prefixes..].fill(0x66);
+    let entry = PAGE + (PAGE_LEN - prefixes) as u64;
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region_with_data(PAGE, PAGE_LEN, MemoryPermissions::READ_EXECUTE, &data)
+        .unwrap();
+
+    let interpreted = Interpreter::new(CpuState::new(entry, 0), &mut memory, 8).run();
+    let mut cpu = CpuState::new(entry, 0);
+    let translated = DbtEngine::new(1024 * 1024)
+        .expect("JIT memory allocation")
+        .run(&mut cpu, &mut memory, 8);
+    [
+        (
+            interpreted.exit_reason,
+            interpreted.final_state.rip,
+            interpreted.instructions_executed,
+        ),
+        (
+            translated.exit_reason,
+            cpu.rip,
+            translated.instructions_executed,
+        ),
+    ]
+    .map(|(exit, rip, count)| (exit, rip.wrapping_sub(entry), count as u64))
+}
+
+/// Fifteen prefixes are already too long whatever follows, so the 16th byte is
+/// never fetched: #GP, not a fetch fault on the unmapped page after them
+/// (Intel SDM Vol. 3A, 7.15).
+#[test]
+fn overlong_instruction_is_gp_without_fetching_the_sixteenth_byte() {
+    for (exit, rip_offset, count) in run_prefixes_at_page_end(MAX_INSTRUCTION_LEN) {
+        assert_eq!(exit, ExitReason::GeneralProtection);
+        assert_eq!((rip_offset, count), (0, 0));
+    }
+}
+
+/// Control for the test above: fourteen prefixes leave room for an opcode, so
+/// the fetch of the 15th byte is what fails.
+#[test]
+fn fourteen_prefixes_at_a_page_end_fault_on_the_fetch() {
+    for (exit, rip_offset, count) in run_prefixes_at_page_end(MAX_INSTRUCTION_LEN - 1) {
+        assert!(matches!(exit, ExitReason::MemoryFault(_)), "{exit:?}");
+        assert_eq!((rip_offset, count), (0, 0));
+    }
 }
