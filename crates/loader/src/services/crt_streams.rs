@@ -100,6 +100,18 @@ struct Input {
 }
 
 impl Input {
+    /// Up to `limit` bytes, consuming them, for `_read` on descriptor 0.
+    /// Meeting the end sets the indicator.
+    fn take(&mut self, limit: usize) -> Vec<u8> {
+        let count = limit.min(self.bytes.len() - self.position);
+        let out = self.bytes[self.position..self.position + count].to_vec();
+        self.position += count;
+        if count == 0 {
+            self.eof = true;
+        }
+        out
+    }
+
     /// One character, or none at the end. Meeting the end sets the
     /// indicator, even when characters came before it in the same read.
     fn character(&mut self) -> Option<u8> {
@@ -624,6 +636,207 @@ impl StandardStreams {
             Some(byte) => i32::from(byte),
             None => -1,
         }
+    }
+
+    /// `_open`. The descriptor, or -1 with `errno`. The wide text modes
+    /// `_O_WTEXT`, `_O_U16TEXT` and `_O_U8TEXT` are not modelled and stop
+    /// the guest; the hint bits (`_O_NOINHERIT`, `_O_SEQUENTIAL`,
+    /// `_O_RANDOM`, `_O_SHORT_LIVED`) change nothing and are accepted.
+    pub(super) fn open_descriptor(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        name: u64,
+        flags: u32,
+    ) -> Outcome<i32> {
+        if name == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        if flags & 0x7_0000 != 0 {
+            return Err(RUNTIME_LIMIT);
+        }
+        let bytes = c_string(memory, name, MAX_NAME + 1).map_err(fault)?;
+        if bytes.is_empty() || bytes.len() as u64 > MAX_NAME {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        Ok(self
+            .opened
+            .open_descriptor(drive, &bytes, flags)
+            .map(|fd| fd as i32)
+            .map_err(|errno| Failed(-1, errno)))
+    }
+
+    /// `_close`. 0, or -1 with `EBADF` for a descriptor that is not open.
+    /// Closing a standard descriptor is not modelled and stops the guest.
+    pub(super) fn close_descriptor(
+        &mut self,
+        memory: &mut GuestMemory,
+        drive: &mut ObjectState,
+        fd: i32,
+    ) -> Outcome<i32> {
+        if fd < 0 {
+            return Ok(Err(Failed(-1, EBADF)));
+        }
+        if fd < 3 {
+            return Err(RUNTIME_LIMIT);
+        }
+        Ok(if self.opened.descriptor_close(memory, drive, fd as u32) {
+            Ok(0)
+        } else {
+            Err(Failed(-1, EBADF))
+        })
+    }
+
+    /// `_read`. The byte count, or -1 with `errno`. Reading the standard
+    /// input consumes what the host supplied; the output descriptors
+    /// cannot be read. A buffer it cannot write stops the guest with a
+    /// fault.
+    pub(super) fn read_descriptor(
+        &mut self,
+        memory: &mut GuestMemory,
+        drive: &ObjectState,
+        fd: i32,
+        buffer: u64,
+        count: u32,
+    ) -> Outcome<i32> {
+        if buffer == 0 && count != 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        if fd < 0 || count as u64 > MAX_TRANSFER {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        let bytes = match fd {
+            0 => self.input.take((count as usize).min(1 << 20)),
+            1 | 2 => return Ok(Err(Failed(-1, EBADF))),
+            _ => match self
+                .opened
+                .descriptor_read(drive, fd as u32, count as usize)
+            {
+                Ok(bytes) => bytes,
+                Err(errno) => return Ok(Err(Failed(-1, errno))),
+            },
+        };
+        memory.write_bytes(buffer, &bytes).map_err(fault)?;
+        Ok(Ok(bytes.len() as i32))
+    }
+
+    /// `_write`. The byte count, or -1 with `errno`. The standard output
+    /// and error descriptors write to the captured streams; the input
+    /// descriptor cannot be written.
+    pub(super) fn write_descriptor(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        fd: i32,
+        buffer: u64,
+        count: u32,
+    ) -> Outcome<i32> {
+        if buffer == 0 && count != 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        if fd < 0 || count as u64 > MAX_TRANSFER {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        let mut bytes = vec![0; count as usize];
+        memory.read_bytes(buffer, &mut bytes).map_err(fault)?;
+        let result = match fd {
+            0 => Err(EBADF),
+            1 => self.write(drive, Stream::Output, &bytes)?,
+            2 => self.write(drive, Stream::Error, &bytes)?,
+            _ => match self.opened.descriptor_write(drive, fd as u32, &bytes) {
+                Ok(()) => Ok(()),
+                Err(errno) => Err(errno),
+            },
+        };
+        Ok(match result {
+            Ok(()) => Ok(count as i32),
+            Err(errno) => Err(Failed(-1, errno)),
+        })
+    }
+
+    /// `_lseek`. The new position, or -1 with `errno`. The standard
+    /// descriptors cannot be sought.
+    pub(super) fn seek_descriptor(
+        &mut self,
+        drive: &ObjectState,
+        fd: i32,
+        offset: i32,
+        origin: i32,
+    ) -> Outcome<i32> {
+        if fd < 0 {
+            return Ok(Err(Failed(-1, EBADF)));
+        }
+        if fd < 3 {
+            return Ok(Err(Failed(-1, EBADF)));
+        }
+        Ok(self
+            .opened
+            .descriptor_seek(drive, fd as u32, offset, origin as u32)
+            .map(|position| position as i32)
+            .map_err(|errno| Failed(-1, errno)))
+    }
+
+    /// `_fileno`. The descriptor of a stream: 0, 1 or 2 for the standard
+    /// ones, a shared descriptor for one `fopen` returned. -1 with
+    /// `EINVAL` for a null stream; a pointer that is no stream stops the
+    /// guest.
+    pub(super) fn descriptor_of(&mut self, file: u64) -> Outcome<i32> {
+        if file == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        Ok(match self.stream(file)? {
+            Stream::Input => Ok(0),
+            Stream::Output => Ok(1),
+            Stream::Error => Ok(2),
+            Stream::File(file) => self
+                .opened
+                .descriptor_of(file)
+                .map(|fd| fd as i32)
+                .map_err(|errno| Failed(-1, errno)),
+        })
+    }
+
+    /// `_isatty`. Nothing here is a character device: the standard input is
+    /// what the host supplied and the output is captured, so the answer is
+    /// always 0. An invalid descriptor is 0 with `EBADF` in errno.
+    pub(super) fn is_terminal(&mut self, fd: i32) -> Outcome<i32> {
+        if fd < 0 {
+            return Ok(Err(Failed(0, EBADF)));
+        }
+        if fd < 3 {
+            return Ok(Ok(0));
+        }
+        Ok(if self.opened.has_descriptor(fd as u32) {
+            Ok(0)
+        } else {
+            Err(Failed(0, EBADF))
+        })
+    }
+
+    /// `_access`. 0 when the name is a file or a directory; the files the
+    /// drive holds are always readable and writable, so the mode only
+    /// decides the answer for what is missing. -1 with `ENOENT` then, or
+    /// `EINVAL` for a null or empty name or a mode with other bits.
+    pub(super) fn access(
+        &self,
+        memory: &GuestMemory,
+        drive: &ObjectState,
+        name: u64,
+        mode: i32,
+    ) -> Outcome<i32> {
+        if mode & !7 != 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        let Some(path) = drive_name(memory, name)? else {
+            return Ok(Err(Failed(-1, EINVAL)));
+        };
+        let Some(path) = path else {
+            return Ok(Err(Failed(-1, ENOENT)));
+        };
+        Ok(match drive.drive_entry(&path) {
+            DriveEntry::File | DriveEntry::Directory => Ok(0),
+            DriveEntry::Missing { .. } => Err(Failed(-1, ENOENT)),
+        })
     }
 
     /// `feof`: the end-of-file indicator of the stream. Only the standard
