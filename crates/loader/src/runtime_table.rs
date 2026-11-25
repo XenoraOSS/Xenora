@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 116] = [
+pub static SERVICES: [ServiceMetadata; 131] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -302,31 +302,9 @@ pub static SERVICES: [ServiceMetadata; 116] = [
         result: "i32",
         status: ServiceStatus::Partial,
         aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
-        failure: "the indicator of the standard input and of file streams; the output streams report 0; -1 with errno EINVAL for a null stream",
+        failure: "the indicator of the standard input only; other streams report 0; -1 with errno EINVAL for a null stream",
         reference: "stdio.h feof",
-        tests: &["stdin_lines_follow_iso_c_at_the_edges", "secure_fopen_and_stream_indicators_follow_iso_c"],
-    },
-    ServiceMetadata {
-        library: "ucrtbase.dll",
-        symbol: "fopen_s",
-        parameters: &[Parameter { name: "file", kind: "ptr" }, Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "ptr" }],
-        result: "i32",
-        status: ServiceStatus::Partial,
-        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
-        failure: "the error number as its result and in errno, with the output pointer null; EINVAL for a null or empty argument, or a name or mode it cannot read; stops the guest for an output pointer it cannot write; the invalid parameter handler is not modelled",
-        reference: "stdio.h fopen_s",
-        tests: &["secure_fopen_and_stream_indicators_follow_iso_c"],
-    },
-    ServiceMetadata {
-        library: "ucrtbase.dll",
-        symbol: "clearerr",
-        parameters: &[Parameter { name: "stream", kind: "ptr" }],
-        result: "void",
-        status: ServiceStatus::Implemented,
-        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
-        failure: "never; errno EINVAL for a null stream; stops the guest for a pointer that is no stream",
-        reference: "stdio.h clearerr",
-        tests: &["secure_fopen_and_stream_indicators_follow_iso_c"],
+        tests: &["stdin_lines_follow_iso_c_at_the_edges"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -393,6 +371,193 @@ pub static SERVICES: [ServiceMetadata; 116] = [
         failure: "-1 with errno ENOENT when the old name holds nothing, EACCES when the new name exists or its directory does not, EINVAL for a null or rejected name; stops the guest for a directory",
         reference: "stdio.h rename",
         tests: &["file_positions_round_trip_and_files_are_removed_and_renamed"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_gmtime64",
+        parameters: &[Parameter { name: "time", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "null with errno EINVAL for a null pointer or a time outside 1970-to-3000",
+        reference: "time.h _gmtime64",
+        tests: &["c_time_breaks_down_and_composes_the_injected_clock"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_localtime64",
+        parameters: &[Parameter { name: "time", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "null with errno EINVAL for a null pointer or a time outside 1970-to-3000",
+        reference: "time.h _localtime64",
+        tests: &["c_time_breaks_down_and_composes_the_injected_clock"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_mktime64",
+        parameters: &[Parameter { name: "tm", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "-1 with errno EINVAL for a null pointer or a time outside 1970-to-3000",
+        reference: "time.h _mktime64",
+        tests: &["c_time_breaks_down_and_composes_the_injected_clock"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "asctime",
+        parameters: &[Parameter { name: "tm", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "null with errno EINVAL for a null pointer or out-of-range fields",
+        reference: "time.h asctime",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_ctime64",
+        parameters: &[Parameter { name: "time", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "null with errno EINVAL for a null pointer or a time outside 1970-to-3000",
+        reference: "time.h _ctime64",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "asctime_s",
+        parameters: &[Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "size", kind: "u64" }, Parameter { name: "tm", kind: "ptr" }],
+        result: "u32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer",
+        reference: "time.h asctime_s",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_ctime64_s",
+        parameters: &[Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "size", kind: "u64" }, Parameter { name: "time", kind: "ptr" }],
+        result: "u32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer",
+        reference: "time.h _ctime64_s",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "clock",
+        parameters: &[],
+        result: "u64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "never",
+        reference: "time.h clock",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_difftime64",
+        parameters: &[Parameter { name: "time1", kind: "u64" }, Parameter { name: "time2", kind: "u64" }],
+        result: "f64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "never",
+        reference: "time.h _difftime64",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "strftime",
+        parameters: &[Parameter { name: "out", kind: "ptr" }, Parameter { name: "size", kind: "u64" }, Parameter { name: "format", kind: "ptr" }, Parameter { name: "tm", kind: "ptr" }],
+        result: "u64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "0 when the result does not fit; EINVAL for null arguments or invalid fields",
+        reference: "time.h strftime",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "gmtime",
+        parameters: &[Parameter { name: "time", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "null with errno EINVAL for a null pointer or a time outside 1970-to-3000",
+        reference: "time.h gmtime",
+        tests: &["c_time_breaks_down_and_composes_the_injected_clock"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "localtime",
+        parameters: &[Parameter { name: "time", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "null with errno EINVAL for a null pointer or a time outside 1970-to-3000",
+        reference: "time.h localtime",
+        tests: &["c_time_breaks_down_and_composes_the_injected_clock"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "mktime",
+        parameters: &[Parameter { name: "tm", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "-1 with errno EINVAL for a null pointer or a time outside 1970-to-3000",
+        reference: "time.h mktime",
+        tests: &["c_time_breaks_down_and_composes_the_injected_clock"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "ctime",
+        parameters: &[Parameter { name: "time", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "null with errno EINVAL for a null pointer or a time outside 1970-to-3000",
+        reference: "time.h ctime",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "ctime_s",
+        parameters: &[Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "size", kind: "u64" }, Parameter { name: "time", kind: "ptr" }],
+        result: "u32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer",
+        reference: "time.h ctime_s",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "difftime",
+        parameters: &[Parameter { name: "time1", kind: "u64" }, Parameter { name: "time2", kind: "u64" }],
+        result: "f64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-time-l1-1-0.dll"],
+        failure: "never",
+        reference: "time.h difftime",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "FileTimeToLocalFileTime",
+        parameters: &[Parameter { name: "input", kind: "ptr" }, Parameter { name: "output", kind: "ptr" }],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-file-l1-1-0.dll"],
+        failure: "never in range; the machine's local time is UTC, so the conversion is the identity; guest fault on an invalid pointer",
+        reference: "fileapi.h FileTimeToLocalFileTime",
+        tests: &["c_time_formats_and_measures_as_the_crt_does"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -1534,24 +1699,6 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
-    registry.register_with_status("ucrtbase.dll", "fopen_s", ServiceStatus::Partial, move |args, cpu, memory| {
-        let call = Call::new(args, cpu, memory);
-        let a0 = call.u64(0)?;
-        let a1 = call.u64(1)?;
-        let a2 = call.u64(2)?;
-        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
-        let result: i32 = handlers::fopen_s(&mut context, a0, a1, a2)?;
-        Ok(result.place(cpu))
-    });
-    let s = state.clone();
-    registry.register_with_status("ucrtbase.dll", "clearerr", ServiceStatus::Implemented, move |args, cpu, memory| {
-        let call = Call::new(args, cpu, memory);
-        let a0 = call.u64(0)?;
-        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
-        let () = handlers::clearerr(&mut context, a0)?;
-        Ok(0)
-    });
-    let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "_ftelli64", ServiceStatus::Partial, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.u64(0)?;
@@ -1602,6 +1749,153 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a1 = call.u64(1)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::rename(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_gmtime64", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_gmtime64(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_localtime64", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_gmtime64(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_mktime64", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_mktime64(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "asctime", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::asctime(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_ctime64", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_ctime64(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "asctime_s", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::asctime_s(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_ctime64_s", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::_ctime64_s(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "clock", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::clock(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_difftime64", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: crate::runtime::Float64 = handlers::_difftime64(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "strftime", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.u64(3)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::strftime(&mut context, a0, a1, a2, a3)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "gmtime", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_gmtime64(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "localtime", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_gmtime64(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "mktime", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_mktime64(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "ctime", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_ctime64(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "ctime_s", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::_ctime64_s(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "difftime", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: crate::runtime::Float64 = handlers::_difftime64(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "FileTimeToLocalFileTime", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::file_time_to_local_file_time(&mut context, a0, a1)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();

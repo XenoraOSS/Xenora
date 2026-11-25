@@ -416,6 +416,145 @@ service ucrtbase.dll _unlink(name: ptr) -> i32
     ref io.h _unlink
     test descriptors_share_files_with_streams
 
+# The C time services of package 5 of #459. The clock is UTC throughout:
+# Xenora has no answer for what zone the machine stands in, and the docs
+# say so.
+service ucrtbase.dll _gmtime64(time: ptr) -> ptr
+    handler _gmtime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
+    ref time.h _gmtime64
+    test c_time_breaks_down_and_composes_the_injected_clock
+
+service ucrtbase.dll _localtime64(time: ptr) -> ptr
+    handler _gmtime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
+    ref time.h _localtime64
+    test c_time_breaks_down_and_composes_the_injected_clock
+
+service ucrtbase.dll _mktime64(tm: ptr) -> ptr
+    handler _mktime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000
+    ref time.h _mktime64
+    test c_time_breaks_down_and_composes_the_injected_clock
+
+service ucrtbase.dll asctime(tm: ptr) -> ptr
+    handler asctime
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails null with errno EINVAL for a null pointer or out-of-range fields
+    ref time.h asctime
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll _ctime64(time: ptr) -> ptr
+    handler _ctime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
+    ref time.h _ctime64
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll asctime_s(buffer: ptr, size: u64, tm: ptr) -> u32
+    handler asctime_s
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer
+    ref time.h asctime_s
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll _ctime64_s(buffer: ptr, size: u64, time: ptr) -> u32
+    handler _ctime64_s
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer
+    ref time.h _ctime64_s
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll clock() -> u64
+    handler clock
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails never
+    ref time.h clock
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll _difftime64(time1: u64, time2: u64) -> f64
+    handler _difftime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails never
+    ref time.h _difftime64
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll strftime(out: ptr, size: u64, format: ptr, tm: ptr) -> u64
+    handler strftime
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails 0 when the result does not fit; EINVAL for null arguments or invalid fields
+    ref time.h strftime
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll gmtime(time: ptr) -> ptr
+    handler _gmtime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
+    ref time.h gmtime
+    test c_time_breaks_down_and_composes_the_injected_clock
+
+service ucrtbase.dll localtime(time: ptr) -> ptr
+    handler _gmtime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
+    ref time.h localtime
+    test c_time_breaks_down_and_composes_the_injected_clock
+
+service ucrtbase.dll mktime(tm: ptr) -> ptr
+    handler _mktime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000
+    ref time.h mktime
+    test c_time_breaks_down_and_composes_the_injected_clock
+
+service ucrtbase.dll ctime(time: ptr) -> ptr
+    handler _ctime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
+    ref time.h ctime
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll ctime_s(buffer: ptr, size: u64, time: ptr) -> u32
+    handler _ctime64_s
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer
+    ref time.h ctime_s
+    test c_time_formats_and_measures_as_the_crt_does
+
+service ucrtbase.dll difftime(time1: u64, time2: u64) -> f64
+    handler _difftime64
+    status implemented
+    alias api-ms-win-crt-time-l1-1-0.dll
+    fails never
+    ref time.h difftime
+    test c_time_formats_and_measures_as_the_crt_does
+
+service kernel32.dll FileTimeToLocalFileTime(input: ptr, output: ptr) -> u32
+    handler file_time_to_local_file_time
+    status partial
+    alias api-ms-win-core-file-l1-1-0.dll
+    fails never in range; the machine's local time is UTC, so the conversion is the identity; guest fault on an invalid pointer
+    ref fileapi.h FileTimeToLocalFileTime
+    test c_time_formats_and_measures_as_the_crt_does
+
 service ucrtbase.dll perror(message: ptr) -> void
     handler perror
     status partial
