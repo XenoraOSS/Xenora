@@ -133,6 +133,13 @@ pub type ServiceHandler = Box<
     dyn Fn(&Win64Args, &mut CpuState, &mut GuestMemory) -> Result<u64, ExitReason> + Send + Sync,
 >;
 
+/// Provider of the guest address of a data import's variable cell. The CRT
+/// variables live behind the same state the modern accessors use, so the
+/// provider allocates or finds the cell through it; the address is stable
+/// once handed out, and the cell's content can still change as the CRT
+/// startup runs.
+pub type DataProvider = Box<dyn Fn(&mut GuestMemory) -> Result<u64, MemoryError> + Send + Sync>;
+
 /// Scope of a registered handler's implementation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ServiceStatus {
@@ -291,6 +298,9 @@ pub struct ImportRegistry {
     /// Services that set the whole CPU state themselves, such as exception
     /// dispatch entering a guest handler or installing an unwind target.
     context_services: std::collections::HashSet<usize>,
+    /// Services that are data objects, not functions: binding writes the
+    /// variable cell's address into the IAT slot instead of a trampoline.
+    data_providers: HashMap<usize, DataProvider>,
     dynamic_trampolines: DynamicTrampolines,
     trampoline_to_service: HashMap<u64, usize>, // Trampoline VA -> service_index
 }
@@ -310,6 +320,7 @@ impl ImportRegistry {
             callback_dispatchers: HashMap::new(),
             callback_tasks: HashMap::new(),
             context_services: Default::default(),
+            data_providers: HashMap::new(),
             trampoline_to_service: HashMap::new(),
             dynamic_trampolines: DynamicTrampolines::default(),
         }
@@ -558,6 +569,28 @@ impl ImportRegistry {
         }
     }
 
+    /// Register a data import: a symbol the exporting module documents as a
+    /// variable, not a function. The IAT slot of a bound image then holds the
+    /// variable cell's guest address, as it does on Windows. The registered
+    /// handler exists only so inspection and reports resolve the symbol like
+    /// any other; nothing ever calls it, because the slot is not a trampoline,
+    /// and it stops the guest as a runtime-limit fault if somehow reached.
+    pub(crate) fn register_data(
+        &mut self,
+        module: &str,
+        symbol: &str,
+        status: ServiceStatus,
+        provider: impl Fn(&mut GuestMemory) -> Result<u64, MemoryError> + Send + Sync + 'static,
+    ) {
+        self.register_with_status(module, symbol, status, |_, _, _| {
+            Err(ExitReason::IllegalInstruction(0xff))
+        });
+        let index = self
+            .service_index(module, symbol)
+            .expect("registered data service");
+        self.data_providers.insert(index, Box::new(provider));
+    }
+
     /// Bind the PE's Import Address Table (IAT) in guest memory to synthetic trampoline VAs.
     pub fn bind_imports(
         &mut self,
@@ -592,6 +625,11 @@ impl ImportRegistry {
             slots.push((address, index));
         }
         for &(address, index) in &slots {
+            if let Some(provider) = self.data_providers.get(&index) {
+                let cell = provider(memory)?;
+                memory.write_u64_bypass(address, cell)?;
+                continue;
+            }
             let trampoline = IMPORT_TRAMPOLINE_BASE_VA + (index as u64) * IMPORT_TRAMPOLINE_STRIDE;
             memory.write_u64_bypass(address, trampoline)?;
             self.trampoline_to_service.insert(trampoline, index);
