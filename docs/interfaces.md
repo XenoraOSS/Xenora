@@ -1420,6 +1420,14 @@ validates the complete payload budget before copying the checked logical range
 into an immutable `GraphicsCopyInput::Host`. Recording does not capture bytes;
 post-submission changes and handle destruction cannot alter the pending snapshot.
 Failed admission leaves queue points and destination contents unchanged, and a
-retry captures fresh bytes. Guest-backed destinations and region/image copies
+retry captures fresh bytes. Guest-backed destinations and image copies
 remain rejected. This is bounded submission-time copying, not coherent guest/GPU
 memory; see the [guest ABI](graphics-call-v1.md#guest-backed-whole-buffer-copy-sources).
+
+
+Buffer-region copies use the same full-source guest snapshot contract through
+opcode43. The region's source and destination bounds are checked before capture;
+the full logical source must be readable and is fully charged to the payload budget.
+The existing native region operation retains the exact owned destination-prior
+version and preserves bytes outside the patch. Existing arbitrary-byte capability
+checks and Produced destination dependencies remain unchanged.

@@ -15,12 +15,46 @@ run ends with `PASS`. Quick mode also rejects filters that select no passing tes
 Use `--help` for prerequisites. These tests render offscreen and compare pixels;
 they do not open an application window. Avoid other GPU test runs at the same time.
 
-## Guest-backed whole-buffer copy snapshots
+## Guest-backed buffer-region copy checkpoint
+
+Opcode43 now accepts guest-backed buffer sources, using the same full-source
+submission snapshot as whole copies. The destination remains owned, and image
+transfers remain outside this extension. All logical source bytes must be readable,
+even outside the selected region; the full padded source staging is budgeted.
+
+The updated quick script passed **56 tests across 16 steps**, zero failures or
+ignored tests. Four new CPU tests first failed against the old recording guard,
+then passed with the source-policy extension. Two new original guest tests passed
+on the native queued adapter. Focused selections are:
+
+```sh
+cargo test --locked -p xenora-loader --test queued_copies cpu_guest_region -- --nocapture
+cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_backed_region_ -- --nocapture --test-threads=1
+```
+
+Enable the Metal validation environment below for the guest command, or use the
+script. Coverage includes odd and exact-end regions, untouched destination borders,
+full-source readability and accounting, retry freshness, alignment restrictions,
+post-submit mutation and retirement. A pending produced destination has different
+bytes from stale host storage, so the guest oracle distinguishes its prior version.
+Both collection orders are tested; this is not a controlled GPU-wait fault test.
+
+An intentional source-offset-zero mutation failed the actual guest readback with
+shifted patch bytes. The source hash matched after restoration. CPU completion bytes
+are scripted contract checks; native guest tests establish the copy-byte results.
+
+All nine gates passed after restoration: **862 workspace tests passed, zero failed,
+86 ignored**; the GPU script reported **334 passed, zero failed, one manual test
+ignored**. GPU totals include CPU checks and overlapping workspace coverage.
+Architecture/linkage evidence confirms native ARM64 with system Metal; API/shader
+validation was enabled. Broader Stage2/3 work remains open.
+
+## Guest-backed whole-buffer copy checkpoint
 
 Queued whole-buffer copies can capture a guest-backed buffer into an owned
 destination. The snapshot occurs at submission: earlier guest writes are observed,
-and later writes cannot alter pending work. Guest-backed destinations and region/image
-copies remain rejected. This does not provide general coherent guest/GPU memory.
+and later writes cannot alter pending work. At this checkpoint guest-backed
+destinations and region/image copies remained rejected. This does not provide general coherent guest/GPU memory.
 
 Quick validation now runs 14 steps and passed **50 tests, zero failed or ignored**.
 The new focused checks account for ten CPU tests and two original guest tests:

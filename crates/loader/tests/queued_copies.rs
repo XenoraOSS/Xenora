@@ -1900,18 +1900,13 @@ fn cpu_guest_copy_invalid_completion_preserves_destination_bytes_and_state() {
 }
 
 #[test]
-fn cpu_guest_copy_source_extension_does_not_admit_destinations_or_region_image_sources() {
+fn cpu_guest_copy_source_extension_does_not_admit_guest_destinations_or_image_sources() {
     let mut h = CopyHarness::new();
     let guest = h.guest_source(0x1800, 16);
     let owned = h.resource(false, &[0; 16]);
     let texture = h.resource(true, &[0; 16]);
     let list = h.lists[0];
     assert!(h.ctx.cmd_copy_resource(list, guest, owned).is_err());
-    assert!(
-        h.ctx
-            .cmd_copy_buffer_region(list, owned, 0, guest, 0, 4)
-            .is_err()
-    );
     assert!(
         h.ctx
             .cmd_copy_buffer_region(list, guest, 0, owned, 0, 4)
@@ -2020,4 +2015,230 @@ fn cpu_guest_copy_unreadable_tail_rejects_but_exact_odd_logical_span_succeeds() 
     );
     h.ctx.release_submission(receipt).unwrap();
     assert_eq!(h.read(destination, 5), [2, 3, 5, 7, 11]);
+}
+
+impl CopyHarness {
+    fn enable_guest_regions(&mut self) {
+        let captured = self.backend.clone();
+        self.ctx.set_metal_unaligned_buffer_region_queued_backend(
+            Default::default(),
+            move |request| {
+                let state = Arc::new(Mutex::new(ControlledState::default()));
+                let mut backend = captured.lock().unwrap();
+                backend.requests.push(request);
+                backend.tickets.push(state.clone());
+                Ok(Box::new(ControlledTicket(state)))
+            },
+        );
+    }
+    fn close_guest_region(
+        &mut self,
+        source: GraphicsHandle,
+        destination: GraphicsHandle,
+        source_offset: usize,
+        destination_offset: usize,
+        len: usize,
+    ) {
+        let list = self.lists[0];
+        self.ctx
+            .cmd_copy_buffer_region(
+                list,
+                destination,
+                destination_offset,
+                source,
+                source_offset,
+                len,
+            )
+            .unwrap();
+        self.ctx
+            .cmd_resource_barrier(
+                list,
+                destination,
+                ResourceStates::COPY_DEST,
+                ResourceStates::COPY_SOURCE,
+            )
+            .unwrap();
+        self.ctx.close_command_list(list).unwrap();
+    }
+}
+
+#[test]
+fn cpu_guest_region_exact_end_snapshots_full_source_and_preserves_destination_prefix() {
+    let mut h = CopyHarness::new();
+    h.enable_guest_regions();
+    let source = h.guest_source(0x1800, 9);
+    let destination = h.resource(false, &[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    h.memory.write_bytes(0x1800, &[31; 9]).unwrap();
+    for (src, dst, len) in [
+        (5, 6, 5),
+        (4, 7, 5),
+        (usize::MAX, 0, 1),
+        (0, usize::MAX, 1),
+        (0, 0, 0),
+    ] {
+        assert!(
+            h.ctx
+                .cmd_copy_buffer_region(h.lists[0], destination, dst, source, src, len)
+                .is_err()
+        );
+    }
+    h.close_guest_region(source, destination, 4, 6, 5);
+    let literal = [17, 29, 43, 61, 79, 97, 113, 131, 149];
+    h.memory.write_bytes(0x1800, &literal).unwrap();
+    let receipt = h
+        .submit(0, &[])
+        .expect("guest-backed region source must be admitted");
+    h.memory.write_bytes(0x1800, &[211; 9]).unwrap();
+    h.reset(0);
+    h.ctx.destroy_resource(source).unwrap();
+    {
+        let backend = h.backend.lock().unwrap();
+        let GraphicsQueuedWorkRequest::BufferRegion(request) = &backend.requests[0] else {
+            panic!("region")
+        };
+        assert_eq!(
+            (
+                request.source_byte_len,
+                request.destination_byte_len,
+                request.source_offset,
+                request.destination_offset,
+                request.byte_len
+            ),
+            (9, 11, 4, 6, 5)
+        );
+        assert!(
+            matches!(&request.source,GraphicsCopyInput::Host(bytes) if bytes.as_ref()==literal)
+        );
+        assert!(
+            matches!(&request.destination,GraphicsCopyInput::Host(bytes) if bytes.as_ref()==[1,2,3,4,5,6,7,8,9,10,11])
+        );
+    }
+    // Entire padded source/destination, plus the existing unaligned patch parameters.
+    assert_eq!(h.ctx.queued_copy_allocation_bytes(), 88); // 4*12 + 2*12 + 16
+    h.complete(0, copy_bytes(&[1, 2, 3, 4, 5, 6, 79, 97, 113, 131, 149]));
+    assert_eq!(
+        h.ctx.wait_submission(receipt).unwrap(),
+        GraphicsSubmissionStatus::Complete
+    );
+    h.ctx.release_submission(receipt).unwrap();
+    assert_eq!(
+        h.read(destination, 11),
+        [1, 2, 3, 4, 5, 6, 79, 97, 113, 131, 149]
+    );
+    assert_eq!(h.ctx.queued_copy_allocation_bytes(), 0);
+    assert_eq!(h.ctx.last_presentation.lock().unwrap().frame_index, 0);
+}
+
+#[test]
+fn cpu_guest_region_uncopied_unreadable_tail_rejects_full_snapshot_then_recovers() {
+    let mut h = CopyHarness::new();
+    h.enable_regions();
+    let source = h.guest_source(0x6000, 9);
+    let destination = h.resource(false, &[1, 2, 3, 4, 5, 6, 7, 8, 99]);
+    h.memory
+        .map_region_with_data(0x6000, 4, MemoryPermissions::READ_ONLY, &[17, 29, 43, 61])
+        .unwrap();
+    h.memory
+        .map_region(0x6004, 5, MemoryPermissions::NO_ACCESS)
+        .unwrap();
+    h.close_guest_region(source, destination, 0, 4, 4);
+    assert!(matches!(h.submit(0, &[]), Err(GraphicsError::Memory(_))));
+    assert!(h.backend.lock().unwrap().requests.is_empty());
+    assert_eq!(h.ctx.queued_copy_allocation_bytes(), 0);
+    h.memory = GuestMemory::new();
+    h.memory
+        .map_region(0x1000, 4096, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    h.memory
+        .map_region_with_data(
+            0x6000,
+            9,
+            MemoryPermissions::READ_ONLY,
+            &[17, 29, 43, 61, 79, 97, 113, 131, 149],
+        )
+        .unwrap();
+    let receipt = h.submit(0, &[]).unwrap();
+    h.complete(0, copy_bytes(&[1, 2, 3, 4, 17, 29, 43, 61, 99]));
+    assert_eq!(receipt.to_u64(), destination.to_u64() + 1);
+    assert_eq!(h.ctx.submission_point(receipt).unwrap().value, 1);
+    assert_eq!(
+        h.ctx.wait_submission(receipt).unwrap(),
+        GraphicsSubmissionStatus::Complete
+    );
+    h.ctx.release_submission(receipt).unwrap();
+    assert_eq!(h.read(destination, 9), [1, 2, 3, 4, 17, 29, 43, 61, 99]);
+}
+
+#[test]
+fn cpu_guest_region_backend_retry_refreshes_full_source_and_charges_backing_not_region() {
+    let mut h = CopyHarness::new();
+    let source = h.guest_source(0x1800, 17);
+    let destination = h.resource(false, &[1, 2, 3, 4, 5, 6, 7, 8, 99]);
+    let snapshots = Arc::new(Mutex::new(Vec::new()));
+    let captured = snapshots.clone();
+    h.ctx
+        .set_metal_unaligned_buffer_region_queued_backend(Default::default(), move |work| {
+            let GraphicsQueuedWorkRequest::BufferRegion(request) = work else {
+                panic!("region")
+            };
+            let GraphicsCopyInput::Host(bytes) = request.source else {
+                panic!("host")
+            };
+            let mut seen = captured.lock().unwrap();
+            seen.push(bytes.to_vec());
+            if seen.len() == 1 {
+                return Err(GraphicsError::InvalidDescriptor);
+            }
+            assert_eq!(request.point.value, 1);
+            Ok(Box::new(CpuTicket(Some(copy_bytes(&[
+                1, 2, 3, 4, 77, 6, 7, 8, 99,
+            ])))))
+        });
+    h.memory.write_bytes(0x1800, &[13; 17]).unwrap();
+    h.close_guest_region(source, destination, 16, 4, 1);
+    assert!(h.submit(0, &[]).is_err());
+    assert_eq!(h.ctx.queued_copy_allocation_bytes(), 0);
+    let mut next = [29; 17];
+    next[16] = 77;
+    h.memory.write_bytes(0x1800, &next).unwrap();
+    let receipt = h.submit(0, &[]).unwrap();
+    assert_eq!(receipt.to_u64(), destination.to_u64() + 1);
+    assert_eq!(
+        *snapshots.lock().unwrap(),
+        vec![vec![13; 17], next.to_vec()]
+    );
+    assert_eq!(h.ctx.queued_copy_allocation_bytes(), 104); // full source20*2 + destination12*4 + parameters16, not copied1byte
+    assert_eq!(
+        h.ctx.wait_submission(receipt).unwrap(),
+        GraphicsSubmissionStatus::Complete
+    );
+    h.ctx.release_submission(receipt).unwrap();
+    assert_eq!(h.read(destination, 9), [1, 2, 3, 4, 77, 6, 7, 8, 99]);
+    assert_eq!(h.ctx.queued_copy_allocation_bytes(), 0);
+}
+
+#[test]
+fn cpu_guest_region_old_aligned_backend_rejects_unaligned_before_dispatch() {
+    let mut h = CopyHarness::new();
+    h.enable_regions();
+    let source = h.guest_source(0x1800, 5);
+    let destination = h.resource(false, &[1, 2, 3, 4, 5]);
+    h.memory.write_bytes(0x1800, &[17, 29, 43, 61, 79]).unwrap();
+    h.close_guest_region(source, destination, 1, 2, 1);
+    assert!(matches!(
+        h.submit(0, &[]),
+        Err(GraphicsError::NativeMetalRequired)
+    ));
+    assert!(h.backend.lock().unwrap().requests.is_empty());
+    assert_eq!(h.ctx.queued_copy_allocation_bytes(), 0);
+    h.enable_guest_regions();
+    let receipt = h.submit(0, &[]).unwrap();
+    h.complete(0, copy_bytes(&[1, 2, 29, 4, 5]));
+    assert_eq!(h.ctx.submission_point(receipt).unwrap().value, 1);
+    assert_eq!(
+        h.ctx.wait_submission(receipt).unwrap(),
+        GraphicsSubmissionStatus::Complete
+    );
+    h.ctx.release_submission(receipt).unwrap();
+    assert_eq!(h.read(destination, 5), [1, 2, 29, 4, 5]);
 }

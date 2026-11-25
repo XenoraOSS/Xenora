@@ -4414,8 +4414,8 @@ fn original_guest_backed_copy_forbidden_roles_and_failed_submit_preserve_destina
         2,
         Some(u64::MAX),
     );
-    // Whole copies may only target owned storage. Regions and image transfers
-    // reject guest-backed storage in either role, even for in-bounds ranges.
+    // Whole/region copies may only target owned storage. Image transfers
+    // still reject guest-backed storage in either role, even for in-bounds ranges.
     guest.call(
         42,
         &[H(list), H(forbidden_destination), H(seed)],
@@ -4428,12 +4428,7 @@ fn original_guest_backed_copy_forbidden_roles_and_failed_submit_preserve_destina
         2,
         Some(u64::MAX),
     );
-    guest.call(
-        43,
-        &[H(list), H(destination), I(0), H(source), I(0), I(4)],
-        2,
-        Some(u64::MAX),
-    );
+    // Guest-backed region sources are covered by original_guest_backed_region_.
     guest.call(
         43,
         &[H(list), H(forbidden_destination), I(0), H(seed), I(0), I(4)],
@@ -4498,4 +4493,148 @@ fn original_guest_backed_copy_forbidden_roles_and_failed_submit_preserve_destina
         0,
         &[],
     );
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_backed_region_submission_snapshot_preserves_borders_and_odd_tail() {
+    const SUBMITTED: [u8; 13] = [3, 251, 17, 129, 64, 7, 223, 41, 155, 2, 199, 83, 237];
+    const AFTER: [u8; 13] = [
+        201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213,
+    ];
+    const PRIOR: [u8; 13] = [
+        101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
+    ];
+    // Independent full-destination literals: interior odd patch, then a patch
+    // ending exactly at both logical source and destination ends.
+    for (source_offset, destination_offset, byte_len, expected) in [
+        (
+            1,
+            3,
+            7,
+            [101, 102, 103, 251, 17, 129, 64, 7, 223, 41, 111, 112, 113],
+        ),
+        (
+            8,
+            8,
+            5,
+            [101, 102, 103, 104, 105, 106, 107, 108, 155, 2, 199, 83, 237],
+        ),
+    ] {
+        let mut guest = GuestScript::new();
+        let device = guest.handle(1, &[]);
+        let queue = guest.handle(2, &[H(device)]);
+        let allocator = guest.handle(3, &[H(device)]);
+        let list = guest.handle(4, &[H(device), H(allocator)]);
+        let mut initial = vec![0xa5; 8];
+        initial.extend([0x11; 13]);
+        initial.extend([0xa5; 8]);
+        let backing = guest.bytes(&initial);
+        let source = guest.handle(49, &[H(device), I(13), I(COPY_SOURCE), I(backing + 8)]);
+        let destination = guest.handle(5, &[H(device), I(13), I(COPY_DEST)]);
+        let prior = guest.bytes(&PRIOR);
+        guest.ok(9, &[H(destination), I(0), I(prior), I(13)]);
+        guest.ok(
+            43,
+            &[
+                H(list),
+                H(destination),
+                I(destination_offset),
+                H(source),
+                I(source_offset),
+                I(byte_len),
+            ],
+        );
+        guest.barrier(list, destination, COPY_DEST, COPY_SOURCE);
+        guest.ok(12, &[H(list)]);
+        // The backing differs at creation/recording, submission, and collection.
+        guest_runtime_write_bytes(&mut guest, backing + 8, &SUBMITTED);
+        let receipt = guest.handle(35, &[H(queue), H(list), I(0), I(0)]);
+        guest_runtime_write_bytes(&mut guest, backing + 8, &AFTER);
+        guest.ok(11, &[H(list), H(allocator)]);
+        guest.ok(26, &[H(source)]);
+        guest.call(32, &[H(receipt)], 0, Some(1));
+        guest.ok(33, &[H(receipt)]);
+        let output = guest.bytes(&[0xa5; 29]);
+        guest.ok(10, &[H(destination), I(0), I(output + 8), I(13)]);
+        check_original_guest_backend(
+            guest,
+            true,
+            true,
+            &[(output, expected.to_vec()), (backing, AFTER.to_vec())],
+            0,
+            &[],
+        );
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_backed_region_pending_destination_version_and_retirement() {
+    const SUBMITTED: [u8; 13] = [3, 251, 17, 129, 64, 7, 223, 41, 155, 2, 199, 83, 237];
+    const AFTER: [u8; 13] = [
+        201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213,
+    ];
+    const PRIOR: [u8; 13] = [
+        101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
+    ];
+    const EXPECTED: [u8; 13] = [101, 102, 103, 251, 17, 129, 64, 7, 223, 41, 111, 112, 113];
+    for producer_first in [false, true] {
+        let mut guest = GuestScript::new();
+        let device = guest.handle(1, &[]);
+        let queues = [0, 1].map(|_| guest.handle(2, &[H(device)]));
+        let allocators = [0, 1].map(|_| guest.handle(3, &[H(device)]));
+        let lists = allocators.map(|a| guest.handle(4, &[H(device), H(a)]));
+        let mut initial = vec![0xa5; 8];
+        initial.extend([0x11; 13]);
+        initial.extend([0xa5; 8]);
+        let backing = guest.bytes(&initial);
+        let source = guest.handle(49, &[H(device), I(13), I(COPY_SOURCE), I(backing + 8)]);
+        let seed = guest.handle(5, &[H(device), I(13), I(COPY_DEST)]);
+        let destination = guest.handle(5, &[H(device), I(13), I(COPY_DEST)]);
+        let prior = guest.bytes(&PRIOR);
+        guest.ok(9, &[H(seed), I(0), I(prior), I(13)]);
+        // Stale committed destination cannot supply the expected untouched edges.
+        let stale = guest.bytes(&[10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]);
+        guest.ok(9, &[H(destination), I(0), I(stale), I(13)]);
+        guest.barrier(lists[0], seed, COPY_DEST, COPY_SOURCE);
+        guest.ok(42, &[H(lists[0]), H(destination), H(seed)]);
+        guest.ok(12, &[H(lists[0])]);
+        guest.ok(
+            43,
+            &[H(lists[1]), H(destination), I(3), H(source), I(1), I(7)],
+        );
+        guest.barrier(lists[1], destination, COPY_DEST, COPY_SOURCE);
+        guest.ok(12, &[H(lists[1])]);
+        let producer = guest.handle(35, &[H(queues[0]), H(lists[0]), I(0), I(0)]);
+        let wait = guest_geometry_wait_record(&mut guest, queues[0], producer);
+        guest_runtime_write_bytes(&mut guest, backing + 8, &SUBMITTED);
+        let consumer = guest.handle(35, &[H(queues[1]), H(lists[1]), I(wait), I(1)]);
+        guest_runtime_write_bytes(&mut guest, backing + 8, &AFTER);
+        for index in 0..2 {
+            guest.ok(11, &[H(lists[index]), H(allocators[index])]);
+        }
+        guest.ok(26, &[H(source)]);
+        guest.ok(26, &[H(seed)]);
+        for receipt in if producer_first {
+            [producer, consumer]
+        } else {
+            [consumer, producer]
+        } {
+            guest.call(32, &[H(receipt)], 0, Some(1));
+        }
+        for receipt in [producer, consumer] {
+            guest.ok(33, &[H(receipt)]);
+        }
+        let output = guest.bytes(&[0xa5; 29]);
+        guest.ok(10, &[H(destination), I(0), I(output + 8), I(13)]);
+        check_original_guest_backend(
+            guest,
+            true,
+            true,
+            &[(output, EXPECTED.to_vec()), (backing, AFTER.to_vec())],
+            0,
+            &[],
+        );
+    }
 }

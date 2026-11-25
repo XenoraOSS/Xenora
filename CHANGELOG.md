@@ -18,6 +18,12 @@ remains unsupported.
 - Extended the read-only RDNA2 planning CLI (`python3 -m qa rdna2`) with family/status filters, compact summaries, Codex-ready manifests under `artifacts/`, active-claim exclusion (family claims exclude those families; path-only claims block overlapping permitted files), coverage reconcile against `semantic_coverage` without inflating counts, and inventory diffs. Covered by `tests/qa/test_rdna2_plan.py`; planning only, no GPU production edits.
 
 ### Added
+- Extended submission-time guest-buffer snapshots to byte-region copies through
+  opcode43. Copies preserve untouched destination bytes and retain existing
+  dependency and alignment checks. The full logical source must be readable;
+  guest-backed destinations and image transfers remain unsupported. Four CPU
+  regressions, two original guest tests and all nine gates pass; a wrong-offset
+  mutation fails the literal native readback comparison.
 - Guest-backed buffer creation through opcode49 and submission-time source snapshots
   for queued whole-buffer copies into owned destinations. Checked guest reads capture
   pre-submit writes while isolating pending work from later changes. Guest-backed

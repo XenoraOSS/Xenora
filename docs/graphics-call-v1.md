@@ -495,7 +495,8 @@ if its GPU work has already completed. Destroyed destinations are not resurrecte
 ## Buffer-region copies
 
 CopyBufferRegion records one region copy in a copy-only list, optionally with
-barriers. Source and destination must be distinct owned buffers. Offsets may be
+barriers. Source and destination must be distinct buffers; the destination must be owned.
+A guest-backed source follows the submission snapshot contract below. Offsets may be
 zero; the byte count must be positive. Checked ranges must fit logical resource
 sizes, including when backing
 allocations contain padding. Full source and destination sizes may differ or be odd.
@@ -600,5 +601,21 @@ fresh bytes. Guest-memory faults retain the existing guest fault behavior.
 Pending work owns the snapshot independently of guest mappings and source handles.
 The synchronous submission call defines the capture boundary; it does not promise
 an atomic snapshot against concurrent external writers. Guest-backed destinations,
-region/image copies from guest-backed resources and general coherent shared memory
+image copies from guest-backed resources and general coherent shared memory
 remain unsupported. The native backend and shader ABI are unchanged.
+
+
+### Guest-backed buffer-region sources
+
+CopyBufferRegion (opcode43) also accepts buffers created through opcode49 as sources.
+It validates positive length and checked source/destination offsets before admission.
+Submission snapshots the entire logical source after full-source payload preflight,
+not only the selected range. All source bytes must therefore be readable, including
+bytes outside the copied region. The selected bytes patch an exact owned destination
+version; untouched prefix/suffix bytes are retained, including when that prior version
+is GPU-produced. Existing dependencies, leases and alignment-capability checks apply.
+
+Recording reads no guest bytes. Pre-submit writes are observed, post-submit writes
+cannot change the retained snapshot, and failed admission is retryable with fresh
+bytes. Guest-backed destinations and guest-backed image transfers remain rejected.
+No guest opcode or native backend ABI is added by this extension.

@@ -1622,7 +1622,8 @@ impl GraphicsContext {
         self.copy_layout_with_guest_source(handle, false)
     }
 
-    /// Only whole-buffer source snapshots may resolve guest-backed storage.
+    /// Whole-buffer and buffer-region source snapshots may resolve guest backing;
+    /// destinations and image-copy endpoints remain owned-only.
     fn copy_layout_with_guest_source(
         &self,
         handle: GraphicsHandle,
@@ -1770,10 +1771,8 @@ impl GraphicsContext {
                     if copy.is_some() || destination == source {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
-                    let source_layout = self.copy_layout_with_guest_source(
-                        source,
-                        region.is_none() && image.is_none(),
-                    )?;
+                    let source_layout =
+                        self.copy_layout_with_guest_source(source, image.is_none())?;
                     let layout = self.copy_layout(destination)?;
                     if let Some((source_location, destination_location, extent)) = image {
                         if matches!(
@@ -1853,8 +1852,7 @@ impl GraphicsContext {
                 return Err(GraphicsError::ResourceLifetimeViolation);
             }
         }
-        let source_layout =
-            self.copy_layout_with_guest_source(source, region.is_none() && image.is_none())?;
+        let source_layout = self.copy_layout_with_guest_source(source, image.is_none())?;
         let produced = preparation.produced.get(&source).copied();
         if produced.is_some() && self.resources[&source].guest_backing_addr.is_some() {
             return Err(GraphicsError::InvalidDescriptor);
@@ -4192,7 +4190,10 @@ impl GraphicsContext {
         Ok(())
     }
 
-    /// Record a byte region copy between distinct owned buffers.
+    /// Record a byte region copy into a distinct owned buffer.
+    /// Guest-backed sources snapshot their entire logical buffer at submission,
+    /// after budget validation. Recording does not read guest memory; unreadable
+    /// bytes outside the copied region still reject the full source snapshot.
     pub fn cmd_copy_buffer_region(
         &mut self,
         list: GraphicsHandle,
@@ -4214,7 +4215,7 @@ impl GraphicsContext {
         }
         let GraphicsCopyLayout::Buffer {
             byte_len: source_len,
-        } = self.copy_layout(source)?
+        } = self.copy_layout_with_guest_source(source, true)?
         else {
             return Err(GraphicsError::InvalidDescriptor);
         };
