@@ -364,4 +364,39 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.alias(ERRHANDLING_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
+
+    // No debugger is attached to a Xenora guest, so the documented answer is
+    // the honest one: false. A program that changes its behavior under a
+    // debugger takes its non-debugged path, which is what a real machine
+    // without a debugger does.
+    registry.register(KERNEL32, "IsDebuggerPresent", move |_, _, _| Ok(0));
+
+    // OutputDebugString writes its string to the attached debugger, and the
+    // documentation is explicit that with no debugger attached the output
+    // goes nowhere. There is no debugger here, so the honest behavior is
+    // that the string has no observable effect. The text is still read so a
+    // bad pointer fails the way it would with a debugger attached.
+    for symbol in ["OutputDebugStringA", "OutputDebugStringW"] {
+        registry.register(KERNEL32, symbol, move |args, _, memory| {
+            let text = args.rcx;
+            if text != 0 {
+                // Touch the first unit so a faulting pointer raises the same
+                // memory fault a debugger-attached read would.
+                let mut unit = [0u8; 2];
+                memory
+                    .read_bytes(text, &mut unit)
+                    .map_err(ExitReason::MemoryFault)?;
+            }
+            Ok(0)
+        });
+    }
+
+    for symbol in [
+        "IsDebuggerPresent",
+        "OutputDebugStringA",
+        "OutputDebugStringW",
+    ] {
+        registry.alias(ERRHANDLING_API, KERNEL32, symbol);
+        registry.set_status(KERNEL32, symbol, ServiceStatus::Implemented);
+    }
 }
