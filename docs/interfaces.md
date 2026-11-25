@@ -588,6 +588,25 @@ for its names. Both are `implemented`. `freopen` is not served: its close
 semantics on failure are unspecified beyond what the drive model can
 answer honestly, and no fixture demanded it.
 
+**The descriptor layer (#493, third part).** `_open`, `_read`, `_write`,
+`_lseek`, `_close`, `_fileno`, `_isatty`, `_access` and `_unlink` serve the
+POSIX-shaped half of the CRT. A descriptor is either a file `_open` made,
+with its own state, or one `_fileno` gave out for a stream, in which case
+it shares the stream's state as the CRT does: a write through the
+descriptor moves where `fgets` reads, and closing it closes the underlying
+file, leaving the stream dangling — undefined behaviour in C, a guest stop
+here. The standard descriptors are 0, 1 and 2: `_read` consumes what the
+host supplied, `_write` appends to the captured output, and neither can be
+sought. Descriptors are the lowest free number from 3, at most 8192. Text
+mode translates CR LF both ways as the streams do. `_O_TEMPORARY` deletes
+the file when the descriptor closes; the wide text modes are not modelled
+and stop the guest; the hint bits change nothing. `_lseek` positions are
+32-bit `long`s: a position no `long` holds is `EINVAL`. `_isatty` is always
+0, as nothing here is a character device. `_access` treats the drive's
+files as readable and writable, so only existence decides. `_unlink` is
+`remove` by another name. All nine services are `implemented` except
+`_open`, which is `partial` for the wide modes.
+
 ### CRT integer conversion
 
 UCRT and the CRT conversion API set expose strtol, strtoul, wcstol, and

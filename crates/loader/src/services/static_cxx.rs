@@ -235,8 +235,8 @@ pub(super) fn register(registry: &mut ImportRegistry) {
     // `__stdio_common_vsprintf` is no longer a stub here: the typed registry
     // serves it since #466.
     // `FormatMessageA` is no longer a stub here: the error services
-    // implement it since package 9 of #459.
-    for (module, symbol) in [(UCRT, "rand_s"), (UCRT, "_read")] {
+    // implement it since package 9 of #459. `_read` is served since #493.
+    for (module, symbol) in [(UCRT, "rand_s")] {
         registry.register_with_status(module, symbol, ServiceStatus::Stub, |_, _, _| {
             Err(UNSUPPORTED)
         });
@@ -248,7 +248,6 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         ("api-ms-win-crt-string-l1-1-0.dll", "strchr"),
         ("api-ms-win-crt-environment-l1-1-0.dll", "getenv"),
         ("api-ms-win-crt-utility-l1-1-0.dll", "rand_s"),
-        ("api-ms-win-crt-stdio-l1-1-0.dll", "_read"),
     ] {
         registry.alias(api_set, UCRT, symbol);
     }
