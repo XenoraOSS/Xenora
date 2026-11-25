@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 182] = [
+pub static SERVICES: [ServiceMetadata; 191] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -1229,6 +1229,105 @@ pub static SERVICES: [ServiceMetadata; 182] = [
         failure: "0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults",
         reference: "winnls.h GetLocaleInfoEx",
         tests: &["the_locale_is_en_us_and_answers_its_strings"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "lstrlenA",
+        parameters: &[Parameter { name: "text", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "winbase.h lstrlenA",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "lstrlenW",
+        parameters: &[Parameter { name: "text", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "winbase.h lstrlenW",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "lstrcpyA",
+        parameters: &[Parameter { name: "destination", kind: "ptr" }, Parameter { name: "source", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "winbase.h lstrcpyA",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "lstrcmpA",
+        parameters: &[Parameter { name: "left", kind: "ptr" }, Parameter { name: "right", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "winbase.h lstrcmpA",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "lstrcmpiA",
+        parameters: &[Parameter { name: "left", kind: "ptr" }, Parameter { name: "right", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "never",
+        reference: "winbase.h lstrcmpiA",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "CompareStringA",
+        parameters: &[Parameter { name: "lcid", kind: "u32" }, Parameter { name: "flags", kind: "u32" }, Parameter { name: "left", kind: "ptr" }, Parameter { name: "left_count", kind: "i32" }, Parameter { name: "right", kind: "ptr" }, Parameter { name: "right_count", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_PARAMETER for another locale or unsupported flags",
+        reference: "winnls.h CompareStringA",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "CompareStringW",
+        parameters: &[Parameter { name: "lcid", kind: "u32" }, Parameter { name: "flags", kind: "u32" }, Parameter { name: "left", kind: "ptr" }, Parameter { name: "left_count", kind: "i32" }, Parameter { name: "right", kind: "ptr" }, Parameter { name: "right_count", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_PARAMETER for another locale or unsupported flags",
+        reference: "winnls.h CompareStringW",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetStringTypeW",
+        parameters: &[Parameter { name: "kind", kind: "u32" }, Parameter { name: "source", kind: "ptr" }, Parameter { name: "count", kind: "i32" }, Parameter { name: "output", kind: "ptr" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_PARAMETER for CT_CTYPE2 and CT_CTYPE3",
+        reference: "winnls.h GetStringTypeW",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "LCMapStringW",
+        parameters: &[Parameter { name: "lcid", kind: "u32" }, Parameter { name: "flags", kind: "u32" }, Parameter { name: "source", kind: "ptr" }, Parameter { name: "count", kind: "i32" }, Parameter { name: "destination", kind: "ptr" }, Parameter { name: "destination_count", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "sets ERROR_INVALID_PARAMETER for unsupported flags or another locale, ERROR_INSUFFICIENT_BUFFER for a small output",
+        reference: "winnls.h LCMapStringW",
+        tests: &["the_string_comparison_services_answer_in_byte_order"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -3003,6 +3102,99 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a3 = call.i32(3)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::get_locale_info_ex(&mut context, a0, a1, a2, a3)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "lstrlenA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::lstrlen_a(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "lstrlenW", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::lstrlen_w(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "lstrcpyA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::lstrcpy_a(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "lstrcmpA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::lstrcmp_a(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "lstrcmpiA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::lstrcmpi_a(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "CompareStringA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let a4 = call.u64(4)?;
+        let a5 = call.i32(5)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::compare_string_a(&mut context, a0, a1, a2, a3, a4, a5)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "CompareStringW", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let a4 = call.u64(4)?;
+        let a5 = call.i32(5)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::compare_string_w(&mut context, a0, a1, a2, a3, a4, a5)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetStringTypeW", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.i32(2)?;
+        let a3 = call.u64(3)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::get_string_type_w(&mut context, a0, a1, a2, a3)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "LCMapStringW", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let a4 = call.u64(4)?;
+        let a5 = call.i32(5)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::lcmap_string_w(&mut context, a0, a1, a2, a3, a4, a5)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();
