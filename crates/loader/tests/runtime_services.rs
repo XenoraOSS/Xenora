@@ -1937,6 +1937,154 @@ fn c_time_formats_and_measures_as_the_crt_does() {
     assert_eq!(guest.memory.read_u64(LINE + 8).unwrap(), 123_456_789);
 }
 
+/// The wide conversions and classification of package 6 of #459. The
+/// expectations are the C locale: every byte is the wide character of the
+/// same value, a wide character above 255 has no multibyte form, and the
+/// classes are the ASCII ones.
+#[test]
+fn wide_characters_convert_in_the_c_locale() {
+    let (mut guest, _) = stdio_guest();
+    // `mbstowcs` zero-extends every byte.
+    guest.memory.write_bytes(LINE, b"abc\0").unwrap();
+    assert_eq!(guest.call("mbstowcs", &[LINE + 0x100, LINE, 8]), 3);
+    assert_eq!(
+        guest.memory.read_u16(LINE + 0x100).unwrap(),
+        u16::from(b'a')
+    );
+    assert_eq!(
+        guest.memory.read_u16(LINE + 0x104).unwrap(),
+        u16::from(b'c')
+    );
+    assert_eq!(
+        guest.memory.read_u16(LINE + 0x106).unwrap(),
+        0,
+        "terminated"
+    );
+    // Fewer wide slots than bytes: no terminator, the count is the slots.
+    assert_eq!(guest.call("mbstowcs", &[LINE + 0x100, LINE, 2]), 2);
+    // A null destination is the length query.
+    assert_eq!(guest.call("mbstowcs", &[0, LINE, 0]), 3);
+    // `wcstombs` is the inverse, failing for a wide character above 255.
+    assert_eq!(guest.call("wcstombs", &[LINE + 0x200, LINE + 0x100, 8]), 3);
+    assert_eq!(
+        &{
+            let mut b = [0u8; 3];
+            guest.memory.read_bytes(LINE + 0x200, &mut b).unwrap();
+            b
+        },
+        b"abc"
+    );
+    guest.memory.write_u16(LINE + 0x100, 0x100).unwrap();
+    assert_eq!(
+        guest.call("wcstombs", &[LINE + 0x200, LINE + 0x100, 8]),
+        u64::MAX
+    );
+    assert_eq!(guest.errno(), 42, "EILSEQ");
+    // The single-character forms.
+    guest.memory.write_bytes(LINE, b"z\0").unwrap();
+    assert_eq!(guest.call("mbtowc", &[LINE + 0x100, LINE, 1]), 1);
+    assert_eq!(
+        guest.memory.read_u16(LINE + 0x100).unwrap(),
+        u16::from(b'z')
+    );
+    assert_eq!(
+        guest.call("mbtowc", &[LINE + 0x100, LINE, 0]),
+        0xFFFF_FFFF,
+        "-1 as an int"
+    );
+    assert_eq!(guest.call("wctomb", &[LINE + 0x300, u64::from(b'q')]), 1);
+    assert_eq!(guest.memory.read_u8(LINE + 0x300).unwrap(), b'q');
+    assert_eq!(
+        guest.call("wctomb", &[LINE + 0x300, 0x100]),
+        0xFFFF_FFFF,
+        "-1 as an int"
+    );
+    assert_eq!(guest.call("mblen", &[LINE, 1]), 1);
+    // The restartable forms advance their source pointer.
+    guest.memory.write_bytes(LINE, b"xy\0").unwrap();
+    guest.memory.write_u64(LINE + 0x400, LINE).unwrap();
+    assert_eq!(
+        guest.call("mbsrtowcs", &[LINE + 0x100, LINE + 0x400, 1, 0]),
+        1
+    );
+    assert_eq!(
+        guest.memory.read_u64(LINE + 0x400).unwrap(),
+        LINE + 1,
+        "advanced"
+    );
+    assert_eq!(
+        guest.call("mbsrtowcs", &[LINE + 0x100, LINE + 0x400, 4, 0]),
+        1
+    );
+    assert_eq!(
+        guest.memory.read_u64(LINE + 0x400).unwrap(),
+        0,
+        "consumed the null"
+    );
+
+    // The classification is ASCII's, through `iswctype`'s bits.
+    assert_eq!(
+        guest.call("iswctype", &[u64::from(b'a'), 0x103]),
+        1,
+        "_ALPHA"
+    );
+    assert_eq!(
+        guest.call("iswctype", &[u64::from(b'a'), 0x4]),
+        0,
+        "not a digit"
+    );
+    assert_eq!(guest.call("iswctype", &[u64::from(b'5'), 0x4]), 1, "_DIGIT");
+    assert_eq!(
+        guest.call("iswctype", &[0xE9, 0x103]),
+        0,
+        "no class above ASCII"
+    );
+    assert_eq!(
+        guest.call("iswctype", &[u64::from(b' '), 0x40]),
+        1,
+        "_BLANK"
+    );
+    // The direct forms answer the same.
+    assert_eq!(guest.call("iswalpha", &[u64::from(b'a')]), 1);
+    assert_eq!(guest.call("iswalpha", &[u64::from(b'5')]), 0);
+    assert_eq!(guest.call("iswspace", &[u64::from(b' ')]), 1);
+    assert_eq!(guest.call("iswupper", &[u64::from(b'A')]), 1);
+    assert_eq!(guest.call("towupper", &[u64::from(b'a')]), u64::from(b'A'));
+    assert_eq!(guest.call("towlower", &[u64::from(b'A')]), u64::from(b'a'));
+    assert_eq!(guest.call("towupper", &[u64::from(b'5')]), u64::from(b'5'));
+
+    // `wcsncat` appends at most count units.
+    let wide = |units: &[u16]| -> Vec<u8> { units.iter().flat_map(|u| u.to_le_bytes()).collect() };
+    let mut start = wide(&[u16::from(b'a'), 0]);
+    start.resize(16, 0);
+    guest.memory.write_bytes(LINE + 0x500, &start).unwrap();
+    let end = wide(&[u16::from(b'b'), u16::from(b'c'), u16::from(b'd'), 0]);
+    guest.memory.write_bytes(LINE + 0x600, &end).unwrap();
+    assert_eq!(
+        guest.call("wcsncat", &[LINE + 0x500, LINE + 0x600, 2]),
+        LINE + 0x500
+    );
+    assert_eq!(
+        guest.memory.read_u16(LINE + 0x502).unwrap(),
+        u16::from(b'b')
+    );
+    assert_eq!(
+        guest.memory.read_u16(LINE + 0x504).unwrap(),
+        u16::from(b'c')
+    );
+    assert_eq!(
+        guest.memory.read_u16(LINE + 0x506).unwrap(),
+        0,
+        "terminated after count"
+    );
+
+    // `_wcsdup` copies.
+    let dup = guest.call("_wcsdup", &[LINE + 0x600]);
+    assert_ne!(dup, 0);
+    assert_eq!(guest.memory.read_u16(dup).unwrap(), u16::from(b'b'));
+    assert_eq!(guest.memory.read_u16(dup + 6).unwrap(), 0);
+}
+
 #[test]
 fn formatted_output_refuses_what_it_cannot_print_correctly() {
     let (mut guest, [input, out, _]) = stdio_guest();

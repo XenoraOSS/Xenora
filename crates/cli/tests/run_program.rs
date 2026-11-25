@@ -69,6 +69,11 @@ fn crt_clock(name: &str) -> PathBuf {
     build("build-crt-clock.sh", "run-program-crt-clock", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_wide(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-wide.sh", "run-program-crt-wide", &OUT).join(format!("{name}.exe"))
+}
+
 fn crt_files(name: &str) -> PathBuf {
     static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-crt-files.sh", "run-program-crt-files", &OUT).join(format!("{name}.exe"))
@@ -472,6 +477,23 @@ fn a_program_using_the_c_clock_passes_its_checks() {
     assert_eq!(run.code, Some(19), "{}", run.stderr);
     assert!(
         run.stdout.contains("check 19 failed: control"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_program_using_wide_conversions_passes_its_checks() {
+    for name in ["crt-wide-O0", "crt-wide-O2"] {
+        let run = run_program(&crt_wide(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {}{}", run.stdout, run.stderr);
+        assert_eq!(run.stdout, "crt_wide: 17 of 17 checks passed\r\n", "{name}");
+        assert_eq!(run.stderr, "", "{name}");
+    }
+    let run = run_program(&crt_wide("crt-wide-break"), &[], &[]);
+    assert_eq!(run.code, Some(18), "{}", run.stderr);
+    assert!(
+        run.stdout.contains("check 18 failed: control"),
         "{}",
         run.stdout
     );

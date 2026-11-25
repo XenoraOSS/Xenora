@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 131 |
-| Generated adapters | 131 |
-| Unique handler implementations | 124 |
-| Implemented | 38 |
-| Partial | 91 |
+| Services with a declared ABI | 132 |
+| Generated adapters | 132 |
+| Unique handler implementations | 132 |
+| Implemented | 40 |
+| Partial | 90 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 131 |
-| API-set aliases (not services) | 131 |
+| Conformance-tested through guest dispatch | 132 |
+| API-set aliases (not services) | 132 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -51,23 +51,24 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!fsetpos` | `(stream: ptr, position: ptr) -> i32` | partial | -1 with errno EINVAL for a null argument or a negative position; stops the guest for a standard stream, a pointer that is no stream, or a position it cannot read |
 | `ucrtbase.dll!remove` | `(name: ptr) -> i32` | implemented | -1 with errno ENOENT for a missing or rejected name, EACCES for a directory, EINVAL for a null or empty name |
 | `ucrtbase.dll!rename` | `(from: ptr, to: ptr) -> i32` | partial | -1 with errno ENOENT when the old name holds nothing, EACCES when the new name exists or its directory does not, EINVAL for a null or rejected name; stops the guest for a directory |
-| `ucrtbase.dll!_gmtime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
-| `ucrtbase.dll!_localtime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
-| `ucrtbase.dll!_mktime64` | `(tm: ptr) -> ptr` | implemented | -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
-| `ucrtbase.dll!asctime` | `(tm: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or out-of-range fields |
-| `ucrtbase.dll!_ctime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
-| `ucrtbase.dll!asctime_s` | `(buffer: ptr, size: u64, tm: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
-| `ucrtbase.dll!_ctime64_s` | `(buffer: ptr, size: u64, time: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
-| `ucrtbase.dll!clock` | `() -> u64` | implemented | never |
-| `ucrtbase.dll!_difftime64` | `(time1: u64, time2: u64) -> f64` | implemented | never |
-| `ucrtbase.dll!strftime` | `(out: ptr, size: u64, format: ptr, tm: ptr) -> u64` | implemented | 0 when the result does not fit; EINVAL for null arguments or invalid fields |
-| `ucrtbase.dll!gmtime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
-| `ucrtbase.dll!localtime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
-| `ucrtbase.dll!mktime` | `(tm: ptr) -> ptr` | implemented | -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
-| `ucrtbase.dll!ctime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
-| `ucrtbase.dll!ctime_s` | `(buffer: ptr, size: u64, time: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
-| `ucrtbase.dll!difftime` | `(time1: u64, time2: u64) -> f64` | implemented | never |
-| `kernel32.dll!FileTimeToLocalFileTime` | `(input: ptr, output: ptr) -> u32` | partial | never in range; the machine's local time is UTC, so the conversion is the identity; guest fault on an invalid pointer |
+| `ucrtbase.dll!mbtowc` | `(wide: ptr, text: ptr, count: u64) -> i32` | implemented | -1 with errno EILSEQ when count is 0; stops the guest for memory it cannot read |
+| `ucrtbase.dll!wctomb` | `(text: ptr, wide: u32) -> i32` | implemented | -1 with errno EILSEQ for a wide character above 255 |
+| `ucrtbase.dll!mblen` | `(text: ptr, count: u64) -> i32` | implemented | -1 when count is 0 |
+| `ucrtbase.dll!mbstowcs` | `(wide: ptr, text: ptr, count: u64) -> u64` | implemented | never in the C locale; a null destination is the length query |
+| `ucrtbase.dll!wcstombs` | `(text: ptr, wide: ptr, count: u64) -> u64` | implemented | (size_t)-1 with errno EILSEQ for a wide character above 255 |
+| `ucrtbase.dll!mbsrtowcs` | `(wide: ptr, source: ptr, count: u64, state: ptr) -> u64` | implemented | never in the C locale; no shift state exists |
+| `ucrtbase.dll!wcsrtombs` | `(text: ptr, source: ptr, count: u64, state: ptr) -> u64` | implemented | (size_t)-1 with errno EILSEQ for a wide character above 255 |
+| `ucrtbase.dll!iswctype` | `(wide: u32, mask: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswalpha` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswdigit` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswalnum` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswlower` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswupper` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!iswspace` | `(wide: u32) -> i32` | implemented | never |
+| `ucrtbase.dll!towlower` | `(wide: u32) -> u32` | implemented | never |
+| `ucrtbase.dll!towupper` | `(wide: u32) -> u32` | implemented | never |
+| `ucrtbase.dll!wcsncat` | `(start: ptr, end: ptr, count: u64) -> ptr` | implemented | never; stops the guest for memory it cannot write |
+| `ucrtbase.dll!_wcsdup` | `(text: ptr) -> ptr` | implemented | null when the copy cannot be allocated |
 | `ucrtbase.dll!perror` | `(message: ptr) -> void` | partial | never |
 | `ucrtbase.dll!fputc` | `(character: i32, stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
 | `ucrtbase.dll!strerror` | `(code: i32) -> ptr` | partial | never; the message is valid until the next call |

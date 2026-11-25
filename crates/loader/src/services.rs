@@ -18,6 +18,7 @@ mod crt_format;
 mod crt_math;
 mod crt_startup;
 mod crt_streams;
+mod crt_wide;
 mod cxx;
 mod environment;
 mod errors;
@@ -1741,6 +1742,122 @@ pub(crate) mod handlers {
             .write_u64(output, time)
             .map_err(crt_streams::fault)?;
         Ok(1)
+    }
+
+    // The wide-character conversions and classification of package 6 of
+    // #459. `crt_wide.rs` documents the C locale's identity encoding they
+    // convert in.
+    pub fn mbtowc(
+        context: &mut ServiceContext<'_>,
+        wide: u64,
+        text: u64,
+        count: u64,
+    ) -> Outcome<i32> {
+        crt_wide::multibyte_to_wide(context.memory, context.teb, wide, text, count)
+            .map(|value| value as i32)
+    }
+
+    pub fn wctomb(context: &mut ServiceContext<'_>, text: u64, wide: u32) -> Outcome<i32> {
+        crt_wide::wide_to_multibyte(context.memory, context.teb, text, u64::from(wide))
+            .map(|value| value as i32)
+    }
+
+    pub fn mblen(context: &mut ServiceContext<'_>, text: u64, count: u64) -> Outcome<i32> {
+        crt_wide::multibyte_length(context.memory, context.teb, text, count)
+            .map(|value| value as i32)
+    }
+
+    pub fn mbstowcs(
+        context: &mut ServiceContext<'_>,
+        wide: u64,
+        text: u64,
+        count: u64,
+    ) -> Outcome<u64> {
+        crt_wide::multibyte_string_to_wide(context.memory, context.teb, wide, text, count)
+    }
+
+    pub fn wcstombs(
+        context: &mut ServiceContext<'_>,
+        text: u64,
+        wide: u64,
+        count: u64,
+    ) -> Outcome<u64> {
+        crt_wide::wide_string_to_multibyte(context.memory, context.teb, text, wide, count)
+    }
+
+    pub fn mbsrtowcs(
+        context: &mut ServiceContext<'_>,
+        wide: u64,
+        source: u64,
+        count: u64,
+        _state: u64,
+    ) -> Outcome<u64> {
+        crt_wide::mbsrtowcs(context.memory, context.teb, wide, source, count)
+    }
+
+    pub fn wcsrtombs(
+        context: &mut ServiceContext<'_>,
+        text: u64,
+        source: u64,
+        count: u64,
+        _state: u64,
+    ) -> Outcome<u64> {
+        crt_wide::wcsrtombs(context.memory, context.teb, text, source, count)
+    }
+
+    pub fn iswalpha(context: &mut ServiceContext<'_>, wide: u32) -> Outcome<i32> {
+        crt_wide::iswalpha(context.memory, context.teb, u64::from(wide)).map(|value| value as i32)
+    }
+
+    pub fn iswdigit(context: &mut ServiceContext<'_>, wide: u32) -> Outcome<i32> {
+        crt_wide::iswdigit(context.memory, context.teb, u64::from(wide)).map(|value| value as i32)
+    }
+
+    pub fn iswalnum(context: &mut ServiceContext<'_>, wide: u32) -> Outcome<i32> {
+        crt_wide::iswalnum(context.memory, context.teb, u64::from(wide)).map(|value| value as i32)
+    }
+
+    pub fn iswlower(context: &mut ServiceContext<'_>, wide: u32) -> Outcome<i32> {
+        crt_wide::iswlower(context.memory, context.teb, u64::from(wide)).map(|value| value as i32)
+    }
+
+    pub fn iswupper(context: &mut ServiceContext<'_>, wide: u32) -> Outcome<i32> {
+        crt_wide::iswupper(context.memory, context.teb, u64::from(wide)).map(|value| value as i32)
+    }
+
+    pub fn iswspace(context: &mut ServiceContext<'_>, wide: u32) -> Outcome<i32> {
+        crt_wide::iswspace(context.memory, context.teb, u64::from(wide)).map(|value| value as i32)
+    }
+
+    pub fn towlower(context: &mut ServiceContext<'_>, wide: u32) -> Outcome<u32> {
+        crt_wide::towlower(context.memory, context.teb, u64::from(wide)).map(|value| value as u32)
+    }
+
+    pub fn towupper(context: &mut ServiceContext<'_>, wide: u32) -> Outcome<u32> {
+        crt_wide::towupper(context.memory, context.teb, u64::from(wide)).map(|value| value as u32)
+    }
+
+    pub fn iswctype(context: &mut ServiceContext<'_>, wide: u32, mask: u32) -> Outcome<i32> {
+        crt_wide::iswctype(
+            context.memory,
+            context.teb,
+            u64::from(wide),
+            u64::from(mask),
+        )
+        .map(|value| value as i32)
+    }
+
+    pub fn wcsncat(
+        context: &mut ServiceContext<'_>,
+        start: u64,
+        end: u64,
+        count: u64,
+    ) -> Outcome<u64> {
+        crt_wide::wcsncat(context.memory, context.teb, start, end, count)
+    }
+
+    pub fn _wcsdup(context: &mut ServiceContext<'_>, text: u64) -> Outcome<u64> {
+        crt_wide::wcsdup(context.memory, context.teb, text)
     }
 
     // The rest of math.h (#468); `crt_math.rs` says which are exact.
