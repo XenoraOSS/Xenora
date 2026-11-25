@@ -10,10 +10,13 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 
 ## Architecture and technical design
 
+- [Original guest graphics calls](graphics-call-v1.md) — Versioned synthetic resource, pipeline, transfer and command descriptors.
 - [Interface contracts](interfaces.md) — Translated shader stages, guest services, native command submission, and synthetic textures.
 - [Fixture memory model](adr/0003-demo-memory-model.md) and [CPU boundary](adr/0004-cpu-boundary.md) — Buffer bindings, guest address translation, and dependency direction.
 
 ## Native Metal graphics
+
+- [Multi-node queued graphs](interfaces.md#opt-in-multi-node-queued-graphs) — Bounded transitive dependencies, exact resource versions and legacy backend limits.
 
 - [Translated offscreen stages](interfaces.md#translated-offscreen-stages) — Translated vertex and pixel stages for the bounded gfx1030 subset.
 - [Blend and depth passes](interfaces.md) — Native blend and depth graphics passes with per-draw state.
@@ -21,6 +24,8 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 
 ## RDNA 2 decoding and shader translation
 
+- [GPU-produced geometry](interfaces.md#gpu-produced-geometry-in-queued-draws) — Exact queued buffer versions, guarded GPU gathering and atomic validation failure.
+- [Bounded graphics countdowns](interfaces.md#bounded-countdown-loops-in-original-graphics-stages) — Original unsigned and signed-positive constant/MIN-bounded nested loops and early exits, typed carried values, native evidence and explicit admission limits.
 - [Instruction coverage](shaders/instruction-coverage.md) — Desktop gfx1030 instruction forms, operand limits, and CPU and GPU results.
 - [Semantic coverage](shaders/semantic-coverage.md) — Generated per-family counts of identified, declared, decoded, lowered and verified gfx1030 forms.
 - [SOP2 scalar ALU](shaders/scalar-alu.md) — Supported scalar add, subtract and bitwise forms, their SCC rules and sources.
@@ -39,6 +44,8 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 ## Testing, validation, and benchmarks
 
 - [Engineering progress](progress.md) — Verification commands, metric definitions, and open release gates.
+- [Local graphics checkpoint](testing/local-graphics-checkpoint.md) — Bounded acceptance, reproducible gates, local results and evidence limitations.
+- [Selective upstream imports](testing/upstream-imports.md) — Source commits, licensing, adaptations and deferred changes.
 - [Test inventory comparison](testing/test-inventory.md) — Detect missing or newly ignored Cargo tests across commits.
 - [Persistent resource and translated rendering acceptance](testing/x9-acceptance.md) — Pinned upstream tests, native ARM64 results and unsupported cases.
 - [Baseline acceptance](testing/phase-02-baseline.md), [Phase 01 assurance](testing/phase01-assurance.md), and [independent reviews](testing/review-log.md) — Candidate-specific results and release findings.

@@ -81,7 +81,7 @@ fn test_d3d12_device_and_resource_lifecycle() {
     ctx.cmd_set_viewport(cmd_list, 64, 64).expect("viewport");
     ctx.cmd_set_render_targets(cmd_list, Some(rt), [0, 0, 0, 255])
         .expect("render target");
-    ctx.cmd_set_vertex_buffer(cmd_list, vb, 0, 48)
+    ctx.cmd_set_vertex_buffer(cmd_list, vb, 0, 16)
         .expect("vertex buffer");
     ctx.cmd_draw_instanced(cmd_list, 3, 1, 0, 0).expect("draw");
 
@@ -348,7 +348,7 @@ fn test_d3d12_native_metal_missing_backend_fails() {
     ctx.cmd_set_viewport(list, 4, 3).unwrap();
     ctx.cmd_set_render_targets(list, None, [0, 0, 0, 255])
         .unwrap();
-    ctx.cmd_set_vertex_buffer(list, vb, 0, 48).unwrap();
+    ctx.cmd_set_vertex_buffer(list, vb, 0, 16).unwrap();
     ctx.cmd_draw_instanced(list, 3, 1, 0, 0).unwrap();
     ctx.close_command_list(list).unwrap();
 
@@ -519,13 +519,20 @@ fn test_guest_dbt_graphics_pipeline_metal_render_dual_inputs() {
         {
             let gpu_clone = gpu.clone();
             let msl_clone = msl.clone();
-            let metal_renderer = move |vtx: &[[f32; 4]; 3],
+            let metal_renderer = move |vtx: &[[f32; 4]],
                                        vp: (usize, usize),
                                        cc: [u8; 4]|
                   -> Result<Vec<u8>, GraphicsError> {
                 let entries = [VERTEX_ENTRY_POINT, PIXEL_ENTRY_POINT];
                 gpu_clone
-                    .render_rgba8(&msl_clone, entries, vtx, &[[0.0; 4]; 3], [vp.0, vp.1], cc)
+                    .render_triangles_rgba8(
+                        &msl_clone,
+                        entries,
+                        vtx,
+                        &vec![[0.0; 4]; vtx.len()],
+                        [vp.0, vp.1],
+                        cc,
+                    )
                     .map_err(|e| GraphicsError::BackendError(format!("Metal GPU error: {:?}", e)))
             };
             let mut gfx = state.graphics.lock().unwrap();
@@ -726,8 +733,8 @@ fn test_d3d12_indexed_draw_fetches_start_and_base_vertex() {
     let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
     let record = seen.clone();
     rig.ctx.set_metal_backend(move |vtx, viewport, clear| {
-        record.lock().unwrap().push(*vtx);
-        GraphicsContext::execute_software_reference_draw(vtx, viewport, clear)
+        record.lock().unwrap().push(vtx.to_vec());
+        GraphicsContext::execute_software_reference_triangles(vtx, viewport, clear)
     });
     let (ib16, ib32) = (rig.ib16, rig.ib32);
     for (name, buffer, draw) in [
@@ -792,7 +799,7 @@ fn test_d3d12_indexed_draw_errors() {
     let counter = calls.clone();
     rig.ctx.set_metal_backend(move |vtx, viewport, clear| {
         *counter.lock().unwrap() += 1;
-        GraphicsContext::execute_software_reference_draw(vtx, viewport, clear)
+        GraphicsContext::execute_software_reference_triangles(vtx, viewport, clear)
     });
     let (ib16, ib32) = (rig.ib16, rig.ib32);
     let unknown = GraphicsHandle {
@@ -825,16 +832,34 @@ fn test_d3d12_indexed_draw_errors() {
             GraphicsError::InvalidResourceHandle,
         ),
         (
-            "count not one triangle",
+            "incomplete triangle list",
             (ib16, 0, R16_UINT),
-            (6, 1, 0, 0),
+            (4, 1, 0, 0),
             GraphicsError::InvalidDescriptor,
         ),
         (
             "bad count with zero instances",
             (ib16, 0, R16_UINT),
-            (6, 0, 0, 0),
+            (4, 0, 0, 0),
             GraphicsError::InvalidDescriptor,
+        ),
+        (
+            "too many native indices",
+            (ib16, 0, R16_UINT),
+            (65_538, 1, 0, 0),
+            GraphicsError::InvalidDescriptor,
+        ),
+        (
+            "allowed native count past short index buffer",
+            (ib16, 0, R16_UINT),
+            (771, 1, 0, 0),
+            GraphicsError::IndexOutOfRange,
+        ),
+        (
+            "last triangle indices past buffer",
+            (ib16, 0, R16_UINT),
+            (6, 1, 2, 0),
+            GraphicsError::IndexOutOfRange,
         ),
         (
             "two instances",
@@ -917,11 +942,10 @@ fn test_d3d12_indexed_draw_errors() {
     // An index buffer whose guest backing would wrap the address space is
     // rejected, not read at a wrapped address.
     let device = ctx.create_device().unwrap();
-    // The read's start wraps (start 8 at 2 bytes each), then only its end does.
-    for (guest_addr, start) in [(u64::MAX - 8, 8), (u64::MAX - 2, 0)] {
-        let wrapping = rig
-            .ctx
-            .create_committed_resource(
+    // Invalid backing spans are rejected at creation, before a draw can use them.
+    for guest_addr in [u64::MAX - 8, u64::MAX - 2] {
+        assert_eq!(
+            rig.ctx.create_committed_resource(
                 device,
                 ResourceDesc {
                     dimension: ResourceDimension::Buffer,
@@ -933,12 +957,9 @@ fn test_d3d12_indexed_draw_errors() {
                 },
                 ResourceStates::COMMON,
                 Some(guest_addr),
-            )
-            .unwrap();
-        assert_eq!(
-            run_indexed(&mut rig, (wrapping, 0, R16_UINT), (3, 1, start, 0)).unwrap_err(),
-            GraphicsError::IndexOutOfRange,
-            "guest address {guest_addr:#x} start {start}"
+            ),
+            Err(GraphicsError::InvalidDescriptor),
+            "guest address {guest_addr:#x}"
         );
     }
     // No rejected draw reached the backend.
@@ -965,12 +986,12 @@ fn test_d3d12_indexed_draw_native_metal() {
     let render = {
         let gpu = gpu.clone();
         let msl = msl.clone();
-        move |vtx: &[[f32; 4]; 3], vp: (usize, usize), cc: [u8; 4]| {
-            gpu.render_rgba8(
+        move |vtx: &[[f32; 4]], vp: (usize, usize), cc: [u8; 4]| {
+            gpu.render_triangles_rgba8(
                 &msl,
                 [VERTEX_ENTRY_POINT, PIXEL_ENTRY_POINT],
                 vtx,
-                &[[0.0; 4]; 3],
+                &vec![[0.0; 4]; vtx.len()],
                 [vp.0, vp.1],
                 cc,
             )

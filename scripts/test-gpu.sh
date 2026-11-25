@@ -9,6 +9,10 @@ export MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1
 export MTL_SHADER_VALIDATION_ABORT_ON_FAULT=1
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 
+# Native view identity plus shared production state-machine unit checks.
+cargo test --locked -p xenora-metal --features gpu-tests --lib --no-run
+timeout 30s cargo test --locked -p xenora-metal --features gpu-tests --lib -- --nocapture --test-threads=1
+
 cargo test --locked -p xenora-metal --features gpu-tests --test native_compute --no-run
 timeout 30s cargo test --locked -p xenora-metal --features gpu-tests --test native_compute -- \
     --nocapture --test-threads=1
@@ -25,10 +29,35 @@ cargo test --locked -p xenora-loader --features gpu-tests --test graphics_d3d12 
 timeout 30s cargo test --locked -p xenora-loader --features gpu-tests --test graphics_d3d12 -- \
     --nocapture --test-threads=1
 
+# Reuse loader command lists and guest buffers across changing frames and failed submissions.
+cargo test --locked -p xenora-loader --features gpu-tests --test repeated_frames --no-run
+timeout 30s cargo test --locked -p xenora-loader --features gpu-tests --test repeated_frames -- \
+    --nocapture --test-threads=1
+
 # The native app interface runs the trusted fixture's guest draw on Metal.
 cargo test --locked -p xenora-ffi --features gpu-tests --test native_frame --no-run
 timeout 30s cargo test --locked -p xenora-ffi --features gpu-tests --test native_frame -- \
     --nocapture --test-threads=1
+
+# Selected original shader pipelines, textures and retained depth through production adapter.
+cargo test --locked -p xenora-ffi --features gpu-tests --test large_scene --no-run
+timeout 60s cargo test --locked -p xenora-ffi --features gpu-tests --test large_scene -- --nocapture --test-threads=1
+
+cargo test --locked -p xenora-ffi --features gpu-tests --test pipeline --no-run
+timeout 30s cargo test --locked -p xenora-ffi --features gpu-tests --test pipeline -- --nocapture --test-threads=1
+
+# Combined indexed, mixed-program, sampled MRT scene with retained depth and recovery.
+cargo test --locked -p xenora-ffi --features gpu-tests --test integrated_scene --no-run
+timeout 30s cargo test --locked -p xenora-ffi --features gpu-tests --test integrated_scene -- --nocapture --test-threads=1
+
+# Original PE guest calls the versioned pipeline/resource service through import dispatch.
+cargo test --locked -p xenora-ffi --features gpu-tests --lib --no-run
+timeout 30s cargo test --locked -p xenora-ffi --features gpu-tests --lib async_tests -- --nocapture --test-threads=1
+# Real two-queue producer/consumer: both commits precede a controlled GPU gate.
+timeout 30s cargo test --locked -p xenora-ffi --features gpu-tests --lib queued::tests -- --nocapture --test-threads=1
+
+cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics --no-run
+timeout 30s cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics -- --nocapture --test-threads=1
 
 # The persistent frame loop runs the guest on its own thread and renders on Metal.
 cargo test --locked -p xenora-ffi --features gpu-tests --test frame_loop --no-run

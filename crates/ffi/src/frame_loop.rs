@@ -13,10 +13,10 @@ use std::cell::RefCell;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread::JoinHandle;
 
+use crate::graphics_backend::FixtureRenderer;
+use xenora_loader::graphics::{GraphicsDraw, GraphicsDrawState};
 use xenora_loader::startup::{StartupLayout, run_synthetic_startup};
 use xenora_loader::{ExitReason, ImportRegistry, Register};
-use xenora_metal::NativeCompute;
-use xenora_shader::{Architecture, PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics};
 
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/pe/frame-loop.exe");
 const INTERACTIVE_FIXTURE: &[u8] = include_bytes!("../../../fixtures/pe/interactive.exe");
@@ -165,15 +165,9 @@ impl FrameLoop {
     }
 
     fn execute(self: &Arc<Self>) -> Result<(), String> {
-        let shader = compile_graphics(
-            Architecture::Gfx1030,
-            include_bytes!("../../../fixtures/rdna2/x9-constant-vs.bin"),
-            include_bytes!("../../../fixtures/rdna2/x9-constant-ps.bin"),
-        )
-        .map_err(|e| format!("shader translation: {e}"))?;
-        let gpu = NativeCompute::new().map_err(|e| format!("Metal device: {e}"))?;
-        // The session's GPU resources live on the guest thread, where the import runs.
-        GPU.with(|slot| *slot.borrow_mut() = Some((gpu, shader.msl)));
+        let renderer = FixtureRenderer::new()?;
+        // The loader context and Metal adapter live on the guest thread.
+        GPU.with(|slot| *slot.borrow_mut() = Some(renderer));
 
         let shared = Arc::clone(self);
         let mut imports = ImportRegistry::new();
@@ -268,7 +262,7 @@ impl FrameLoop {
 }
 
 thread_local! {
-    static GPU: RefCell<Option<(NativeCompute, String)>> = const { RefCell::new(None) };
+    static GPU: RefCell<Option<FixtureRenderer>> = const { RefCell::new(None) };
 }
 
 /// Frame `index` is a red strip in column `index % 4` on the clear colour.
@@ -280,21 +274,24 @@ fn render(index: u32) -> Option<Vec<u8>> {
     let column = (index as usize % WIDTH) as f32;
     let x0 = -1.0 + column * (2.0 / WIDTH as f32);
     let pixels = GPU.with(|slot| {
-        let slot = slot.borrow();
-        let (gpu, msl) = slot.as_ref()?;
-        gpu.render_rgba8(
-            msl,
-            [VERTEX_ENTRY_POINT, PIXEL_ENTRY_POINT],
-            &[
-                [x0, -10.0, 0.5, 1.0],
-                [x0 + 0.7, 0.0, 0.5, 1.0],
-                [x0, 10.0, 0.5, 1.0],
-            ],
-            &[[0.0; 4]; 3],
-            [WIDTH, HEIGHT],
-            CLEAR,
-        )
-        .ok()
+        let mut slot = slot.borrow_mut();
+        let renderer = slot.as_mut()?;
+        renderer
+            .render(
+                &[GraphicsDraw {
+                    vertices: vec![
+                        [x0, -10.0, 0.5, 1.0],
+                        [x0 + 0.7, 0.0, 0.5, 1.0],
+                        [x0, 10.0, 0.5, 1.0],
+                    ],
+                    viewport: (WIDTH, HEIGHT),
+                    state: GraphicsDrawState::default(),
+                    ..Default::default()
+                }],
+                CLEAR,
+            )
+            .ok()
+            .map(|out| out.pixels)
     })?;
     (pixels == expected(index)).then_some(pixels)
 }

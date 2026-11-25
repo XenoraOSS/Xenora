@@ -8,6 +8,7 @@
 
 use std::fmt::Write as _;
 mod frame_loop;
+pub mod graphics_backend;
 
 use frame_loop::FrameLoop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
@@ -15,7 +16,6 @@ use std::sync::{Arc, Mutex};
 use xenora_loader::startup::{StartupLayout, run_synthetic_startup};
 use xenora_loader::{ExitReason, ImportRegistry, ParsedPe, ProbeConfig, Register, probe_pe_bytes};
 use xenora_metal::{MetalRgba8Texture, MetalRgba8TextureDesc, NativeCompute, Rgba8MipLevel};
-use xenora_shader::{Architecture, PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics};
 
 pub const XENORA_ABI_VERSION: u32 = 1;
 
@@ -584,30 +584,26 @@ const ENTRY_STEPS: usize = 100;
 const EXPECTED_PIXEL: [u8; 4] = [255, 0, 0, 255];
 
 fn draw() -> Result<Vec<u8>, String> {
-    let shader = compile_graphics(
-        Architecture::Gfx1030,
-        include_bytes!("../../../fixtures/rdna2/x9-constant-vs.bin"),
-        include_bytes!("../../../fixtures/rdna2/x9-constant-ps.bin"),
-    )
-    .map_err(|e| format!("shader translation: {e}"))?;
-    let gpu = NativeCompute::new().map_err(|e| format!("Metal device: {e}"))?;
-    let pixels = gpu
-        .render_rgba8(
-            &shader.msl,
-            [VERTEX_ENTRY_POINT, PIXEL_ENTRY_POINT],
-            &[
-                [-1.0, -1.0, 0.5, 1.0],
-                [3.0, -1.0, 0.5, 1.0],
-                [-1.0, 3.0, 0.5, 1.0],
-            ],
-            &[[0.0; 4]; 3],
-            [
-                XENORA_FIXTURE_FRAME_WIDTH as usize,
-                XENORA_FIXTURE_FRAME_HEIGHT as usize,
-            ],
+    let mut renderer = graphics_backend::FixtureRenderer::new()?;
+    let pixels = renderer
+        .render(
+            &[xenora_loader::graphics::GraphicsDraw {
+                vertices: vec![
+                    [-1.0, -1.0, 0.5, 1.0],
+                    [3.0, -1.0, 0.5, 1.0],
+                    [-1.0, 3.0, 0.5, 1.0],
+                ],
+                viewport: (
+                    XENORA_FIXTURE_FRAME_WIDTH as usize,
+                    XENORA_FIXTURE_FRAME_HEIGHT as usize,
+                ),
+                state: xenora_loader::graphics::GraphicsDrawState::default(),
+                ..Default::default()
+            }],
             [19, 43, 93, 251],
         )
-        .map_err(|e| format!("Metal render: {e}"))?;
+        .map_err(|e| format!("loader render: {e}"))?
+        .pixels;
     if pixels != EXPECTED_PIXEL.repeat(FRAME_BYTES / 4) {
         return Err("read-back frame differs from the fixture shader's output".into());
     }

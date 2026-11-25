@@ -16,10 +16,11 @@ gpu-tests = []
 [dependencies]
 libc = "0.2"
 sha2 = "0.10"
+xenora-shader = { path = "../shader" }
+xenora-texture = { path = "../texture" }
 
 [dev-dependencies]
 xenora-metal = { path = "../metal" }
-xenora-shader = { path = "../shader" }
 
 [[bench]]
 name = "dbt_bench"

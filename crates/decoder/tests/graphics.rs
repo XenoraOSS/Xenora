@@ -24,6 +24,7 @@ fn decodes_export_registers_and_interpolation_fields_in_byte_order() {
                 instruction: Instruction::Export {
                     target: ExportTarget::Parameter0,
                     sources: [255, 128, 15, 1],
+                    done: false,
                 },
             },
             DecodedInstruction {
@@ -69,6 +70,19 @@ fn rejects_truncated_export_and_each_invalid_operand_field() {
     for bit in 0..26 {
         let mut bytes = [0; 8];
         bytes[..4].copy_from_slice(&(valid ^ (1 << bit)).to_le_bytes());
+        if matches!(bit, 4 | 5 | 6 | 11) {
+            let decoded = decode(Architecture::Gfx1030, &bytes).unwrap();
+            let index = if bit == 11 { 0 } else { 1 << (bit - 4) };
+            assert_eq!(
+                decoded[0].instruction,
+                Instruction::Export {
+                    target: ExportTarget::RenderTarget(index),
+                    sources: [0; 4],
+                    done: bit != 11,
+                }
+            );
+            continue;
+        }
         assert!(
             matches!(
                 decode(Architecture::Gfx1030, &bytes),
@@ -82,5 +96,54 @@ fn rejects_truncated_export_and_each_invalid_operand_field() {
             ),
             "export bit {bit}"
         );
+    }
+}
+
+#[test]
+fn runtime_uniform_fixtures_decode_register_conditions_and_diamond_boundaries() {
+    use xenora_decoder::ScalarSource;
+    for (bytes, register, compare_offset, branch_offset, arm, join) in [
+        (
+            include_bytes!("../../../fixtures/rdna2/x9-runtime-uniform-vs.bin").as_slice(),
+            24,
+            0,
+            4,
+            20,
+            28,
+        ),
+        (
+            include_bytes!("../../../fixtures/rdna2/x9-runtime-uniform-ps.bin").as_slice(),
+            25,
+            8,
+            12,
+            28,
+            36,
+        ),
+    ] {
+        let decoded = decode(Architecture::Gfx1030, bytes).unwrap();
+        let compare = decoded.iter().find(|i| i.offset == compare_offset).unwrap();
+        match compare.instruction {
+            Instruction::ScalarCompare { op, src0, src1 } => {
+                assert_eq!(op.mnemonic(), "s_cmp_eq_u32");
+                assert_eq!(src0, ScalarSource::Register(register));
+                assert_eq!(src1, ScalarSource::Immediate(0));
+            }
+            other => panic!("expected scalar compare, got {other:?}"),
+        }
+        assert_eq!(
+            decoded
+                .iter()
+                .find(|i| i.offset == branch_offset)
+                .unwrap()
+                .instruction,
+            Instruction::BranchSccZero { target: arm }
+        );
+        assert!(
+            decoded
+                .iter()
+                .any(|i| i.instruction == Instruction::Branch { target: join })
+        );
+        assert!(decoded.iter().any(|i| i.offset == arm));
+        assert!(decoded.iter().any(|i| i.offset == join));
     }
 }

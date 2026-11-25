@@ -288,20 +288,29 @@ fn decode_gfx1030(bytes: &[u8], offset: usize) -> Result<(Instruction, u8), Deco
     if EXP.matches(first) {
         let len = EXP.byte_len();
         let sources = word(bytes, len)?.to_le_bytes();
-        // RDNA 2 ISA Table 56. Match all operand and reserved bits, including
+        // RDNA 2 ISA section 13.9 (EXP). Match operand and reserved bits, including
         // the four enable bits, compression, DONE and valid-mask flags.
         let target = match first & 0x03ff_ffff {
             0x08cf => ExportTarget::Position0,
             0x020f => ExportTarget::Parameter0,
-            0x180f => ExportTarget::RenderTarget0,
+            operands if operands & !0x0870 == 0x100f => {
+                ExportTarget::RenderTarget(((operands >> 4) & 7) as u8)
+            }
             _ => {
                 return Err(unsupported(
                     "exp",
-                    "expected full uncompressed POS0 done, PARAM0, or MRT0 done vm",
+                    "expected full uncompressed POS0 done, PARAM0, or MRT0..7 vm with explicit DONE",
                 ));
             }
         };
-        return Ok((Instruction::Export { target, sources }, len));
+        return Ok((
+            Instruction::Export {
+                target,
+                sources,
+                done: first & (1 << 11) != 0,
+            },
+            len,
+        ));
     }
     if IMAGE_SAMPLE_LZ.matches(first) {
         let len = IMAGE_SAMPLE_LZ.byte_len();
@@ -588,11 +597,12 @@ fn branch_target(
     offset: usize,
     mnemonic: &'static str,
 ) -> Result<usize, DecodeErrorKind> {
-    let displacement = first as u16 as i16;
-    let words = usize::try_from(displacement)
-        .map_err(|_| unsupported(mnemonic, "expected a forward branch"))?;
+    let displacement = isize::from(first as u16 as i16);
+    // SOPP displacement is signed and relative to the next four-byte instruction.
+    // Keep the final offset checked in both directions; stream-boundary validation
+    // is performed separately after all instruction lengths are known.
     offset
-        .checked_add(4 + words * 4)
+        .checked_add_signed(4 + displacement * 4)
         .ok_or_else(|| unsupported(mnemonic, "target byte offset overflowed"))
 }
 

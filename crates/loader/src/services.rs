@@ -29,6 +29,7 @@ const THREAD_SET_RIGHTS: u32 = 0x0020 | 0x0400;
 const THREAD_SUPPORTED_RIGHTS: u32 = THREAD_QUERY_RIGHTS | THREAD_SET_RIGHTS | 0x0010_0000;
 const THREAD_PRIORITY_ERROR_RETURN: u64 = 0x7fff_ffff;
 const MAX_THREAD_HANDLES: usize = 1024;
+use crate::graphics_service::MAX_GUEST_OBJECTS;
 const PAGE_SIZE: u64 = 4096;
 const MEM_COMMIT_RESERVE: u32 = 0x3000;
 const MEM_RELEASE: u32 = 0x8000;
@@ -196,6 +197,31 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     registry.register("xmem.dll", "XMemFree", handler);
     registry.set_status("xmem.dll", "XMemFree", ServiceStatus::Stub);
 
+    let graphics = state.graphics.clone();
+    registry.register_with_status(
+        "xenora_fixture.dll",
+        "GraphicsCallV1",
+        ServiceStatus::Implemented,
+        move |args, _cpu, memory| {
+            let descriptor = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
+            let bytes = args.get(1, memory).map_err(ExitReason::MemoryFault)?;
+            let result = args.get(2, memory).map_err(ExitReason::MemoryFault)?;
+            if args.get(3, memory).map_err(ExitReason::MemoryFault)? != 0 {
+                return Ok(crate::graphics_service::STATUS_INVALID_CALL);
+            }
+            let mut context = graphics
+                .lock()
+                .map_err(|_| ExitReason::IllegalInstruction(0xff))?;
+            crate::graphics_service::graphics_call_v1(
+                &mut context,
+                memory,
+                descriptor,
+                bytes,
+                result,
+            )
+        },
+    );
+
     // 10. Synthetic Test Graphics Device Creation (xenora_fixture.dll)
     // Prototype graphics device creation for original integration fixtures.
     // In guest ABI: ppDevice is Arg 3 (R9). Writes generation-checked device handle.
@@ -208,9 +234,14 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
         if pp_device == 0 {
             return Ok(0x80070057); // E_INVALIDARG
         }
+        mem.validate_write_range(pp_device, 8)
+            .map_err(ExitReason::MemoryFault)?;
         let mut gfx = s_gfx
             .lock()
             .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+        if gfx.guest_object_count() >= MAX_GUEST_OBJECTS {
+            return Ok(0x80004005); // E_FAIL
+        }
         match gfx.create_device() {
             Ok(handle) => {
                 mem.write_u64(pp_device, handle.to_u64())
@@ -258,60 +289,94 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
             (4, 3)
         };
 
+        if vp_w > 4096 || vp_h > 4096 {
+            return Ok(0x80070057); // E_INVALIDARG
+        }
+        let pp_out = args.get(3, mem).map_err(ExitReason::MemoryFault)?;
+        if pp_out != 0 {
+            mem.validate_write_range(pp_out, 8)
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        vtx_addr
+            .checked_add(48)
+            .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?;
+        let mut vertex_bytes = [0; 48];
+        mem.read_bytes(vtx_addr, &mut vertex_bytes)
+            .map_err(ExitReason::MemoryFault)?;
+
         let mut gfx = s_gfx
             .lock()
             .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
 
-        // Build and execute guest command list through GraphicsContext
-        let dev = gfx
-            .create_device()
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-        let queue = gfx
-            .create_command_queue(dev, crate::graphics::CommandListType::Direct)
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-        let alloc = gfx
-            .create_command_allocator(dev, crate::graphics::CommandListType::Direct)
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-        let list = gfx
-            .create_command_list(dev, alloc, crate::graphics::CommandListType::Direct)
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+        // Reserve room for device, queue, allocator, list and vertex buffer before
+        // creating any of them. All guest imports count the same context objects.
+        if gfx.guest_object_count() > MAX_GUEST_OBJECTS - 5 {
+            return Ok(0x80004005); // E_FAIL
+        }
 
-        let vb_desc = crate::graphics::ResourceDesc {
-            dimension: crate::graphics::ResourceDimension::Buffer,
-            width: 48,
-            height: 1,
-            depth_or_array_size: 1,
-            mip_levels: 1,
-            format_rgba8: false,
-        };
-        let vb = gfx
-            .create_committed_resource(
-                dev,
-                vb_desc,
-                crate::graphics::ResourceStates::VERTEX_AND_CONSTANT_BUFFER,
-                Some(vtx_addr),
-            )
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-
-        gfx.cmd_set_viewport(list, vp_w, vp_h)
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-        gfx.cmd_set_render_targets(list, None, clear_color)
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-        gfx.cmd_set_vertex_buffer(list, vb, 0, 48)
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-        gfx.cmd_draw_instanced(list, 3, 1, 0, 0)
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-        gfx.close_command_list(list)
-            .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
-
-        let outcome = gfx.execute_command_list(queue, list, mem).map_err(|e| {
-            ExitReason::IllegalInstruction(match e {
-                crate::graphics::GraphicsError::NativeMetalRequired => 0xFE,
-                _ => 0xFF,
+        let mut temporary = Vec::with_capacity(5);
+        let submission = (|| {
+            // Build and execute guest command list through GraphicsContext
+            let dev = gfx
+                .create_device()
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            temporary.push(dev);
+            let queue = gfx
+                .create_command_queue(dev, crate::graphics::CommandListType::Direct)
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            temporary.push(queue);
+            let alloc = gfx
+                .create_command_allocator(dev, crate::graphics::CommandListType::Direct)
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            temporary.push(alloc);
+            let list = gfx
+                .create_command_list(dev, alloc, crate::graphics::CommandListType::Direct)
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            temporary.push(list);
+            let vb_desc = crate::graphics::ResourceDesc {
+                dimension: crate::graphics::ResourceDimension::Buffer,
+                width: 48,
+                height: 1,
+                depth_or_array_size: 1,
+                mip_levels: 1,
+                format_rgba8: false,
+            };
+            let vb = gfx
+                .create_committed_resource(
+                    dev,
+                    vb_desc,
+                    crate::graphics::ResourceStates::VERTEX_AND_CONSTANT_BUFFER,
+                    Some(vtx_addr),
+                )
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            temporary.push(vb);
+            gfx.cmd_set_viewport(list, vp_w, vp_h)
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            gfx.cmd_set_render_targets(list, None, clear_color)
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            gfx.cmd_set_vertex_buffer(list, vb, 0, 16)
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            gfx.cmd_draw_instanced(list, 3, 1, 0, 0)
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            gfx.close_command_list(list)
+                .map_err(|_| ExitReason::MemoryFault(crate::memory::MemoryError::Overflow))?;
+            gfx.execute_command_list(queue, list, mem).map_err(|e| {
+                ExitReason::IllegalInstruction(match e {
+                    crate::graphics::GraphicsError::NativeMetalRequired => 0xFE,
+                    _ => 0xFF,
+                })
             })
-        })?;
+        })();
+        let outcome = match submission {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                gfx.discard_unpublished_guest_objects(&temporary);
+                return Err(error);
+            }
+        };
+        // Successful legacy submissions retain their objects, preserving the
+        // existing shared-cap contract. Failed submissions retain none.
 
-        let pp_out = args.get(3, mem).map_err(ExitReason::MemoryFault)?;
         if pp_out != 0 {
             mem.write_u64(pp_out, outcome.pixels.len() as u64)
                 .map_err(ExitReason::MemoryFault)?;

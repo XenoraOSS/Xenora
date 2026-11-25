@@ -34,12 +34,9 @@ fn declared_semantic_forms_are_exactly_those_decoded_from_fixtures() {
         "{:?}",
         decoded.difference(&declared)
     );
-    // Covered by inline words in tests/gfx1030.rs rather than fixture binaries.
-    let inline_only: BTreeSet<_> = declared
-        .difference(&decoded)
-        .map(|(name, _)| *name)
-        .collect();
-    assert_eq!(inline_only, BTreeSet::from(["IMAGE_SAMPLE_LZ"]));
+    // Sampling now has an original LLVM-assembled graphics fixture as well.
+    // Every declared form must be represented by the checked-in fixture corpus.
+    assert_eq!(decoded, declared);
     for (name, family) in SEMANTIC_FORMS {
         assert!(
             FORMS

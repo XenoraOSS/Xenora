@@ -115,7 +115,8 @@ impl SamplerDesc {
         }
     }
 
-    /// Builder for setting an explicit mip level.
+    /// Select one mip, overriding the validated LOD range when sampling.
+    /// Texture binding still validates that this level exists.
     pub const fn with_explicit_mip(mut self, mip: u32) -> Self {
         self.explicit_mip = Some(mip);
         self

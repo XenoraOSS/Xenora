@@ -9,6 +9,7 @@ pub mod arm64;
 pub mod cpu;
 pub mod dbt;
 pub mod graphics;
+pub mod graphics_service;
 pub mod import_table;
 pub mod imports;
 pub mod jit;

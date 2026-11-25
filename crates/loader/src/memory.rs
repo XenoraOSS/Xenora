@@ -307,6 +307,11 @@ impl GuestMemory {
         Ok(())
     }
 
+    /// Preflight an entire output span without changing guest memory.
+    pub fn validate_write_range(&self, address: u64, len: usize) -> Result<(), MemoryError> {
+        self.resolve(address, len, Some("write")).map(|_| ())
+    }
+
     /// Write raw bytes into guest memory at the specified address, checking permissions.
     pub fn write_bytes(&mut self, address: u64, src: &[u8]) -> Result<(), MemoryError> {
         self.write_checked(address, src, Some("write"))

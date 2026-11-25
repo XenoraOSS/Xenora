@@ -316,6 +316,10 @@ scripts/test-gpu.sh
 
 The native test suite enables Metal API and shader validation and tests the supported compute, rendering and texture paths.
 
+For copy/paste targeted commands, expected output and the distinction between
+offscreen pixel checks and an application window, see the
+[local graphics validation guide](docs/testing/local-graphics-checkpoint.md#run-focused-graphics-checks).
+
 ### Verify guest execution
 
 ```sh

@@ -175,8 +175,8 @@ pub enum ExportTarget {
     Position0,
     /// Vertex parameter slot zero.
     Parameter0,
-    /// Pixel color attachment zero.
-    RenderTarget0,
+    /// Pixel color attachment index (the supported decoder bounds this to 0..=7).
+    RenderTarget(u8),
 }
 
 /// Phase of a pixel parameter interpolation.
@@ -274,6 +274,8 @@ pub enum Instruction {
     Export {
         target: ExportTarget,
         sources: [u8; 4],
+        /// Explicit DONE flag. Pixel export sequences terminate only at DONE.
+        done: bool,
     },
     /// Parameter interpolation with a source barycentric coordinate and an attribute component.
     Interpolate {
@@ -414,13 +416,21 @@ impl fmt::Display for Instruction {
             Self::Export {
                 target,
                 sources: [a, b, c, d],
+                done,
             } => {
-                let (name, flags) = match target {
-                    ExportTarget::Position0 => ("pos0", " done"),
-                    ExportTarget::Parameter0 => ("param0", ""),
-                    ExportTarget::RenderTarget0 => ("mrt0", " done vm"),
-                };
-                write!(formatter, " {name}, v{a}, v{b}, v{c}, v{d}{flags}")
+                match target {
+                    ExportTarget::Position0 => write!(formatter, " pos0")?,
+                    ExportTarget::Parameter0 => write!(formatter, " param0")?,
+                    ExportTarget::RenderTarget(index) => write!(formatter, " mrt{index}")?,
+                }
+                write!(formatter, ", v{a}, v{b}, v{c}, v{d}")?;
+                if done {
+                    write!(formatter, " done")?;
+                }
+                if matches!(target, ExportTarget::RenderTarget(_)) {
+                    write!(formatter, " vm")?;
+                }
+                Ok(())
             }
             Self::Interpolate {
                 dst,

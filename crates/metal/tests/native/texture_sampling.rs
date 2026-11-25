@@ -88,3 +88,32 @@ fn native_gpu_rgba8_sampling_matches_cpu_reference() {
         uv_coords.len()
     );
 }
+
+#[test]
+fn malformed_texture_descriptors_fail_before_native_allocation() {
+    let gpu = context();
+    for desc in [
+        Rgba8TextureDesc {
+            width: 0,
+            height: 1,
+            mips: 1,
+        },
+        Rgba8TextureDesc {
+            width: 1,
+            height: 1,
+            mips: 65,
+        },
+        Rgba8TextureDesc {
+            width: 16385,
+            height: 1,
+            mips: 1,
+        },
+        Rgba8TextureDesc {
+            width: usize::MAX,
+            height: 2,
+            mips: 1,
+        },
+    ] {
+        assert!(MetalRgba8Texture::allocate(gpu.device(), desc).is_err());
+    }
+}

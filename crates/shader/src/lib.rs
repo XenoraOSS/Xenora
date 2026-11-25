@@ -5,7 +5,10 @@
 use std::fmt::{self, Write};
 
 mod graphics;
-pub use graphics::{PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics};
+pub use graphics::{
+    CompiledGraphics, PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics,
+    compile_graphics_pipeline,
+};
 
 pub use xenora_decoder::Architecture;
 use xenora_decoder::{

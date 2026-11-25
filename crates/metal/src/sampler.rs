@@ -66,9 +66,14 @@ impl MetalSampler {
             // Normalized coordinates: normalized UV sampling in [0.0, 1.0].
             descriptor.setNormalizedCoordinates(true);
 
-            // Validated LOD bounds.
-            descriptor.setLodMinClamp(desc.min_lod);
-            descriptor.setLodMaxClamp(desc.max_lod);
+            // Explicit selection pins the sampler to that mip, including for
+            // translated sample_lz instructions that request level zero.
+            let (min_lod, max_lod) = desc
+                .explicit_mip
+                .map(|mip| (mip as f32, mip as f32))
+                .unwrap_or((desc.min_lod, desc.max_lod));
+            descriptor.setLodMinClamp(min_lod);
+            descriptor.setLodMaxClamp(max_lod);
 
             let sampler = device
                 .newSamplerStateWithDescriptor(&descriptor)
@@ -87,6 +92,14 @@ impl MetalSampler {
     #[inline]
     pub fn raw(&self) -> &ProtocolObject<dyn MTLSamplerState> {
         &self.sampler
+    }
+
+    pub(crate) fn device_id(&self) -> u64 {
+        self.sampler.device().registryID()
+    }
+
+    pub(crate) fn same_object(&self, other: &Self) -> bool {
+        std::ptr::eq(self.raw(), other.raw())
     }
 
     /// Access the source sampler descriptor.

@@ -183,9 +183,12 @@ dependencies = [
 name = "xenora-ffi"
 version = "0.1.0"
 dependencies = [
+ "objc2",
+ "objc2-metal",
  "xenora-loader",
  "xenora-metal",
  "xenora-shader",
+ "xenora-texture",
 ]
 
 [[package]]
@@ -204,6 +207,7 @@ dependencies = [
  "sha2",
  "xenora-metal",
  "xenora-shader",
+ "xenora-texture",
 ]
 
 [[package]]

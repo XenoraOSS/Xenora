@@ -1,5 +1,9 @@
 use xenora_metal::NativeCompute;
 
+#[path = "native/async_render.rs"]
+mod async_render;
+#[path = "native/bc_sampled.rs"]
+mod bc_sampled;
 #[path = "native/blend.rs"]
 mod blend;
 #[path = "support/blend_cases.rs"]
@@ -8,14 +12,32 @@ mod blend_cases;
 mod depth;
 #[path = "support/depth_cases.rs"]
 mod depth_cases;
+#[path = "native/graphics_loops.rs"]
+mod graphics_loops;
+#[path = "native/graphics_nested_loops.rs"]
+mod graphics_nested_loops;
 #[path = "native/guest_buffer.rs"]
 mod guest_buffer;
+#[path = "native/image_copy.rs"]
+mod image_copy;
 #[path = "native/indexed.rs"]
 mod indexed;
 #[path = "support/indexed_cases.rs"]
 mod indexed_cases;
+#[path = "native/nested_vertex.rs"]
+mod nested_vertex;
 #[path = "native/offscreen.rs"]
 mod offscreen;
+#[path = "native/queued_copy.rs"]
+mod queued_copy;
+#[path = "native/render_cohort.rs"]
+mod render_cohort;
+#[path = "native/runtime_uniform_semantics.rs"]
+mod runtime_uniform_semantics;
+#[path = "native/runtime_uniforms.rs"]
+mod runtime_uniforms;
+#[path = "native/scalar_graphics.rs"]
+mod scalar_graphics;
 #[path = "native/texture.rs"]
 mod texture;
 #[path = "native/texture_bc_alpha.rs"]
@@ -24,8 +46,12 @@ mod texture_bc_alpha;
 mod texture_bc_channel;
 #[path = "native/texture_sampling.rs"]
 mod texture_sampling;
+#[path = "native/texture_views.rs"]
+mod texture_views;
 #[path = "native/translated_render.rs"]
 mod translated_render;
+#[path = "native/unaligned_copy.rs"]
+mod unaligned_copy;
 
 const KERNEL_HEADER: &str = r"
 #include <metal_stdlib>
@@ -409,3 +435,21 @@ kernel void fixture(device const uint *input [[buffer(0)]],
         }
     }
 }
+
+#[path = "native/queued_graphs.rs"]
+mod queued_graphs;
+
+#[path = "native/render_graphs.rs"]
+mod render_graphs;
+
+#[path = "native/graphics_breaks.rs"]
+mod graphics_breaks;
+
+#[path = "native/graphics_signed_loops.rs"]
+mod graphics_signed_loops;
+
+#[path = "native/produced_geometry.rs"]
+mod produced_geometry;
+
+#[path = "native/pipeline_cache.rs"]
+mod pipeline_cache;

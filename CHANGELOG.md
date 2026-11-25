@@ -10,9 +10,287 @@ Guest execution uses original, purpose-built test programs. Commercial Xbox game
 remains unsupported.
 
 ### Changed
+- Memoized graphics loop-bound inference, including unknown results and remaining
+  analysis depth, to bound analysis work on shared MIN expression graphs.
+- Decode signed SOPP branch targets relative to the following instruction, while
+  preserving full-stream instruction-boundary checks. Compute and graphics consumers
+  reject unsupported cycles explicitly; bounded graphics countdowns are described below.
 - Extended the read-only RDNA2 planning CLI (`python3 -m qa rdna2`) with family/status filters, compact summaries, Codex-ready manifests under `artifacts/`, active-claim exclusion (family claims exclude those families; path-only claims block overlapping permitted files), coverage reconcile against `semantic_coverage` without inflating counts, and inventory diffs. Covered by `tests/qa/test_rdna2_plan.py`; planning only, no GPU production edits.
 
 ### Added
+- Nested read-only texture views through guest opcode45. Child mip ranges are
+  relative to the parent and normalize to the root backing; children remain valid
+  after parent destruction. Six CPU checks and two original guest tests across
+  three adapters pass. Array and writable views remain unsupported.
+- Reused bounded Metal compute pipelines, adapted from upstream commit6f1ac2a.
+  Cache keys include source, entry and validation mode; contexts remain isolated.
+  Compilation failures are not cached. Four native cache tests pass, along with
+  all nine repository gates. No local performance speedup is claimed.
+- Added an opt-in queued path for GPU-produced positions, colors and R16/R32
+  indices, with guarded byte gathering and validation status carried through
+  submission dependencies. Host-only and legacy paths retain their contracts.
+  Local CPU, eight native and two original guest tests pass, with eight injected
+  fault types detected. Final independent acceptance is recorded locally.
+- Added bounded signed-positive graphics countdowns with signed MIN proofs and
+  exact negative zero-trip live-outs. Signed and unsigned value facts remain
+  separate across loop joins; unsafe bounds and other induction forms reject.
+  Local CPU regressions, five native tests, an original guest across three adapters
+  and all nine gates pass. Six injected faults trigger pixel, admission or fact
+  assertions. Two independent reviews accepted this bounded increment.
+- Added conditional and unconditional exits to the innermost bounded graphics
+  countdown's continuation. Typed live-out values and SCC follow the selected edge;
+  wholly unreachable loop intervals need no entry bound. Ten CPU regressions, five
+  native tests and an original guest across three adapters passed, along with all
+  nine local gates and two independent scoped reviews. Eight faults trigger pixel
+  or admission assertions. General loops and divergent-wave execution remain open.
+- Added opt-in queued graphs with up to 16 retained nodes and multiple pending
+  submissions per queue. Inputs resolve exact ancestor versions; conflicting
+  unordered writers reject, and failures propagate before descendant publication.
+  Legacy backend limits remain intact. Original native and guest copy/render tests,
+  all nine local gates and two independent scoped reviews passed. Eight injected
+  faults detect ancestry, identity, failure-ordering and ownership regressions.
+- Added arbitrary-byte queued buffer-region copies through the native worker and
+  guest opcode43. GPU patches preserve the full destination and exact input versions;
+  older backend registrations retain their aligned-only contracts. Native evidence
+  covers 153 literal byte cases, pending inputs, multiple threadgroups and payload
+  boundaries. All nine local gates and two independent scoped reviews passed;
+  ten injected faults trigger byte, ordering, ownership or validation failures.
+- Extended the graphics countdown compiler to strictly nested loop forests with
+  distinct counters and multiplicative execution budgets, including final child
+  header checks. Independently bounded counters retain their bound across loop
+  joins only when all writes are validated nonwrapping decrements. Nine new native
+  tests and an original guest test pass, including three loop levels, retained
+  counters, swaps, texture accumulation and geometry. All nine local gates and
+  two independent scoped reviews passed; six faults trigger admission or pixel
+  assertions. General loop shapes and wave divergence remain unsupported.
+- Added initial compilation of contiguous, nonnested unsigned graphics countdowns,
+  with bounds derived from original shader constants or unsigned MIN operations.
+  Generated Metal uses real iteration and typed carried values; unsafe loop shapes
+  and missing entry definitions reject explicitly. CPU regression and admission-boundary
+  tests, eight native tests and an original guest test pass locally. All nine gates
+  and two independent scoped reviews passed; six shader faults and three decoder
+  faults trigger regression checks. General loops and divergent execution remain unsupported.
+- Added native RGBA8 texture rectangles and pitched buffer/texture transfers that
+  preserve the full destination and retain both exact input versions. Native tests
+  pass with Metal API/GPU validation, including non-256 row pitches and exact final-row
+  bounds. Guest opcode 44 records validated copies, and original guest programs
+  exercise every direction and pending-input role. All nine local gates and two
+  independent scoped reviews passed; 18 fault-injection cases fail observable checks.
+  Additional mips/slices, compressed/depth copies and broader graphs remain open.
+- Added native aligned buffer-region copies that preserve the complete prior
+  destination, including odd logical tails, and retain exact source/destination
+  versions. Guest opcode 43 records validated regions; original guest tests cover
+  both pending-input roles and both collection orders. All nine local gates and two
+  independent scoped reviews passed; six production faults fail observable tests.
+  Unaligned copies remain open; image transfers are described above.
+- Added native queued whole-buffer and single-mip RGBA8 copies with immutable
+  produced outputs, GPU dependencies, exact logical buffer lengths and retained
+  payload accounting. Original native tests cover ordering, direct texture use,
+  resource lifetime and budget refunds. Guest opcode 42 records copies submitted through the
+  typed loader/worker path; four original guest tests pass for buffer chains, render-to-copy,
+  copy-to-sampling and copy-to-Load. All nine local checks and two independent scoped
+  reviews passed; six production mutations fail observable assertions. Partial and
+  subresource transfers, additional formats and broader queue graphs remain open.
+- Added typed graphics scalar locals, MOV and eleven arithmetic/selection forms,
+  with exact integer joins, carry/borrow and signed overflow, protected inputs and
+  definite-assignment checks. Original native fixtures cover result bits and flags,
+  arithmetic chains, aliases and high-bit joins; an original guest test exercises
+  all three native backend modes. All nine local gates and two independent scoped
+  reviews passed; seven production mutations cause observable assertion failures.
+  Loops and divergent execution remain open.
+- Added typed immutable queued depth versions, GPU copies into fresh working depth,
+  read-only preservation, later updates and clear-only initialization. Native, worker
+  and original guest tests cover ownership, failure recovery and atomic publication.
+  All nine local gates and two independent scoped reviews passed; five production
+  mutations fail observable assertions. Depth sampling/views remain open; whole-resource
+  copies are described above.
+- Added queued color initialization that distinguishes host bytes from an exact
+  produced GPU version, with native copying into a fresh attachment before Load.
+  Original native, worker and guest tests validate partial overlays, immutable
+  versions, failure handling and retained payload reservations. All nine local gates
+  and two independent reviews passed; five production faults fail observable tests.
+  Whole-resource copies and typed depth versions are described above.
+- Added per-draw scalar uniforms (s24..s31), guest opcode 41, and forward runtime
+  graphics branches with definite-assignment checks and SCC/VGPR joins. Native and
+  sync/async/queued loader adapters retain immutable uniform data through completion.
+  Original tests cover all twelve integer comparisons, nested joins, two targets
+  and geometry/color changes without recompilation. All nine local gates and two independent scoped reviews passed, with four
+  observable production mutation failures. Divergent EXEC/VCC execution and loops
+  remain open.
+- Added checked canonical RGBA8/BC1/BC3 mip storage layouts for persistent texture
+  resources, including complete compressed edge blocks and overflow-safe offsets.
+  Original CPU tests cover odd dimensions, mip tails and invalid layouts.
+- Added immutable persistent native BC1/BC3 sampled textures, shared-storage
+  linear/sRGB mip views, typed loader resources and guest opcode 40. All three FFI
+  adapters propagate actual-device BC capabilities, preserve compressed bytes and
+  retain typed parent storage; unsupported devices reject without decompression.
+  Render outputs remain RGBA8. Targeted guest sync/async, queued and four native
+  cases passed. Interpolated alpha and color use independently derived reference
+  precision envelopes; wrong-mip and lost-sRGB production mutations remain detected.
+  Full local validation gates passed; no Xbox equivalence is claimed.
+- Added actual shared-storage sampled mip-range views with RGBA8 linear/sRGB
+  interpretation, view-relative dimensions and LOD validation, and guest view
+  creation/destruction/binding. Immutable native and produced-view handles preserve
+  parent ownership and queued dependency provenance without upload/raw access.
+  FFI caches include backing identity, metadata and complete view descriptors.
+  Local native, original guest and queued FFI tests cover mip/spatial selection,
+  sRGB alpha preservation, retained ownership and failure handling. Arrays, writable
+  or arbitrary-format views, wider guest formats and full Stage 2/3 support remain open.
+- Added an opt-in two-queue graphics backend with two retained loader receipts,
+  dependency-aware planned states and opaque native produced-texture versions.
+  `RenderCohort` samples producer RGBA8 outputs directly, stages owned depth uploads
+  without waiting in submission, and drains failures in producer-first order before
+  host-unblocking consumers. Publication failure rejects dependent results; recovery
+  uses a fresh generation after ticket release. Existing async mode remains limited
+  to one receipt. Tests cover gated native/FFI handoff and controlled host rejection;
+  scripted missing-signal tests share production drain logic but do not demonstrate
+  actual GPU-fault recovery. Overlapping depth and broader
+  Stage 2 synchronization and Stage 3 control flow remain unsupported.
+- Added two independent texture slots and two sampler slots, including all four
+  cross-pairs, through translated shaders, loader snapshots, native submission and
+  original guest opcode 34. Required binding masks and per-pair LOD compatibility
+  are checked; opcode 21 remains slot-zero-only. Native submission rejects conflicting
+  slot objects and incompatible devices, clears absent slots per draw and retains
+  inputs through async completion. Local native and sync/async guest tests cover
+  cross-pairs and sampler rebinding; general descriptors/views, wider synchronization
+  and divergent graphics control flow remain open.
+- Added original PE guest regressions for both index widths, padded attributes,
+  signed base vertices, failed-frame recovery, fractional-alpha blending and channel
+  masks through synchronous and asynchronous native submission. A combined indexed,
+  sampled, two-target scene checks preserved depth/color and recovery after rejection.
+- Extended graphics-stage translation with immediate/literal signed and unsigned
+  scalar comparisons and uniform forward SCC0 branches. Uninitialized conditions,
+  SGPR operands and invalid targets reject; runtime divergence remains unsupported.
+- Added shader-pipeline changes within a single translated render pass, including
+  sampled and unsampled draws. Native pipeline caching includes program identity;
+  all programs validate before encoding and async tickets retain every draw input.
+- Expanded translated native scenes to 65,535 vertices, 256 draws and one million
+  pixels per target, with checked 4,096-axis bounds. Software and older fixture limits
+  remain separate. Original indexed scenes cover both index widths, padded attributes,
+  changing uploads, retained depth/color and atomic rejection of a bad final index.
+- Added owned native rendering tickets with nonblocking status polling and explicit
+  completion collection, plus a native worker and original guest submit/poll/wait/release
+  commands. In-flight resources survive list reset and logical destruction; retired
+  storage remains charged until completion. Outputs publish only after validation.
+  The original async mode supports one outstanding receipt; the separate bounded
+  queued backend described above adds two-queue dependencies.
+- Added explicit color attachment Load for preserved RGBA8 targets across submissions,
+  including the original guest descriptor interface. Rendering stages prior bytes in
+  fresh native targets and publishes colors only after validated completion; existing
+  target binding APIs continue to clear. Original guest tests exercise depth-tested
+  preservation followed by a clipped overlay from a distinct shader pipeline.
+- Graphics stages now follow validated forward unconditional branches while preserving
+  reached-path register, interpolation and export checks. Original assembled shaders
+  cover skipped geometry/color writes on native Metal. Runtime conditional branches,
+  loops and divergent execution remain unsupported; uniform SCC0 support is listed above.
+- Added the original `GraphicsCallV1` guest import with versioned fixed-size
+  descriptors for resource/pipeline creation, transfers, command recording and
+  submission. Writable result spans are preflighted before mutation; descriptors,
+  shader reads and object/command counts are bounded. Legacy guest imports share
+  the object limit. Vertex-binding arithmetic is checked and overflowing guest
+  readback addresses retain memory-fault semantics. Legacy output spans are preflighted
+  and failed temporary draw setup releases its objects. This is a synthetic ABI.
+- Added compiled graphics pipeline metadata, loader pipeline/color/sampled-resource
+  binding and a reusable native Metal adapter. The application fixture now uses
+  this adapter; selected original programs exercise changing texture uploads,
+  per-draw sampler/UV bindings, retained depth and eight color outputs.
+- Loader RGBA8 textures now support bounded packed mip chains. The adapter uploads
+  each distinct resource snapshot once per submission and binds independent samplers
+  per draw. Explicit mip selection now pins native LOD clamps instead of being
+  ignored. Invalid legacy binding use and sampled/output aliases fail before dispatch.
+- Added loader depth resources, explicit clear/load binding, depth read/write
+  barriers and staged backend snapshots committed with validated color outputs.
+  Native adapters transfer immutable owned depth bytes across the loader boundary;
+  no unsafe thread-trait declarations are needed. Invalid color readbacks preserve
+  prior depth, barrier state and presentation. Clear-only depth passes are supported.
+- Added retained native Depth32Float surfaces with explicit clear/load operations
+  for translated multi-target passes. Successful synchronous submissions preserve
+  depth across passes; staged copies keep earlier contents intact on failure.
+  Native coverage includes occlusion, updates, reversed depth, read-only depth
+  draws and serialized use across queues. General guest depth-resource services remain open.
+- Bind one through eight distinct loader RGBA8 targets with independent clears,
+  matching extents, ordered native output callbacks and atomic readback commits.
+  All outputs remain available while presentation uses slot zero. Native tests
+  render translated MRT exports across repeated frames and copy every resource
+  back to guest memory; malformed later outputs preserve all resources and state.
+- Added 1–8 native RGBA8 color attachments with separate clears and readbacks,
+  sharing extent and per-draw depth/blend/mask state. Existing single-target APIs
+  delegate to the same path. Native tests verify all slots and overlap/clipping.
+- Preserve MRT0–MRT7 and explicit DONE in decoded pixel exports; translate dense
+  output sets without renumbering. Full uncompressed VM exports are supported;
+  duplicate targets, holes, missing final DONE and post-DONE exports are rejected.
+  An original LLVM-assembled eight-output fixture reaches all eight Metal targets.
+  General guest pipeline integration remains open.
+- Added configurable depth clears through loader commands and the application
+  fixture adapter, including reversed-depth native coverage and reset validation.
+- Lower pixel-stage register add/multiply using separate precise FP32 operations.
+  Original assembled fixtures exercise interpolated and sampled arithmetic on
+  native Metal; reserved registers and arithmetic after exports remain rejected.
+- Added retained texture/sampler bindings per draw to stateful translated passes.
+  Native tests combine changing uploads, sampling/arithmetic, depth, blending,
+  clipping and retained resource ownership over repeated frames. The binding ABI
+  remains one slot-zero RGBA8 texture and sampler per draw.
+- Added explicit loader resource destruction after all recorded command-list
+  references are reset. Live references block destruction even after completed
+  or failed submissions; stale handles are rejected. Guest memory and completed
+  presentation pixels remain owned independently. This covers synchronous loader
+  resources, not asynchronous GPU retirement or a guest destruction ABI.
+- Added synchronous guest uploads and readbacks for host-backed loader resources,
+  requiring COPY_DEST/COPY_SOURCE states and checked ranges. Failed memory access
+  leaves destinations unchanged. Synthetic tests cover upload/render/readback;
+  queued whole-resource transfers and their guest ABI are described above.
+- Added checked integer viewport origins and per-draw scissor rectangles through
+  the loader, native translated passes and application fixture adapter. Scissor
+  reset restores full-target clipping; empty rectangles suppress rasterization.
+  Native regressions cover clipping, preserved geometry, buffer advancement after
+  empty draws, reset/recovery and invalid or overflowing regions. Coordinates
+  remain bounded to the target; this does not add a general guest viewport ABI.
+- Route the application's trusted-frame runner and persistent/interactive fixture
+  loops through a shared loader-to-Metal adapter. Frame loops reuse a context,
+  command list and bounded vertex buffer; the C API and fixture output remain
+  unchanged. Native tests cover ordered state, invalid-input recovery and the
+  existing frame-loop, lifecycle, input-replay and memory checks. The textured
+  resource path remains separate; this is original-fixture integration only.
+- Added translated Metal passes combining per-draw depth compare/write, blending
+  and color write masks. Loader commands retain bounded draw state for ordered
+  adapters; legacy adapters reject unsupported state. Native tests cover depth
+  write changes, alpha blending, additive blending, masks and command-list reset.
+- Stage loader resource-barrier metadata until successful readback so validation
+  and backend failures leave resource states unchanged and allow correct retry.
+  Local synthetic validation is not independent acceptance or game compatibility.
+- Connected ordered loader pass callbacks to native Metal tests, retaining each
+  draw's viewport within an extent fixed by the first draw. Legacy adapters remain
+  compatible; unsupported target and clear changes are still rejected.
+- Reject undersized render targets and malformed readback lengths before presenting
+  a frame. Bound completed submission history to 256 handles so repeated frames do
+  not accumulate unlimited diagnostic entries. Added translated vertex-arithmetic
+  coverage through the ordered pass; no new shader opcode support is claimed.
+- Added a native ordered triangle-pass API with per-draw position/color inputs
+  and viewports over one cleared RGBA8 target. Existing single-draw APIs retain
+  their signatures. Synthetic tests cover ordering, viewport changes, invalid
+  later draws and the 256-draw limit;
+  local tests do not constitute independent acceptance.
+- Extended loader indexed draws to complete triangle lists of up to 768 indices,
+  retaining 16-/32-bit index formats, offsets, signed base vertices and checked
+  buffer reads. The combined command-list limit remains 256 triangles. Tests
+  cover both formats, the maximum count, and invalid final indices.
+- Added bounded non-indexed triangle-list draws through the loader and native Metal:
+  up to 256 triangles in one command, using one cleared target and one GPU draw.
+  The loader backend callback now takes a vertex slice; single-triangle Metal APIs
+  remain compatible. Native tests cover both halves of a square, per-triangle colors,
+  the maximum vertex count, and malformed input rejection. Instancing remains unsupported.
+- Fixed consecutive loader draws erasing earlier geometry: compatible draws now share
+  one cleared target, with a combined limit of 256 triangles. Vertex reads complete
+  before rendering; viewport, target and clear changes after drawing starts are
+  rejected. This is bounded synthetic-ABI batching, not general render-pass support.
+  Local validation does not constitute independent acceptance.
+- Added loader graphics regression tests that reuse one command list and guest vertex buffer
+  across 48 changing frames, replay the sequence in a fresh context, preserve owned readbacks,
+  and verify that invalid submissions leave the last presentation intact before recovery.
+  A separate injected-backend-error test checks propagation and retry; it is not GPU evidence.
+  The native test is included in `scripts/test-gpu.sh`. Local Metal API and shader validation
+  passed on Apple M4 Max (96 native frame submissions); independent acceptance remains open.
+  These are host-driven graphics API tests with synthetic shaders, not commercial-game execution.
 - Added authoritative read-only x86-64 CPU inventory CLI (`python3 -m qa cpu-inventory`) over `crates/loader/x86/instructions.toml` via `generate_x86.load`, with opcode-map/prefix/operand summaries, native vs shared-semantic operation partitions from `dbt.rs`, fixture mnemonic evidence and a separate unsupported catalog. Does not count candidates as implemented. Covered by `tests/qa/test_cpu_inventory.py`.
 - Added typed runtime inventory CLI (`python3 -m qa runtime-inventory`) over `crates/loader/runtime/services.txt`, reporting implemented/partial/stub services separately from API-set aliases and leaving independently-verified empty unless recorded. Covered by `tests/qa/test_runtime_inventory.py`.
 
@@ -107,6 +385,27 @@ remains unsupported.
   native DBT.
 
 ### Fixed
+- Validate COMMON/PRESENT barrier starting states exactly like other states.
+  Stale transitions and list replays now fail without committing resource state,
+  presentation or history. Regression coverage reproduces the prior wildcard.
+- Revalidate public native RGBA8 texture descriptors at allocation and mip-extent
+  boundaries, including per-axis dimensions and mip counts. Malformed packed-row
+  descriptors no longer overflow during construction; uploads reject them before
+  changing native texture contents.
+- Bound RGBA8 textures now determine loader target dimensions, preserving full
+  target clears and row layout when per-draw viewports are smaller. Legacy
+  callbacks reject layouts they cannot preserve instead of packing incorrect rows.
+- Reject unsupported loader resource layouts, zero dimensions and overflowing
+  storage/backing ranges before allocation. Buffer and single-level RGBA8 2D
+  resources have explicit 64 MiB per-resource and 256 MiB per-context storage
+  limits; allocation errors are recoverable and destruction reclaims the budget.
+  These are bounded loader limits, not Metal hardware capabilities.
+- Non-indexed loader draws now honor the starting vertex and vertex stride, validate
+  each position read against the vertex resource (including checked address arithmetic),
+  and skip zero-instance draws. Unsupported vertex counts and instancing fail explicitly
+  instead of silently drawing one triangle. Regression tests reproduce the prior wrong
+  geometry, missing zero-instance handling and unchecked vertex selection; padded layouts
+  are also exercised by the native Metal regression target.
 - Made the static probe and the binder share one bounded import parser, after the truncated-name fix for #270. Truncated, unterminated, empty or non-ASCII names, reserved bits and endless tables are reported by the probe and refused by the binder.
 - Fixed import binding writing some slots before finding an unresolved import, and service calls taking effect before an unreadable return address was noticed. A service that changes a nonvolatile register, including XMM6 to XMM15, now stops the guest (part of #201).
 - Fixed older import-generator templates that reported success for unimplemented wrappers, used a nonexistent exit reason, and read floating-point arguments from integer registers.

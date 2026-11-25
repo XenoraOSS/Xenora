@@ -363,3 +363,19 @@ fn vector_compares_lower_to_per_thread_wave_masks_and_selects() {
         include_str!("../../../fixtures/golden/vector-compare.metal")
     );
 }
+
+#[test]
+fn signed_decoding_keeps_compute_backedges_fail_closed_even_when_unreachable() {
+    for opcode in [0xbf82_0000u32, 0xbf84_0000, 0xbf86_0000, 0xbf88_0000] {
+        for displacement in [0xffff, 0xfffe] {
+            let mut code: Vec<_> = [0xbf82_0001, opcode | displacement]
+                .iter()
+                .flat_map(|word| word.to_le_bytes())
+                .collect();
+            code.extend_from_slice(FIXTURE);
+            assert!(matches!(compile(Architecture::Gfx1030, &code),
+                Err(CompileError::Verify { offset: 4, reason })
+                    if reason == "branch target must be a forward instruction boundary"));
+        }
+    }
+}

@@ -20,3 +20,8 @@ gpu-tests = []
 xenora-loader = { path = "../loader" }
 xenora-metal = { path = "../metal" }
 xenora-shader = { path = "../shader" }
+xenora-texture = { path = "../texture" }
+
+[target.'cfg(all(target_arch = "aarch64", target_os = "macos"))'.dev-dependencies]
+objc2 = "=0.6.5"
+objc2-metal = { version = "=0.3.2", default-features = false, features = ["std", "MTLDevice", "MTLEvent", "MTLCommandBuffer", "MTLCommandQueue"] }

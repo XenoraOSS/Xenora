@@ -114,7 +114,6 @@ fn rejects_other_opcodes_and_noncanonical_operands() {
         (&[0xbefc_0387], "s_mov_b32"),
         (&[0xbf06_87fe], "s_cmp_eq_u32"),
         (&[0xbf06_ffff, 0], "s_cmp_eq_u32"),
-        (&[0xbf82_ffff], "s_branch"),
         (&[0xbf84_fffe], "s_cbranch_scc0"),
         (&[0x3602_0680], "v_and_b32_e32"),
         (&[0x3803_fe80], "v_or_b32_e32"),
@@ -1029,4 +1028,79 @@ fn decode_at_resolves_branch_targets_from_the_stream_offset() {
             },
         })
     );
+}
+
+#[test]
+fn signed_sopp_targets_cover_backedges_self_and_extreme_displacements() {
+    for opcode in [0xbf82_0000u32, 0xbf84_0000, 0xbf86_0000, 0xbf88_0000] {
+        let bytes: Vec<_> = [0x7e10_02f2, opcode | 0xfffe, 0xbf81_0000]
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect();
+        let decoded = decode(Architecture::Gfx1030, &bytes).expect("signed backedge must decode");
+        assert_eq!(decoded[1].offset, 4);
+        assert_eq!(decoded[1].branch_target(), Some(0));
+        let next = opcode.to_le_bytes();
+        assert_eq!(
+            decode_at(Architecture::Gfx1030, &next, 0)
+                .unwrap()
+                .branch_target(),
+            Some(4)
+        );
+        assert_eq!(
+            decode(Architecture::Gfx1030, &next).unwrap_err().kind,
+            DecodeErrorKind::InvalidBranchTarget { target: 4 }
+        );
+        let self_branch = (opcode | 0xffff).to_le_bytes();
+        assert_eq!(
+            decode(Architecture::Gfx1030, &self_branch).unwrap()[0].branch_target(),
+            Some(0)
+        );
+        let forward = (opcode | 0x7fff).to_le_bytes();
+        assert_eq!(
+            decode_at(Architecture::Gfx1030, &forward, 0)
+                .unwrap()
+                .branch_target(),
+            Some(131072)
+        );
+        // PC 131068 + 4 + (-32768 * 4) = 0.
+        let mut extreme = vec![0; 131072];
+        extreme[131068..].copy_from_slice(&(opcode | 0x8000).to_le_bytes());
+        assert_eq!(
+            decode_at(Architecture::Gfx1030, &extreme, 131068)
+                .unwrap()
+                .branch_target(),
+            Some(0)
+        );
+        for immediate in [0xfffe, 0x8000] {
+            assert!(
+                decode_at(
+                    Architecture::Gfx1030,
+                    &(opcode | immediate).to_le_bytes(),
+                    0
+                )
+                .is_err(),
+                "negative stream target must reject"
+            );
+        }
+    }
+}
+
+#[test]
+fn signed_sopp_backedges_cannot_enter_literal_or_second_instruction_words() {
+    for opcode in [0xbf82_0000u32, 0xbf84_0000, 0xbf86_0000, 0xbf88_0000] {
+        for prefix in [[0x7e10_02ffu32, 0x3f80_0000], [0xf800_180f, 0x0809_0908]] {
+            // At byte8, displacement-2 resolves byte4, inside the preceding instruction.
+            let bytes: Vec<_> = [prefix[0], prefix[1], opcode | 0xfffe, 0xbf81_0000]
+                .iter()
+                .flat_map(|word| word.to_le_bytes())
+                .collect();
+            let error = decode(Architecture::Gfx1030, &bytes).unwrap_err();
+            assert_eq!(error.offset, 8);
+            assert_eq!(
+                error.kind,
+                DecodeErrorKind::InvalidBranchTarget { target: 4 }
+            );
+        }
+    }
 }
