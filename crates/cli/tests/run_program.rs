@@ -130,6 +130,9 @@ fn crt_codepages(name: &str) -> PathBuf {
 fn crt_locale(name: &str) -> PathBuf {
     build("build-crt-locale.sh", "run-program-crt-locale", &OUT).join(format!("{name}.exe"))
 
+fn crt_compare(name: &str) -> PathBuf {
+    build("build-crt-compare.sh", "run-program-crt-compare", &OUT).join(format!("{name}.exe"))
+
 /// The SHA-256 of a file, from the host's `shasum`.
 fn digest(path: &Path) -> String {
     let output = Command::new("shasum")
@@ -1112,5 +1115,22 @@ fn a_program_using_the_locale_identity_runs_and_detects_a_wrong_result() {
     assert_eq!(
         run.stdout,
         "check 19 failed: the control fails\r\ncrt-locale: 1/19 checks failed, first 19\r\n"
+    );
+}
+
+#[test]
+fn a_program_comparing_strings_runs_and_detects_a_wrong_result() {
+    for name in ["crt-compare-O0", "crt-compare-O2"] {
+        let run = run_program(&crt_compare(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {:?}", run.stdout);
+        assert_eq!(run.stdout, "crt-compare: 26/26 checks passed\r\n", "{name}");
+        assert_eq!(run.stderr, "", "{name}");
+    }
+    // The control must fail its last check: the exit code is its number.
+    let run = run_program(&crt_compare("crt-compare-break"), &[], &[]);
+    assert_eq!(run.code, Some(27), "control: {:?}", run.stdout);
+    assert_eq!(
+        run.stdout,
+        "check 27 failed: the control fails\r\ncrt-compare: 1/27 checks failed, first 27\r\n"
     );
 }

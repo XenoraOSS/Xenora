@@ -771,6 +771,16 @@ wide and narrow output. Another locale, an unknown type or the number form
 fails with `ERROR_INVALID_PARAMETER` rather than answering wrong. Nothing
 was compared with Windows.
 
+### String comparison
+
+`lstrcmp`, `CompareString` and the insensitive forms compare in byte order -
+ordinal, not the linguistic order Windows en-US uses - with an ASCII-only
+case fold when insensitivity is requested. Flags Xenora does not implement
+are refused with `ERROR_INVALID_PARAMETER` rather than silently ignored.
+`GetStringTypeW` answers `CT_CTYPE1` classification of ASCII input and
+refuses the other types; `LCMapStringW` maps ASCII case and refuses sort
+keys. Nothing was compared with Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.

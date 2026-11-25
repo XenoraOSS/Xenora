@@ -944,6 +944,82 @@ service kernel32.dll GetLocaleInfoEx(name: ptr, kind: u32, output: ptr, count: i
     ref winnls.h GetLocaleInfoEx
     test the_locale_is_en_us_and_answers_its_strings
 
+# The byte-order string comparison, classification and case mapping of the one
+# locale, package 7 third part of #459. crates/loader/src/services/compare.rs
+# documents what is ordinal rather than linguistic, and which flags fail.
+
+service kernel32.dll lstrlenA(text: ptr) -> i32
+    handler lstrlen_a
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails never
+    ref winbase.h lstrlenA
+    test the_string_comparison_services_answer_in_byte_order
+
+service kernel32.dll lstrlenW(text: ptr) -> i32
+    handler lstrlen_w
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails never
+    ref winbase.h lstrlenW
+    test the_string_comparison_services_answer_in_byte_order
+
+service kernel32.dll lstrcpyA(destination: ptr, source: ptr) -> ptr
+    handler lstrcpy_a
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails never
+    ref winbase.h lstrcpyA
+    test the_string_comparison_services_answer_in_byte_order
+
+service kernel32.dll lstrcmpA(left: ptr, right: ptr) -> i32
+    handler lstrcmp_a
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails never
+    ref winbase.h lstrcmpA
+    test the_string_comparison_services_answer_in_byte_order
+
+service kernel32.dll lstrcmpiA(left: ptr, right: ptr) -> i32
+    handler lstrcmpi_a
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails never
+    ref winbase.h lstrcmpiA
+    test the_string_comparison_services_answer_in_byte_order
+
+service kernel32.dll CompareStringA(lcid: u32, flags: u32, left: ptr, left_count: i32, right: ptr, right_count: i32) -> i32
+    handler compare_string_a
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails sets ERROR_INVALID_PARAMETER for another locale or unsupported flags
+    ref winnls.h CompareStringA
+    test the_string_comparison_services_answer_in_byte_order
+
+service kernel32.dll CompareStringW(lcid: u32, flags: u32, left: ptr, left_count: i32, right: ptr, right_count: i32) -> i32
+    handler compare_string_w
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails sets ERROR_INVALID_PARAMETER for another locale or unsupported flags
+    ref winnls.h CompareStringW
+    test the_string_comparison_services_answer_in_byte_order
+
+service kernel32.dll GetStringTypeW(kind: u32, source: ptr, count: i32, output: ptr) -> bool32
+    handler get_string_type_w
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails sets ERROR_INVALID_PARAMETER for CT_CTYPE2 and CT_CTYPE3
+    ref winnls.h GetStringTypeW
+    test the_string_comparison_services_answer_in_byte_order
+
+service kernel32.dll LCMapStringW(lcid: u32, flags: u32, source: ptr, count: i32, destination: ptr, destination_count: i32) -> i32
+    handler lcmap_string_w
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails sets ERROR_INVALID_PARAMETER for unsupported flags or another locale, ERROR_INSUFFICIENT_BUFFER for a small output
+    ref winnls.h LCMapStringW
+    test the_string_comparison_services_answer_in_byte_order
+
 # What a hosted C program's startup code hands to `main`. The three pointer
 # functions and the two initialization functions are listed by Microsoft only
 # by name; crates/loader/src/services/crt_arguments.rs says what is documented,

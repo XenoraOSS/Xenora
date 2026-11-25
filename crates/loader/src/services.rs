@@ -10,6 +10,7 @@
 //! - Xbox physical memory: `XMemAlloc`, `XMemFree`
 
 mod codepages;
+mod compare;
 mod crt;
 mod crt_arguments;
 mod crt_callbacks;
@@ -1828,6 +1829,279 @@ pub(crate) mod handlers {
             }
         }
         locale_info(context, kind, output, count, true)
+    }
+
+    // String comparison, classification and case mapping for the one locale,
+    // package 7 third part of #459. `services/compare.rs` documents the scope.
+
+    fn read_narrow_string(
+        memory: &crate::memory::GuestMemory,
+        address: u64,
+    ) -> Result<Vec<u8>, crate::cpu::ExitReason> {
+        let mut bytes = Vec::new();
+        for index in 0..65536u64 {
+            let byte = memory
+                .read_u8(address + index)
+                .map_err(crate::cpu::ExitReason::MemoryFault)?;
+            if byte == 0 {
+                return Ok(bytes);
+            }
+            bytes.push(byte);
+        }
+        Err(crate::cpu::ExitReason::MemoryFault(
+            crate::memory::MemoryError::UnmappedAddress(address),
+        ))
+    }
+
+    fn read_wide_units(
+        memory: &crate::memory::GuestMemory,
+        address: u64,
+        count: i32,
+    ) -> Result<Vec<u16>, crate::cpu::ExitReason> {
+        // count -1 reads up to and excluding the terminator; a positive count
+        // reads exactly that many units, including embedded nulls.
+        let mut units = Vec::new();
+        if count < 0 {
+            for index in 0..32768u64 {
+                let unit = memory
+                    .read_u16(address + index * 2)
+                    .map_err(crate::cpu::ExitReason::MemoryFault)?;
+                if unit == 0 {
+                    return Ok(units);
+                }
+                units.push(unit);
+            }
+            return Err(crate::cpu::ExitReason::MemoryFault(
+                crate::memory::MemoryError::UnmappedAddress(address),
+            ));
+        }
+        for index in 0..count as u64 {
+            units.push(
+                memory
+                    .read_u16(address + index * 2)
+                    .map_err(crate::cpu::ExitReason::MemoryFault)?,
+            );
+        }
+        Ok(units)
+    }
+
+    fn read_narrow_counted(
+        memory: &crate::memory::GuestMemory,
+        address: u64,
+        count: i32,
+    ) -> Result<Vec<u8>, crate::cpu::ExitReason> {
+        if count < 0 {
+            return read_narrow_string(memory, address);
+        }
+        let mut bytes = Vec::new();
+        for index in 0..count as u64 {
+            bytes.push(
+                memory
+                    .read_u8(address + index)
+                    .map_err(crate::cpu::ExitReason::MemoryFault)?,
+            );
+        }
+        Ok(bytes)
+    }
+
+    pub fn lstrlen_a(context: &mut ServiceContext<'_>, text: u64) -> Outcome<i32> {
+        let bytes = read_narrow_string(context.memory, text)?;
+        Ok(bytes.len() as i32)
+    }
+
+    pub fn lstrlen_w(context: &mut ServiceContext<'_>, text: u64) -> Outcome<i32> {
+        let units = read_wide_units(context.memory, text, -1)?;
+        Ok(units.len() as i32)
+    }
+
+    pub fn lstrcpy_a(
+        context: &mut ServiceContext<'_>,
+        destination: u64,
+        source: u64,
+    ) -> Outcome<u64> {
+        let memory = &mut *context.memory;
+        let mut bytes = read_narrow_string(memory, source)?;
+        bytes.push(0);
+        memory
+            .write_bytes(destination, &bytes)
+            .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        Ok(destination)
+    }
+
+    pub fn lstrcmp_a(context: &mut ServiceContext<'_>, left: u64, right: u64) -> Outcome<i32> {
+        let a = read_narrow_string(context.memory, left)?;
+        let b = read_narrow_string(context.memory, right)?;
+        Ok(compare::compare_bytes(&a, &b, false))
+    }
+
+    pub fn lstrcmpi_a(context: &mut ServiceContext<'_>, left: u64, right: u64) -> Outcome<i32> {
+        let a = read_narrow_string(context.memory, left)?;
+        let b = read_narrow_string(context.memory, right)?;
+        Ok(compare::compare_bytes(&a, &b, true))
+    }
+
+    const NORM_IGNORECASE: u32 = 0x1;
+    const CSTR_LESS_THAN: i32 = 1;
+    const CSTR_EQUAL: i32 = 2;
+    // Flags beyond the case fold are refused rather than silently ignored:
+    // the module documents that Xenora compares in byte order, not the
+    // linguistic order of Windows en-US.
+
+    fn compare_string(
+        context: &mut ServiceContext<'_>,
+        wide: bool,
+        flags: u32,
+        left: u64,
+        left_count: i32,
+        right: u64,
+        right_count: i32,
+    ) -> Outcome<i32> {
+        if flags & !NORM_IGNORECASE != 0 {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        let fold = flags & NORM_IGNORECASE != 0;
+        let order = if wide {
+            let a = read_wide_units(context.memory, left, left_count)?;
+            let b = read_wide_units(context.memory, right, right_count)?;
+            let narrow = |units: &[u16]| -> Vec<u8> {
+                units
+                    .iter()
+                    .map(|unit| {
+                        let byte = u8::try_from(*unit).unwrap_or(0xff);
+                        if fold { compare::fold(byte) } else { byte }
+                    })
+                    .collect()
+            };
+            compare::compare_bytes(&narrow(&a), &narrow(&b), false)
+        } else {
+            let a = read_narrow_counted(context.memory, left, left_count)?;
+            let b = read_narrow_counted(context.memory, right, right_count)?;
+            compare::compare_bytes(&a, &b, fold)
+        };
+        Ok(if order < 0 {
+            CSTR_LESS_THAN
+        } else if order > 0 {
+            CSTR_LESS_THAN + 2
+        } else {
+            CSTR_EQUAL
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn compare_string_a(
+        context: &mut ServiceContext<'_>,
+        lcid: u32,
+        flags: u32,
+        left: u64,
+        left_count: i32,
+        right: u64,
+        right_count: i32,
+    ) -> Outcome<i32> {
+        if lcid != 0x0409 {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        compare_string(context, false, flags, left, left_count, right, right_count)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn compare_string_w(
+        context: &mut ServiceContext<'_>,
+        lcid: u32,
+        flags: u32,
+        left: u64,
+        left_count: i32,
+        right: u64,
+        right_count: i32,
+    ) -> Outcome<i32> {
+        if lcid != 0x0409 {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        compare_string(context, true, flags, left, left_count, right, right_count)
+    }
+
+    pub fn get_string_type_w(
+        context: &mut ServiceContext<'_>,
+        kind: u32,
+        source: u64,
+        count: i32,
+        output: u64,
+    ) -> Outcome<bool> {
+        // CT_CTYPE1 is 1. The numeric and locale-specific type 2 and 3 tables
+        // are refused rather than answered wrong; compare.rs documents it.
+        if kind != 1 {
+            return context
+                .state
+                .fail(context.teb, ERROR_INVALID_PARAMETER, false);
+        }
+        let memory = &mut *context.memory;
+        let units = read_wide_units(memory, source, count)?;
+        let total = if count < 0 {
+            units.len() + 1
+        } else {
+            units.len()
+        };
+        for index in 0..total {
+            let unit = units.get(index).copied().unwrap_or(0);
+            memory
+                .write_u16(output + index as u64 * 2, compare::ctype1(unit))
+                .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        }
+        Ok(true)
+    }
+
+    const LCMAP_LOWERCASE: u32 = 0x100;
+    const LCMAP_UPPERCASE: u32 = 0x200;
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn lcmap_string_w(
+        context: &mut ServiceContext<'_>,
+        lcid: u32,
+        flags: u32,
+        source: u64,
+        count: i32,
+        destination: u64,
+        destination_count: i32,
+    ) -> Outcome<i32> {
+        if lcid != 0x0409 {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        // Exactly one case operation, nothing else: sort keys, the byte
+        // reversal and the linguistic modifiers are refused. compare.rs
+        // documents that only ASCII letters change.
+        if flags != LCMAP_UPPERCASE && flags != LCMAP_LOWERCASE {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        let memory = &mut *context.memory;
+        let units = read_wide_units(memory, source, count)?;
+        let total = if count < 0 {
+            units.len() + 1
+        } else {
+            units.len()
+        };
+        let mapped: Vec<u16> = (0..total)
+            .map(|index| {
+                let unit = units.get(index).copied().unwrap_or(0);
+                match u8::try_from(unit) {
+                    Ok(byte) if flags == LCMAP_UPPERCASE => u16::from(byte.to_ascii_uppercase()),
+                    Ok(byte) => u16::from(byte.to_ascii_lowercase()),
+                    Err(_) => unit,
+                }
+            })
+            .collect();
+        if destination_count == 0 {
+            return Ok(total as i32);
+        }
+        if (destination_count as usize) < total {
+            return context
+                .state
+                .fail(context.teb, ERROR_INSUFFICIENT_BUFFER, 0);
+        }
+        for (index, unit) in mapped.iter().enumerate() {
+            memory
+                .write_u16(destination + index as u64 * 2, *unit)
+                .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        }
+        Ok(total as i32)
     }
 
     // What a hosted C program's startup code hands to `main` (#392).

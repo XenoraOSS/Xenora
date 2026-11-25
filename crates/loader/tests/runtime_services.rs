@@ -5883,3 +5883,145 @@ fn the_locale_is_en_us_and_answers_its_strings() {
     assert_eq!(guest.call("GetLocaleInfoW", &[0x0409, 0x1001, CPBUF, 4]), 0);
     assert_eq!(guest.last_error(), 122);
 }
+
+/// Writes args 5 and 6 to the guest stack above the shadow space, then calls
+/// with the first four in registers: the Microsoft x64 calling convention.
+fn call6(guest: &mut Guest, symbol: &str, args: &[u64; 6]) -> u64 {
+    guest.memory.write_u64(STACK_TOP + 32, args[4]).unwrap();
+    guest.memory.write_u64(STACK_TOP + 40, args[5]).unwrap();
+    guest.call(symbol, &args[..4])
+}
+
+#[test]
+fn the_string_comparison_services_answer_in_byte_order() {
+    let mut guest = Guest::new();
+    place(&mut guest, SCRATCH, b"Hello");
+    place(&mut guest, SCRATCH + 0x10, b"HELLO");
+    place(&mut guest, SCRATCH + 0x20, b"world");
+    // Wide "AbC" at 0x30 and "aBc" at 0x40.
+    for (base, text) in [(0x30u64, "AbC"), (0x40, "aBc")] {
+        for (index, unit) in text.encode_utf16().chain([0]).enumerate() {
+            guest
+                .memory
+                .write_u16(SCRATCH + base + index as u64 * 2, unit)
+                .unwrap();
+        }
+    }
+
+    // The lengths count without the terminator, narrow in bytes and wide in units.
+    assert_eq!(guest.call("lstrlenA", &[SCRATCH]), 5);
+    assert_eq!(guest.call("lstrlenW", &[SCRATCH + 0x30]), 3);
+
+    // lstrcpy copies with the terminator and hands the destination back.
+    let copied = guest.call("lstrcpyA", &[SCRATCH + 0x60, SCRATCH + 0x20]);
+    assert_eq!(copied, SCRATCH + 0x60);
+    assert_eq!(guest_string(&guest.memory, SCRATCH + 0x60), b"world");
+
+    // lstrcmp is ordinal; the case-insensitive form folds ASCII letters.
+    assert_eq!(guest.call("lstrcmpA", &[SCRATCH, SCRATCH]) as i32, 0);
+    // Ordinal: 'e'(0x65) > 'E'(0x45), so "Hello" sorts after "HELLO".
+    assert!((guest.call("lstrcmpA", &[SCRATCH, SCRATCH + 0x10]) as i32) > 0);
+    assert!((guest.call("lstrcmpA", &[SCRATCH + 0x10, SCRATCH]) as i32) < 0);
+    assert_eq!(
+        guest.call("lstrcmpiA", &[SCRATCH, SCRATCH + 0x10]) as i32,
+        0
+    );
+    assert!((guest.call("lstrcmpiA", &[SCRATCH, SCRATCH + 0x20]) as i32) != 0);
+
+    // CompareString answers 1/2/3 for less/equal/greater, byte order in both
+    // widths, the case fold only when asked. -1 counts the terminator.
+    let args = [0x0409, 0, SCRATCH, u64::MAX, SCRATCH, u64::MAX];
+    assert_eq!(call6(&mut guest, "CompareStringA", &args), 2);
+    // Ordinal byte order: 'e'(0x65) sorts after 'E'(0x45), so "Hello" is greater.
+    let args = [0x0409, 0, SCRATCH, u64::MAX, SCRATCH + 0x10, u64::MAX];
+    assert_eq!(call6(&mut guest, "CompareStringA", &args), 3);
+    let args = [0x0409, 1, SCRATCH, u64::MAX, SCRATCH + 0x10, u64::MAX];
+    assert_eq!(call6(&mut guest, "CompareStringA", &args), 2);
+    let args = [
+        0x0409,
+        0,
+        SCRATCH + 0x30,
+        u64::MAX,
+        SCRATCH + 0x40,
+        u64::MAX,
+    ];
+    assert_eq!(call6(&mut guest, "CompareStringW", &args), 1); // 'A'<'a' ordinal
+    let args = [
+        0x0409,
+        1,
+        SCRATCH + 0x30,
+        u64::MAX,
+        SCRATCH + 0x40,
+        u64::MAX,
+    ];
+    assert_eq!(call6(&mut guest, "CompareStringW", &args), 2);
+
+    // Failures: another locale, unsupported flags.
+    let args = [0x040C, 0, SCRATCH, u64::MAX, SCRATCH, u64::MAX];
+    assert_eq!(call6(&mut guest, "CompareStringA", &args), 0);
+    assert_eq!(guest.last_error(), 87);
+    let args = [0x0409, 4, SCRATCH, u64::MAX, SCRATCH, u64::MAX];
+    assert_eq!(call6(&mut guest, "CompareStringA", &args), 0);
+    assert_eq!(guest.last_error(), 87);
+
+    // GetStringTypeW classifies ASCII for CT_CTYPE1, terminator included for -1.
+    let got = guest.call(
+        "GetStringTypeW",
+        &[1, SCRATCH + 0x30, u64::MAX, SCRATCH + 0x80],
+    );
+    assert_eq!(got, 1);
+    let upper_alpha = 0x1 | 0x100 | 0x80; // 'A' is upper, alpha, xdigit
+    assert_eq!(guest.memory.read_u16(SCRATCH + 0x80).unwrap(), upper_alpha);
+    let lower_alpha = 0x2 | 0x100 | 0x80; // 'b' is lower, alpha and a hex digit
+    assert_eq!(guest.memory.read_u16(SCRATCH + 0x82).unwrap(), lower_alpha);
+    let upper_c = 0x1 | 0x100 | 0x80; // 'C' is upper, alpha and a hex digit
+    assert_eq!(guest.memory.read_u16(SCRATCH + 0x84).unwrap(), upper_c);
+    // The terminator is classified too for -1: U+0000 is a control character.
+    assert_eq!(guest.memory.read_u16(SCRATCH + 0x86).unwrap(), 0x20);
+    // CT_CTYPE2 is refused.
+    let got = guest.call(
+        "GetStringTypeW",
+        &[2, SCRATCH + 0x30, u64::MAX, SCRATCH + 0x80],
+    );
+    assert_eq!(got, 0);
+    assert_eq!(guest.last_error(), 87);
+
+    // LCMapStringW maps ASCII case, counts the terminator for -1, answers the
+    // required size for a null destination, and fails a small buffer.
+    let wrote = call6(
+        &mut guest,
+        "LCMapStringW",
+        &[0x0409, 0x200, SCRATCH + 0x40, u64::MAX, SCRATCH + 0xA0, 8],
+    );
+    assert_eq!(wrote, 4);
+    assert_eq!(
+        guest.memory.read_u16(SCRATCH + 0xA0).unwrap(),
+        u16::from(b'A')
+    );
+    assert_eq!(
+        guest.memory.read_u16(SCRATCH + 0xA2).unwrap(),
+        u16::from(b'B')
+    );
+    assert_eq!(guest.memory.read_u16(SCRATCH + 0xA6).unwrap(), 0);
+    let asked = call6(
+        &mut guest,
+        "LCMapStringW",
+        &[0x0409, 0x100, SCRATCH + 0x40, u64::MAX, 0, 0],
+    );
+    assert_eq!(asked, 4);
+    let small = call6(
+        &mut guest,
+        "LCMapStringW",
+        &[0x0409, 0x200, SCRATCH + 0x40, u64::MAX, SCRATCH + 0xA0, 2],
+    );
+    assert_eq!(small, 0);
+    assert_eq!(guest.last_error(), 122);
+    // Sort keys and friends are refused.
+    let bad = call6(
+        &mut guest,
+        "LCMapStringW",
+        &[0x0409, 0x400, SCRATCH + 0x40, u64::MAX, SCRATCH + 0xA0, 8],
+    );
+    assert_eq!(bad, 0);
+    assert_eq!(guest.last_error(), 87);
+}
