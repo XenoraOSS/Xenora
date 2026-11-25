@@ -276,4 +276,5 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         "ucrtbase.dll",
         "__C_specific_handler",
     );
+    registry.alias("msvcrt.dll", "ucrtbase.dll", "__C_specific_handler");
 }

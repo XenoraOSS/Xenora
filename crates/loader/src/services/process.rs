@@ -110,4 +110,6 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.alias(CRT_RUNTIME_API, UCRT, symbol);
         registry.set_status(UCRT, symbol, ServiceStatus::Partial);
     }
+    // The legacy CRT, as the compatibility mapping in crt_callbacks.rs.
+    registry.alias("msvcrt.dll", UCRT, "_exit");
 }
