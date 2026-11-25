@@ -1106,6 +1106,37 @@ impl StandardStreams {
         };
     }
 
+    /// Console output: bytes appended to the same capture `fwrite` uses, so
+    /// `printf` and `WriteConsole` interleave in order. `error` selects the
+    /// error capture instead of the output one.
+    pub(super) fn console_write(&mut self, error: bool, bytes: &[u8]) {
+        let capture = if error {
+            &mut self.error
+        } else {
+            &mut self.output
+        };
+        capture.extend_from_slice(bytes);
+    }
+
+    /// One console input line: up to `limit` bytes ending after the first
+    /// line feed, which the console hands back as CR LF. The input itself
+    /// keeps its LF translation; only the console answer gains the CR.
+    pub(super) fn console_line(&mut self, limit: usize) -> Vec<u8> {
+        let mut line = Vec::new();
+        while line.len() + 1 < limit {
+            match self.input.character() {
+                Some(b'\n') => {
+                    line.push(b'\r');
+                    line.push(b'\n');
+                    break;
+                }
+                Some(byte) => line.push(byte),
+                None => break,
+            }
+        }
+        line
+    }
+
     /// `fflush`. A null stream means every open stream. Nothing is ever held
     /// back, so there is nothing to do.
     pub(super) fn flush(&self, file: u64) -> Result<i32, ExitReason> {
