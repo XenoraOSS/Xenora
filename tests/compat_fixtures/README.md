@@ -379,5 +379,16 @@ documented failure answers and the sharing with the process heap. Built by
 `kernel32.dll`. It is built at `-O0` and `-O2`, and once at `-O1` with
 `CRT_WINMEMORY_BREAK` as a control. `crates/cli/tests/run_program.rs` runs
 all three through `xenora run`.
+
+## The error, environment and system services
+
+`tests/compat_fixtures/crt_winsys.c` (package 9 of #459) is a hosted C
+program that formats error messages in both widths, exchanges the error
+mode, expands strings over the empty environment, walks the environment
+block and reads the version, directories, computer name and processor
+topology of the simulated machine. Built by `build-crt-winsys.sh` with
+mingw-w64, the calls are imports of `kernel32.dll`. It is built at `-O0`
+and `-O2`, and once at `-O1` with `CRT_WINSYS_BREAK` as a control.
+`crates/cli/tests/run_program.rs` runs all three through `xenora run`.
 Provenance is as for Gate A2: the source and scripts are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.

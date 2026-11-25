@@ -84,6 +84,11 @@ fn crt_winmemory(name: &str) -> PathBuf {
     build("build-crt-winmemory.sh", "run-program-crt-winmemory", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_winsys(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-winsys.sh", "run-program-crt-winsys", &OUT).join(format!("{name}.exe"))
+}
+
 /// The SHA-256 of a file, from the host's `shasum`.
 fn digest(path: &Path) -> String {
     let output = Command::new("shasum")
@@ -878,4 +883,17 @@ fn a_program_using_the_legacy_memory_services_runs_and_detects_a_wrong_result() 
     // The control must fail its last check: the exit code is its number.
     let run = run_program(&crt_winmemory("crt-winmemory-break"), &[], &[]);
     assert_eq!(run.code, Some(17), "control: {:?}", run.stdout);
+}
+
+#[test]
+fn a_program_using_the_error_environment_and_system_services_runs() {
+    for name in ["crt-winsys-O0", "crt-winsys-O2"] {
+        let run = run_program(&crt_winsys(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {:?}", run.stdout);
+        assert_eq!(run.stdout, "crt-winsys: 25/25 checks passed\r\n", "{name}");
+        assert_eq!(run.stderr, "", "{name}");
+    }
+    // The control must fail its last check: the exit code is its number.
+    let run = run_program(&crt_winsys("crt-winsys-break"), &[], &[]);
+    assert_eq!(run.code, Some(26), "control: {:?}", run.stdout);
 }

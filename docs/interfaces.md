@@ -587,6 +587,39 @@ a no-op success; freeing a non-allocation answers the handle itself with
 the invalid-handle error. Flags outside the documented mask are an invalid
 parameter. Nothing was compared with Windows.
 
+### Error reporting
+
+`FormatMessage` reads the system table for the error codes the synthetic
+services produce, in en-US, with the trailing newline real messages carry.
+Insert sequences expand string and numeric specifiers; the arguments are
+read as a flat array of machine words, so floating point inserts are not
+formatted. The allocate form allocates from the process heap and the memory
+is released with `LocalFree`, as documented. Unknown identifiers fail with
+the missing-message error; module tables do not exist yet and
+`FORMAT_MESSAGE_FROM_HMODULE` is refused as unsupported. `SetErrorMode`
+stores and exchanges the mode even though no error dialogs exist. Nothing
+was compared with Windows.
+
+### The environment block
+
+The environment is empty, so expansion is the identity - the documented
+result when no variable is defined. `ExpandEnvironmentStrings` counts the
+terminator in both its success return and its required-size answer.
+`GetEnvironmentStringsW` hands each caller its own copy of the empty block
+from the process heap, because the documentation requires the caller to
+free it.
+
+### The simulated machine
+
+`GetVersionEx` reports a Windows 10 era NT workstation, coherent with the
+GDK-era programs the runtime hosts; it is simulated, not measured.
+`GetWindowsDirectory` and `GetSystemDirectory` answer the synthetic drive's
+layout, the computer name is XENORA, and the processor topology is one core
+in one package in one group, coherent with the count `GetSystemInfo`
+reports. Numa, cache and group relationships are not modeled yet:
+enumerating them alone answers zero entries. Nothing was compared with
+Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.
