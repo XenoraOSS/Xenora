@@ -326,6 +326,18 @@ with mingw-w64, the calls are imports of `kernel32.dll`. It is built at
 `-O0` and `-O2`, and once at `-O1` with `CRT_CODEPAGES_BREAK`, which
 expects a wrong count on purpose as a control.
 `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+
+## The locale identity
+
+`tests/compat_fixtures/crt_locale.c` (package 7 of #459) is a hosted C
+program that asks the runtime for its one locale with the LCID, LANGID and
+locale-name getters and for the en-US strings of `GetLocaleInfo` in its
+three forms, checking the documented failures for other locales, unknown
+types and small buffers. Built by `build-crt-locale.sh` with mingw-w64,
+the calls are imports of `kernel32.dll`. It is built at `-O0` and `-O2`,
+and once at `-O1` with `CRT_LOCALE_BREAK`, which expects a wrong count on
+purpose as a control. `crates/cli/tests/run_program.rs` runs all three
+through `xenora run`.
 Provenance is as for Gate A2: the source and script are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.
 
@@ -357,7 +369,6 @@ with `CRT_FILES_BREAK`, which expects a text position without the carriage
 returns, so check 17 fails, as a control. `crates/cli/tests/run_program.rs`
 runs all three through `xenora run`. Provenance is as for Gate A2.
 
-<<<<<<< HEAD
 ## Temporary files
 
 `tests/compat_fixtures/crt_tmp.c` (#493, last part) is a hosted C program
@@ -429,8 +440,6 @@ to fail where it succeeds, so check 2 fails, as a control.
 `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
 Provenance is as for Gate A2.
 
-||||||| parent of 226e489 (Serve the wide buffer forms of printf)
-=======
 ## C runtime wide buffer formatting
 
 `tests/compat_fixtures/crt_swprintf.c` (#459) is a hosted C program that
@@ -443,7 +452,6 @@ it with mingw-w64 (UCRT flavour) at `-O0` and `-O2`, and once at `-O1` with
 1 fails, as a control. `crates/cli/tests/run_program.rs` runs all three
 through `xenora run`. Provenance is as for Gate A2.
 
->>>>>>> 226e489 (Serve the wide buffer forms of printf)
 ## C runtime mathematics
 
 `tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the

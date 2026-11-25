@@ -30,6 +30,7 @@ mod files;
 mod gdk_queue;
 mod graphics;
 mod heap;
+mod locale;
 mod modules;
 mod platform_fixture;
 mod process;
@@ -62,6 +63,7 @@ const ERROR_INVALID_HANDLE: u32 = 6;
 const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
 const ERROR_NOT_SUPPORTED: u32 = 50;
 const ERROR_INVALID_PARAMETER: u32 = 87;
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 const ERROR_INVALID_ADDRESS: u32 = 487;
 const THREAD_QUERY_RIGHTS: u32 = 0x0040 | 0x0800;
 const THREAD_SET_RIGHTS: u32 = 0x0020 | 0x0400;
@@ -1692,6 +1694,140 @@ pub(crate) mod handlers {
             return state.fail(teb, ERROR_NOACCESS, false);
         }
         Ok(true)
+    }
+
+    // The locale identity: `services/locale.rs` says why one locale and
+    // what it answers.
+
+    pub fn get_system_default_lcid(_context: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(crate::services::locale::EN_US)
+    }
+
+    pub fn get_user_default_lcid(_context: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(crate::services::locale::EN_US)
+    }
+
+    pub fn get_user_default_langid(_context: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(crate::services::locale::EN_US)
+    }
+
+    pub fn get_user_default_locale_name(
+        context: &mut ServiceContext<'_>,
+        output: u64,
+        count: i32,
+    ) -> Outcome<i32> {
+        let state = context.state;
+        let teb = context.teb;
+        let name = crate::services::locale::EN_US_NAME;
+        if count == 0 {
+            return Ok(name.len() as i32);
+        }
+        if output == 0 || (count as usize) < name.len() {
+            return state.fail(teb, ERROR_INSUFFICIENT_BUFFER, 0);
+        }
+        let memory = &mut *context.memory;
+        for (index, &unit) in name.iter().enumerate() {
+            memory
+                .write_u16(output + index as u64 * 2, unit)
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        Ok(name.len() as i32)
+    }
+
+    /// The shared body of the locale-info forms: the string for a type, or
+    /// the failure. `wide` chooses the output encoding; every string of the
+    /// table is ASCII, so the narrow form is the same bytes.
+    fn locale_info(
+        context: &mut ServiceContext<'_>,
+        kind: u32,
+        output: u64,
+        count: i32,
+        wide: bool,
+    ) -> Outcome<i32> {
+        let state = context.state;
+        let teb = context.teb;
+        let Some(text) = crate::services::locale::lookup(kind) else {
+            return state.fail(teb, ERROR_INVALID_PARAMETER, 0);
+        };
+        let len = text.len() + 1;
+        if count == 0 {
+            return Ok(len as i32);
+        }
+        if output == 0 || (count as usize) < len {
+            return state.fail(teb, ERROR_INSUFFICIENT_BUFFER, 0);
+        }
+        let memory = &mut *context.memory;
+        if wide {
+            for (index, &byte) in text.as_bytes().iter().chain(&[0]).enumerate() {
+                memory
+                    .write_u16(output + index as u64 * 2, u16::from(byte))
+                    .map_err(ExitReason::MemoryFault)?;
+            }
+        } else {
+            memory
+                .write_bytes(output, text.as_bytes())
+                .map_err(ExitReason::MemoryFault)?;
+            memory
+                .write_bytes(output + text.len() as u64, &[0])
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        Ok(len as i32)
+    }
+
+    pub fn get_locale_info_w(
+        context: &mut ServiceContext<'_>,
+        lcid: u32,
+        kind: u32,
+        output: u64,
+        count: i32,
+    ) -> Outcome<i32> {
+        if lcid != crate::services::locale::EN_US {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        locale_info(context, kind, output, count, true)
+    }
+
+    pub fn get_locale_info_a(
+        context: &mut ServiceContext<'_>,
+        lcid: u32,
+        kind: u32,
+        output: u64,
+        count: i32,
+    ) -> Outcome<i32> {
+        if lcid != crate::services::locale::EN_US {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        locale_info(context, kind, output, count, false)
+    }
+
+    pub fn get_locale_info_ex(
+        context: &mut ServiceContext<'_>,
+        name: u64,
+        kind: u32,
+        output: u64,
+        count: i32,
+    ) -> Outcome<i32> {
+        let state = context.state;
+        let teb = context.teb;
+        // A null name is the user default, as the page documents; anything
+        // else must name the one locale, letter case aside.
+        if name != 0 {
+            let memory = &mut *context.memory;
+            let mut text = Vec::new();
+            for index in 0..64u64 {
+                let unit = memory
+                    .read_u16(name + index * 2)
+                    .map_err(ExitReason::MemoryFault)?;
+                if unit == 0 {
+                    break;
+                }
+                text.push(unit as u8);
+            }
+            if !text.is_empty() && !text.eq_ignore_ascii_case(b"en-us") {
+                return state.fail(teb, ERROR_INVALID_PARAMETER, 0);
+            }
+        }
+        locale_info(context, kind, output, count, true)
     }
 
     // What a hosted C program's startup code hands to `main` (#392).

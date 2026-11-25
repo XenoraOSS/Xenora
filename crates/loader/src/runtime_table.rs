@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 175] = [
+pub static SERVICES: [ServiceMetadata; 182] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -1152,6 +1152,83 @@ pub static SERVICES: [ServiceMetadata; 175] = [
         failure: "false with ERROR_INVALID_PARAMETER for a page Xenora does not serve or a null output; stops the guest for memory that faults",
         reference: "winnls.h GetCPInfo",
         tests: &["the_codepages_answer_their_numbers"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetSystemDefaultLCID",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "never",
+        reference: "winnls.h GetSystemDefaultLCID",
+        tests: &["the_locale_is_en_us_and_answers_its_strings"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetUserDefaultLCID",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "never",
+        reference: "winnls.h GetUserDefaultLCID",
+        tests: &["the_locale_is_en_us_and_answers_its_strings"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetUserDefaultLangID",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "never",
+        reference: "winnls.h GetUserDefaultLangID",
+        tests: &["the_locale_is_en_us_and_answers_its_strings"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetUserDefaultLocaleName",
+        parameters: &[Parameter { name: "output", kind: "ptr" }, Parameter { name: "count", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "0 with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults",
+        reference: "winnls.h GetUserDefaultLocaleName",
+        tests: &["the_locale_is_en_us_and_answers_its_strings"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetLocaleInfoW",
+        parameters: &[Parameter { name: "lcid", kind: "u32" }, Parameter { name: "kind", kind: "u32" }, Parameter { name: "output", kind: "ptr" }, Parameter { name: "count", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults",
+        reference: "winnls.h GetLocaleInfoW",
+        tests: &["the_locale_is_en_us_and_answers_its_strings"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetLocaleInfoA",
+        parameters: &[Parameter { name: "lcid", kind: "u32" }, Parameter { name: "kind", kind: "u32" }, Parameter { name: "output", kind: "ptr" }, Parameter { name: "count", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults",
+        reference: "winnls.h GetLocaleInfoA",
+        tests: &["the_locale_is_en_us_and_answers_its_strings"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetLocaleInfoEx",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "kind", kind: "u32" }, Parameter { name: "output", kind: "ptr" }, Parameter { name: "count", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults",
+        reference: "winnls.h GetLocaleInfoEx",
+        tests: &["the_locale_is_en_us_and_answers_its_strings"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -2863,6 +2940,69 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a1 = call.out::<18>(1)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: bool = handlers::get_codepage_info(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetSystemDefaultLCID", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::get_system_default_lcid(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetUserDefaultLCID", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::get_user_default_lcid(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetUserDefaultLangID", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::get_user_default_langid(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetUserDefaultLocaleName", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.i32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::get_user_default_locale_name(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetLocaleInfoW", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::get_locale_info_w(&mut context, a0, a1, a2, a3)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetLocaleInfoA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::get_locale_info_a(&mut context, a0, a1, a2, a3)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetLocaleInfoEx", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::get_locale_info_ex(&mut context, a0, a1, a2, a3)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();

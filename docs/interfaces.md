@@ -761,6 +761,16 @@ represent becomes the default byte and raises the caller's flag. A zero
 byte count is the documented failure Microsoft's pages describe, not an
 empty conversion. Nothing was compared with Windows.
 
+### Locale identity
+
+One locale exists: English (United States), which is Xenora's choice. The
+LCID and LANGID getters answer its `0x0409`, `GetUserDefaultLocaleName`
+answers `en-US`, and the `GetLocaleInfo` forms serve its documented public
+strings — the decimal point, the date and time formats, the currency — in
+wide and narrow output. Another locale, an unknown type or the number form
+fails with `ERROR_INVALID_PARAMETER` rather than answering wrong. Nothing
+was compared with Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.

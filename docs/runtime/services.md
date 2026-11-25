@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 175 |
-| Generated adapters | 175 |
-| Unique handler implementations | 168 |
+| Services with a declared ABI | 182 |
+| Generated adapters | 182 |
+| Unique handler implementations | 175 |
 | Implemented | 68 |
-| Partial | 105 |
+| Partial | 112 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 175 |
-| API-set aliases (not services) | 175 |
+| Conformance-tested through guest dispatch | 182 |
+| API-set aliases (not services) | 182 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -122,6 +122,13 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `kernel32.dll!GetOEMCP` | `() -> u32` | partial | never |
 | `kernel32.dll!IsValidCodePage` | `(codepage: u32) -> bool32` | partial | never; false for a page Xenora does not serve |
 | `kernel32.dll!GetCPInfo` | `(codepage: u32, info: out<18>) -> bool32` | partial | false with ERROR_INVALID_PARAMETER for a page Xenora does not serve or a null output; stops the guest for memory that faults |
+| `kernel32.dll!GetSystemDefaultLCID` | `() -> u32` | partial | never |
+| `kernel32.dll!GetUserDefaultLCID` | `() -> u32` | partial | never |
+| `kernel32.dll!GetUserDefaultLangID` | `() -> u32` | partial | never |
+| `kernel32.dll!GetUserDefaultLocaleName` | `(output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!GetLocaleInfoW` | `(lcid: u32, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!GetLocaleInfoA` | `(lcid: u32, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!GetLocaleInfoEx` | `(name: ptr, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
 | `ucrtbase.dll!__p___argc` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!__p___argv` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!__p__environ` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
