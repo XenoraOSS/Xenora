@@ -651,5 +651,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     registry.alias(MSVCRT, UCRT, "_initterm");
     for symbol in ["qsort", "qsort_s", "bsearch", "bsearch_s"] {
         registry.alias(CRT_UTILITY_API, UCRT, symbol);
+        // The legacy CRT exports the sorting forms under the same names.
+        registry.alias(MSVCRT, UCRT, symbol);
     }
 }

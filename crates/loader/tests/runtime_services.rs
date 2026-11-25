@@ -162,6 +162,9 @@ impl Guest {
         for symbol in LEGACY_DATA_SYMBOLS {
             imports.push(("msvcrt.dll", Symbol::Name(symbol)));
         }
+        for symbol in LEGACY_FUNCTION_SYMBOLS {
+            imports.push(("msvcrt.dll", Symbol::Name(symbol)));
+        }
         let image = build(&imports);
         let pe = ParsedPe::parse(&image.bytes).unwrap();
         let mut memory = pe.load_into_memory(&image.bytes).unwrap().memory;
@@ -175,7 +178,10 @@ impl Guest {
         let bound = registry
             .bind_imports(&pe, &image.bytes, BASE, &mut memory)
             .unwrap();
-        assert_eq!(bound, SERVICES.len() + 1 + LEGACY_DATA_SYMBOLS.len());
+        assert_eq!(
+            bound,
+            SERVICES.len() + 1 + LEGACY_DATA_SYMBOLS.len() + LEGACY_FUNCTION_SYMBOLS.len()
+        );
         let mut engine = DbtEngine::new(256 * 1024).unwrap();
         engine.set_import_registry(registry);
         Self {
@@ -194,6 +200,10 @@ impl Guest {
             .iter()
             .position(|service| service.symbol == symbol)
             .or((symbol == "_errno").then_some(SERVICES.len()))
+            .or(LEGACY_FUNCTION_SYMBOLS
+                .iter()
+                .position(|&entry| entry == symbol)
+                .map(|index| SERVICES.len() + 1 + LEGACY_DATA_SYMBOLS.len() + index))
             .unwrap();
         let mut cpu = CpuState::new(BASE + u64::from(CODE_RVA) + 16 * index as u64, STACK_TOP);
         cpu.gs_base = self.teb;
@@ -4330,6 +4340,13 @@ const LEGACY_DATA_SYMBOLS: [&str; 7] = [
     "_timezone",
 ];
 
+/// Legacy-linked binaries import these services from `msvcrt.dll`, where the
+/// compatibility mapping resolves them to the same handlers as the modern
+/// runtime.
+const LEGACY_FUNCTION_SYMBOLS: [&str; 8] = [
+    "strlen", "memcpy", "malloc", "free", "strcmp", "memchr", "strchr", "getenv",
+];
+
 const JUNK: u64 = 0xFFFF_FFFF_0000_0000;
 /// The low 32 bits of an `int` result of -1.
 const MINUS_ONE: u64 = 0xFFFF_FFFF;
@@ -6378,4 +6395,45 @@ fn the_console_identity_and_standard_handles_round_trip() {
     guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
     assert_eq!(guest.call("WriteConsoleA", &[0x5555, SCRATCH, 1, 0]), 0);
     assert_eq!(guest.last_error(), 6);
+}
+
+#[test]
+fn legacy_function_imports_run_the_same_services() {
+    let mut guest = Guest::new();
+    // Every legacy import binds: the count assertion in `Guest::new` covers it.
+    // `strlen` measures the string the narrow form receives.
+    guest.memory.write_bytes(SCRATCH, b"legacy\0").unwrap();
+    assert_eq!(guest.call("strlen", &[SCRATCH]), 6);
+    // `memcpy` copies and answers the destination.
+    assert_eq!(
+        guest.call("memcpy", &[SCRATCH + 0x20, SCRATCH, 7]),
+        SCRATCH + 0x20
+    );
+    let mut copied = [0u8; 7];
+    guest
+        .memory
+        .read_bytes(SCRATCH + 0x20, &mut copied)
+        .unwrap();
+    assert_eq!(&copied, b"legacy\0");
+    // `malloc` and `free` round trip.
+    let allocation = guest.call("malloc", &[0x40]);
+    assert_ne!(allocation, 0);
+    guest.call("free", &[allocation]);
+    // `strcmp` orders its operands.
+    guest
+        .memory
+        .write_bytes(SCRATCH + 0x40, b"legacy\0")
+        .unwrap();
+    assert_eq!(guest.call("strcmp", &[SCRATCH, SCRATCH + 0x40]), 0);
+    // `memchr` finds the byte and misses the absent one.
+    assert_eq!(
+        guest.call("memchr", &[SCRATCH, u64::from(b'g'), 6]),
+        SCRATCH + 2
+    );
+    assert_eq!(guest.call("memchr", &[SCRATCH, u64::from(b'z'), 6]), 0);
+    // `strchr` finds the terminator itself, as the documentation requires.
+    assert_eq!(guest.call("strchr", &[SCRATCH, 0]), SCRATCH + 6);
+    // `getenv` misses every name in the empty environment.
+    guest.memory.write_bytes(SCRATCH + 0x60, b"PATH\0").unwrap();
+    assert_eq!(guest.call("getenv", &[SCRATCH + 0x60]), 0);
 }

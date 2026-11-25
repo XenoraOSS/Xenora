@@ -13,6 +13,8 @@ use super::crt_streams::{Failed, Outcome};
 const SCAN_BUDGET: u64 = 1_048_576;
 const UCRT: &str = "ucrtbase.dll";
 const CRT_STRING_API: &str = "api-ms-win-crt-string-l1-1-0.dll";
+/// The legacy CRT module that pre-UCRT mingw binaries import directly.
+const MSVCRT: &str = "msvcrt.dll";
 
 #[derive(Clone, Copy)]
 enum StringUnit {
@@ -141,6 +143,8 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         });
         for symbol in [length, bounded_length, compare, bounded_compare] {
             registry.alias(CRT_STRING_API, UCRT, symbol);
+            // The legacy CRT exports the same narrow and wide string forms.
+            registry.alias(MSVCRT, UCRT, symbol);
             registry.set_status(UCRT, symbol, ServiceStatus::Partial);
         }
     }
@@ -192,6 +196,8 @@ pub(super) fn register(registry: &mut ImportRegistry) {
 
     for symbol in ["memset", "memcpy", "memmove", "memcmp"] {
         registry.alias(CRT_STRING_API, UCRT, symbol);
+        // The legacy CRT exports the memory forms under the same names.
+        registry.alias(MSVCRT, UCRT, symbol);
         registry.set_status(UCRT, symbol, ServiceStatus::Partial);
     }
     // The mingw-w64 C runtime imports `memcpy`, `memmove` and `memcmp`
@@ -371,6 +377,8 @@ pub(super) fn register_errno(registry: &mut ImportRegistry) {
     });
     for symbol in ["_errno", "_set_errno", "_get_errno"] {
         registry.alias("api-ms-win-crt-runtime-l1-1-0.dll", UCRT, symbol);
+        // The legacy CRT carries the same errno accessors.
+        registry.alias(MSVCRT, UCRT, symbol);
         registry.set_status(UCRT, symbol, ServiceStatus::Partial);
     }
 }
@@ -409,6 +417,8 @@ pub(super) fn register_heap(registry: &mut ImportRegistry) {
 
     for symbol in ["malloc", "calloc", "realloc", "free"] {
         registry.alias("api-ms-win-crt-heap-l1-1-0.dll", UCRT, symbol);
+        // The legacy CRT exports the heap forms under the same names.
+        registry.alias(MSVCRT, UCRT, symbol);
         registry.set_status(UCRT, symbol, ServiceStatus::Partial);
     }
 }
