@@ -138,7 +138,10 @@ mod tests {
     #[test]
     fn compat_modules_are_not_api_sets() {
         assert_eq!(resolve_api_set_canonical("msvcrt.dll"), "unknown.dll");
-        assert_eq!(get_compat_modules_for_canonical("ucrtbase.dll"), &["msvcrt.dll"]);
+        assert_eq!(
+            get_compat_modules_for_canonical("ucrtbase.dll"),
+            &["msvcrt.dll"]
+        );
         assert!(get_compat_modules_for_canonical("kernel32.dll").is_empty());
     }
 

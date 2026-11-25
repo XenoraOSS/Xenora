@@ -15,6 +15,9 @@ use std::sync::Arc;
 const UCRT: &str = "ucrtbase.dll";
 const CRT_UTILITY_API: &str = "api-ms-win-crt-utility-l1-1-0.dll";
 const CRT_RUNTIME_API: &str = "api-ms-win-crt-runtime-l1-1-0.dll";
+/// The legacy CRT, served with the ucrtbase implementations as the
+/// compatibility mapping documented in `xenora-import-gen`'s `apiset.rs`.
+const MSVCRT: &str = "msvcrt.dll";
 /// Largest array, in bytes, that sorting may permute.
 const SORT_BUDGET: u64 = 1_048_576;
 /// Largest initializer table, in entries.
@@ -585,6 +588,9 @@ fn register_exit_tables(registry: &mut ImportRegistry, state: &Arc<ServicesState
         registry.alias(CRT_RUNTIME_API, UCRT, symbol);
     }
     registry.alias(CRT_RUNTIME_API, UCRT, "atexit");
+    for symbol in ["exit", "atexit", "_cexit"] {
+        registry.alias(MSVCRT, UCRT, symbol);
+    }
 }
 
 pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
@@ -642,6 +648,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         );
         registry.alias(CRT_RUNTIME_API, UCRT, symbol);
     }
+    registry.alias(MSVCRT, UCRT, "_initterm");
     for symbol in ["qsort", "qsort_s", "bsearch", "bsearch_s"] {
         registry.alias(CRT_UTILITY_API, UCRT, symbol);
     }
