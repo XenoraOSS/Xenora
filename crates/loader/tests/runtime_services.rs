@@ -4495,6 +4495,94 @@ fn crt_app_type_and_math_error_handler_are_recorded() {
     assert_eq!(guest.last_error(), 0);
 }
 
+#[test]
+fn legacy_startup_records_the_app_type() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.state.crt_app_type(), 0);
+    guest.call("__set_app_type", &[JUNK | 1]);
+    assert_eq!(guest.state.crt_app_type(), 1);
+    // The legacy entry and the modern one record in the same place.
+    guest.call("_set_app_type", &[2]);
+    assert_eq!(guest.state.crt_app_type(), 2);
+    assert_eq!(guest.errno(), 0);
+}
+
+#[test]
+fn legacy_startup_builds_the_main_arguments() {
+    let mut guest = Guest::new();
+    let supplied = ["gate-a2.exe", "one", "two words"];
+    guest.state.set_program_arguments(&supplied).unwrap();
+    // Null output pointers are refused with EINVAL.
+    for args in [
+        [0, SCRATCH, SCRATCH + 16, 0, 0],
+        [SCRATCH, 0, SCRATCH + 16, 0, 0],
+        [SCRATCH, SCRATCH + 16, 0, 0, 0],
+    ] {
+        guest.memory.write_u64(SCRATCH, 0xDEAD).unwrap();
+        assert_eq!(
+            guest.call("__getmainargs", &args) & 0xFFFF_FFFF,
+            u64::from(u32::MAX)
+        );
+        assert_eq!(guest.memory.read_u64(SCRATCH).unwrap(), 0xDEAD, "untouched");
+        assert_eq!(guest.errno(), 22);
+    }
+    guest.memory.write_u64(SCRATCH, 0).unwrap();
+    guest.memory.write_u64(SCRATCH + 8, 0).unwrap();
+    guest.memory.write_u64(SCRATCH + 16, 0).unwrap();
+    assert_eq!(
+        guest.call(
+            "__getmainargs",
+            &[SCRATCH, SCRATCH + 8, SCRATCH + 16, 0, 0xBAD]
+        ) & 0xFFFF_FFFF,
+        0
+    );
+    assert_eq!(guest.memory.read_u32(SCRATCH).unwrap(), 3);
+    let table = guest.memory.read_u64(SCRATCH + 8).unwrap();
+    assert!(table != 0);
+    // The same table the modern accessors reach.
+    let modern = guest.call("__p___argv", &[]);
+    assert_eq!(guest.memory.read_u64(modern).unwrap(), table);
+    let mut first = guest.memory.read_u64(table).unwrap();
+    let mut bytes = Vec::new();
+    loop {
+        match guest.memory.read_u8(first).unwrap() {
+            0 => break,
+            byte => bytes.push(byte),
+        }
+        first += 1;
+    }
+    assert_eq!(bytes, b"gate-a2.exe");
+    // The environment is the empty table `_initialize_narrow_environment` builds.
+    let environ = guest.memory.read_u64(SCRATCH + 16).unwrap();
+    assert_eq!(guest.memory.read_u64(environ).unwrap(), 0);
+    // A second call returns the same table: the arguments configure once.
+    assert_eq!(
+        guest.call("__getmainargs", &[SCRATCH, SCRATCH + 8, SCRATCH + 16, 1, 0]) & 0xFFFF_FFFF,
+        0
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 8).unwrap(), table);
+}
+
+#[test]
+fn legacy_mb_cur_max_is_one_byte() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("___mb_cur_max_func", &[]) & 0xFFFF_FFFF, 1);
+    assert_eq!(guest.errno(), 0);
+}
+
+#[test]
+fn legacy_amsg_exit_ends_the_process() {
+    let mut guest = Guest::new();
+    let (_, exit) = guest.run("_amsg_exit", &[JUNK | 7]);
+    assert_eq!(exit, ExitReason::ProcessExit(7));
+    let (_, again) = guest.run("_amsg_exit", &[3]);
+    assert_eq!(
+        again,
+        ExitReason::ProcessExit(7),
+        "the first exit status wins"
+    );
+}
+
 /// The module and symbol pairs a program built with mingw-w64 14.0.0 (UCRT)
 /// imports these services by, read from such a program's import table.
 #[test]

@@ -6,13 +6,13 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 200 |
-| Generated adapters | 200 |
-| Unique handler implementations | 193 |
+| Services with a declared ABI | 204 |
+| Generated adapters | 204 |
+| Unique handler implementations | 196 |
 | Implemented | 68 |
-| Partial | 130 |
+| Partial | 134 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 200 |
+| Conformance-tested through guest dispatch | 204 |
 | API-set aliases (not services) | 230 |
 | Independently accepted | 0 |
 
@@ -218,3 +218,7 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!__p__commode` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!signal` | `(signal: i32, handler: ptr) -> ptr` | partial | SIG_ERR with errno EINVAL for a signal the documentation does not list |
 | `kernel32.dll!SetUnhandledExceptionFilter` | `(filter: ptr) -> ptr` | partial | never |
+| `msvcrt.dll!__set_app_type` | `(kind: i32) -> void` | partial | never |
+| `msvcrt.dll!__getmainargs` | `(argc: ptr, argv: ptr, envp: ptr, dowildcard: i32, start_info: ptr) -> i32` | partial | -1 with errno EINVAL when any of the three output pointers is null; the start-up information is not written |
+| `msvcrt.dll!___mb_cur_max_func` | `() -> u32` | partial | never |
+| `msvcrt.dll!_amsg_exit` | `(code: i32) -> void` | partial | never returns; the runtime-error message of the CRT is not written |
