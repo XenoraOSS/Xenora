@@ -1732,6 +1732,13 @@ fn secure_fopen_and_stream_indicators_follow_iso_c() {
     assert_ne!(guest.call("feof", &[file]) & 0xFFFF_FFFF, 0);
     assert_eq!(guest.call("clearerr", &[file]) & 0xFFFF_FFFF, 0);
     assert_eq!(guest.call("feof", &[file]) & 0xFFFF_FFFF, 0);
+    // A successful seek clears the indicator too (ISO C 7.21.9.2): read to
+    // the end again, seek back to the start, and `feof` is clear.
+    assert_eq!(line(&mut guest, file, 8), None, "at the end");
+    assert_ne!(guest.call("feof", &[file]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.call("_fseeki64", &[file, 0, 0]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.call("feof", &[file]) & 0xFFFF_FFFF, 0);
+    assert_eq!(line(&mut guest, file, 8).unwrap(), b"xy");
     close(&mut guest, file);
     // `clearerr` of a null stream is a no-op with errno EINVAL; of the
     // output streams it has nothing to clear; of a pointer that is no
