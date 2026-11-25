@@ -216,10 +216,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         let state = Arc::clone(state);
         registry.register(KERNEL32, symbol, move |args, cpu, memory| {
             let (module, buffer, capacity) = (args.rcx, args.rdx, args.r8 as u32);
-            let owned = module == 0
-                || memory
-                    .main_image
-                    .is_some_and(|image| module == image.base);
+            let owned = module == 0 || memory.main_image.is_some_and(|image| module == image.base);
             if !owned {
                 return state.fail(cpu.gs_base, MODULE_NOT_FOUND, 0);
             }
@@ -250,9 +247,13 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             for (index, unit) in units.iter().take(copied).enumerate() {
                 let at = buffer + index as u64 * width;
                 if wide {
-                    memory.write_u16(at, *unit).map_err(ExitReason::MemoryFault)?;
+                    memory
+                        .write_u16(at, *unit)
+                        .map_err(ExitReason::MemoryFault)?;
                 } else {
-                    memory.write_u8(at, *unit as u8).map_err(ExitReason::MemoryFault)?;
+                    memory
+                        .write_u8(at, *unit as u8)
+                        .map_err(ExitReason::MemoryFault)?;
                 }
             }
             let end = buffer + copied as u64 * width;
@@ -560,7 +561,9 @@ mod tests {
     fn the_module_file_name_answers_the_program_path_with_truncation() {
         let mut registry = ImportRegistry::new();
         let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
-        state.set_program_arguments(&["c:\\games\\probe.exe"]).unwrap();
+        state
+            .set_program_arguments(&["c:\\games\\probe.exe"])
+            .unwrap();
         register_standard_services(&mut registry, state);
         let mut memory = GuestMemory::new();
         memory
@@ -614,4 +617,3 @@ mod tests {
         assert_eq!(foreign, 0);
     }
 }
-

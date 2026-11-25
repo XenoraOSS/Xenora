@@ -1177,7 +1177,6 @@ fn sprintf_faults_inside_the_buffer_stop_the_guest_and_nothing_leaves_it() {
 }
 
 #[test]
-#[test]
 fn puts_writes_the_line_to_the_captured_stdout() {
     let (mut guest, _) = stdio_guest();
     let text = place(&mut guest, STRINGS, b"a line");

@@ -28,6 +28,7 @@ mod heap;
 mod modules;
 mod platform_fixture;
 mod process;
+mod registry;
 mod startup_info;
 mod static_cxx;
 mod synch;
@@ -589,6 +590,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     crt_callbacks::register(registry, &state);
     environment::register(registry, &state);
     errors::register(registry, &state);
+    registry::register(registry, &state);
     heap::register(registry, &state);
     cxx::register(registry, &state);
 

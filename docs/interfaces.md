@@ -1110,3 +1110,25 @@ yet and `xenora run` takes `--metal-hud` for the embedded fixtures only, so
 for a program the switch turns on tracing instead. Apple's Metal Performance
 HUD cannot attach to these frames, which are read back from offscreen Metal
 targets and drawn as images.
+
+### Module file names
+
+`GetModuleFileNameA` and `GetModuleFileNameW` answer the path the program was
+started with - the same string the command line is built from - for a null
+module handle or the main image base. A small buffer receives the documented
+truncation form: what fits, terminated, with the capacity itself as the
+answer and ERROR_INSUFFICIENT_BUFFER. A foreign module fails with
+ERROR_MOD_NOT_FOUND because no library is ever loaded into the address
+space as an image. This is implemented behaviour verified through the unit
+tests. Nothing here was compared with Windows or with an Xbox console.
+
+### The registry is honestly empty
+
+The advapi32 registry services - `RegOpenKeyExA/W`, `RegQueryValueExA/W`
+and `RegCloseKey` - model the machine's registry as empty. The predefined
+roots open because they always exist; every subkey and every value is
+absent with ERROR_FILE_NOT_FOUND, which is what a fresh Windows answers
+for the keys a program would probe. Programs that need registry values to
+exist are not supported. This is implemented behaviour verified through
+the unit tests. Nothing here was compared with Windows or with an Xbox
+console.
