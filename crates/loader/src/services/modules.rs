@@ -208,6 +208,67 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         });
     }
 
+    // `GetModuleFileName` answers the path the program was started with for
+    // its own image - the same string the command line is built from. Any
+    // other module does not exist here, as no library is ever loaded into
+    // the address space as an image.
+    for (symbol, wide) in [("GetModuleFileNameA", false), ("GetModuleFileNameW", true)] {
+        let state = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            let (module, buffer, capacity) = (args.rcx, args.rdx, args.r8 as u32);
+            let owned = module == 0
+                || memory
+                    .main_image
+                    .is_some_and(|image| module == image.base);
+            if !owned {
+                return state.fail(cpu.gs_base, MODULE_NOT_FOUND, 0);
+            }
+            if capacity == 0 {
+                return state.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let path = state
+                .crt_arguments()
+                .for_command_line()
+                .first()
+                .cloned()
+                .unwrap_or_default();
+            // The count semantics are the documented truncation form: a
+            // small buffer receives what fits, terminated, and the answer
+            // is the capacity itself with ERROR_INSUFFICIENT_BUFFER.
+            let units: Vec<u16> = if wide {
+                path.encode_utf16().collect()
+            } else {
+                path.bytes().map(u16::from).collect()
+            };
+            let width = if wide { 2u64 } else { 1u64 };
+            let fits = units.len() < capacity as usize;
+            let copied = if fits {
+                units.len()
+            } else {
+                capacity as usize - 1
+            };
+            for (index, unit) in units.iter().take(copied).enumerate() {
+                let at = buffer + index as u64 * width;
+                if wide {
+                    memory.write_u16(at, *unit).map_err(ExitReason::MemoryFault)?;
+                } else {
+                    memory.write_u8(at, *unit as u8).map_err(ExitReason::MemoryFault)?;
+                }
+            }
+            let end = buffer + copied as u64 * width;
+            if wide {
+                memory.write_u16(end, 0).map_err(ExitReason::MemoryFault)?;
+            } else {
+                memory.write_u8(end, 0).map_err(ExitReason::MemoryFault)?;
+            }
+            if fits {
+                Ok(units.len() as u64)
+            } else {
+                state.fail(cpu.gs_base, ERROR_INSUFFICIENT_BUFFER, u64::from(capacity))
+            }
+        });
+    }
+
     for (symbol, wide) in [("GetModuleHandleExA", false), ("GetModuleHandleExW", true)] {
         let state = Arc::clone(state);
         let modules = catalog(&modules);
@@ -372,6 +433,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "GetModuleHandleW",
         "GetModuleHandleExA",
         "GetModuleHandleExW",
+        "GetModuleFileNameA",
+        "GetModuleFileNameW",
         "GetProcAddress",
         "FreeLibrary",
     ] {
@@ -492,4 +555,63 @@ mod tests {
         assert_eq!(cpu.get(Register::Rax), 42);
         assert_eq!(cpu.rip, 0x1234);
     }
+
+    #[test]
+    fn the_module_file_name_answers_the_program_path_with_truncation() {
+        let mut registry = ImportRegistry::new();
+        let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+        state.set_program_arguments(&["c:\\games\\probe.exe"]).unwrap();
+        register_standard_services(&mut registry, state);
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x20000, 4096, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        memory.main_image = Some(MainImage {
+            base: 0x150000000,
+            size: 0x1000,
+            entry_point: 0x150001000,
+        });
+        let narrow_length;
+        let wide_length;
+        let truncated_length;
+        let foreign;
+        {
+            let memory = &mut memory;
+            let mut call = |symbol: &str, module, buffer, capacity| {
+                let mut cpu = CpuState::default();
+                cpu.set(Register::Rcx, module);
+                cpu.set(Register::Rdx, buffer);
+                cpu.set(Register::R8, capacity);
+                let service = registry
+                    .resolve(LOADER_API, &ImportName::Name(symbol.to_owned()))
+                    .unwrap();
+                (service.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+            };
+            narrow_length = call("GetModuleFileNameA", 0, 0x20000, 64);
+            wide_length = call("GetModuleFileNameW", 0x150000000, 0x20100, 64);
+            truncated_length = call("GetModuleFileNameA", 0, 0x20200, 8);
+            foreign = call("GetModuleFileNameA", 0xdead0000, 0x20000, 64);
+        }
+        // The narrow form copies the whole path and answers its length.
+        let length = narrow_length;
+        assert_eq!(length, 18);
+        let mut bytes = [0u8; 20];
+        memory.read_bytes(0x20000, &mut bytes).unwrap();
+        assert_eq!(&bytes[..18], b"c:\\games\\probe.exe");
+        assert_eq!(bytes[18], 0);
+        // The wide form counts wide units; the main-image handle is the
+        // module itself.
+        assert_eq!(wide_length, 18);
+        assert_eq!(memory.read_u16(0x20100).unwrap(), u16::from(b'c'));
+        // A small buffer truncates, terminates and answers the capacity
+        // with ERROR_INSUFFICIENT_BUFFER - the documented truncation form.
+        assert_eq!(truncated_length, 8);
+        let mut small = [0u8; 8];
+        memory.read_bytes(0x20200, &mut small).unwrap();
+        assert_eq!(&small[..7], b"c:\\game");
+        assert_eq!(small[7], 0);
+        // A foreign module does not exist here.
+        assert_eq!(foreign, 0);
+    }
 }
+
