@@ -7,7 +7,7 @@ use std::ptr::NonNull;
 mod cohort;
 pub use cohort::{
     OwnedDepthInput, OwnedRenderOutput, QueuedSampledBinding, RenderBufferOutput, RenderCohort,
-    RenderColorOutput, RenderColorView, RenderPoint, RenderQueue,
+    RenderColorOutput, RenderColorView, RenderPoint, RenderQueue, RenderTypedTextureOutput,
 };
 
 use objc2::rc::{Retained, autoreleasepool};
@@ -43,8 +43,9 @@ pub const MAX_RENDER_DIMENSION: usize = 4096;
 /// Maximum ordered draw count in a translated pass.
 pub const MAX_RENDER_DRAWS: usize = 256;
 
-// Per pending translated pass: up to 8 * 4 * MAX_RENDER_PIXELS color
-// texture bytes (32 MiB), plus the same amount in returned host readbacks;
+// Per pending translated pass: up to 8 * 8 * MAX_RENDER_PIXELS typed color
+// texture bytes (64 MiB), plus the same amount in returned host readbacks;
+// RGBA8-only passes retain the previous 32 MiB color bound.
 // a working depth texture adds 4 MiB, alongside any previously retained depth.
 // Two native float4 vertex/color buffers total 32 * MAX_RENDER_VERTICES bytes.
 // Depth host transfers pad rows to 256 bytes: at most 4 * pixels + 252 * height
@@ -66,6 +67,10 @@ fn translated_pixels(
         .filter(|&pixels| pixels <= MAX_RENDER_PIXELS)
         .ok_or_else(|| MetalError::new(operation, "expected at most 1048576 pixels"))
 }
+
+#[path = "typed_render.rs"]
+mod typed_render;
+pub use typed_render::{TypedColorAttachment, TypedColorClear, TypedTriangleTargetsPass};
 
 const PIXEL_FORMAT: MTLPixelFormat = MTLPixelFormat::RGBA8Unorm;
 
@@ -168,6 +173,7 @@ impl<'a> DrawBindings<'a> {
 pub struct PendingRender<'a> {
     command: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
     textures: Vec<Retained<ProtocolObject<dyn MTLTexture>>>,
+    color_formats: Vec<xenora_texture::TextureFormat>,
     working_depth: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     retained_depth: Option<&'a mut MetalDepthTarget>,
     extent: [usize; 2],
@@ -178,7 +184,7 @@ pub struct PendingRender<'a> {
     _pipelines: Vec<Retained<ProtocolObject<dyn MTLRenderPipelineState>>>,
     _depth_states: Vec<Option<Retained<ProtocolObject<dyn MTLDepthStencilState>>>>,
     _bindings: Vec<NativeSampledBinding>,
-    _color_sources: Vec<Option<RenderColorOutput>>,
+    _color_sources: Vec<Option<crate::RenderTypedTextureOutput>>,
     _color_lease: Option<std::rc::Rc<cohort::ColorLease>>,
     _temporary_lease: Option<std::rc::Rc<cohort::ColorLease>>,
     _owned_depth: Option<MetalDepthTarget>,
@@ -190,6 +196,19 @@ pub struct PendingRender<'a> {
 }
 
 impl PendingRender<'_> {
+    /// Exact layouts of the allocated color attachments, available before collection.
+    pub fn color_layouts(&self) -> Vec<crate::TypedTextureDesc> {
+        self.color_formats
+            .iter()
+            .map(|format| crate::TypedTextureDesc {
+                format: *format,
+                extent: self.extent,
+                mip_levels: 1,
+                array_layers: None,
+            })
+            .collect()
+    }
+
     /// Poll once without waiting. GPU errors are returned, never treated as success.
     pub fn is_complete(&self) -> Result<bool, MetalError> {
         let status = self.command.status();
@@ -233,14 +252,15 @@ impl PendingRender<'_> {
         }
         let [width, height] = self.extent;
         let mut outputs = Vec::with_capacity(self.textures.len());
-        for texture in &self.textures {
-            let mut output = vec![0; width * height * 4];
+        for (texture, format) in self.textures.iter().zip(&self.color_formats) {
+            let row_bytes = width * format.block_bytes();
+            let mut output = vec![0; row_bytes * height];
             // SAFETY: GPU completion precedes reading these owned shared textures;
             // validated extents fit the initialized, tightly packed allocation.
             unsafe {
                 texture.getBytes_bytesPerRow_fromRegion_mipmapLevel(
                     NonNull::from(output.as_mut_slice()).cast(),
-                    width * 4,
+                    row_bytes,
                     whole(width, height),
                     0,
                 );
@@ -270,7 +290,7 @@ impl Drop for PendingRender<'_> {
 }
 
 /// Owned, immutable depth bytes suitable for moving between loader threads.
-/// Only native readback creates snapshots; retained words are tightly packed.
+/// Native readback or checked typed-copy publication creates packed snapshots.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DepthSnapshot {
     extent: [usize; 2],
@@ -278,6 +298,34 @@ pub struct DepthSnapshot {
 }
 
 impl DepthSnapshot {
+    /// Preserve exact Depth32Float storage bits, without numeric conversion.
+    pub fn from_packed_bytes(extent: [usize; 2], bytes: &[u8]) -> Result<Self, MetalError> {
+        let pixels = translated_pixels(extent, "depth snapshot")?;
+        if bytes.len() != pixels * 4 {
+            return Err(MetalError::new(
+                "depth snapshot",
+                "packed byte length mismatch",
+            ));
+        }
+        let mut words = Vec::new();
+        words
+            .try_reserve_exact(pixels)
+            .map_err(|_| MetalError::new("depth snapshot", "allocation failed"))?;
+        words.extend(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|b| u32::from_le_bytes(*b)),
+        );
+        Ok(Self { extent, words })
+    }
+    pub fn to_packed_bytes(&self) -> Vec<u8> {
+        self.words
+            .iter()
+            .flat_map(|word| word.to_le_bytes())
+            .collect()
+    }
     /// Retained host storage, excluding temporary padded transfer buffers.
     pub fn byte_len(&self) -> usize {
         self.words.len() * 4
@@ -696,7 +744,7 @@ impl NativeCompute {
                 width,
                 height,
                 MTLStorageMode::Private,
-                MTLTextureUsage::RenderTarget,
+                MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead,
             )?,
             extent,
             device_id: self.device.registryID(),
@@ -985,7 +1033,65 @@ impl NativeCompute {
         queued: Option<cohort::SubmissionSync>,
         uniforms: Option<&[DrawUniforms]>,
     ) -> Result<PendingRender<'a>, MetalError> {
+        self.submit_targets_typed_internal(
+            source,
+            entries,
+            draws,
+            [width, height],
+            clears,
+            sampled,
+            pass_state,
+            bindings,
+            retained_depth,
+            color_loads,
+            multi,
+            queued,
+            uniforms,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn submit_targets_typed_internal<'a>(
+        &self,
+        source: &str,
+        entries: [&str; 2],
+        draws: &[TriangleDraw<'_>],
+        [width, height]: [usize; 2],
+        clears: &[[u8; 4]],
+        sampled: Option<(
+            &crate::texture_pipeline::MetalRgba8Texture,
+            &crate::sampler::MetalSampler,
+        )>,
+        pass_state: Option<(&[TriangleState], Option<f32>)>,
+        bindings: Option<&[crate::BoundSampledTexture]>,
+        retained_depth: Option<(&'a mut MetalDepthTarget, DepthLoad)>,
+        color_loads: Option<&[Option<&[u8]>]>,
+        multi: Option<MultiPipelineInputs<'_>>,
+        queued: Option<cohort::SubmissionSync>,
+        uniforms: Option<&[DrawUniforms]>,
+        typed_colors: Option<&[TypedColorAttachment]>,
+    ) -> Result<PendingRender<'a>, MetalError> {
         validate_uniforms(draws.len(), uniforms)?;
+        let legacy_colors: Vec<_> = clears
+            .iter()
+            .map(|clear| TypedColorAttachment {
+                format: xenora_texture::TextureFormat::Rgba8Unorm,
+                clear: TypedColorClear::Float(clear.map(|v| f64::from(v) / 255.0)),
+                blend_enabled: true,
+            })
+            .collect();
+        let color_descs = typed_colors.unwrap_or(&legacy_colors);
+        if color_descs.len() != clears.len() {
+            return Err(MetalError::new(
+                "typed targets",
+                "attachment count mismatch",
+            ));
+        }
+        for color in color_descs {
+            color.validate()?;
+        }
+
         let gathered_geometry = queued
             .as_ref()
             .map(|q| q.geometry.clone())
@@ -1145,14 +1251,13 @@ impl NativeCompute {
         let pixels = translated_pixels([width, height], "render bounds")?;
         if color_loads.is_some_and(|loads| {
             loads.len() != clears.len()
-                || loads
-                    .iter()
-                    .flatten()
-                    .any(|bytes| bytes.len() != pixels * 4)
+                || loads.iter().zip(color_descs).any(|(load, color)| {
+                    load.is_some_and(|bytes| bytes.len() != pixels * color.format.block_bytes())
+                })
         }) {
             return Err(MetalError::new(
                 "color loads",
-                "expected one load per attachment and exactly width * height * 4 bytes",
+                "expected one load per attachment with exact typed packed bytes",
             ));
         }
         if let Some((shaders, _)) = multi {
@@ -1210,14 +1315,15 @@ impl NativeCompute {
                     } else {
                         MTLPixelFormat::Invalid
                     });
-                    for slot in 0..clears.len() {
+                    for (slot, color) in color_descs.iter().enumerate() {
                         // SAFETY: Attachment count is validated to 1..=8.
                         let attachment =
                             unsafe { descriptor.colorAttachments().objectAtIndexedSubscript(slot) };
-                        attachment.setPixelFormat(PIXEL_FORMAT);
+                        attachment.setPixelFormat(color.pixel_format()?);
                         attachment.setWriteMask(state.write_mask.metal());
-                        attachment.setBlendingEnabled(state.blend.is_some());
-                        if let Some(blend) = state.blend {
+                        let blend = state.blend.filter(|_| color.blend_enabled);
+                        attachment.setBlendingEnabled(blend.is_some());
+                        if let Some(blend) = blend {
                             attachment.setSourceRGBBlendFactor(blend.source_rgb.metal());
                             attachment.setDestinationRGBBlendFactor(blend.destination_rgb.metal());
                             attachment.setRgbBlendOperation(blend.rgb_operation.metal());
@@ -1248,22 +1354,21 @@ impl NativeCompute {
                 .map(|state| has_depth.then(|| self.depth_state(state.depth)).transpose())
                 .collect::<Result<Vec<_>, _>>()?;
 
-            // SAFETY: The nonzero dimensions are bounded by MAX_RENDER_PIXELS, and
-            // RGBA8Unorm is a renderable format on the selected Apple family.
-            let texture_descriptor = unsafe {
-                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
-                    PIXEL_FORMAT,
-                    width,
-                    height,
-                    false,
-                )
-            };
-            texture_descriptor.setStorageMode(MTLStorageMode::Shared);
-            texture_descriptor
-                .setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
             let pass = MTLRenderPassDescriptor::renderPassDescriptor();
-            let mut textures = Vec::with_capacity(clears.len());
-            for (slot, clear) in clears.iter().enumerate() {
+            let mut textures = Vec::with_capacity(color_descs.len());
+            for (slot, color) in color_descs.iter().enumerate() {
+                // SAFETY: Bounded extent and explicitly validated color format.
+                let texture_descriptor = unsafe {
+                    MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                        color.pixel_format()?,
+                        width,
+                        height,
+                        false,
+                    )
+                };
+                texture_descriptor.setStorageMode(MTLStorageMode::Shared);
+                texture_descriptor
+                    .setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
                 let texture = self
                     .device
                     .newTextureWithDescriptor(&texture_descriptor)
@@ -1278,7 +1383,7 @@ impl NativeCompute {
                 attachment.setTexture(Some(&texture));
                 let loaded = color_loads.and_then(|loads| loads[slot]);
                 if let Some(bytes) = loaded {
-                    // SAFETY: The exact packed RGBA8 length and bounded extent
+                    // SAFETY: The exact typed packed length and bounded extent
                     // were validated before compilation. This fresh shared texture
                     // has no GPU users; replaceRegion copies the borrowed bytes.
                     unsafe {
@@ -1286,7 +1391,11 @@ impl NativeCompute {
                             whole(width, height),
                             0,
                             NonNull::from(bytes).cast(),
-                            width * 4,
+                            if height == 1 {
+                                0
+                            } else {
+                                width * color.format.block_bytes()
+                            },
                         );
                     }
                 }
@@ -1301,7 +1410,7 @@ impl NativeCompute {
                         MTLLoadAction::Clear
                     },
                 );
-                let [red, green, blue, alpha] = clear.map(|value| f64::from(value) / 255.0);
+                let [red, green, blue, alpha] = color.clear.components();
                 attachment.setClearColor(MTLClearColor {
                     red,
                     green,
@@ -1320,7 +1429,7 @@ impl NativeCompute {
                     width,
                     height,
                     MTLStorageMode::Private,
-                    MTLTextureUsage::RenderTarget,
+                    MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead,
                 )?;
                 let attachment = pass.depthAttachment();
                 attachment.setTexture(Some(&texture));
@@ -1479,6 +1588,7 @@ impl NativeCompute {
             let pending = PendingRender {
                 command,
                 textures,
+                color_formats: color_descs.iter().map(|c| c.format).collect(),
                 working_depth,
                 retained_depth: retained_depth.map(|(depth, _)| depth),
                 extent: [width, height],

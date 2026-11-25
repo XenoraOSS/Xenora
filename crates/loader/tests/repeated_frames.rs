@@ -1559,6 +1559,7 @@ fn native_loader_depth_rejects_color_without_advancing_depth() {
             colors[0].pop();
         }
         Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors,
             depth: Some(Arc::new(
                 gpu.snapshot_depth(&depth)

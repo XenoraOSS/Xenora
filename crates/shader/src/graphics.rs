@@ -172,9 +172,34 @@ impl StageIr {
     }
 }
 
+/// Element interpretation required by a synthetic sampled texture binding.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GraphicsSampleType {
+    #[default]
+    Float,
+    Uint,
+    Depth,
+}
+
+/// Fragment export representation; Uint preserves the source VGPR bits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GraphicsExportType {
+    #[default]
+    Float,
+    Uint,
+}
+
+/// Explicit synthetic resource types; ordinary pipelines retain float bindings.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GraphicsPipelineTypes {
+    pub textures: [GraphicsSampleType; 2],
+    pub colors: [GraphicsExportType; 8],
+}
+
 /// Compiled graphics stages and resource requirements derived from their lifted IR.
 #[derive(Debug)]
 pub struct CompiledGraphics {
+    pub types: GraphicsPipelineTypes,
     /// Generated shader source, disassembly and intermediate representation.
     pub shader: CompiledShader,
     /// Number of contiguous color attachments starting at MRT0 (1..=8).
@@ -220,6 +245,24 @@ pub fn compile_graphics_pipeline(
     architecture: Architecture,
     vertex: &[u8],
     pixel: &[u8],
+) -> Result<CompiledGraphics, CompileError> {
+    compile_graphics_pipeline_typed(
+        architecture,
+        vertex,
+        pixel,
+        GraphicsPipelineTypes::default(),
+    )
+}
+
+/// Compile explicit unsigned-integer, raw-depth and floating-point resource roles.
+/// Integer sampling uses nearest samplers supplied by the backend. Values travel
+/// as VGPR bit patterns; floating arithmetic on sampled integer data is rejected.
+/// Raw depth maps to (depth, 0, 0, 1) in the synthetic descriptor contract.
+pub fn compile_graphics_pipeline_typed(
+    architecture: Architecture,
+    vertex: &[u8],
+    pixel: &[u8],
+    types: GraphicsPipelineTypes,
 ) -> Result<CompiledGraphics, CompileError> {
     let compile_stage = |stage: Stage, bytes: &[u8]| {
         let result = decode_fixture(architecture, bytes).and_then(|decoded| {
@@ -270,6 +313,7 @@ pub fn compile_graphics_pipeline(
             mask
         }
     });
+    validate_resource_types(&pixel, types, sampled_pairs, color_count)?;
     let has_sampling = sampled_pairs != 0;
 
     let mut disassembly = String::new();
@@ -297,15 +341,20 @@ pub fn compile_graphics_pipeline(
         msl,
         "}};\n\nvertex VertexOutput {VERTEX_ENTRY_POINT}(\n    uint vertex_id [[vertex_id]],\n    device const float4* positions [[buffer(0)]],\n    device const float4* colors [[buffer(1)]]{vertex_uniforms}) {{\n"
     );
-    emit_values(&vertex, &mut ir, &mut msl);
+    emit_values(&vertex, GraphicsPipelineTypes::default(), &mut ir, &mut msl);
     msl.push_str("    VertexOutput output;\n");
     emit_export(position, "pos0", "output.position", &mut ir, &mut msl);
     if let Some(parameter) = parameter {
         emit_export(parameter, "param0", "output.parameter", &mut ir, &mut msl);
     }
     msl.push_str("    return output;\n}\n\nstruct PixelOutput {\n");
-    for slot in 0..color_count {
-        let _ = writeln!(msl, "    float4 color{slot} [[color({slot})]];");
+    for (slot, export_type) in types.colors.iter().enumerate().take(color_count) {
+        let kind = if *export_type == GraphicsExportType::Uint {
+            "uint4"
+        } else {
+            "float4"
+        };
+        let _ = writeln!(msl, "    {kind} color{slot} [[color({slot})]];");
     }
     msl.push_str("};\n\n");
     let mut params = Vec::new();
@@ -315,11 +364,14 @@ pub fn compile_graphics_pipeline(
     if interpolates {
         params.push("VertexOutput input [[stage_in]]".to_string());
     }
-    for slot in 0..2 {
+    for (slot, sample_type) in types.textures.iter().enumerate() {
         if sampled_pairs & (0b11 << (slot * 2)) != 0 {
-            params.push(format!(
-                "texture2d<float, access::sample> tex{slot} [[texture({slot})]]"
-            ));
+            let kind = match sample_type {
+                GraphicsSampleType::Float => "texture2d<float, access::sample>",
+                GraphicsSampleType::Uint => "texture2d<uint, access::sample>",
+                GraphicsSampleType::Depth => "depth2d<float, access::sample>",
+            };
+            params.push(format!("{kind} tex{slot} [[texture({slot})]]"));
         }
     }
     for slot in 0..2 {
@@ -340,9 +392,23 @@ pub fn compile_graphics_pipeline(
         "fragment PixelOutput {PIXEL_ENTRY_POINT}({param_decl}) {{"
     );
     ir.push_str("pixel:\n");
-    emit_values(&pixel, &mut ir, &mut msl);
+    emit_values(&pixel, types, &mut ir, &mut msl);
     msl.push_str("    PixelOutput output;\n");
     for (slot, color) in pixel.colors[..color_count].iter().enumerate() {
+        if types.colors[slot] == GraphicsExportType::Uint {
+            let export = color.as_ref().unwrap();
+            let [a, b, c, d] = export.values;
+            let _ = writeln!(
+                ir,
+                "{:04x}: export.bits.u32x4 mrt{slot}, {a}, {b}, {c}, {d}",
+                export.offset
+            );
+            let _ = writeln!(
+                msl,
+                "    output.color{slot} = as_type<uint4>(float4({a}, {b}, {c}, {d}));"
+            );
+            continue;
+        }
         emit_export(
             color.as_ref().unwrap(),
             &format!("mrt{slot}"),
@@ -353,6 +419,7 @@ pub fn compile_graphics_pipeline(
     }
     msl.push_str("    return output;\n}\n");
     Ok(CompiledGraphics {
+        types,
         shader: CompiledShader {
             disassembly,
             ir,
@@ -1027,6 +1094,80 @@ fn compare_expression(op: ScalarCompareOp, left: ScalarValue, right: ScalarValue
     format!("{} {relation} {}", source(left), source(right))
 }
 
+fn validate_resource_types(
+    pixel: &StageIr,
+    types: GraphicsPipelineTypes,
+    pairs: u8,
+    colors: usize,
+) -> Result<(), CompileError> {
+    if (0..2).any(|slot| {
+        pairs & (3 << (slot * 2)) == 0 && types.textures[slot] != GraphicsSampleType::Float
+    }) || types.colors[colors..]
+        .iter()
+        .any(|t| *t != GraphicsExportType::Float)
+    {
+        return Err(CompileError::GraphicsLink {
+            reason: "nondefault type for an unused resource slot",
+        });
+    }
+    let mut integer_bits: Vec<bool> = pixel.values.iter().map(|(_, op)| matches!(op,
+        Op::SampleLodZero {texture_index, ..} if types.textures[*texture_index as usize] == GraphicsSampleType::Uint
+    )).collect();
+    let mut dependents = vec![Vec::new(); pixel.values.len()];
+    for block in pixel.blocks.iter().flatten() {
+        for (_, copies) in &block.edge_copies {
+            for (destination, source) in copies {
+                if let EdgeValue::Float(source) = source {
+                    dependents[source.0].push(destination.0);
+                }
+            }
+        }
+    }
+    let mut work: Vec<usize> = integer_bits
+        .iter()
+        .enumerate()
+        .filter_map(|(index, tainted)| tainted.then_some(index))
+        .collect();
+    while let Some(source) = work.pop() {
+        for &destination in &dependents[source] {
+            if !integer_bits[destination] {
+                integer_bits[destination] = true;
+                work.push(destination);
+            }
+        }
+    }
+    for (offset, op) in &pixel.values {
+        if let Op::SampleLodZero { u, v, .. } = op
+            && (integer_bits[u.0] || integer_bits[v.0])
+        {
+            return Err(CompileError::Verify {
+                offset: offset.unwrap_or(0),
+                reason: "sampled integer bits cannot be floating texture coordinates",
+            });
+        }
+        if let Op::Binary(_, a, b) = op
+            && (integer_bits[a.0] || integer_bits[b.0])
+        {
+            return Err(CompileError::Verify {
+                offset: offset.unwrap_or(0),
+                reason: "floating arithmetic on sampled integer bits requires explicit conversion",
+            });
+        }
+    }
+    for (slot, export) in pixel.colors[..colors].iter().enumerate() {
+        let export = export.as_ref().expect("validated contiguous exports");
+        if types.colors[slot] == GraphicsExportType::Float
+            && export.values.iter().any(|v| integer_bits[v.0])
+        {
+            return Err(CompileError::Verify {
+                offset: export.offset,
+                reason: "sampled integer bits require an unsigned integer export",
+            });
+        }
+    }
+    Ok(())
+}
+
 fn value_type(op: Op) -> &'static str {
     match op {
         Op::Compare(..) | Op::ScalarFlag(..) | Op::Phi(ValueType::Bool) => "bool",
@@ -1035,7 +1176,7 @@ fn value_type(op: Op) -> &'static str {
     }
 }
 
-fn emit_values(stage: &StageIr, ir: &mut String, msl: &mut String) {
+fn emit_values(stage: &StageIr, types: GraphicsPipelineTypes, ir: &mut String, msl: &mut String) {
     if stage
         .values
         .iter()
@@ -1045,13 +1186,13 @@ fn emit_values(stage: &StageIr, ir: &mut String, msl: &mut String) {
     }
 
     if !stage.runtime_control {
-        emit_range(stage, 0..stage.values.len(), false, ir, msl);
+        emit_range(stage, types, 0..stage.values.len(), false, ir, msl);
         return;
     }
     for (index, &(_, op)) in stage.values.iter().enumerate() {
         let _ = writeln!(msl, "    {} {};", value_type(op), Value(index));
     }
-    emit_range(stage, 0..stage.initial_values, true, ir, msl);
+    emit_range(stage, types, 0..stage.initial_values, true, ir, msl);
     msl.push_str("    uint block = 0u;\n    bool finished = false;\n    while (!finished) {\n    switch (block) {\n");
     for (index, block) in stage.blocks.iter().enumerate() {
         let Some(block) = block else {
@@ -1059,7 +1200,7 @@ fn emit_values(stage: &StageIr, ir: &mut String, msl: &mut String) {
         };
         let _ = writeln!(ir, "block {index}:");
         let _ = writeln!(msl, "    case {index}u: {{");
-        emit_range(stage, block.values.clone(), true, ir, msl);
+        emit_range(stage, types, block.values.clone(), true, ir, msl);
         let edge = |next: usize, ir: &mut String, msl: &mut String| {
             msl.push_str("        {\n");
             for (target, copies) in &block.edge_copies {
@@ -1113,6 +1254,7 @@ fn emit_parallel_copies(
 
 fn emit_range(
     stage: &StageIr,
+    types: GraphicsPipelineTypes,
     range: std::ops::Range<usize>,
     assignment: bool,
     ir: &mut String,
@@ -1172,13 +1314,28 @@ fn emit_range(
                 sampler_index,
             } => {
                 let channel = ["r", "g", "b", "a"][usize::from(component)];
+                let sample = format!(
+                    "tex{texture_index}.sample(samp{sampler_index}, float2({u}, {v}), level(0.0f))"
+                );
+                let (kind, expression) = match types.textures[texture_index as usize] {
+                    GraphicsSampleType::Float => ("f32", format!("{sample}.{channel}")),
+                    GraphicsSampleType::Uint => {
+                        ("u32.bits", format!("as_type<float>({sample}.{channel})"))
+                    }
+                    GraphicsSampleType::Depth => (
+                        "depth",
+                        match component {
+                            0 => sample,
+                            3 => "1.0f".into(),
+                            _ => "0.0f".into(),
+                        },
+                    ),
+                };
                 (
                     format!(
-                        "sample_lz.2d.f32 tex{texture_index}, samp{sampler_index}, ({u}, {v})[{channel}]"
+                        "sample_lz.2d.{kind} tex{texture_index}, samp{sampler_index}, ({u}, {v})[{channel}]"
                     ),
-                    format!(
-                        "tex{texture_index}.sample(samp{sampler_index}, float2({u}, {v}), level(0.0f)).{channel}"
-                    ),
+                    expression,
                 )
             }
         };

@@ -1,7 +1,7 @@
 # Local graphics checkpoint
 
 This summary records the accumulated graphics checkpoint and the subsequent
-nested-view, compute-cache, sampler-handle, guest-copy, R8, mip/slice and array-view increments on 25 November 2026. It is not release certification or a
+nested-view, compute-cache, sampler-handle, guest-copy, R8, mip/slice, array-view and typed-format increments on 25 November 2026. It is not release certification or a
 claim of Xbox hardware equivalence. Supporting raw logs, mutation records and
 source manifests remain local and are not distributed with the repository.
 
@@ -14,6 +14,41 @@ failure, and saves each step's output under `artifacts/validation-*`. A successf
 run ends with `PASS`. Quick mode also rejects filters that select no passing tests.
 Use `--help` for prerequisites. These tests render offscreen and compare pixels;
 they do not open an application window. Avoid other GPU test runs at the same time.
+
+## Typed formats and resource roles checkpoint
+
+The [ten-format matrix](../resource-formats.md) is implemented: exact same-format
+mip/slice transfers, typed sampling, seven color storage formats, per-target blending
+where supported, and retained Depth32 attachments. BC1/BC3 require runtime capability.
+Queued consumers retain exact produced resources and selected views. Completion
+validates each attachment's format and extent before publishing any output; only
+RGBA8 slot zero publishes the legacy RGBA presentation image. Writable subresource
+views, shader-indexed arrays and general format conversion remain outside this matrix.
+
+All nine repository gates passed. Workspace tests reported **901 passed, zero failed,
+107 ignored**; the native GPU script reported **403 passed, zero failed, one manual
+case ignored**. The GPU script includes CPU checks and overlaps the workspace suite;
+these totals must not be added as unique GPU tests. Final quick validation passed
+**160 tests across 42 steps**, with zero failures or ignored tests.
+
+Native execution used an Apple M4 Max running macOS 27.2.1. The native and guest
+executables were checked as ARM64 and linked to system Metal. Tests cover literal
+packed bytes, integer bit preservation through shader joins, normalized/float blend
+results, selected array/mip views, retained depth, completion rejection and lifetime
+budgets. Original guest cases exercise synchronous, asynchronous and queued adapters.
+This establishes local synthetic behavior, not Xbox hardware equivalence.
+
+Six deliberate production mutations triggered decisive assertions: wrong copy
+format, wrong buffer offset, numeric conversion of integer sample bits, missing
+produced-view wait, clearing a retained Load, and accepting incorrect completion
+format metadata. Source restoration was checked after each campaign. The Load
+mutation tests preservation, not substitution of one produced version for another.
+Subsequent formatting and final gates validate the final source snapshot.
+
+Intermediate failures remain in local logs. The expanded guest test was corrected
+to reuse its producer queue within the existing two-queue limit. The blend oracle
+was independently re-derived with an input away from a quantization tie; no tolerance
+was broadened. Raw evidence is stored locally under `artifacts/formats-roles-*`.
 
 ## Selected array-slice view checkpoint
 
@@ -118,8 +153,8 @@ oracles before the final run.
 
 R8 textures now keep one-byte texels throughout packed storage, transfers and
 native upload. All three production adapters sample actual Metal R8 textures,
-including selected and nested read-only mip views. The contract is sampled-only:
-R8 attachments, Produced textures and queued texture copies remain unsupported.
+including selected and nested read-only mip views. That checkpoint was sampled-only;
+R8 attachments, Produced textures and queued texture copies were outside its scope.
 
 Quick validation passed **66 tests across 21 steps**, with zero failures or ignored
 tests. Five new CPU checks cover packed odd mip chains, overflow, native upload

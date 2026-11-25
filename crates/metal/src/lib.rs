@@ -20,7 +20,8 @@ pub use compute::{
     MAX_RENDER_DIMENSION, MAX_RENDER_DRAWS, MAX_RENDER_PIXELS, MAX_RENDER_VERTICES,
     MetalDepthTarget, MetalError, NativeCompute, OwnedDepthInput, OwnedRenderOutput, PendingRender,
     QueuedSampledBinding, RenderBufferOutput, RenderCohort, RenderColorOutput, RenderColorView,
-    RenderPoint, RenderQueue, RunProfile, TriangleShader,
+    RenderPoint, RenderQueue, RenderTypedTextureOutput, RunProfile, TriangleShader,
+    TypedColorAttachment, TypedColorClear, TypedTriangleTargetsPass,
 };
 
 #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
@@ -30,10 +31,59 @@ pub use sampler::MetalSampler;
 pub use texture_pipeline::{
     ArraySliceViewDesc, BcMipUpload, BcTextureDesc, BindingSlot, BoundSampledTexture,
     MAX_BC_TEXTURE_BYTES, MAX_R8_TEXTURE_BYTES, MetalBcTexture, MetalR8Texture,
-    MetalRgba8ArrayTexture, MetalRgba8Texture, MetalTextureView, R8MipUpload, R8TextureDesc,
-    Rgba8ArrayMipUpload, Rgba8ArrayTextureDesc, Rgba8MipLevel,
+    MetalRgba8ArrayTexture, MetalRgba8Texture, MetalTextureView, MetalTypedTexture, R8MipUpload,
+    R8TextureDesc, Rgba8ArrayMipUpload, Rgba8ArrayTextureDesc, Rgba8MipLevel,
     Rgba8TextureDesc as MetalRgba8TextureDesc, SampledBinding, TextureViewDesc, TextureViewFormat,
 };
+
+/// Full immutable texture identity. `Some(1)` is an array, never ordinary 2D.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TypedTextureDesc {
+    pub format: xenora_texture::TextureFormat,
+    pub extent: [usize; 2],
+    pub mip_levels: u32,
+    pub array_layers: Option<u32>,
+}
+
+/// An exact produced texture view; retains both its GPU version and payload lease.
+#[derive(Clone)]
+pub struct RenderTypedTextureView {
+    pub(crate) output: RenderTypedTextureOutput,
+    pub(crate) view: MetalTextureView,
+}
+
+pub enum TypedCopyInput<'a> {
+    HostTexture {
+        desc: TypedTextureDesc,
+        bytes: &'a [u8],
+    },
+    ProducedTexture(RenderTypedTextureOutput),
+    HostBuffer(&'a [u8]),
+    ProducedBuffer(RenderBufferOutput),
+    ProducedColor(RenderColorOutput),
+    ProducedDepth(RenderDepthOutput),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TypedImageCopyLocation {
+    Texture {
+        mip: u32,
+        slice: u32,
+        origin: [usize; 2],
+    },
+    Buffer {
+        offset: usize,
+        bytes_per_row: usize,
+    },
+}
+
+pub struct QueuedTypedImageCopy<'a> {
+    pub source: TypedCopyInput<'a>,
+    pub destination: TypedCopyInput<'a>,
+    pub source_location: TypedImageCopyLocation,
+    pub destination_location: TypedImageCopyLocation,
+    pub extent: [usize; 2],
+}
 
 /// Whole-resource source for a queued GPU copy. Produced inputs retain provenance.
 pub enum QueuedCopyInput<'a> {
@@ -98,11 +148,16 @@ pub struct QueuedImageCopy<'a> {
 pub enum RenderCopyOutput {
     Buffer(RenderBufferOutput),
     Color(RenderColorOutput),
+    TypedTexture(RenderTypedTextureOutput),
 }
 
 /// Owned host result of collecting a completed GPU copy.
 #[derive(Debug)]
 pub enum OwnedCopyOutput {
+    TypedTexture {
+        desc: TypedTextureDesc,
+        bytes: Vec<u8>,
+    },
     Rgba8Array {
         extent: [usize; 2],
         mip_levels: u32,
@@ -183,6 +238,7 @@ pub enum QueuedColorLoad<'a> {
     Clear,
     Host(&'a [u8]),
     Produced(RenderColorOutput),
+    ProducedTyped(RenderTypedTextureOutput),
 }
 
 /// Immutable exact produced depth version; no raw, upload or sampled conversion.

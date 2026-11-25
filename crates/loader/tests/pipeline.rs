@@ -144,6 +144,7 @@ fn cpu_malformed_pipeline_creation_does_not_poison_valid_creation() {
             assert!(!pipeline.uses_texture);
             assert!(depth.is_none());
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![[29, 31, 37, 255].repeat(12)],
                 depth: None,
             })
@@ -377,6 +378,7 @@ fn cpu_indexed_draw_gathers_guest_vertex_colors_in_index_order() {
         assert!(!draws[0].pipeline.as_ref().unwrap().uses_texture);
         assert!(depth.is_none());
         Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![[41, 43, 47, 255].repeat(12)],
             depth: None,
         })
@@ -425,6 +427,7 @@ fn cpu_sampled_draws_share_pixel_snapshot_and_keep_distinct_samplers() {
             );
             assert!(depth.is_none());
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![[59, 61, 67, 255].repeat(12)],
                 depth: None,
             })
@@ -626,6 +629,7 @@ fn cpu_indexed_colors_honor_offset_stride_base_and_reject_final_fetch() {
             assert!(!short, "failed final color fetch reached callback");
             assert_eq!(draws[0].colors, [B, R, G]);
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![[23, 29, 31, 255].repeat(12)],
                 depth: None,
             })
@@ -676,6 +680,7 @@ impl xenora_loader::graphics::GraphicsPendingSubmission for CpuPipelineSwitchPen
         // CPU-only: inspect owned data after the originating handles were destroyed.
         assert_cpu_pipeline_switch_snapshots(&self.0.draws);
         Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![[17, 29, 43, 255].repeat(12)],
             depth: None,
         })
@@ -729,6 +734,7 @@ fn cpu_pipeline_switch_a_b_a_snapshots_survive_async_reset_and_destruction() {
             h.ctx.set_metal_stateful_backend(|draws, _, _, _, _| {
                 assert_cpu_pipeline_switch_snapshots(draws);
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![[17, 29, 43, 255].repeat(12)],
                     depth: None,
                 })
@@ -849,6 +855,7 @@ fn cpu_multislot_all_pairs_have_exact_independent_snapshots() {
                     &[0, 0, 0, 0]
                 );
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![0; extent.0 * extent.1 * 4]],
                     depth: None,
                 })
@@ -887,6 +894,7 @@ fn cpu_multislot_shared_texture_and_legacy_unbind_preserve_slot_one() {
             assert!(draws[1].sampled_bindings.textures[0].is_none());
             assert!(draws[1].sampled_bindings.samplers[0].is_none());
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![0; extent.0 * extent.1 * 4]],
                 depth: None,
             })
@@ -997,6 +1005,7 @@ fn cpu_multislot_checks_only_used_pairs_and_rejects_invalid_lod_state_alias() {
             .set_metal_multislot_attachment_backend(move |_, extent, _, _, _| {
                 assert_eq!(invalid, 0, "invalid inputs reached CPU callback");
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![0; extent.0 * extent.1 * 4]],
                     depth: None,
                 })
@@ -1103,6 +1112,7 @@ fn cpu_views_share_full_backing_and_validate_relative_mips() {
                 assert!(Arc::ptr_eq(&a.pixels, &b.pixels));
                 assert!(draws[0].sampled.is_none());
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![0; extent.0 * extent.1 * 4]],
                     depth: None,
                 })
@@ -1317,6 +1327,7 @@ fn cpu_typed_bc_snapshots_keep_original_blocks_and_require_capability() {
                     assert!(draw.sampled.is_none());
                     assert_eq!(draw.sampled_bindings.views[0].unwrap().format, view_format);
                     Ok(GraphicsPassOutput {
+                        color_layouts: None,
                         colors: vec![vec![0; extent.0 * extent.1 * 4]],
                         depth: None,
                     })
@@ -1475,6 +1486,7 @@ fn cpu_typed_capabilities_are_independent_and_old_installers_reset_them() {
                     format
                 );
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![0; extent.0 * extent.1 * 4]],
                     depth: None,
                 })
@@ -1577,6 +1589,7 @@ fn cpu_legacy_bc_targets_reject_clear_only_and_draw_before_dispatch_preserving_f
             h.ctx.close_command_list(h.list).unwrap();
             h.ctx.set_metal_attachment_backend(|_, extent, _, _, _| {
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![0; extent.0 * extent.1 * 4]],
                     depth: None,
                 })
@@ -1753,6 +1766,7 @@ fn cpu_runtime_uniform_snapshots_are_per_draw_and_missing_later_data_is_atomic()
                 ));
                 assert_eq!(draws[0].pipeline.as_ref().unwrap().required_uniform_mask, 3);
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![[41, 43, 47, 255].repeat(extent.0 * extent.1)],
                     depth: None,
                 })
@@ -1840,6 +1854,7 @@ fn cpu_uniform_missing_binding_is_ignored_by_empty_draws_before_valid_draw() {
                 assert_eq!(draws[0].uniforms, Some([0; 8]));
                 assert_eq!(draws[0].vertices.len(), 3);
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![[19, 23, 29, 255].repeat(extent.0 * extent.1)],
                     depth: None,
                 })
@@ -1936,6 +1951,7 @@ fn cpu_async_uniform_downgrades_and_missing_later_draw_do_not_allocate_receipts(
                 assert_eq!(request.draws.len(), 1);
                 assert_eq!(request.draws[0].uniforms, Some([7; 8]));
                 Ok(Box::new(CpuUniformReady(Some(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![[31, 37, 41, 255].repeat(request.extent.0 * request.extent.1)],
                     depth: None,
                 }))))
@@ -2040,6 +2056,7 @@ fn cpu_runtime_sampling_requires_both_feasible_pairs_for_every_uniform_value() {
                         );
                     }
                     Ok(GraphicsPassOutput {
+                        color_layouts: None,
                         colors: vec![[131, 137, 139, 149].repeat(extent.0 * extent.1)],
                         depth: None,
                     })
@@ -2141,6 +2158,7 @@ fn cpu_nested_views_normalize_relative_ranges_and_survive_parent_destruction() {
                 (9, 5, 4, 224)
             );
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![17, 31, 47, 255]],
                 depth: None,
             })
@@ -2317,6 +2335,7 @@ impl xenora_loader::graphics::GraphicsPendingSubmission for CpuSamplerSnapshotPe
             assert!(draw.sampled_bindings.samplers[1].is_none());
         }
         Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![vec![23, 41, 59, 255]],
             depth: None,
         })
@@ -2463,6 +2482,7 @@ fn cpu_sampler_handles_invalid_later_slot_is_atomic_and_aliases_reuse_descriptor
                 &bindings.textures[1].as_ref().unwrap().pixels
             ));
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![0; 4]],
                 depth: None,
             })
@@ -2605,6 +2625,7 @@ fn cpu_r8_snapshots_keep_packed_mips_and_require_independent_capability() {
                 assert!(draw.sampled.is_none());
                 assert_eq!(draw.sampled_bindings.views[0].unwrap().format, view_format);
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![0; extent.0 * extent.1 * 4]],
                     depth: None,
                 })

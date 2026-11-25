@@ -17,6 +17,9 @@ fn queued_copy_host_buffer_to_produced_buffer_literal_baseline() {
         .submit_copy(RenderQueue::First, QueuedCopyInput::HostBuffer(&host), &[])
         .unwrap();
     let output = match cohort.copy_output(&producer).unwrap() {
+        RenderCopyOutput::TypedTexture(_) => {
+            panic!("legacy copy unexpectedly returned typed texture")
+        }
         RenderCopyOutput::Buffer(output) => output,
         RenderCopyOutput::Color(_) => panic!("buffer copy returned a color output"),
     };
@@ -73,12 +76,18 @@ fragment float4 pattern(V v [[stage_in]]) {
 
 fn buffer_output(cohort: &RenderCohort, point: &RenderPoint) -> RenderBufferOutput {
     match cohort.copy_output(point).unwrap() {
+        RenderCopyOutput::TypedTexture(_) => {
+            panic!("legacy copy unexpectedly returned typed texture")
+        }
         RenderCopyOutput::Buffer(output) => output,
         RenderCopyOutput::Color(_) => panic!("expected buffer output"),
     }
 }
 fn color_output(cohort: &RenderCohort, point: &RenderPoint) -> RenderColorOutput {
     match cohort.copy_output(point).unwrap() {
+        RenderCopyOutput::TypedTexture(_) => {
+            panic!("legacy copy unexpectedly returned typed texture")
+        }
         RenderCopyOutput::Color(output) => output,
         RenderCopyOutput::Buffer(_) => panic!("expected RGBA output"),
     }

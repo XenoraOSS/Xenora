@@ -33,7 +33,8 @@ pub use render::{
     DrawUniforms, IndexBuffer, IndexedDraw, IndexedPass, MAX_RENDER_DIMENSION, MAX_RENDER_DRAWS,
     MAX_RENDER_PIXELS, MAX_RENDER_VERTICES, MetalDepthTarget, OwnedDepthInput, OwnedRenderOutput,
     PendingRender, QueuedSampledBinding, RenderBufferOutput, RenderCohort, RenderColorOutput,
-    RenderColorView, RenderPoint, RenderQueue, TriangleShader,
+    RenderColorView, RenderPoint, RenderQueue, RenderTypedTextureOutput, TriangleShader,
+    TypedColorAttachment, TypedColorClear, TypedTriangleTargetsPass,
 };
 
 const MAX_THREADS_PER_GROUP: usize = 64;

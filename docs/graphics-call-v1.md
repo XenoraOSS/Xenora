@@ -21,8 +21,9 @@ word. Handles retain their generation in the high32 bits and ID in the low32 bit
 Handles are opaque; guests must use returned values, not invent IDs.
 
 Fields described as u32, u16, booleans or f32 bits require zero upper bits.
-Booleans must be exactly 0 or 1. A float is its IEEE754 binary32 bit pattern in the
-low32 bits; finite/range validation depends on its operation. The one signed field,
+Booleans must be exactly 0 or 1. Unless explicitly described as f64 (opcode56),
+a float is its IEEE754 binary32 bit pattern in the low32 bits; finite/range
+validation depends on its operation. The one signed field,
 indexed base vertex, is a sign-extended i32 stored as an i64 bit pattern in a u64 word.
 No native host pointer is exposed.
 
@@ -100,6 +101,11 @@ loader ResourceStates bits. Unsupported formats and layouts fail.
 | 50 | CopyImageSubresource | list, destination, destination kind, destination subresource, destination A, destination B, source, source kind, source subresource, source A, source B, width, height | 0 |
 | 51 | CreateTextureArray | device, width, height u32, mip count u32, array layer count u32, initial state u32 | RGBA8 array resource handle |
 | 52 | CreateArraySliceView | device, array backing, slice u32, base mip u32, mip count u32, format | read-only 2D view handle |
+| 53 | CreateResourceTexture | device, width, height, mip count u32, array layers u32, storage format, initial state u32 | typed resource handle |
+| 54 | CopyTypedImage | same thirteen arguments as opcode50 | 0 |
+| 55 | CreateTypedPipeline | device, vertex address, vertex byte count, pixel address, pixel byte count, type bits | pipeline handle |
+| 56 | TypedColorTargets | list, count, record address | 0 |
+
 
 CreatePipeline reads nonempty, four-byte-aligned shader blobs of at most 1024 bytes
 each. Decoding and translation must succeed before a pipeline handle is allocated.
@@ -258,11 +264,11 @@ writable views.
 Six focused CPU checks, two original guest tests across three adapters and all
 nine repository gates passed. See the [validation guide](testing/local-graphics-checkpoint.md).
 
-CreateArraySliceView (opcode52) selects one slice of an explicit RGBA8 array as a
+CreateArraySliceView (opcode52) selects one slice of an explicit typed array as a
 read-only 2D view. Arguments are `[device, backing, slice, base_mip, mip_count,
 format]`; slice and both mip fields require zero upper32 bits. Slice must fit the
-array, and the nonempty checked mip range must fit its chain. Only format codes0
-and1 are accepted. Ordinary 2D resources reject, including when their layout has
+array, and the nonempty checked mip range must fit its chain. Format codes must
+match its storage family (see the typed format extension below). Ordinary 2D resources reject, including when their layout has
 the same byte length as a one-layer array. Opcode37 continues to reject arrays.
 
 These views bind through existing opcodes39/48 and nest through opcode45. They
@@ -451,10 +457,10 @@ not free that producer's versions or their remaining budget charges.
 
 The two-slot, two-queue, sampled mip-view and persistent BC1/BC3 contracts are bounded
 Stage 2 increments.
-General descriptor heaps, texture arrays, writable/subresource-overlap views, broader
-formats and filter/address
-modes, arbitrary queue graphs, future waits and general concurrent copy/render scheduling
-remain open. Graphics Stage 3 supports
+General descriptor heaps, shader-indexed arrays, writable/subresource-overlap views,
+formats beyond the explicit matrix, additional filter/address modes, arbitrary queue
+graphs, future waits and general concurrent copy/render scheduling remain open.
+Array storage and selected-slice read-only views are available. Graphics Stage 3 supports
 [bounded countdowns and innermost early exits](interfaces.md#bounded-countdown-loops-in-original-graphics-stages).
 General loops, EXEC/VCC divergence and reconvergence remain open; the runtime uniform
 SCC0 contract below does not complete Stage 3.
@@ -659,9 +665,10 @@ selected-mip views. Cache identity includes storage format, snapshot identity,
 dimensions, mip count and view descriptor. Changed uploaded bytes create new native
 storage; pending submissions retain their prior snapshot and view.
 
-This is sampled-texture support. R8 render/depth attachments, GPU-produced R8
-textures and queued texture-copy endpoints remain unsupported. Existing resource
-budgets, checked transfers, alias and retirement rules continue to apply.
+This original R8 path provides sampled-texture support. The explicit typed-resource
+extension below adds R8 color attachments, GPU-produced versions and queued copies.
+R8 depth attachments remain invalid. Existing resource budgets, checked transfers,
+alias and retirement rules continue to apply.
 
 R8 sampling returns normalized red with absent green/blue components zero and alpha
 one, as specified by the [Metal Shading Language specification](https://developer.apple.com/metal/Metal-Shading-Language-Specification.pdf)
@@ -717,3 +724,48 @@ inputs and output layouts retain exact extent, mip count and layer count through
 submission and atomic completion. Hazards remain whole-backing: copying between
 two subresources of the same resource is rejected. This feature does not add
 independent subresource concurrency or compressed/depth transfers.
+
+## Explicit resource formats and roles
+
+The [format matrix](resource-formats.md) defines the bounded milestone; its validation
+status is recorded there. Opcode53 preserves the existing storage codes 0=RGBA8,
+1=BC1, 2=BC3 and 3=R8, and adds 4=RG8, 5=BGRA8, 6=RGBA16Float, 7=R32Float,
+8=R32Uint and 9=Depth32Float. Array layers zero means ordinary 2D; 1–256 means an
+explicit array, including a distinct one-layer array. Depth uses the real depth
+resource store. Attachments require ordinary single-mip surfaces.
+
+Opcode54 uses opcode50's explicit mip/slice and pitched-buffer location encoding,
+but derives block alignment and row size from the texture format. Texture pairs must
+match storage format exactly. Buffer transfers preserve packed storage bytes, not
+converted colors. BC origins are block aligned; partial blocks must end at the
+selected mip edge. Source and prior destination versions are both dependencies.
+Legacy opcode50 remains RGBA8-only.
+
+View codes retain 0–6 and add 7=RG8, 8=BGRA8, 9=BGRA8 sRGB, 10=RGBA16Float,
+11=R32Float, 12=R32Uint and 13=Depth32Float. Root, child and selected-array-slice
+views share these codes. Views preserve the storage family; only RGBA8, BGRA8,
+BC1 and BC3 support optional sRGB interpretation. They remain read-only.
+
+Opcode55's type word uses two bits for texture slot0 (bits0–1) and slot1 (bits2–3):
+0=float, 1=unsigned integer, 2=raw depth; 3 rejects. Bits8–15 select unsigned integer
+exports for color slots0–7; zero selects float. All other bits must be zero.
+Nondefault types on unused shader inputs/exports reject. Bindings and attachment
+formats must match the compiled types at every draw. Unsigned samples preserve
+bits through moves and control-flow joins; implicit floating arithmetic, coordinates
+or exports using those bits reject. All supported samplers use nearest filtering.
+
+Opcode56 reads 1–8 records, each eight little-endian u64 words (64 bytes):
+resource handle, load mode (0=clear, 1=Load), blend-enabled boolean, clear kind,
+and four clear components. Kind0 stores finite f64 bit patterns; kind1 stores u32
+integers with zero high32 bits. The resource supplies the format. Integer targets
+require kind1 and disabled blending; float targets require kind0. Clear fields are
+validated even for Load. A float slot may blend while an integer MRT slot remains
+unblended. Host and produced Load preserve exact format, extent and bytes.
+
+Sampling and color roles require explicit backend capability registration, separate
+from transfer capabilities. Installing an older backend revokes the role masks.
+Typed completion validates each output's exact format, extent, mip/array identity
+and byte count before publishing any resource.
+Only RGBA8 in slot0 updates the RGBA presentation image; other packed outputs remain
+available through resource readback and execution results. This does not perform
+implicit float, integer, channel-order or color-space conversion.

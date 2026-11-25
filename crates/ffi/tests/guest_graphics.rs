@@ -5706,3 +5706,713 @@ fn original_guest_array_views_pending_copy_sample_and_retirement() {
         check_original_guest_backend(guest, true, true, &[(out, expected.clone())], 1, &expected);
     }
 }
+
+// (guest format code, storage unit bytes, full two-layer bytes, source offset,
+// destination offset, literal selected texel/block). No layout helper oracle.
+fn guest_typed_copy_cases() -> Vec<(u64, usize, usize, usize, usize, Vec<u8>)> {
+    vec![
+        (0, 4, 144, 64, 140, vec![17, 53, 127, 193]),
+        (1, 8, 64, 16, 48, vec![0, 248, 224, 7, 228, 27, 177, 78]),
+        (
+            2,
+            16,
+            128,
+            32,
+            96,
+            vec![
+                231, 17, 136, 198, 250, 136, 198, 250, 31, 0, 0, 248, 228, 27, 177, 78,
+            ],
+        ),
+        (3, 1, 36, 16, 35, vec![127]),
+        (4, 2, 72, 32, 70, vec![17, 193]),
+        (5, 4, 144, 64, 140, vec![17, 53, 127, 193]),
+        (6, 8, 288, 128, 280, vec![0, 188, 0, 64, 0, 128, 53, 126]),
+        (7, 4, 144, 64, 140, vec![69, 35, 193, 127]),
+        (8, 4, 144, 64, 140, vec![1, 0, 0, 1]),
+        (9, 4, 144, 64, 140, vec![69, 35, 193, 127]),
+    ]
+}
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_typed_transfers_texture_to_texture() {
+    guest_typed_copy_pair(0);
+}
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_typed_transfers_buffer_to_texture() {
+    guest_typed_copy_pair(1);
+}
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_typed_transfers_texture_to_buffer() {
+    guest_typed_copy_pair(2);
+}
+fn guest_typed_copy_pair(direction: u8) {
+    for (format, unit, size, source_offset, destination_offset, pattern) in guest_typed_copy_cases()
+    {
+        for pending_source in [false, true] {
+            for producer_first in [false, true] {
+                let compressed = format == 1 || format == 2;
+                let mut source_bytes = vec![0x39; if direction == 1 { 2 * unit } else { size }];
+                let start = if direction == 1 { unit } else { source_offset };
+                source_bytes[start..start + unit].copy_from_slice(&pattern);
+                let prior = vec![0xa5; if direction == 2 { 2 * unit + 1 } else { size }];
+                let mut expected = prior.clone();
+                let patch = if direction == 2 {
+                    unit
+                } else {
+                    destination_offset
+                };
+                expected[patch..patch + unit].copy_from_slice(&pattern);
+                let mut guest = GuestScript::new();
+                let device = guest.handle(1, &[]);
+                let queues = [guest.handle(2, &[H(device)]), guest.handle(2, &[H(device)])];
+                let allocators = [guest.handle(3, &[H(device)]), guest.handle(3, &[H(device)])];
+                let lists = [
+                    guest.handle(4, &[H(device), H(allocators[0])]),
+                    guest.handle(4, &[H(device), H(allocators[1])]),
+                ];
+                let create = |g: &mut GuestScript, buffer: bool, len: usize| {
+                    if buffer {
+                        g.handle(5, &[H(device), I(len as u64), I(COPY_DEST)])
+                    } else {
+                        g.handle(
+                            53,
+                            &[H(device), I(5), I(3), I(3), I(2), I(format), I(COPY_DEST)],
+                        )
+                    }
+                };
+                let source = create(&mut guest, direction == 1, source_bytes.len());
+                let destination = create(&mut guest, direction == 2, prior.len());
+                let (seed_bytes, seed_buffer) = if pending_source {
+                    (&source_bytes, direction == 1)
+                } else {
+                    (&prior, direction == 2)
+                };
+                let seed = create(&mut guest, seed_buffer, seed_bytes.len());
+                let changed = if pending_source { source } else { destination };
+                let upload = guest.bytes(seed_bytes);
+                guest.ok(9, &[H(seed), I(0), I(upload), I(seed_bytes.len() as u64)]);
+                let mut poisoned = seed_bytes.clone();
+                // Producer changes all bytes for buffers, and a whole mip1 for textures.
+                // Destination poison is in mip0, outside the consumer's mip1/mip2 patch.
+                let seed_mip = if pending_source { 1 } else { 0 };
+                let seed_slice = if pending_source { 0 } else { 1 };
+                let (range_start, range_len) = if seed_buffer {
+                    (0, seed_bytes.len())
+                } else if pending_source {
+                    (
+                        if compressed {
+                            if format == 1 { 16 } else { 32 }
+                        } else {
+                            15 * unit
+                        },
+                        if compressed { unit } else { 2 * unit },
+                    )
+                } else {
+                    (size / 2, if compressed { 2 * unit } else { 15 * unit })
+                };
+                poisoned[range_start..range_start + range_len].fill(0xee);
+                let initial = guest.bytes(&poisoned);
+                guest.ok(9, &[H(changed), I(0), I(initial), I(poisoned.len() as u64)]);
+                let (host, bytes) = if pending_source {
+                    (destination, &prior)
+                } else {
+                    (source, &source_bytes)
+                };
+                let upload = guest.bytes(bytes);
+                guest.ok(9, &[H(host), I(0), I(upload), I(bytes.len() as u64)]);
+                guest.barrier(lists[0], seed, COPY_DEST, COPY_SOURCE);
+                if seed_buffer {
+                    guest.ok(42, &[H(lists[0]), H(changed), H(seed)]);
+                } else {
+                    let sub = (seed_slice << 32) | seed_mip;
+                    guest.ok(
+                        54,
+                        &[
+                            H(lists[0]),
+                            H(changed),
+                            I(0),
+                            I(sub),
+                            I(0),
+                            I(0),
+                            H(seed),
+                            I(0),
+                            I(sub),
+                            I(0),
+                            I(0),
+                            I(if pending_source { 2 } else { 5 }),
+                            I(if pending_source { 1 } else { 3 }),
+                        ],
+                    );
+                }
+                guest.barrier(
+                    lists[usize::from(!pending_source)],
+                    source,
+                    COPY_DEST,
+                    COPY_SOURCE,
+                );
+                guest.ok(12, &[H(lists[0])]);
+                guest.ok(
+                    54,
+                    &[
+                        H(lists[1]),
+                        H(destination),
+                        I(u64::from(direction == 2)),
+                        I(if direction == 2 {
+                            0
+                        } else {
+                            (1u64 << 32) | if compressed { 1 } else { 2 }
+                        }),
+                        I(if direction == 2 { unit as u64 } else { 0 }),
+                        I(if direction == 2 { (3 * unit) as u64 } else { 0 }),
+                        H(source),
+                        I(u64::from(direction == 1)),
+                        I(if direction == 1 { 0 } else { 1 }),
+                        I(if direction == 1 {
+                            unit as u64
+                        } else {
+                            u64::from(!compressed)
+                        }),
+                        I(if direction == 1 { (3 * unit) as u64 } else { 0 }),
+                        I(if compressed { 2 } else { 1 }),
+                        I(1),
+                    ],
+                );
+                guest.barrier(lists[1], destination, COPY_DEST, COPY_SOURCE);
+                guest.ok(12, &[H(lists[1])]);
+                let a = guest.handle(35, &[H(queues[0]), H(lists[0]), I(0), I(0)]);
+                let point = guest.call(36, &[H(a)], 0, Some(1));
+                let waits = guest.bytes(&[0; 16]);
+                guest.copy_result(queues[0], waits);
+                guest.copy_result(point, waits + 8);
+                let b = guest.handle(35, &[H(queues[1]), H(lists[1]), I(waits), I(1)]);
+                for i in 0..2 {
+                    guest.ok(11, &[H(lists[i]), H(allocators[i])]);
+                }
+                guest.ok(26, &[H(seed)]);
+                guest.ok(26, &[H(source)]);
+                for receipt in if producer_first { [a, b] } else { [b, a] } {
+                    guest.call(32, &[H(receipt)], 0, Some(1));
+                }
+                guest.ok(33, &[H(a)]);
+                guest.ok(33, &[H(b)]);
+                let output = guest.bytes(&vec![0xa5; expected.len() + 16]);
+                guest.ok(
+                    10,
+                    &[
+                        H(destination),
+                        I(0),
+                        I(output + 8),
+                        I(expected.len() as u64),
+                    ],
+                );
+                check_original_guest_backend(guest, true, true, &[(output, expected)], 0, &[]);
+            }
+        }
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_typed_roles_sample_matrix_three_adapters() {
+    for (asynchronous, queued) in [(false, false), (true, false), (true, true)] {
+        for array in [false, true] {
+            let mut guest = GuestScript::new();
+            let device = guest.handle(1, &[]);
+            let queue = guest.handle(2, &[H(device)]);
+            let producer_queue = if queued {
+                Some(guest.handle(2, &[H(device)]))
+            } else {
+                None
+            };
+            let allocator = guest.handle(3, &[H(device)]);
+            let list = guest.handle(4, &[H(device), H(allocator)]);
+            let vb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+            let cb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+            let positions = guest.bytes(&floats(&[
+                [-1., -1., 0.5, 1.],
+                [3., -1., 0.5, 1.],
+                [-1., 3., 0.5, 1.],
+            ]));
+            let uv = guest.bytes(&floats(&[[0.5, 0.5, 0., 1.]; 3]));
+            guest.ok(9, &[H(vb), I(0), I(positions), I(48)]);
+            guest.ok(9, &[H(cb), I(0), I(uv), I(48)]);
+            let vs = include_bytes!("../../../fixtures/rdna2/x9-varying-vs.bin");
+            let ps = include_bytes!("../../../fixtures/rdna2/x9-view-sample-ps.bin");
+            let va = guest.bytes(vs);
+            let pa = guest.bytes(ps);
+            let mut readbacks = Vec::new();
+            for (index, (format, view_code, width, bytes, types, expected)) in [
+                (0, 0, 1, vec![17, 53, 127, 193], 0, vec![17, 53, 127, 193]),
+                (1, 2, 4, vec![255, 255, 0, 0, 0, 0, 0, 0], 0, vec![255; 4]),
+                (
+                    2,
+                    4,
+                    4,
+                    vec![17, 255, 0, 0, 0, 0, 0, 0, 255, 255, 0, 0, 0, 0, 0, 0],
+                    0,
+                    vec![255, 255, 255, 17],
+                ),
+                (3, 6, 1, vec![128], 0, vec![128, 0, 0, 255]),
+                (4, 7, 1, vec![17, 193], 0, vec![17, 193, 0, 255]),
+                (5, 8, 1, vec![17, 53, 127, 193], 0, vec![127, 53, 17, 193]),
+                (
+                    6,
+                    10,
+                    1,
+                    vec![0, 52, 0, 56, 0, 58, 0, 60],
+                    0,
+                    vec![64, 128, 191, 255],
+                ),
+                (7, 11, 1, vec![0, 0, 128, 62], 0, vec![64, 0, 0, 255]),
+                (
+                    8,
+                    12,
+                    1,
+                    vec![69, 35, 193, 127],
+                    257,
+                    vec![69, 35, 193, 127],
+                ),
+                (9, 13, 1, vec![0, 0, 64, 63], 2, vec![191, 0, 0, 255]),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                eprintln!(
+                    "typed sample adapter async={asynchronous} queued={queued} array={array} format={format} first_call={}",
+                    guest.calls.len()
+                );
+                let root_width = if array { width.max(2) } else { width };
+                let mut packed = if array {
+                    vec![0; bytes.len() * if width == 4 { 4 } else { 10 }]
+                } else {
+                    bytes.clone()
+                };
+                if array {
+                    let offset = packed.len() - bytes.len();
+                    packed[offset..].copy_from_slice(&bytes);
+                }
+                let texture = guest.handle(
+                    53,
+                    &[
+                        H(device),
+                        I(root_width),
+                        I(root_width),
+                        I(if array { 2 } else { 1 }),
+                        I(if array { 2 } else { 0 }),
+                        I(format),
+                        I(COPY_DEST),
+                    ],
+                );
+                let data = guest.bytes(&packed);
+                let producer = if queued {
+                    let source = guest.handle(
+                        53,
+                        &[
+                            H(device),
+                            I(root_width),
+                            I(root_width),
+                            I(if array { 2 } else { 1 }),
+                            I(if array { 2 } else { 0 }),
+                            I(format),
+                            I(COPY_DEST),
+                        ],
+                    );
+                    guest.ok(9, &[H(source), I(0), I(data), I(packed.len() as u64)]);
+                    let poison = guest.bytes(&vec![0; packed.len()]);
+                    guest.ok(9, &[H(texture), I(0), I(poison), I(packed.len() as u64)]);
+                    let pq = producer_queue.unwrap();
+                    let alloc = guest.handle(3, &[H(device)]);
+                    let pl = guest.handle(4, &[H(device), H(alloc)]);
+                    guest.barrier(pl, source, COPY_DEST, COPY_SOURCE);
+                    let sub = if array { (1u64 << 32) | 1 } else { 0 };
+                    let span = if array { root_width / 2 } else { root_width };
+                    guest.ok(
+                        54,
+                        &[
+                            H(pl),
+                            H(texture),
+                            I(0),
+                            I(sub),
+                            I(0),
+                            I(0),
+                            H(source),
+                            I(0),
+                            I(sub),
+                            I(0),
+                            I(0),
+                            I(span),
+                            I(span),
+                        ],
+                    );
+                    guest.barrier(pl, texture, COPY_DEST, PIXEL_RESOURCE);
+                    guest.ok(12, &[H(pl)]);
+                    let receipt = guest.handle(35, &[H(pq), H(pl), I(0), I(0)]);
+                    let point = guest.call(36, &[H(receipt)], 0, Some(index as u64 + 1));
+                    let wait = guest.bytes(&[0; 16]);
+                    guest.copy_result(pq, wait);
+                    guest.copy_result(point, wait + 8);
+                    guest.ok(11, &[H(pl), H(alloc)]);
+                    guest.ok(26, &[H(source)]);
+                    Some((receipt, wait))
+                } else {
+                    guest.ok(9, &[H(texture), I(0), I(data), I(packed.len() as u64)]);
+                    None
+                };
+                let view = if array {
+                    guest.handle(52, &[H(device), H(texture), I(1), I(1), I(1), I(view_code)])
+                } else {
+                    guest.handle(37, &[H(device), H(texture), I(0), I(1), I(view_code)])
+                };
+                let pipeline = guest.handle(
+                    55,
+                    &[
+                        H(device),
+                        I(va),
+                        I(vs.len() as u64),
+                        I(pa),
+                        I(ps.len() as u64),
+                        I(types),
+                    ],
+                );
+                let target = guest.handle(
+                    53,
+                    &[
+                        H(device),
+                        I(1),
+                        I(1),
+                        I(1),
+                        I(0),
+                        I(if types == 257 { 8 } else { 0 }),
+                        I(RENDER_TARGET),
+                    ],
+                );
+                let mut record = [0u64; 8];
+                record[3] = u64::from(types == 257);
+                let records = guest.bytes(
+                    &record
+                        .into_iter()
+                        .flat_map(u64::to_le_bytes)
+                        .collect::<Vec<_>>(),
+                );
+                guest.copy_result(target, records);
+                guest.ok(56, &[H(list), I(1), I(records)]);
+                if index == 0 {
+                    guest.barrier(list, vb, COPY_DEST, VERTEX_BUFFER);
+                    guest.barrier(list, cb, COPY_DEST, VERTEX_BUFFER);
+                }
+                if !queued {
+                    guest.barrier(list, texture, COPY_DEST, PIXEL_RESOURCE);
+                }
+                guest.ok(14, &[H(list), H(pipeline)]);
+                guest.ok(17, &[H(list), I(1), I(1)]);
+                guest.ok(18, &[H(list), H(vb), I(0), I(16)]);
+                guest.ok(19, &[H(list), H(cb), I(0), I(16)]);
+                let table = sampled_table(&mut guest, [Some(view), None], [Some(0), None], false);
+                guest.ok(39, &[H(list), I(table)]);
+                guest.ok(23, &[H(list), I(3), I(1), I(0), I(0)]);
+                guest.barrier(list, target, RENDER_TARGET, COPY_SOURCE);
+                if let Some((producer, wait)) = producer {
+                    guest.ok(12, &[H(list)]);
+                    let consumer = guest.handle(35, &[H(queue), H(list), I(wait), I(1)]);
+                    guest.call(32, &[H(consumer)], 0, Some(1));
+                    guest.call(32, &[H(producer)], 0, Some(1));
+                    guest.ok(33, &[H(consumer)]);
+                    guest.ok(33, &[H(producer)]);
+                } else {
+                    finish_guest_submission(&mut guest, queue, list, asynchronous, 1);
+                }
+                guest.ok(11, &[H(list), H(allocator)]);
+                guest.ok(38, &[H(view)]);
+                guest.ok(26, &[H(texture)]);
+                guest.ok(27, &[H(pipeline)]);
+                let output = guest.bytes(&[0xa5; 20]);
+                guest.ok(10, &[H(target), I(0), I(output + 8), I(4)]);
+                readbacks.push((output, expected));
+            }
+            eprintln!("executing typed sample async={asynchronous} queued={queued} array={array}");
+            check_original_guest_backend(
+                guest,
+                asynchronous,
+                queued,
+                &readbacks,
+                9,
+                &[191, 0, 0, 255],
+            );
+        }
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_typed_roles_seven_attachments_depth_write_reject() {
+    for (asynchronous, queued) in [(false, false), (true, false), (true, true)] {
+        let mut g = GuestScript::new();
+        let d = g.handle(1, &[]);
+        let q = g.handle(2, &[H(d)]);
+        let a = g.handle(3, &[H(d)]);
+        let l = g.handle(4, &[H(d), H(a)]);
+        let vb = g.handle(5, &[H(d), I(48), I(COPY_DEST)]);
+        let cb = g.handle(5, &[H(d), I(96), I(COPY_DEST)]);
+        let pos = g.bytes(&floats(&[
+            [-1., -1., 0.5, 1.],
+            [3., -1., 0.5, 1.],
+            [-1., 3., 0.5, 1.],
+        ]));
+        let mut colors = vec![[0.25, 0.5, 0.75, 1.]; 3];
+        colors.extend([[1., 0., 0., 1.]; 3]);
+        let ca = g.bytes(&floats(&colors));
+        g.ok(9, &[H(vb), I(0), I(pos), I(48)]);
+        g.ok(9, &[H(cb), I(0), I(ca), I(96)]);
+        let vs = include_bytes!("../../../fixtures/rdna2/x9-varying-vs.bin");
+        let ps = include_bytes!("../../../fixtures/rdna2/x9-varying-ps.bin");
+        let va = g.bytes(vs);
+        let pa = g.bytes(ps);
+        let mut reads = Vec::new();
+        for (i, (format, expected)) in [
+            (3, vec![64]),
+            (4, vec![64, 128]),
+            (0, vec![64, 128, 191, 255]),
+            (5, vec![191, 128, 64, 255]),
+            (6, vec![0, 52, 0, 56, 0, 58, 0, 60]),
+            (7, vec![0, 0, 128, 62]),
+            (8, vec![0, 0, 128, 62]),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let t = g.handle(
+                53,
+                &[H(d), I(1), I(1), I(1), I(0), I(format), I(RENDER_TARGET)],
+            );
+            let z = g.handle(7, &[H(d), I(1), I(1)]);
+            let pipeline = g.handle(
+                55,
+                &[
+                    H(d),
+                    I(va),
+                    I(vs.len() as u64),
+                    I(pa),
+                    I(ps.len() as u64),
+                    I(if format == 8 { 256 } else { 0 }),
+                ],
+            );
+            let mut words = [0u64; 8];
+            words[3] = u64::from(format == 8);
+            let records = g.bytes(
+                &words
+                    .into_iter()
+                    .flat_map(u64::to_le_bytes)
+                    .collect::<Vec<_>>(),
+            );
+            g.copy_result(t, records);
+            g.ok(56, &[H(l), I(1), I(records)]);
+            g.ok(16, &[H(l), H(z), I(0), I(u64::from(1f32.to_bits()))]);
+            if i == 0 {
+                g.barrier(l, vb, COPY_DEST, VERTEX_BUFFER);
+                g.barrier(l, cb, COPY_DEST, VERTEX_BUFFER);
+            }
+            g.ok(14, &[H(l), H(pipeline)]);
+            g.ok(17, &[H(l), I(1), I(1)]);
+            g.ok(18, &[H(l), H(vb), I(0), I(16)]);
+            g.ok(
+                22,
+                &[
+                    H(l),
+                    I(2),
+                    I(1),
+                    I(0),
+                    I(15),
+                    I(0),
+                    I(0),
+                    I(0),
+                    I(0),
+                    I(0),
+                    I(0),
+                    I(0),
+                ],
+            );
+            for offset in [0, 48] {
+                g.ok(19, &[H(l), H(cb), I(offset), I(16)]);
+                g.ok(23, &[H(l), I(3), I(1), I(0), I(0)]);
+            }
+            g.barrier(l, t, RENDER_TARGET, COPY_SOURCE);
+            finish_guest_submission(&mut g, q, l, asynchronous, 2);
+            g.ok(11, &[H(l), H(a)]);
+            g.ok(27, &[H(pipeline)]);
+            g.ok(26, &[H(z)]);
+            let out = g.bytes(&vec![0xa5; expected.len() + 16]);
+            g.ok(10, &[H(t), I(0), I(out + 8), I(expected.len() as u64)]);
+            reads.push((out, expected));
+        }
+        check_original_guest_backend(g, asynchronous, queued, &reads, 1, &[64, 128, 191, 255]);
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_typed_roles_pending_load_and_rendered_depth_sample() {
+    let mut g = GuestScript::new();
+    let d = g.handle(1, &[]);
+    let queues = [g.handle(2, &[H(d)]), g.handle(2, &[H(d)])];
+    let alloc = [g.handle(3, &[H(d)]), g.handle(3, &[H(d)])];
+    let lists = [
+        g.handle(4, &[H(d), H(alloc[0])]),
+        g.handle(4, &[H(d), H(alloc[1])]),
+    ];
+    let color = g.handle(53, &[H(d), I(2), I(1), I(1), I(0), I(7), I(RENDER_TARGET)]);
+    let rgba = g.handle(6, &[H(d), I(2), I(1), I(1), I(RENDER_TARGET)]);
+    let depth = g.handle(7, &[H(d), I(2), I(1)]);
+    let view = g.handle(37, &[H(d), H(depth), I(0), I(1), I(13)]);
+    let vb = g.handle(5, &[H(d), I(48), I(COPY_DEST)]);
+    let cb = g.handle(5, &[H(d), I(96), I(COPY_DEST)]);
+    let positions = g.bytes(&floats(&[
+        [-1., -1., 0.25, 1.],
+        [3., -1., 0.25, 1.],
+        [-1., 3., 0.25, 1.],
+    ]));
+    let mut values = vec![[0.5, 0., 0., 1.]; 3];
+    values.extend([[0.75, 0.5, 0., 1.]; 3]);
+    let values = g.bytes(&floats(&values));
+    g.ok(9, &[H(vb), I(0), I(positions), I(48)]);
+    g.ok(9, &[H(cb), I(0), I(values), I(96)]);
+    let vs = include_bytes!("../../../fixtures/rdna2/x9-varying-vs.bin");
+    let ps = include_bytes!("../../../fixtures/rdna2/x9-varying-ps.bin");
+    let sample = include_bytes!("../../../fixtures/rdna2/x9-scene-sampled-mrt-ps.bin");
+    let va = g.bytes(vs);
+    let pa = g.bytes(ps);
+    let sa = g.bytes(sample);
+    let producer_pipeline = g.handle(
+        55,
+        &[
+            H(d),
+            I(va),
+            I(vs.len() as u64),
+            I(pa),
+            I(ps.len() as u64),
+            I(0),
+        ],
+    );
+    let consumer_pipeline = g.handle(
+        55,
+        &[
+            H(d),
+            I(va),
+            I(vs.len() as u64),
+            I(sa),
+            I(sample.len() as u64),
+            I(2),
+        ],
+    );
+    let clear = [0u64, 0, 0, 0, 0.125f64.to_bits(), 0, 0, 0];
+    let records = g.bytes(
+        &clear
+            .into_iter()
+            .flat_map(u64::to_le_bytes)
+            .collect::<Vec<_>>(),
+    );
+    g.copy_result(color, records);
+    g.ok(56, &[H(lists[0]), I(1), I(records)]);
+    g.ok(
+        16,
+        &[H(lists[0]), H(depth), I(0), I(u64::from(1f32.to_bits()))],
+    );
+    g.barrier(lists[0], vb, COPY_DEST, VERTEX_BUFFER);
+    g.barrier(lists[0], cb, COPY_DEST, VERTEX_BUFFER);
+    g.ok(14, &[H(lists[0]), H(producer_pipeline)]);
+    g.ok(17, &[H(lists[0]), I(2), I(1)]);
+    g.ok(18, &[H(lists[0]), H(vb), I(0), I(16)]);
+    g.ok(19, &[H(lists[0]), H(cb), I(0), I(16)]);
+    g.ok(
+        22,
+        &[
+            H(lists[0]),
+            I(2),
+            I(1),
+            I(0),
+            I(15),
+            I(0),
+            I(0),
+            I(1),
+            I(1),
+            I(0),
+            I(1),
+            I(1),
+        ],
+    );
+    g.ok(23, &[H(lists[0]), I(3), I(1), I(0), I(0)]);
+    g.barrier(lists[0], depth, 0x10, PIXEL_RESOURCE);
+    g.ok(12, &[H(lists[0])]);
+    let records = g.bytes(&[0; 128]);
+    g.copy_result(rgba, records);
+    g.copy_result(color, records + 64);
+    // Second attachment loads the producer version. MRT1 is BRGA, whose red
+    // channel is the depth sample's missing blue channel, exactly zero.
+    let load = g.bytes(&1u64.to_le_bytes());
+    g.copy_result(load, records + 72);
+    g.ok(56, &[H(lists[1]), I(2), I(records)]);
+    g.ok(14, &[H(lists[1]), H(consumer_pipeline)]);
+    g.ok(17, &[H(lists[1]), I(2), I(1)]);
+    g.ok(18, &[H(lists[1]), H(vb), I(0), I(16)]);
+    g.ok(19, &[H(lists[1]), H(cb), I(48), I(16)]);
+    let table = sampled_table(&mut g, [Some(view), None], [Some(0), None], false);
+    g.ok(39, &[H(lists[1]), I(table)]);
+    g.ok(
+        22,
+        &[
+            H(lists[1]),
+            I(0),
+            I(0),
+            I(0),
+            I(15),
+            I(0),
+            I(0),
+            I(1),
+            I(1),
+            I(0),
+            I(1),
+            I(1),
+        ],
+    );
+    g.ok(23, &[H(lists[1]), I(3), I(1), I(0), I(0)]);
+    g.barrier(lists[1], color, RENDER_TARGET, COPY_SOURCE);
+    g.barrier(lists[1], rgba, RENDER_TARGET, COPY_SOURCE);
+    g.ok(12, &[H(lists[1])]);
+    let a = g.handle(35, &[H(queues[0]), H(lists[0]), I(0), I(0)]);
+    let point = g.call(36, &[H(a)], 0, Some(1));
+    let wait = g.bytes(&[0; 16]);
+    g.copy_result(queues[0], wait);
+    g.copy_result(point, wait + 8);
+    let b = g.handle(35, &[H(queues[1]), H(lists[1]), I(wait), I(1)]);
+    for i in 0..2 {
+        g.ok(11, &[H(lists[i]), H(alloc[i])]);
+    }
+    g.ok(38, &[H(view)]);
+    for r in [depth, vb, cb] {
+        g.ok(26, &[H(r)]);
+    }
+    for p in [producer_pipeline, consumer_pipeline] {
+        g.ok(27, &[H(p)]);
+    }
+    g.call(32, &[H(b)], 0, Some(1));
+    g.call(32, &[H(a)], 0, Some(1));
+    g.ok(33, &[H(b)]);
+    g.ok(33, &[H(a)]);
+    let out_color = g.bytes(&[0xa5; 24]);
+    let out_rgba = g.bytes(&[0xa5; 24]);
+    g.ok(10, &[H(color), I(0), I(out_color + 8), I(8)]);
+    g.ok(10, &[H(rgba), I(0), I(out_rgba + 8), I(8)]);
+    let pixels = vec![0, 0, 0, 0, 64, 0, 0, 255];
+    check_original_guest_backend(
+        g,
+        true,
+        true,
+        &[
+            (out_color, vec![0, 0, 0, 62, 0, 0, 0, 0]),
+            (out_rgba, pixels.clone()),
+        ],
+        1,
+        &pixels,
+    );
+}

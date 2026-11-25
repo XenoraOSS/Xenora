@@ -25,7 +25,7 @@ use xenora_metal::{
     MetalRgba8Texture, MetalRgba8TextureDesc, MetalSampler, MetalTextureView, NativeCompute,
     R8MipUpload, R8TextureDesc, Rgba8ArrayMipUpload, Rgba8ArrayTextureDesc, Rgba8MipLevel,
     SampledBinding, TextureViewDesc, TextureViewFormat, TriangleDraw, TriangleShader,
-    TriangleState, TriangleTargetsPass,
+    TriangleState,
 };
 use xenora_shader::{PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT};
 use xenora_texture::{PackedTextureArrayLayout, PackedTextureLayout, TextureFormat};
@@ -54,6 +54,7 @@ struct UploadedView {
 
 #[derive(Clone)]
 enum UploadedStorage {
+    Typed(xenora_metal::MetalTypedTexture),
     Array(MetalRgba8ArrayTexture),
     Rgba8(MetalRgba8Texture),
     Bc(MetalBcTexture),
@@ -62,6 +63,7 @@ enum UploadedStorage {
 impl UploadedStorage {
     fn view(&self, desc: TextureViewDesc) -> Result<MetalTextureView, GraphicsError> {
         match self {
+            Self::Typed(t) => t.view(desc).map_err(metal_error),
             Self::Array(_) => Err(GraphicsError::InvalidDescriptor),
             Self::Rgba8(t) => t.view(desc).map_err(metal_error),
             Self::Bc(t) => t.view(desc).map_err(metal_error),
@@ -71,7 +73,9 @@ impl UploadedStorage {
     fn rgba8(&self) -> Result<MetalRgba8Texture, GraphicsError> {
         match self {
             Self::Rgba8(t) => Ok(t.clone()),
-            Self::Array(_) | Self::Bc(_) | Self::R8(_) => Err(GraphicsError::InvalidDescriptor),
+            Self::Typed(_) | Self::Array(_) | Self::Bc(_) | Self::R8(_) => {
+                Err(GraphicsError::InvalidDescriptor)
+            }
         }
     }
 }
@@ -102,6 +106,12 @@ fn sampled_view_desc(
                 TextureFormat::Bc1RgbaUnorm => GraphicsTextureViewFormat::Bc1RgbaUnorm,
                 TextureFormat::Bc3RgbaUnorm => GraphicsTextureViewFormat::Bc3RgbaUnorm,
                 TextureFormat::Rgba8Unorm => unreachable!(),
+                TextureFormat::Rg8Unorm => GraphicsTextureViewFormat::Rg8Unorm,
+                TextureFormat::Bgra8Unorm => GraphicsTextureViewFormat::Bgra8Unorm,
+                TextureFormat::Rgba16Float => GraphicsTextureViewFormat::Rgba16Float,
+                TextureFormat::R32Float => GraphicsTextureViewFormat::R32Float,
+                TextureFormat::R32Uint => GraphicsTextureViewFormat::R32Uint,
+                TextureFormat::Depth32Float => GraphicsTextureViewFormat::Depth32Float,
             },
         }),
     })
@@ -112,6 +122,13 @@ fn native_view_desc(desc: GraphicsTextureViewDesc) -> TextureViewDesc {
         base_mip: desc.base_mip,
         mip_count: desc.mip_count,
         format: match desc.format {
+            GraphicsTextureViewFormat::Rg8Unorm => TextureViewFormat::Rg8Unorm,
+            GraphicsTextureViewFormat::Bgra8Unorm => TextureViewFormat::Bgra8Unorm,
+            GraphicsTextureViewFormat::Bgra8UnormSrgb => TextureViewFormat::Bgra8UnormSrgb,
+            GraphicsTextureViewFormat::Rgba16Float => TextureViewFormat::Rgba16Float,
+            GraphicsTextureViewFormat::R32Float => TextureViewFormat::R32Float,
+            GraphicsTextureViewFormat::R32Uint => TextureViewFormat::R32Uint,
+            GraphicsTextureViewFormat::Depth32Float => TextureViewFormat::Depth32Float,
             GraphicsTextureViewFormat::R8Unorm => TextureViewFormat::R8Unorm,
             GraphicsTextureViewFormat::Rgba8Unorm => TextureViewFormat::Rgba8Unorm,
             GraphicsTextureViewFormat::Rgba8UnormSrgb => TextureViewFormat::Rgba8UnormSrgb,
@@ -198,12 +215,12 @@ fn upload_array_view(
     }) {
         return Ok(cached.view.clone());
     }
-    let UploadedStorage::Array(owner) = upload_texture(gpu, snapshot, textures)? else {
-        return Err(GraphicsError::InvalidDescriptor);
-    };
-    let view = owner
-        .array_slice_view(native_array_view_desc(desc))
-        .map_err(metal_error)?;
+    let view = match upload_texture(gpu, snapshot, textures)? {
+        UploadedStorage::Array(owner) => owner.array_slice_view(native_array_view_desc(desc)),
+        UploadedStorage::Typed(owner) => owner.array_slice_view(native_array_view_desc(desc)),
+        _ => return Err(GraphicsError::InvalidDescriptor),
+    }
+    .map_err(metal_error)?;
     views.push(UploadedView {
         pixels: snapshot.pixels.clone(),
         backing,
@@ -262,9 +279,6 @@ fn upload_texture(
             .map_err(|_| GraphicsError::InvalidDescriptor)
         })
         .transpose()?;
-    if sampled.array_layers.is_some() && sampled.format != TextureFormat::Rgba8Unorm {
-        return Err(GraphicsError::InvalidDescriptor);
-    }
     if sampled.pixels.len()
         != array_layout
             .as_ref()
@@ -282,7 +296,29 @@ fn upload_texture(
     }) {
         return Ok(uploaded.texture.clone());
     }
-    let texture = if let Some(array) = array_layout {
+    let typed = !matches!(
+        sampled.format,
+        TextureFormat::Rgba8Unorm
+            | TextureFormat::R8Unorm
+            | TextureFormat::Bc1RgbaUnorm
+            | TextureFormat::Bc3RgbaUnorm
+    ) || (sampled.array_layers.is_some()
+        && sampled.format != TextureFormat::Rgba8Unorm);
+    let texture = if typed {
+        UploadedStorage::Typed(
+            xenora_metal::MetalTypedTexture::upload(
+                gpu,
+                xenora_metal::TypedTextureDesc {
+                    format: sampled.format,
+                    extent: [sampled.width, sampled.height],
+                    mip_levels: sampled.mip_levels,
+                    array_layers: sampled.array_layers,
+                },
+                &sampled.pixels,
+            )
+            .map_err(metal_error)?,
+        )
+    } else if let Some(array) = array_layout {
         let mut uploads = Vec::new();
         for slice in 0..array.layers() {
             for level in 0..sampled.mip_levels {
@@ -379,6 +415,7 @@ fn upload_texture(
                     .map_err(metal_error)?,
                 )
             }
+            _ => return Err(GraphicsError::InvalidDescriptor),
         }
     };
     textures.push(UploadedTexture {
@@ -399,6 +436,7 @@ fn upload_texture(
 pub fn install_pipeline_backend(context: &mut GraphicsContext) -> Result<(), GraphicsError> {
     let gpu = NativeCompute::new().map_err(metal_error)?;
     let capabilities = texture_capabilities(&gpu);
+    let roles = resource_role_capabilities(&gpu);
     context.set_metal_array_view_attachment_backend(
         capabilities,
         move |draws, extent, attachments, transient_clear, binding| {
@@ -413,6 +451,7 @@ pub fn install_pipeline_backend(context: &mut GraphicsContext) -> Result<(), Gra
             )
         },
     );
+    context.enable_resource_roles(roles)?;
     Ok(())
 }
 
@@ -444,6 +483,19 @@ fn render_pipeline_request(
                 .pipeline
                 .as_ref()
                 .ok_or(GraphicsError::InvalidDescriptor)?;
+            let color_formats: Vec<_> = attachments
+                .iter()
+                .map(|c| c.typed.map_or(TextureFormat::Rgba8Unorm, |t| t.format))
+                .collect();
+            validate_pipeline_formats(
+                pipeline,
+                &color_formats,
+                std::array::from_fn(|slot| {
+                    draw.sampled_bindings.textures[slot]
+                        .as_ref()
+                        .map(|t| t.format)
+                }),
+            )?;
             if pipeline.color_targets != clears.len()
                 || draw.colors.len() != draw.vertices.len()
                 || pipeline.sampled_pairs & !15 != 0
@@ -573,12 +625,13 @@ fn render_pipeline_request(
                 .create_depth_target([extent.0, extent.1])
                 .map_err(metal_error)?,
             GraphicsDepthLoad::Load => {
-                let snapshot = binding
-                    .previous
-                    .as_ref()
-                    .and_then(|previous| previous.downcast_ref::<DepthSnapshot>())
-                    .ok_or(GraphicsError::InvalidDescriptor)?;
-                gpu.restore_depth(snapshot).map_err(metal_error)?
+                let snapshot = native_depth_snapshot(
+                    binding
+                        .previous
+                        .as_ref()
+                        .ok_or(GraphicsError::InvalidDescriptor)?,
+                )?;
+                gpu.restore_depth(&snapshot).map_err(metal_error)?
             }
         }),
         None => None,
@@ -587,11 +640,15 @@ fn render_pipeline_request(
         GraphicsDepthLoad::Clear(value) => DepthLoad::Clear(value),
         GraphicsDepthLoad::Load => DepthLoad::Load,
     });
-    let pass = TriangleTargetsPass {
+    let typed_colors: Vec<_> = attachments
+        .iter()
+        .map(|c| native_color_attachment(c.typed, c.clear))
+        .collect();
+    let pass = xenora_metal::TypedTriangleTargetsPass {
         draws: &native_draws,
         states: &states,
         extent: [extent.0, extent.1],
-        clears: &clears,
+        colors: &typed_colors,
         clear_depth: (binding.is_none() && draws.iter().any(|d| d.state.depth_compare.is_some()))
             .then_some(transient_clear),
     };
@@ -606,7 +663,7 @@ fn render_pipeline_request(
         })
         .collect();
     let pending = gpu
-        .submit_view_binding_triangle_targets_with_uniforms_rgba8(
+        .submit_typed_triangle_targets(
             &shaders,
             &pass,
             &sampled,
@@ -620,16 +677,32 @@ fn render_pipeline_request(
             .send(Ok(()))
             .map_err(|_| GraphicsError::BackendError("submission caller disconnected".into()))?;
     }
+    let color_layouts = Some(
+        pending
+            .color_layouts()
+            .into_iter()
+            .map(|desc| xenora_loader::graphics::GraphicsTypedTextureDesc {
+                format: desc.format,
+                extent: (desc.extent[0], desc.extent[1]),
+                mip_levels: desc.mip_levels,
+                array_layers: desc.array_layers,
+            })
+            .collect(),
+    );
     let colors = pending.wait().map_err(metal_error)?;
     let depth = retained
         .as_ref()
         .map(|depth| {
             gpu.snapshot_depth(depth)
-                .map(|snapshot| Arc::new(snapshot) as GraphicsDepthSnapshot)
+                .map(|snapshot| packed_depth_snapshot(snapshot, extent))
                 .map_err(metal_error)
         })
         .transpose()?;
-    Ok(GraphicsPassOutput { colors, depth })
+    Ok(GraphicsPassOutput {
+        colors,
+        color_layouts,
+        depth,
+    })
 }
 
 type Completion = Result<GraphicsPassOutput, GraphicsError>;
@@ -728,7 +801,13 @@ where
                 let _ = initialized.send(Err(error));
                 return;
             }
-            if initialized.send(Ok(texture_capabilities(&gpu))).is_err() {
+            if initialized
+                .send(Ok((
+                    texture_capabilities(&gpu),
+                    resource_role_capabilities(&gpu),
+                )))
+                .is_err()
+            {
                 return;
             }
             while let Ok(message) = incoming.recv() {
@@ -761,7 +840,7 @@ where
         requests: Some(requests),
         thread: Mutex::new(Some(thread)),
     });
-    let capabilities = ready.recv().map_err(|_| {
+    let (capabilities, roles) = ready.recv().map_err(|_| {
         GraphicsError::BackendError("native worker initialization disconnected".into())
     })??;
     context.set_metal_array_view_async_backend(capabilities, move |request| {
@@ -786,6 +865,7 @@ where
             terminal: false,
         }))
     });
+    context.enable_resource_roles(roles)?;
     Ok(())
 }
 
@@ -1111,4 +1191,99 @@ mod async_tests {
         rescue.join().unwrap();
         assert!(!timeout.load(Ordering::SeqCst));
     }
+}
+
+fn native_depth_snapshot(snapshot: &GraphicsDepthSnapshot) -> Result<DepthSnapshot, GraphicsError> {
+    if let Some(native) = snapshot.downcast_ref::<DepthSnapshot>() {
+        return Ok(native.clone());
+    }
+    let typed = snapshot
+        .downcast_ref::<xenora_loader::graphics::GraphicsTypedDepthSnapshot>()
+        .ok_or(GraphicsError::InvalidDescriptor)?;
+    if typed.desc.format != TextureFormat::Depth32Float
+        || typed.desc.mip_levels != 1
+        || typed.desc.array_layers.is_some()
+    {
+        return Err(GraphicsError::InvalidDescriptor);
+    }
+    DepthSnapshot::from_packed_bytes([typed.desc.extent.0, typed.desc.extent.1], &typed.bytes)
+        .map_err(metal_error)
+}
+
+fn resource_role_capabilities(
+    gpu: &NativeCompute,
+) -> xenora_loader::graphics::GraphicsResourceRoleCapabilities {
+    xenora_loader::graphics::GraphicsResourceRoleCapabilities {
+        sampled_formats: gpu.typed_copy_capabilities(),
+        color_formats: 0x1f9,
+    }
+}
+fn native_color_attachment(
+    typed: Option<xenora_loader::graphics::GraphicsTypedColorAttachment>,
+    clear: [u8; 4],
+) -> xenora_metal::TypedColorAttachment {
+    if let Some(t) = typed {
+        xenora_metal::TypedColorAttachment {
+            format: t.format,
+            clear: match t.clear {
+                xenora_loader::graphics::GraphicsTypedColorClear::Float(v) => {
+                    xenora_metal::TypedColorClear::Float(v)
+                }
+                xenora_loader::graphics::GraphicsTypedColorClear::Uint(v) => {
+                    xenora_metal::TypedColorClear::Uint(v)
+                }
+            },
+            blend_enabled: t.blend_enabled,
+        }
+    } else {
+        xenora_metal::TypedColorAttachment {
+            format: TextureFormat::Rgba8Unorm,
+            clear: xenora_metal::TypedColorClear::Float(clear.map(|v| f64::from(v) / 255.0)),
+            blend_enabled: true,
+        }
+    }
+}
+fn packed_depth_snapshot(snapshot: DepthSnapshot, extent: (usize, usize)) -> GraphicsDepthSnapshot {
+    Arc::new(xenora_loader::graphics::GraphicsTypedDepthSnapshot {
+        desc: xenora_loader::graphics::GraphicsTypedTextureDesc {
+            format: TextureFormat::Depth32Float,
+            extent,
+            mip_levels: 1,
+            array_layers: None,
+        },
+        bytes: Arc::from(snapshot.to_packed_bytes()),
+    })
+}
+
+fn validate_pipeline_formats(
+    pipeline: &xenora_loader::graphics::GraphicsPipeline,
+    colors: &[TextureFormat],
+    textures: [Option<TextureFormat>; 2],
+) -> Result<(), GraphicsError> {
+    use xenora_shader::{GraphicsExportType, GraphicsSampleType};
+    if colors.len() != pipeline.color_targets
+        || colors.iter().enumerate().any(|(i, f)| {
+            pipeline.types.colors[i]
+                != if *f == TextureFormat::R32Uint {
+                    GraphicsExportType::Uint
+                } else {
+                    GraphicsExportType::Float
+                }
+        })
+    {
+        return Err(GraphicsError::InvalidDescriptor);
+    }
+    for (slot, format) in textures.into_iter().enumerate() {
+        if let Some(f) = format {
+            let expected = match f {
+                TextureFormat::R32Uint => GraphicsSampleType::Uint,
+                TextureFormat::Depth32Float => GraphicsSampleType::Depth,
+                _ => GraphicsSampleType::Float,
+            };
+            if pipeline.types.textures[slot] != expected {
+                return Err(GraphicsError::InvalidDescriptor);
+            }
+        }
+    }
+    Ok(())
 }

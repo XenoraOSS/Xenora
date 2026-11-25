@@ -34,6 +34,7 @@ impl GraphicsPendingSubmission for Pending {
 impl Control {
     fn complete(&self, pixels: &[u8]) {
         *self.result.lock().unwrap() = Some(Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![pixels.to_vec()],
             depth: None,
         }));
@@ -318,6 +319,7 @@ fn failed_completion_preserves_colors_states_and_presentation() {
         let ticket = h.submit();
         *h.control.result.lock().unwrap() = Some(if malformed {
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![99; 3]],
                 depth: None,
             })
@@ -548,6 +550,7 @@ fn malformed_second_color_does_not_commit_depth_or_first_color() {
         .unwrap();
     let seed = h.submit();
     *h.control.result.lock().unwrap() = Some(Ok(GraphicsPassOutput {
+        color_layouts: None,
         colors: vec![vec![1, 2, 3, 4], vec![5, 6, 7, 8]],
         depth: Some(Arc::new(37u32)),
     }));
@@ -565,6 +568,7 @@ fn malformed_second_color_does_not_commit_depth_or_first_color() {
         .unwrap();
     let failed = h.submit();
     *h.control.result.lock().unwrap() = Some(Ok(GraphicsPassOutput {
+        color_layouts: None,
         colors: vec![vec![99; 4], vec![88; 3]],
         depth: Some(Arc::new(91u32)),
     }));
@@ -605,6 +609,7 @@ fn malformed_second_color_does_not_commit_depth_or_first_color() {
     }
     // Missing depth must also fail without advancing the presentation.
     *h.control.result.lock().unwrap() = Some(Ok(GraphicsPassOutput {
+        color_layouts: None,
         colors: vec![vec![99; 4], vec![88; 4]],
         depth: None,
     }));

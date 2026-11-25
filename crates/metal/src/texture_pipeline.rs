@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Native Apple Metal RGBA8 texture upload and pipeline binding foundation.
+//! Native Metal texture storage, uploads and read-only sampled views.
 //!
-//! Provides validated RGBA8 2D texture allocation, mip upload, and binding definitions
-//! for compute kernels and future translated pixel shader stages.
+//! Legacy RGBA8 owners retain their contract; immutable typed owners preserve
+//! format, mip and array identity across uploads and selected views.
 
 use std::ffi::c_void;
 use std::ptr::NonNull;
@@ -109,8 +109,8 @@ impl Rgba8TextureDesc {
     }
 }
 
-/// Read-only views within RGBA8, BC1, BC3, or linear R8 storage families.
-/// Cross-family casts and sRGB reinterpretation of R8 are unsupported.
+/// Read-only views preserve their storage family. Optional sRGB interpretation
+/// is available only for RGBA8, BGRA8, BC1 and BC3; cross-family casts reject.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TextureViewFormat {
     R8Unorm,
@@ -120,6 +120,13 @@ pub enum TextureViewFormat {
     Bc1RgbaUnormSrgb,
     Bc3RgbaUnorm,
     Bc3RgbaUnormSrgb,
+    Rg8Unorm,
+    Bgra8Unorm,
+    Bgra8UnormSrgb,
+    Rgba16Float,
+    R32Float,
+    R32Uint,
+    Depth32Float,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct TextureViewDesc {
@@ -242,10 +249,6 @@ impl NativeSampledTexture {
     fn array_slice_view(&self, desc: ArraySliceViewDesc) -> Result<MetalTextureView, MetalError> {
         if self.texture.textureType() != MTLTextureType::Type2DArray
             || desc.slice as usize >= self.texture.arrayLength()
-            || !matches!(
-                desc.format,
-                TextureViewFormat::Rgba8Unorm | TextureViewFormat::Rgba8UnormSrgb
-            )
         {
             return Err(MetalError::new(
                 "array view",
@@ -278,6 +281,21 @@ impl NativeSampledTexture {
         }
         let pixel_format = match (self.format, desc.format) {
             (TextureFormat::R8Unorm, TextureViewFormat::R8Unorm) => MTLPixelFormat::R8Unorm,
+            (TextureFormat::Rg8Unorm, TextureViewFormat::Rg8Unorm) => MTLPixelFormat::RG8Unorm,
+            (TextureFormat::Bgra8Unorm, TextureViewFormat::Bgra8Unorm) => {
+                MTLPixelFormat::BGRA8Unorm
+            }
+            (TextureFormat::Bgra8Unorm, TextureViewFormat::Bgra8UnormSrgb) => {
+                MTLPixelFormat::BGRA8Unorm_sRGB
+            }
+            (TextureFormat::Rgba16Float, TextureViewFormat::Rgba16Float) => {
+                MTLPixelFormat::RGBA16Float
+            }
+            (TextureFormat::R32Float, TextureViewFormat::R32Float) => MTLPixelFormat::R32Float,
+            (TextureFormat::R32Uint, TextureViewFormat::R32Uint) => MTLPixelFormat::R32Uint,
+            (TextureFormat::Depth32Float, TextureViewFormat::Depth32Float) => {
+                MTLPixelFormat::Depth32Float
+            }
             (TextureFormat::Rgba8Unorm, TextureViewFormat::Rgba8Unorm) => {
                 MTLPixelFormat::RGBA8Unorm
             }
@@ -687,6 +705,104 @@ impl MetalR8Texture {
                 desc,
             })
         })
+    }
+}
+
+/// Fully initialized immutable typed storage. Upload completes before publication;
+/// GPU-produced versions use the separate provenance-retaining cohort interface.
+#[derive(Clone, Debug)]
+pub struct MetalTypedTexture {
+    texture: NativeSampledTexture,
+    desc: crate::TypedTextureDesc,
+}
+impl MetalTypedTexture {
+    pub fn upload(
+        gpu: &crate::NativeCompute,
+        desc: crate::TypedTextureDesc,
+        bytes: &[u8],
+    ) -> Result<Self, MetalError> {
+        let texture = gpu.upload_typed_texture_storage(desc, bytes)?;
+        Ok(Self {
+            texture: typed_sampled_storage(texture, desc)?,
+            desc,
+        })
+    }
+    pub fn desc(&self) -> crate::TypedTextureDesc {
+        self.desc
+    }
+    pub fn view(&self, desc: TextureViewDesc) -> Result<MetalTextureView, MetalError> {
+        self.texture.view(desc)
+    }
+    pub fn array_slice_view(
+        &self,
+        desc: ArraySliceViewDesc,
+    ) -> Result<MetalTextureView, MetalError> {
+        self.texture.array_slice_view(desc)
+    }
+}
+
+fn typed_sampled_storage(
+    texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    desc: crate::TypedTextureDesc,
+) -> Result<NativeSampledTexture, MetalError> {
+    let kind = if desc.array_layers.is_some() {
+        MTLTextureType::Type2DArray
+    } else {
+        MTLTextureType::Type2D
+    };
+    if texture.textureType() != kind
+        || texture.pixelFormat() != storage_pixel_format(desc.format)
+        || texture.width() != desc.extent[0]
+        || texture.height() != desc.extent[1]
+        || texture.mipmapLevelCount() != desc.mip_levels as usize
+        || texture.arrayLength() != desc.array_layers.unwrap_or(1) as usize
+    {
+        return Err(MetalError::new(
+            "typed texture",
+            "native storage does not match authoritative descriptor",
+        ));
+    }
+    Ok(NativeSampledTexture {
+        texture,
+        _parent: None,
+        width: desc.extent[0],
+        height: desc.extent[1],
+        mips: desc.mip_levels,
+        format: desc.format,
+    })
+}
+
+/// Internal only: callers retain the exact Produced owner alongside this view.
+pub(crate) fn typed_texture_view(
+    texture: Retained<ProtocolObject<dyn MTLTexture>>,
+    desc: crate::TypedTextureDesc,
+    view: TextureViewDesc,
+    slice: Option<u32>,
+) -> Result<MetalTextureView, MetalError> {
+    let storage = typed_sampled_storage(texture, desc)?;
+    match slice {
+        None => storage.view(view),
+        Some(slice) => storage.array_slice_view(ArraySliceViewDesc {
+            slice,
+            base_mip: view.base_mip,
+            mip_count: view.mip_count,
+            format: view.format,
+        }),
+    }
+}
+
+pub(crate) fn storage_pixel_format(format: TextureFormat) -> MTLPixelFormat {
+    match format {
+        TextureFormat::R8Unorm => MTLPixelFormat::R8Unorm,
+        TextureFormat::Rg8Unorm => MTLPixelFormat::RG8Unorm,
+        TextureFormat::Rgba8Unorm => MTLPixelFormat::RGBA8Unorm,
+        TextureFormat::Bgra8Unorm => MTLPixelFormat::BGRA8Unorm,
+        TextureFormat::Rgba16Float => MTLPixelFormat::RGBA16Float,
+        TextureFormat::R32Float => MTLPixelFormat::R32Float,
+        TextureFormat::R32Uint => MTLPixelFormat::R32Uint,
+        TextureFormat::Depth32Float => MTLPixelFormat::Depth32Float,
+        TextureFormat::Bc1RgbaUnorm => MTLPixelFormat::BC1_RGBA,
+        TextureFormat::Bc3RgbaUnorm => MTLPixelFormat::BC3_RGBA,
     }
 }
 

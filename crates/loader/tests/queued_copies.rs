@@ -22,7 +22,9 @@ fn cpu_queued_copy_typed_buffer_and_texture_publish_exact_bytes_without_presenta
         GraphicsCopyLayout::Rgba8 { extent: (2, 1) },
     ] {
         let literal = match layout {
-            GraphicsCopyLayout::Rgba8MipChain { .. } | GraphicsCopyLayout::Rgba8Array { .. } => {
+            GraphicsCopyLayout::TypedTexture(_)
+            | GraphicsCopyLayout::Rgba8MipChain { .. }
+            | GraphicsCopyLayout::Rgba8Array { .. } => {
                 panic!("unexpected subresource layout in legacy copy test")
             }
             GraphicsCopyLayout::Buffer { .. } => vec![17, 83, 149, 231, 9],
@@ -40,7 +42,9 @@ fn cpu_queued_copy_typed_buffer_and_texture_publish_exact_bytes_without_presenta
             .create_command_list(device, allocator, CommandListType::Direct)
             .unwrap();
         let desc = match layout {
-            GraphicsCopyLayout::Rgba8MipChain { .. } | GraphicsCopyLayout::Rgba8Array { .. } => {
+            GraphicsCopyLayout::TypedTexture(_)
+            | GraphicsCopyLayout::Rgba8MipChain { .. }
+            | GraphicsCopyLayout::Rgba8Array { .. } => {
                 panic!("unexpected subresource layout in legacy copy test")
             }
             GraphicsCopyLayout::Buffer { byte_len } => ResourceDesc {
@@ -380,6 +384,7 @@ fn cpu_copy_wrong_completion_kind_layout_or_length_rolls_back_bytes_and_states()
             0,
             match failure {
                 0 => GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![17; 4]],
                     depth: None,
                 }),
@@ -497,6 +502,7 @@ fn cpu_cached_copy_success_is_rejected_after_copy_or_render_producer_publication
             0,
             if render {
                 GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![17; 3]],
                     depth: None,
                 })
@@ -683,6 +689,7 @@ fn cpu_copied_texture_load_uses_typed_native_version_and_render_completion() {
     h.complete(
         1,
         GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![vec![17, 83, 149, 231, 211, 43, 97, 127]],
             depth: None,
         }),
@@ -894,6 +901,7 @@ fn cpu_pending_copy_geometry_cannot_be_materialized_from_stale_host_bytes() {
         h.complete(
             1,
             GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![0; 4]],
                 depth: None,
             }),
@@ -959,6 +967,7 @@ fn cpu_newer_independent_copy_never_suppresses_older_render_publication() {
         h.complete(
             0,
             GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![17, 83, 149, 231]],
                 depth: None,
             }),
@@ -1152,6 +1161,7 @@ fn cpu_shared_copy_render_payload_ceiling_rejects_before_dispatch_then_recovers(
                 }
             } else {
                 GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![17, 83, 149, 231]],
                     depth: None,
                 })
@@ -1207,6 +1217,7 @@ fn cpu_cached_render_success_cannot_publish_after_copy_producer_publication_fail
     h.complete(
         1,
         GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![vec![31, 47, 61, 79]],
             depth: None,
         }),

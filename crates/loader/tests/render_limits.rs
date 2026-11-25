@@ -154,6 +154,7 @@ fn snapshot_output(
         [65534.0, 0.25, 0.5, 1.0]
     );
     GraphicsPassOutput {
+        color_layouts: None,
         colors: vec![[7, 11, 13, 255].repeat(extent.0 * extent.1)],
         depth: None,
     }
@@ -298,6 +299,7 @@ fn target_pixel_and_axis_limits_apply_before_native_dispatch() {
             .set_metal_attachment_backend(move |_, extent, _, _, _| {
                 callback_calls.fetch_add(1, Ordering::SeqCst);
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![[2, 3, 5, 255].repeat(extent.0 * extent.1)],
                     depth: None,
                 })
@@ -403,6 +405,7 @@ fn async_native_pixel_boundary_matches_synchronous_preparation() {
             callback_calls.fetch_add(1, Ordering::SeqCst);
             assert_eq!(request.extent, (1024, 1024));
             Ok(Box::new(Ready(Some(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![17; 4194304]],
                 depth: None,
             }))))
@@ -482,6 +485,7 @@ fn native_draw_count_accepts_256_and_rejects_257_before_fetch_or_dispatch() {
                         assert_eq!(request.draws.len(), 256);
                         assert!(request.draws.iter().all(|draw| draw.vertices.len() == 3));
                         Ok(Box::new(Ready(Some(GraphicsPassOutput {
+                            color_layouts: None,
                             colors: vec![vec![2, 3, 5, 255]],
                             depth: None,
                         }))))
@@ -493,6 +497,7 @@ fn native_draw_count_accepts_256_and_rejects_257_before_fetch_or_dispatch() {
                             assert_eq!(draws.len(), 256);
                             assert!(draws.iter().all(|draw| draw.vertices.len() == 3));
                             Ok(GraphicsPassOutput {
+                                color_layouts: None,
                                 colors: vec![vec![2, 3, 5, 255]],
                                 depth: None,
                             })

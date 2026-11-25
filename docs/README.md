@@ -16,6 +16,8 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 
 ## Native Metal graphics
 
+- [Typed resource formats and roles](resource-formats.md) — Finite storage, transfer, sampling and attachment matrix, representation rules and exclusions.
+
 - [Multi-node queued graphs](interfaces.md#opt-in-multi-node-queued-graphs) — Bounded transitive dependencies, exact resource versions and legacy backend limits.
 
 - [Translated offscreen stages](interfaces.md#translated-offscreen-stages) — Translated vertex and pixel stages for the bounded gfx1030 subset.

@@ -90,7 +90,7 @@ fn cpu_invalid_envelopes_and_reserved_words_preserve_result() {
         (0, 0),
         (0, 2),
         (1, 0),
-        (1, 53), // First unassigned opcode after CreateArraySliceView.
+        (1, 57), // First unassigned opcode after typed color targets.
         (1, u64::MAX),
         (2, 1),
         (15, 1),
@@ -533,6 +533,7 @@ fn cpu_async_guest_receipts_preflight_outputs_and_cache_terminal_status() {
     assert_eq!(h.output(), SENTINEL);
     assert_eq!(h.call(30, &[queue, list]), Ok(2));
     *result.lock().unwrap() = Some(Ok(GraphicsPassOutput {
+        color_layouts: None,
         colors: vec![vec![7, 11, 13, 255]],
         depth: None,
     }));
@@ -741,6 +742,7 @@ impl xenora_loader::graphics::GraphicsQueuedPendingSubmission for ServiceQueuedT
     ) -> Result<xenora_loader::graphics::GraphicsPassOutput, xenora_loader::graphics::GraphicsError>
     {
         Ok(xenora_loader::graphics::GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![vec![7, 11, 13, 255]],
             depth: None,
         })
@@ -1139,6 +1141,7 @@ fn cpu_uniform_guest_binding_preflights_all_bytes_and_copies_before_result_alias
         move |draws, extent, _, _, _| {
             assert_eq!(draws[0].uniforms, Some(words));
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![[1, 2, 3, 255].repeat(extent.0 * extent.1)],
                 depth: None,
             })

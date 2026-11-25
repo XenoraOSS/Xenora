@@ -158,6 +158,7 @@ fn mixed_attachments_receive_literal_committed_snapshots() {
                 Some([11, 22, 33, 44].as_slice())
             );
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![9, 8, 7, 6], vec![55, 66, 77, 88]],
                 depth: None,
             })
@@ -183,6 +184,7 @@ fn malformed_output_preserves_all_colors_barriers_and_presentation() {
             Some([1, 2, 3, 4].as_slice())
         );
         Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![vec![99; 4], vec![88; 3]],
             depth: None,
         })
@@ -300,6 +302,7 @@ fn color_load_and_depth_snapshot_commit_together() {
                 assert_eq!(*depth.previous.unwrap().downcast_ref::<u32>().unwrap(), 37);
             }
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![if phase == 1 {
                     vec![99; 3]
                 } else {
@@ -481,6 +484,7 @@ fn recorded_load_reads_latest_base_level_and_preserves_mip_tail() {
                 )
             );
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![
                     91, 92, 93, 94, 21, 22, 23, 24, 31, 32, 33, 34, 41, 42, 43, 44,
                 ]],

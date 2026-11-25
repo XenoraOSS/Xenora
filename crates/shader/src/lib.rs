@@ -6,8 +6,9 @@ use std::fmt::{self, Write};
 
 mod graphics;
 pub use graphics::{
-    CompiledGraphics, PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics,
-    compile_graphics_pipeline,
+    CompiledGraphics, GraphicsExportType, GraphicsPipelineTypes, GraphicsSampleType,
+    PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics, compile_graphics_pipeline,
+    compile_graphics_pipeline_typed,
 };
 
 pub use xenora_decoder::Architecture;

@@ -18,6 +18,15 @@ remains unsupported.
 - Extended the read-only RDNA2 planning CLI (`python3 -m qa rdna2`) with family/status filters, compact summaries, Codex-ready manifests under `artifacts/`, active-claim exclusion (family claims exclude those families; path-only claims block overlapping permitted files), coverage reconcile against `semantic_coverage` without inflating counts, and inventory diffs. Covered by `tests/qa/test_rdna2_plan.py`; planning only, no GPU production edits.
 
 ### Added
+- Explicit typed texture transfers, sampling and attachment roles through guest
+  opcodes53–56. The finite matrix covers R8, RG8, RGBA8, BGRA8, RGBA16Float,
+  R32Float, R32Uint, Depth32Float and runtime-supported BC1/BC3. Copies preserve
+  packed bits, complete mip/array backings and exact queued versions. Typed
+  pipelines distinguish float, integer and raw-depth sampling; integer targets
+  preserve unsigned bits and reject blending. Selected read-only views retain
+  complete ownership, and completion validates layouts before atomic publication.
+  Writable subresource views, broader bindings and general guest coherence remain
+  separate workstreams. See `docs/resource-formats.md` for the matrix and exclusions.
 - Read-only 2D views of selected RGBA8 array slices through guest opcode52,
   with nested mip ranges and exact queued GPU versions. Existing view bindings
   accept these handles; full backing ownership and whole-resource hazards remain

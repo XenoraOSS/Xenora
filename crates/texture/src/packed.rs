@@ -6,8 +6,39 @@ use crate::TextureError;
 pub enum TextureFormat {
     Rgba8Unorm,
     R8Unorm,
+    Rg8Unorm,
+    Bgra8Unorm,
+    Rgba16Float,
+    R32Float,
+    R32Uint,
+    Depth32Float,
     Bc1RgbaUnorm,
     Bc3RgbaUnorm,
+}
+
+impl TextureFormat {
+    /// Storage-block dimensions in texels, independent of supported GPU roles.
+    pub const fn block_extent(self) -> (usize, usize) {
+        match self {
+            Self::Bc1RgbaUnorm | Self::Bc3RgbaUnorm => (4, 4),
+            _ => (1, 1),
+        }
+    }
+
+    /// Bytes occupied by one complete storage block; copies preserve these bytes.
+    pub const fn block_bytes(self) -> usize {
+        match self {
+            Self::R8Unorm => 1,
+            Self::Rg8Unorm => 2,
+            Self::Rgba8Unorm
+            | Self::Bgra8Unorm
+            | Self::R32Float
+            | Self::R32Uint
+            | Self::Depth32Float => 4,
+            Self::Rgba16Float | Self::Bc1RgbaUnorm => 8,
+            Self::Bc3RgbaUnorm => 16,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,12 +185,10 @@ fn footprint(
 ) -> Result<TextureMipFootprint, TextureError> {
     // BC1/BC3 use 4x4 texel blocks of 8/16 bytes respectively:
     // https://learn.microsoft.com/en-us/windows/win32/direct3d11/texture-block-compression-in-direct3d-11
-    let (columns, rows, unit_bytes) = match format {
-        TextureFormat::Rgba8Unorm => (width, height, 4),
-        TextureFormat::R8Unorm => (width, height, 1),
-        TextureFormat::Bc1RgbaUnorm => (width.div_ceil(4), height.div_ceil(4), 8),
-        TextureFormat::Bc3RgbaUnorm => (width.div_ceil(4), height.div_ceil(4), 16),
-    };
+    let (block_width, block_height) = format.block_extent();
+    let columns = width.div_ceil(block_width);
+    let rows = height.div_ceil(block_height);
+    let unit_bytes = format.block_bytes();
     let row_bytes = columns
         .checked_mul(unit_bytes)
         .ok_or(TextureError::SizeOverflow)?;

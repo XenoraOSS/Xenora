@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/validate-graphics.sh [quick|full]
 
 quick (default): focused CPU and native Metal checks for produced geometry,
-                 views, samplers, guest-backed copies, R8 sampling, mip/slice transfers, array-slice views and compute caching.
+                 views, samplers, guest-backed copies, R8 sampling, mip/slice transfers, array-slice views, typed formats/roles and compute caching.
 full:            all nine repository validation gates, including the GPU suite.
 
 Run on native Apple Silicon with the repository build dependencies installed.
@@ -90,6 +90,15 @@ run_tests() {
 }
 printf 'Running %s validation. Logs: %s\n' "$mode" "$log_dir"
 if [[ "$mode" == quick ]]; then
+    run_tests typed-layout cargo test --locked -p xenora-texture --test packed_layout ten_format_ -- --nocapture
+    run_tests typed-shader cargo test --locked -p xenora-shader --test graphics_typed -- --nocapture
+    run_tests typed-role-loader cargo test --locked -p xenora-loader --test typed_roles -- --nocapture
+    run_tests typed-transfer-loader cargo test --locked -p xenora-loader --test typed_transfers -- --nocapture
+    run_tests typed-copy-budget cargo test --locked -p xenora-metal --features gpu-tests --lib native_typed_copy_ -- --nocapture --test-threads=1
+    run_tests typed-transfer-native cargo test --locked -p xenora-metal --features gpu-tests --test native_compute typed_transfers:: -- --nocapture --test-threads=1
+    run_tests typed-attachment-native cargo test --locked -p xenora-metal --features gpu-tests --test native_compute typed_attachments:: -- --nocapture --test-threads=1
+    run_tests typed-role-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_typed_roles_ -- --nocapture --test-threads=1
+    run_tests typed-transfer-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_typed_transfers_ -- --nocapture --test-threads=1
     run_tests geometry-cpu cargo test --locked -p xenora-loader --test produced_geometry -- --nocapture
     run_tests nested-cpu cargo test --locked -p xenora-loader --test pipeline cpu_nested_view -- --nocapture
     run_tests nested-abi cargo test --locked -p xenora-loader --test graphics_service cpu_guest_child_view -- --nocapture
@@ -99,12 +108,12 @@ if [[ "$mode" == quick ]]; then
     run_tests guest-copy-cpu cargo test --locked -p xenora-loader --test queued_copies cpu_guest_copy -- --nocapture
     run_tests guest-region-cpu cargo test --locked -p xenora-loader --test queued_copies cpu_guest_region -- --nocapture
     run_tests guest-copy-abi cargo test --locked -p xenora-loader --test graphics_service cpu_guest_backed -- --nocapture
-    run_tests array-layout cargo test --locked -p xenora-texture --test packed_layout array_ -- --nocapture
+    run_tests array-layout cargo test --locked -p xenora-texture --test packed_layout array_ -- --nocapture --skip ten_format_
     run_tests mip-loader cargo test --locked -p xenora-loader --test mip_transfers -- --nocapture
     run_tests array-loader cargo test --locked -p xenora-loader --test array_transfers -- --nocapture
     run_tests array-views-loader cargo test --locked -p xenora-loader --test array_views -- --nocapture
     run_tests r8-layout cargo test --locked -p xenora-texture --test packed_layout r8_ -- --nocapture
-    run_tests r8-upload cargo test --locked -p xenora-metal --lib r8_ -- --nocapture
+    run_tests r8-upload cargo test --locked -p xenora-metal --lib r8_validation_tests:: -- --nocapture
     run_tests r8-loader cargo test --locked -p xenora-loader --test pipeline cpu_r8_ -- --nocapture
     run_tests subresource-budget cargo test --locked -p xenora-metal --features gpu-tests --lib native_mip_array_ -- --nocapture --test-threads=1
     run_tests array-native cargo test --locked -p xenora-metal --features gpu-tests --test native_compute array_transfers:: -- --nocapture --test-threads=1

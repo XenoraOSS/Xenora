@@ -169,6 +169,7 @@ impl Harness {
             .lock()
             .unwrap()
             .result = Some(Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![rgba.to_vec()],
             depth: None,
         }));
@@ -255,6 +256,7 @@ fn cpu_queued_failed_producer_drains_consumer_and_recovers_new_generation() {
     let b = h.submit(1, &[point]).unwrap();
     // Wrong output length is a loader publication failure, even after native success.
     h.backend.lock().unwrap().tickets[0].lock().unwrap().result = Some(Ok(GraphicsPassOutput {
+        color_layouts: None,
         colors: vec![vec![1]],
         depth: None,
     }));
@@ -439,6 +441,7 @@ fn cpu_queued_cached_consumer_success_cannot_publish_after_producer_rejection() 
     // A's malformed output. A later rejection cannot retract that channel message.
     h.complete(1, [99; 4]);
     h.backend.lock().unwrap().tickets[0].lock().unwrap().result = Some(Ok(GraphicsPassOutput {
+        color_layouts: None,
         colors: vec![vec![1]],
         depth: None,
     }));
@@ -796,6 +799,7 @@ impl Harness {
             .lock()
             .unwrap()
             .result = Some(Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors,
             depth: None,
         }));
@@ -1190,6 +1194,7 @@ impl Harness {
             .lock()
             .unwrap()
             .result = Some(Ok(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![color.to_vec()],
             depth: Some(Arc::new([bits])),
         }));
@@ -1396,11 +1401,13 @@ fn cpu_produced_depth_failed_publication_cannot_commit_color_or_depth() {
         h.complete_depth(0, [11; 4], 0x3e800000);
         let consumer = if failure == 0 {
             GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![23; 4], vec![31]],
                 depth: Some(Arc::new([0x3f000000u32])),
             }
         } else if failure == 1 {
             GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![23; 4], vec![31; 4]],
                 depth: None,
             }
@@ -1408,10 +1415,12 @@ fn cpu_produced_depth_failed_publication_cannot_commit_color_or_depth() {
             // Producer color publication fails after native completion; B has cached success.
             h.backend.lock().unwrap().tickets[0].lock().unwrap().result =
                 Some(Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![11]],
                     depth: Some(Arc::new([0x3e800000u32])),
                 }));
             GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![23; 4], vec![31; 4]],
                 depth: Some(Arc::new([0x3f000000u32])),
             }

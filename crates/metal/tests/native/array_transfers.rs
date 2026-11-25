@@ -101,6 +101,9 @@ fn request<'a>(
 }
 fn produced(c: &RenderCohort, p: &RenderPoint) -> QueuedCopyInput<'static> {
     match c.copy_output(p).unwrap() {
+        RenderCopyOutput::TypedTexture(_) => {
+            panic!("legacy copy unexpectedly returned typed texture")
+        }
         RenderCopyOutput::Color(v) => QueuedCopyInput::ProducedColor(v),
         RenderCopyOutput::Buffer(v) => QueuedCopyInput::ProducedBuffer(v),
     }

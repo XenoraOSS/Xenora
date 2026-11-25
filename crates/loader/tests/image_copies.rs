@@ -550,6 +550,7 @@ fn cpu_image_bad_full_outputs_preserve_prior_bytes_and_states() {
             0,
             match fault {
                 0 => GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![0; 8]],
                     depth: None,
                 }),
@@ -763,6 +764,7 @@ fn cpu_image_render_color_version_is_valid_for_source_or_prior_destination() {
         h.complete(
             0,
             GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![101, 102, 103, 104, 101, 102, 103, 104]],
                 depth: None,
             }),

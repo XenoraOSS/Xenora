@@ -14,7 +14,8 @@ cargo test --locked -p xenora-metal --features gpu-tests --lib --no-run
 timeout 30s cargo test --locked -p xenora-metal --features gpu-tests --lib -- --nocapture --test-threads=1
 
 cargo test --locked -p xenora-metal --features gpu-tests --test native_compute --no-run
-timeout 30s cargo test --locked -p xenora-metal --features gpu-tests --test native_compute -- \
+# Additional independently gated format/input-role cases extend the serial suite.
+timeout 60s cargo test --locked -p xenora-metal --features gpu-tests --test native_compute -- \
     --nocapture --test-threads=1
 
 cargo test --locked -p xenora-loader --features gpu-tests --test dbt_render --no-run

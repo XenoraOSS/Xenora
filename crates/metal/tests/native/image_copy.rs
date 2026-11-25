@@ -245,12 +245,18 @@ fn image_request<'a>(
 }
 fn produced_input(cohort: &RenderCohort, point: &RenderPoint) -> QueuedCopyInput<'static> {
     match cohort.copy_output(point).unwrap() {
+        RenderCopyOutput::TypedTexture(_) => {
+            panic!("legacy copy unexpectedly returned typed texture")
+        }
         RenderCopyOutput::Buffer(b) => QueuedCopyInput::ProducedBuffer(b),
         RenderCopyOutput::Color(c) => QueuedCopyInput::ProducedColor(c),
     }
 }
 fn check_image(output: OwnedCopyOutput, direction: u8) {
     match output {
+        OwnedCopyOutput::TypedTexture { .. } => {
+            panic!("legacy image copy unexpectedly returned typed texture")
+        }
         OwnedCopyOutput::Rgba8MipChain { .. } | OwnedCopyOutput::Rgba8Array { .. } => {
             panic!("legacy image copy returned a subresource layout")
         }
@@ -587,6 +593,9 @@ fragment float4 overlay() { return float4(1,0,1,1); }
             )
             .unwrap();
         let output = match cohort.copy_output(&producer).unwrap() {
+            RenderCopyOutput::TypedTexture(_) => {
+                panic!("legacy copy unexpectedly returned typed texture")
+            }
             RenderCopyOutput::Color(output) => output,
             _ => panic!("expected color output"),
         };
@@ -680,6 +689,9 @@ fn queued_image_copy_host_snapshots_old_versions_and_stale_each_role() {
         )
         .unwrap();
     let old = match cohort.copy_output(&first).unwrap() {
+        RenderCopyOutput::TypedTexture(_) => {
+            panic!("legacy copy unexpectedly returned typed texture")
+        }
         RenderCopyOutput::Color(output) => output,
         _ => panic!("expected color output"),
     };

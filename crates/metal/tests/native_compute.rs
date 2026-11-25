@@ -465,3 +465,9 @@ mod array_transfers;
 
 #[path = "native/array_views.rs"]
 mod array_views;
+
+#[path = "native/typed_transfers.rs"]
+mod typed_transfers;
+
+#[path = "native/typed_attachments.rs"]
+mod typed_attachments;

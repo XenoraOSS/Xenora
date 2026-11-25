@@ -192,3 +192,149 @@ fn array_total_overflow_rejects_even_when_single_chain_fits() {
     let one = xenora_texture::PackedTextureArrayLayout::new(Rgba8Unorm, width, 1, 1, 1).unwrap();
     assert_eq!(one.byte_len(), usize::MAX - 3);
 }
+
+#[test]
+fn ten_format_storage_blocks_are_literal_and_role_independent() {
+    for (format, extent, bytes) in [
+        (R8Unorm, (1, 1), 1),
+        (Rg8Unorm, (1, 1), 2),
+        (Rgba8Unorm, (1, 1), 4),
+        (Bgra8Unorm, (1, 1), 4),
+        (Rgba16Float, (1, 1), 8),
+        (R32Float, (1, 1), 4),
+        (R32Uint, (1, 1), 4),
+        (Depth32Float, (1, 1), 4),
+        (Bc1RgbaUnorm, (4, 4), 8),
+        (Bc3RgbaUnorm, (4, 4), 16),
+    ] {
+        assert_eq!(format.block_extent(), extent, "{format:?}");
+        assert_eq!(format.block_bytes(), bytes, "{format:?}");
+    }
+}
+
+#[test]
+fn ten_format_odd_mips_and_two_layers_have_literal_full_footprints() {
+    // Each tuple is (width, height, absolute offset, row bytes, block rows, bytes).
+    // These tables do not call block/layout helpers to construct expected values.
+    let r8 = [
+        (5, 3, 0, 5, 3, 15),
+        (2, 1, 15, 2, 1, 2),
+        (1, 1, 17, 1, 1, 1),
+        (5, 3, 18, 5, 3, 15),
+        (2, 1, 33, 2, 1, 2),
+        (1, 1, 35, 1, 1, 1),
+    ];
+    let rg8 = [
+        (5, 3, 0, 10, 3, 30),
+        (2, 1, 30, 4, 1, 4),
+        (1, 1, 34, 2, 1, 2),
+        (5, 3, 36, 10, 3, 30),
+        (2, 1, 66, 4, 1, 4),
+        (1, 1, 70, 2, 1, 2),
+    ];
+    let four = [
+        (5, 3, 0, 20, 3, 60),
+        (2, 1, 60, 8, 1, 8),
+        (1, 1, 68, 4, 1, 4),
+        (5, 3, 72, 20, 3, 60),
+        (2, 1, 132, 8, 1, 8),
+        (1, 1, 140, 4, 1, 4),
+    ];
+    let half4 = [
+        (5, 3, 0, 40, 3, 120),
+        (2, 1, 120, 16, 1, 16),
+        (1, 1, 136, 8, 1, 8),
+        (5, 3, 144, 40, 3, 120),
+        (2, 1, 264, 16, 1, 16),
+        (1, 1, 280, 8, 1, 8),
+    ];
+    let bc1 = [
+        (5, 3, 0, 16, 1, 16),
+        (2, 1, 16, 8, 1, 8),
+        (1, 1, 24, 8, 1, 8),
+        (5, 3, 32, 16, 1, 16),
+        (2, 1, 48, 8, 1, 8),
+        (1, 1, 56, 8, 1, 8),
+    ];
+    let bc3 = [
+        (5, 3, 0, 32, 1, 32),
+        (2, 1, 32, 16, 1, 16),
+        (1, 1, 48, 16, 1, 16),
+        (5, 3, 64, 32, 1, 32),
+        (2, 1, 96, 16, 1, 16),
+        (1, 1, 112, 16, 1, 16),
+    ];
+    for (format, chain_bytes, array_bytes, expected) in [
+        (R8Unorm, 18, 36, r8),
+        (Rg8Unorm, 36, 72, rg8),
+        (Rgba8Unorm, 72, 144, four),
+        (Bgra8Unorm, 72, 144, four),
+        (Rgba16Float, 144, 288, half4),
+        (R32Float, 72, 144, four),
+        (R32Uint, 72, 144, four),
+        (Depth32Float, 72, 144, four),
+        (Bc1RgbaUnorm, 32, 64, bc1),
+        (Bc3RgbaUnorm, 64, 128, bc3),
+    ] {
+        let chain = PackedTextureLayout::new(format, 5, 3, 3).unwrap();
+        assert_eq!(chain.format(), format);
+        assert_eq!(chain.byte_len(), chain_bytes, "{format:?}");
+        let actual: Vec<_> = chain
+            .levels()
+            .iter()
+            .map(|f| (f.width, f.height, f.offset, f.row_bytes, f.rows, f.byte_len))
+            .collect();
+        assert_eq!(actual, expected[..3], "{format:?} chain");
+        let array = xenora_texture::PackedTextureArrayLayout::new(format, 5, 3, 3, 2).unwrap();
+        assert_eq!(array.layers(), 2);
+        assert_eq!(array.chain(), &chain);
+        assert_eq!(array.byte_len(), array_bytes, "{format:?}");
+        for (index, expected) in expected.into_iter().enumerate() {
+            let f = array
+                .footprint((index / 3) as u32, (index % 3) as u32)
+                .unwrap();
+            assert_eq!(
+                (f.width, f.height, f.offset, f.row_bytes, f.rows, f.byte_len),
+                expected,
+                "{format:?} subresource {index}"
+            );
+        }
+    }
+}
+
+#[test]
+fn ten_format_checked_rows_mip_sum_and_array_total_overflow() {
+    for (format, width, bytes) in [
+        (R8Unorm, usize::MAX, usize::MAX),
+        (Rg8Unorm, usize::MAX / 2, usize::MAX - 1),
+        (Rgba8Unorm, usize::MAX / 4, usize::MAX - 3),
+        (Bgra8Unorm, usize::MAX / 4, usize::MAX - 3),
+        (Rgba16Float, usize::MAX / 8, usize::MAX - 7),
+        (R32Float, usize::MAX / 4, usize::MAX - 3),
+        (R32Uint, usize::MAX / 4, usize::MAX - 3),
+        (Depth32Float, usize::MAX / 4, usize::MAX - 3),
+        (Bc1RgbaUnorm, usize::MAX / 2 - 3, usize::MAX - 7),
+        (Bc3RgbaUnorm, usize::MAX / 4 - 3, usize::MAX - 15),
+    ] {
+        let chain = PackedTextureLayout::new(format, width, 1, 1).unwrap();
+        assert_eq!(chain.byte_len(), bytes, "{format:?} representable boundary");
+        assert_eq!(
+            PackedTextureLayout::new(format, width, 1, 2),
+            Err(TextureError::SizeOverflow),
+            "{format:?} mip sum"
+        );
+        assert_eq!(
+            PackedTextureLayout::new(format, width, usize::MAX, 1),
+            Err(TextureError::SizeOverflow),
+            "{format:?} rows"
+        );
+        assert_eq!(
+            xenora_texture::PackedTextureArrayLayout::new(format, width, 1, 1, 2),
+            Err(TextureError::SizeOverflow),
+            "{format:?} array sum"
+        );
+        let one = xenora_texture::PackedTextureArrayLayout::new(format, width, 1, 1, 1).unwrap();
+        assert_eq!(one.byte_len(), bytes);
+        assert_eq!(one.footprint(0, 0).unwrap().byte_len, bytes);
+    }
+}

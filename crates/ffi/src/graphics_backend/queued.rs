@@ -18,6 +18,11 @@ use xenora_metal::{
 };
 use xenora_texture::PackedTextureArrayLayout;
 
+#[path = "queued_typed.rs"]
+mod typed;
+use typed::{loader_desc, native_desc};
+use xenora_loader::graphics::{GraphicsTypedCopyCapabilities, GraphicsTypedDepthSnapshot};
+
 type Completion = Result<GraphicsQueuedWorkOutput, GraphicsError>;
 
 enum Message {
@@ -95,6 +100,7 @@ impl Drop for Ticket {
 struct Entry {
     point: RenderPoint,
     outputs: Vec<RenderColorOutput>,
+    typed_outputs: Vec<xenora_metal::RenderTypedTextureOutput>,
     depth_output: Option<RenderDepthOutput>,
     copy_output: Option<(GraphicsCopyLayout, RenderCopyOutput)>,
     completed: Option<mpsc::Sender<Completion>>,
@@ -152,6 +158,9 @@ impl State {
                             .map_err(metal_error)
                             .and_then(|output| {
                                 let (layout, bytes) = match output {
+                                    OwnedCopyOutput::TypedTexture { desc, bytes } => {
+                                        (GraphicsCopyLayout::TypedTexture(loader_desc(desc)), bytes)
+                                    }
                                     OwnedCopyOutput::Rgba8Array {
                                         extent,
                                         mip_levels,
@@ -190,6 +199,17 @@ impl State {
                                     ),
                                 };
                                 let expected_bytes = match expected {
+                                    GraphicsCopyLayout::TypedTexture(desc) => {
+                                        PackedTextureArrayLayout::new(
+                                            desc.format,
+                                            desc.extent.0,
+                                            desc.extent.1,
+                                            desc.mip_levels,
+                                            desc.array_layers.unwrap_or(1),
+                                        )
+                                        .ok()
+                                        .map(|l| l.byte_len())
+                                    }
                                     GraphicsCopyLayout::Rgba8Array {
                                         extent,
                                         mip_levels,
@@ -230,9 +250,17 @@ impl State {
                             .map(|output| {
                                 GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
                                     colors: output.colors,
-                                    depth: output
-                                        .depth
-                                        .map(|depth| Arc::new(depth) as GraphicsDepthSnapshot),
+                                    color_layouts: Some(
+                                        output.color_layouts.into_iter().map(loader_desc).collect(),
+                                    ),
+                                    depth: output.depth.map(|depth| {
+                                        let e = entry
+                                            .depth_output
+                                            .as_ref()
+                                            .expect("owned depth output")
+                                            .extent();
+                                        packed_depth_snapshot(depth, (e[0], e[1]))
+                                    }),
                                 })
                             })
                     };
@@ -321,7 +349,9 @@ impl State {
             .collect::<Result<Vec<_>, _>>()?;
         let input = match (&request.layout, &request.source) {
             (
-                GraphicsCopyLayout::Rgba8Array { .. } | GraphicsCopyLayout::Rgba8MipChain { .. },
+                GraphicsCopyLayout::TypedTexture(_)
+                | GraphicsCopyLayout::Rgba8Array { .. }
+                | GraphicsCopyLayout::Rgba8MipChain { .. },
                 _,
             ) => {
                 return Err(GraphicsError::InvalidDescriptor);
@@ -351,7 +381,8 @@ impl State {
                     return Err(GraphicsError::InvalidDescriptor);
                 }
                 match layout {
-                    GraphicsCopyLayout::Rgba8Array { .. }
+                    GraphicsCopyLayout::TypedTexture(_)
+                    | GraphicsCopyLayout::Rgba8Array { .. }
                     | GraphicsCopyLayout::Rgba8MipChain { .. } => {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
@@ -386,6 +417,7 @@ impl State {
                     }
                 }
             }
+            (_, GraphicsCopyInput::HostDepth(_)) => return Err(GraphicsError::InvalidDescriptor),
         };
         let point = self
             .cohort
@@ -404,6 +436,7 @@ impl State {
             Entry {
                 point,
                 outputs: Vec::new(),
+                typed_outputs: Vec::new(),
                 depth_output: None,
                 copy_output: Some((request.layout, output)),
                 completed: Some(completed),
@@ -526,6 +559,7 @@ impl State {
             Entry {
                 point,
                 outputs: Vec::new(),
+                typed_outputs: Vec::new(),
                 depth_output: None,
                 copy_output: Some((
                     GraphicsCopyLayout::Buffer {
@@ -546,6 +580,7 @@ impl State {
         waits: &[GraphicsQueuePoint],
     ) -> Result<QueuedCopyInput<'a>, GraphicsError> {
         match layout {
+            GraphicsCopyLayout::TypedTexture(_) => Err(GraphicsError::InvalidDescriptor),
             GraphicsCopyLayout::Rgba8Array {
                 extent: (width, height),
                 mip_levels,
@@ -560,6 +595,7 @@ impl State {
                 )
                 .map_err(|_| GraphicsError::InvalidDescriptor)?;
                 match input {
+                    GraphicsCopyInput::HostDepth(_) => Err(GraphicsError::InvalidDescriptor),
                     GraphicsCopyInput::Host(bytes) => {
                         if bytes.len() != packed.byte_len() {
                             return Err(GraphicsError::InvalidDescriptor);
@@ -599,6 +635,7 @@ impl State {
                     PackedTextureLayout::new(TextureFormat::Rgba8Unorm, width, height, mip_levels)
                         .map_err(|_| GraphicsError::InvalidDescriptor)?;
                 match input {
+                    GraphicsCopyInput::HostDepth(_) => Err(GraphicsError::InvalidDescriptor),
                     GraphicsCopyInput::Host(bytes) => {
                         if bytes.len() != packed.byte_len() {
                             return Err(GraphicsError::InvalidDescriptor);
@@ -631,6 +668,7 @@ impl State {
             GraphicsCopyLayout::Rgba8 {
                 extent: (width, height),
             } => match input {
+                GraphicsCopyInput::HostDepth(_) => Err(GraphicsError::InvalidDescriptor),
                 GraphicsCopyInput::Host(bytes) => {
                     if width.checked_mul(height).and_then(|n| n.checked_mul(4)) != Some(bytes.len())
                     {
@@ -704,63 +742,75 @@ impl State {
                     .ok_or(GraphicsError::InvalidResourceHandle)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        let source =
-            self.image_copy_input(&request.source, request.source_layout, &request.waits)?;
-        let destination = self.image_copy_input(
-            &request.destination,
-            request.destination_layout,
-            &request.waits,
-        )?;
-        let mip_copy = matches!(
+        let typed = matches!(
             request.source_location,
-            GraphicsImageCopyLocation::Rgba8Mip { .. }
+            GraphicsImageCopyLocation::Texture { .. }
         ) || matches!(
             request.destination_location,
-            GraphicsImageCopyLocation::Rgba8Mip { .. }
+            GraphicsImageCopyLocation::Texture { .. }
         );
-        let location = |input| match input {
-            GraphicsImageCopyLocation::Rgba8Mip {
-                mip,
-                slice,
-                origin: (x, y),
-            } => ImageCopyLocation::Rgba8Mip {
-                mip,
-                slice,
-                origin: [x, y],
-            },
-            GraphicsImageCopyLocation::Rgba8 { origin: (x, y) } => {
-                ImageCopyLocation::Rgba8 { origin: [x, y] }
-            }
-            GraphicsImageCopyLocation::Buffer {
-                offset,
-                bytes_per_row,
-            } => ImageCopyLocation::Buffer {
-                offset,
-                bytes_per_row,
-            },
-        };
-        let copy = QueuedImageCopy {
-            source,
-            destination,
-            source_location: location(request.source_location),
-            destination_location: location(request.destination_location),
-            extent: [request.extent.0, request.extent.1],
-        };
-        let array_copy = matches!(request.source_layout, GraphicsCopyLayout::Rgba8Array { .. })
-            || matches!(
-                request.destination_layout,
-                GraphicsCopyLayout::Rgba8Array { .. }
-            );
-        let point = if array_copy {
-            self.cohort
-                .submit_array_image_copy(queue, copy, &dependencies)
-        } else if mip_copy {
-            self.cohort
-                .submit_mip_image_copy(queue, copy, &dependencies)
+        let point = if typed {
+            self.submit_native_typed_copy(queue, request, &dependencies)?
         } else {
-            self.cohort.submit_image_copy(queue, copy, &dependencies)
-        }
-        .map_err(metal_error)?;
+            let source =
+                self.image_copy_input(&request.source, request.source_layout, &request.waits)?;
+            let destination = self.image_copy_input(
+                &request.destination,
+                request.destination_layout,
+                &request.waits,
+            )?;
+            let mip_copy = matches!(
+                request.source_location,
+                GraphicsImageCopyLocation::Rgba8Mip { .. }
+            ) || matches!(
+                request.destination_location,
+                GraphicsImageCopyLocation::Rgba8Mip { .. }
+            );
+            let location = |input| match input {
+                GraphicsImageCopyLocation::Texture { .. } => unreachable!("typed path separated"),
+                GraphicsImageCopyLocation::Rgba8Mip {
+                    mip,
+                    slice,
+                    origin: (x, y),
+                } => ImageCopyLocation::Rgba8Mip {
+                    mip,
+                    slice,
+                    origin: [x, y],
+                },
+                GraphicsImageCopyLocation::Rgba8 { origin: (x, y) } => {
+                    ImageCopyLocation::Rgba8 { origin: [x, y] }
+                }
+                GraphicsImageCopyLocation::Buffer {
+                    offset,
+                    bytes_per_row,
+                } => ImageCopyLocation::Buffer {
+                    offset,
+                    bytes_per_row,
+                },
+            };
+            let copy = QueuedImageCopy {
+                source,
+                destination,
+                source_location: location(request.source_location),
+                destination_location: location(request.destination_location),
+                extent: [request.extent.0, request.extent.1],
+            };
+            let array_copy = matches!(request.source_layout, GraphicsCopyLayout::Rgba8Array { .. })
+                || matches!(
+                    request.destination_layout,
+                    GraphicsCopyLayout::Rgba8Array { .. }
+                );
+            if array_copy {
+                self.cohort
+                    .submit_array_image_copy(queue, copy, &dependencies)
+            } else if mip_copy {
+                self.cohort
+                    .submit_mip_image_copy(queue, copy, &dependencies)
+            } else {
+                self.cohort.submit_image_copy(queue, copy, &dependencies)
+            }
+            .map_err(metal_error)?
+        };
         let output = match self.cohort.copy_output(&point).map_err(metal_error) {
             Ok(output) => output,
             Err(error) => {
@@ -774,6 +824,7 @@ impl State {
             Entry {
                 point,
                 outputs: Vec::new(),
+                typed_outputs: Vec::new(),
                 depth_output: None,
                 copy_output: Some((request.destination_layout, output)),
                 completed: Some(completed),
@@ -849,15 +900,30 @@ impl State {
         )?;
         // Capture output capabilities before collection; they retain producer
         // provenance and cannot expose CPU mutation or raw native texture handles.
-        let outputs = (0..request.outputs.len())
-            .map(|slot| self.cohort.color_output(&point, slot).map_err(metal_error))
+        let typed_outputs = (0..request.outputs.len())
+            .map(|slot| {
+                self.cohort
+                    .typed_color_output(&point, slot)
+                    .map_err(metal_error)
+            })
             .collect::<Result<Vec<_>, _>>();
-        let outputs = match outputs {
-            Ok(outputs) => outputs,
-            Err(error) => {
-                self.fail(error.clone());
-                return Err(error);
+        let typed_outputs = match typed_outputs {
+            Ok(v) => v,
+            Err(e) => {
+                self.fail(e.clone());
+                return Err(e);
             }
+        };
+        let outputs = if typed_outputs
+            .iter()
+            .all(|o| o.desc().format == TextureFormat::Rgba8Unorm)
+        {
+            typed_outputs
+                .iter()
+                .map(|o| o.rgba8_output().map_err(metal_error))
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            Vec::new()
         };
         let depth_output = if request.depth_output.is_some() {
             match self.cohort.depth_output(&point).map_err(metal_error) {
@@ -876,6 +942,7 @@ impl State {
             Entry {
                 point,
                 outputs,
+                typed_outputs,
                 depth_output,
                 copy_output: None,
                 completed: Some(completed),
@@ -897,8 +964,20 @@ fn produced_output(
             .outputs
             .get(usize::from(slot))
             .cloned()
-            .ok_or(GraphicsError::InvalidResourceHandle),
+            .map(Ok)
+            .unwrap_or_else(|| {
+                entry
+                    .typed_outputs
+                    .get(usize::from(slot))
+                    .ok_or(GraphicsError::InvalidResourceHandle)?
+                    .rgba8_output()
+                    .map_err(metal_error)
+            }),
         GraphicsProducedOutput::Copy(0) => match &entry.copy_output {
+            Some((
+                GraphicsCopyLayout::TypedTexture(desc),
+                RenderCopyOutput::TypedTexture(output),
+            )) if native_desc(*desc) == output.desc() => output.rgba8_output().map_err(metal_error),
             Some((
                 GraphicsCopyLayout::Rgba8Array {
                     extent,
@@ -940,6 +1019,19 @@ fn produced_depth(
     entries: &HashMap<GraphicsQueuePoint, Entry>,
     version: GraphicsProducedVersion,
 ) -> Result<RenderDepthOutput, GraphicsError> {
+    if version.output == GraphicsProducedOutput::Copy(0) {
+        if let Some((
+            GraphicsCopyLayout::TypedTexture(desc),
+            RenderCopyOutput::TypedTexture(output),
+        )) = entries
+            .get(&version.point)
+            .and_then(|e| e.copy_output.as_ref())
+            && native_desc(*desc) == output.desc()
+        {
+            return output.depth_output().map_err(metal_error);
+        }
+        return Err(GraphicsError::InvalidDescriptor);
+    }
     if version.output != GraphicsProducedOutput::Depth {
         return Err(GraphicsError::InvalidDescriptor);
     }
@@ -1001,6 +1093,14 @@ fn submit_native(
     entries: &HashMap<GraphicsQueuePoint, Entry>,
     dependencies: &[RenderPoint],
 ) -> Result<RenderPoint, GraphicsError> {
+    if request.color_types.len() != request.colors.len() {
+        return Err(GraphicsError::InvalidDescriptor);
+    }
+    let color_formats: Vec<_> = request
+        .color_types
+        .iter()
+        .map(|t| t.map_or(TextureFormat::Rgba8Unorm, |t| t.format))
+        .collect();
     let shaders = request
         .draws
         .iter()
@@ -1009,6 +1109,14 @@ fn submit_native(
                 .pipeline
                 .as_ref()
                 .ok_or(GraphicsError::InvalidDescriptor)?;
+            let texture_formats = std::array::from_fn(|slot| {
+                draw.textures[slot].as_ref().map(|t| match t {
+                    GraphicsTextureInput::Host(t) => t.format,
+                    GraphicsTextureInput::ProducedTyped { desc, .. } => desc.format,
+                    _ => TextureFormat::Rgba8Unorm,
+                })
+            });
+            validate_pipeline_formats(pipeline, &color_formats, texture_formats)?;
             if pipeline.color_targets != request.colors.len()
                 || pipeline.sampled_pairs & !15 != 0
                 || pipeline.uses_texture != (pipeline.sampled_pairs != 0)
@@ -1059,6 +1167,7 @@ fn submit_native(
             let is_array = match texture {
                 GraphicsTextureInput::Host(t) => t.array_layers.is_some(),
                 GraphicsTextureInput::ProducedArray { .. } => true,
+                GraphicsTextureInput::ProducedTyped { desc, .. } => desc.array_layers.is_some(),
                 _ => false,
             };
             if is_array != array_desc.is_some()
@@ -1067,6 +1176,14 @@ fn submit_native(
                 return Err(GraphicsError::InvalidDescriptor);
             }
             let uploaded = match texture {
+                GraphicsTextureInput::ProducedTyped { version, desc } => {
+                    if !request.waits.contains(&version.point)
+                        || produced_typed_output(entries, *version)?.desc() != native_desc(*desc)
+                    {
+                        return Err(GraphicsError::InvalidDescriptor);
+                    }
+                    None
+                }
                 GraphicsTextureInput::ProducedArray {
                     version,
                     width,
@@ -1117,6 +1234,26 @@ fn submit_native(
                 )?,
                 _ => None,
             };
+            let produced_typed_view =
+                if let GraphicsTextureInput::ProducedTyped { version, desc } = texture {
+                    let output = produced_typed_output(entries, *version)?;
+                    Some(if let Some(array) = array_desc {
+                        output
+                            .array_slice_view(native_array_view_desc(array))
+                            .map_err(metal_error)?
+                    } else {
+                        let view = draw.views[texture_slot].map(native_view_desc).unwrap_or(
+                            xenora_metal::TextureViewDesc {
+                                base_mip: 0,
+                                mip_count: desc.mip_levels,
+                                format: typed_native_view_format(desc.format),
+                            },
+                        );
+                        output.view(view).map_err(metal_error)?
+                    })
+                } else {
+                    None
+                };
             let produced_view =
                 if let (GraphicsTextureInput::ProducedArray { version, .. }, Some(desc)) =
                     (texture, array_desc)
@@ -1164,6 +1301,17 @@ fn submit_native(
                 let texture_slot = BindingSlot::new(texture_slot as u32);
                 let sampler_slot = BindingSlot::new(sampler_slot as u32);
                 pairs.push(match texture {
+                    GraphicsTextureInput::ProducedTyped { .. } => {
+                        QueuedSampledBinding::ProducedTypedView {
+                            view: produced_typed_view
+                                .as_ref()
+                                .ok_or(GraphicsError::InvalidDescriptor)?
+                                .clone(),
+                            sampler,
+                            texture_slot,
+                            sampler_slot,
+                        }
+                    }
                     GraphicsTextureInput::Host(_) if viewed.is_some() => {
                         QueuedSampledBinding::Viewed {
                             view: viewed.as_ref().unwrap().clone(),
@@ -1276,15 +1424,31 @@ fn submit_native(
     let loads = request
         .colors
         .iter()
-        .map(|binding| match binding {
+        .enumerate()
+        .map(|(slot, binding)| match binding {
             GraphicsQueuedColorInput::Clear(_) => Ok(QueuedColorLoad::Clear),
             GraphicsQueuedColorInput::Host(bytes) => Ok(QueuedColorLoad::Host(bytes)),
             GraphicsQueuedColorInput::Produced(version) => {
-                let output = produced_output(entries, *version)?;
-                if output.is_array() || output.mip_levels() != 1 {
+                if !request.waits.contains(&version.point) {
                     return Err(GraphicsError::InvalidDescriptor);
                 }
-                Ok(QueuedColorLoad::Produced(output))
+                let output = produced_typed_output(entries, *version)?;
+                let format = request
+                    .color_types
+                    .get(slot)
+                    .ok_or(GraphicsError::InvalidDescriptor)?
+                    .map_or(TextureFormat::Rgba8Unorm, |t| t.format);
+                if output.desc()
+                    != (xenora_metal::TypedTextureDesc {
+                        format,
+                        extent: [request.extent.0, request.extent.1],
+                        mip_levels: 1,
+                        array_layers: None,
+                    })
+                {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                Ok(QueuedColorLoad::ProducedTyped(output))
             }
         })
         .collect::<Result<Vec<_>, GraphicsError>>()?;
@@ -1293,21 +1457,28 @@ fn submit_native(
         .as_ref()
         .map(|binding| match binding {
             GraphicsQueuedDepthInput::Clear(value) => Ok(QueuedDepthInput::Clear(*value)),
-            GraphicsQueuedDepthInput::Host(snapshot) => snapshot
-                .downcast_ref::<DepthSnapshot>()
-                .cloned()
-                .map(QueuedDepthInput::Host)
-                .ok_or(GraphicsError::InvalidDescriptor),
+            GraphicsQueuedDepthInput::Host(snapshot) => {
+                super::native_depth_snapshot(snapshot).map(QueuedDepthInput::Host)
+            }
             GraphicsQueuedDepthInput::Produced(version) => {
                 produced_depth(entries, *version).map(QueuedDepthInput::Produced)
             }
         })
         .transpose()?;
-    let pass = TriangleTargetsPass {
+    if request.color_types.len() != request.colors.len() {
+        return Err(GraphicsError::InvalidDescriptor);
+    }
+    let typed_colors: Vec<_> = request
+        .color_types
+        .iter()
+        .zip(&clears)
+        .map(|(t, c)| native_color_attachment(*t, *c))
+        .collect();
+    let pass = xenora_metal::TypedTriangleTargetsPass {
         draws: &draws,
         states: &states,
         extent: [request.extent.0, request.extent.1],
-        clears: &clears,
+        colors: &typed_colors,
         clear_depth: (request.depth.is_none()
             && request
                 .draws
@@ -1327,7 +1498,7 @@ fn submit_native(
         })
         .collect();
     cohort
-        .submit_with_geometry(
+        .submit_with_typed_attachments(
             queue,
             &shaders,
             &pass,
@@ -1368,7 +1539,13 @@ where
                 return;
             }
             if initialized
-                .send(Ok(texture_capabilities(&state.gpu)))
+                .send(Ok((
+                    texture_capabilities(&state.gpu),
+                    GraphicsTypedCopyCapabilities {
+                        formats: state.gpu.typed_copy_capabilities(),
+                    },
+                    resource_role_capabilities(&state.gpu),
+                )))
                 .is_err()
             {
                 return;
@@ -1405,8 +1582,8 @@ where
         requests: Some(requests),
         thread: Mutex::new(Some(thread)),
     });
-    let capabilities = ready.recv().map_err(|_| disconnected())??;
-    context.set_metal_array_view_queued_backend(capabilities, move |request| {
+    let (capabilities, typed_capabilities, roles) = ready.recv().map_err(|_| disconnected())??;
+    context.set_metal_typed_copy_queued_backend(capabilities, typed_capabilities, move |request| {
         let point = match &request {
             GraphicsQueuedWorkRequest::Render(request) => request.point,
             GraphicsQueuedWorkRequest::ImageCopy(request) => request.point,
@@ -1433,6 +1610,7 @@ where
             terminal: false,
         }))
     });
+    context.enable_resource_roles(roles)?;
     Ok(())
 }
 
@@ -2551,5 +2729,60 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+fn produced_typed_output(
+    entries: &HashMap<GraphicsQueuePoint, Entry>,
+    version: GraphicsProducedVersion,
+) -> Result<xenora_metal::RenderTypedTextureOutput, GraphicsError> {
+    let entry = entries
+        .get(&version.point)
+        .ok_or(GraphicsError::InvalidResourceHandle)?;
+    match version.output {
+        GraphicsProducedOutput::Color(slot) => entry
+            .typed_outputs
+            .get(slot as usize)
+            .cloned()
+            .map(Ok)
+            .unwrap_or_else(|| {
+                entry
+                    .outputs
+                    .get(slot as usize)
+                    .ok_or(GraphicsError::InvalidResourceHandle)?
+                    .typed_output()
+                    .map_err(metal_error)
+            }),
+        GraphicsProducedOutput::Depth => entry
+            .depth_output
+            .as_ref()
+            .ok_or(GraphicsError::InvalidResourceHandle)?
+            .typed_output()
+            .map_err(metal_error),
+        GraphicsProducedOutput::Copy(0) => match entry.copy_output.as_ref() {
+            Some((
+                GraphicsCopyLayout::TypedTexture(desc),
+                RenderCopyOutput::TypedTexture(output),
+            )) if native_desc(*desc) == output.desc() => Ok(output.clone()),
+            Some((_, RenderCopyOutput::Color(output))) => {
+                output.typed_output().map_err(metal_error)
+            }
+            _ => Err(GraphicsError::InvalidDescriptor),
+        },
+        _ => Err(GraphicsError::InvalidDescriptor),
+    }
+}
+fn typed_native_view_format(format: TextureFormat) -> TextureViewFormat {
+    match format {
+        TextureFormat::Rgba8Unorm => TextureViewFormat::Rgba8Unorm,
+        TextureFormat::R8Unorm => TextureViewFormat::R8Unorm,
+        TextureFormat::Rg8Unorm => TextureViewFormat::Rg8Unorm,
+        TextureFormat::Bgra8Unorm => TextureViewFormat::Bgra8Unorm,
+        TextureFormat::Rgba16Float => TextureViewFormat::Rgba16Float,
+        TextureFormat::R32Float => TextureViewFormat::R32Float,
+        TextureFormat::R32Uint => TextureViewFormat::R32Uint,
+        TextureFormat::Depth32Float => TextureViewFormat::Depth32Float,
+        TextureFormat::Bc1RgbaUnorm => TextureViewFormat::Bc1RgbaUnorm,
+        TextureFormat::Bc3RgbaUnorm => TextureViewFormat::Bc3RgbaUnorm,
     }
 }

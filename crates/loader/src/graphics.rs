@@ -19,6 +19,18 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use xenora_texture::{PackedTextureArrayLayout, PackedTextureLayout, TextureFormat};
 
+#[path = "graphics_resource_roles.rs"]
+mod resource_roles;
+#[path = "graphics_typed_copy.rs"]
+mod typed_copy;
+pub use resource_roles::{
+    GraphicsResourceRoleCapabilities, GraphicsTypedColorAttachment, GraphicsTypedColorClear,
+};
+
+pub use typed_copy::{
+    GraphicsTypedCopyCapabilities, GraphicsTypedDepthSnapshot, GraphicsTypedTextureDesc,
+};
+
 /// Maximum retained nodes for an explicitly graph-capable queued backend.
 pub const MAX_QUEUED_GRAPH_NODES: usize = 16;
 
@@ -225,6 +237,7 @@ impl GraphicsTextureCapabilities {
             TextureFormat::R8Unorm => self.r8,
             TextureFormat::Bc1RgbaUnorm => self.bc1,
             TextureFormat::Bc3RgbaUnorm => self.bc3,
+            _ => false,
         }
     }
 }
@@ -448,6 +461,7 @@ impl Default for GraphicsDrawState {
 /// Validated positions and viewport for one ordered draw.
 #[derive(Debug)]
 pub struct GraphicsPipeline {
+    pub types: xenora_shader::GraphicsPipelineTypes,
     pub required_uniform_mask: u8,
     pub msl: String,
     pub color_targets: usize,
@@ -457,6 +471,13 @@ pub struct GraphicsPipeline {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum GraphicsTextureViewFormat {
+    Rg8Unorm,
+    Bgra8Unorm,
+    Bgra8UnormSrgb,
+    Rgba16Float,
+    R32Float,
+    R32Uint,
+    Depth32Float,
     R8Unorm,
     Rgba8Unorm,
     Rgba8UnormSrgb,
@@ -469,6 +490,12 @@ pub enum GraphicsTextureViewFormat {
 impl GraphicsTextureViewFormat {
     fn storage_format(self) -> TextureFormat {
         match self {
+            Self::Rg8Unorm => TextureFormat::Rg8Unorm,
+            Self::Bgra8Unorm | Self::Bgra8UnormSrgb => TextureFormat::Bgra8Unorm,
+            Self::Rgba16Float => TextureFormat::Rgba16Float,
+            Self::R32Float => TextureFormat::R32Float,
+            Self::R32Uint => TextureFormat::R32Uint,
+            Self::Depth32Float => TextureFormat::Depth32Float,
             Self::R8Unorm => TextureFormat::R8Unorm,
             Self::Rgba8Unorm | Self::Rgba8UnormSrgb => TextureFormat::Rgba8Unorm,
             Self::Bc1RgbaUnorm | Self::Bc1RgbaUnormSrgb => TextureFormat::Bc1RgbaUnorm,
@@ -573,8 +600,12 @@ pub enum GraphicsDepthLoad {
 }
 
 /// Initial contents of a host-backed RGBA8 color attachment.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum GraphicsColorLoad {
+    Typed {
+        attachment: GraphicsTypedColorAttachment,
+        load: bool,
+    },
     Clear([u8; 4]),
     Load,
 }
@@ -582,6 +613,7 @@ pub enum GraphicsColorLoad {
 /// Immutable base-level color snapshot; `clear` applies when `previous` is None.
 #[derive(Clone, Debug)]
 pub struct GraphicsColorBinding {
+    pub typed: Option<GraphicsTypedColorAttachment>,
     pub clear: [u8; 4],
     pub previous: Option<Arc<[u8]>>,
 }
@@ -602,6 +634,7 @@ pub struct GraphicsDepthBinding {
 }
 
 pub struct GraphicsPassOutput {
+    pub color_layouts: Option<Vec<GraphicsTypedTextureDesc>>,
     pub colors: Vec<Vec<u8>>,
     pub depth: Option<GraphicsDepthSnapshot>,
 }
@@ -637,6 +670,10 @@ pub struct GraphicsProducedVersion {
 
 #[derive(Clone, Debug)]
 pub enum GraphicsTextureInput {
+    ProducedTyped {
+        version: GraphicsProducedVersion,
+        desc: GraphicsTypedTextureDesc,
+    },
     ProducedArray {
         version: GraphicsProducedVersion,
         width: usize,
@@ -728,6 +765,7 @@ pub enum GraphicsQueuedDepthInput {
 }
 
 pub struct GraphicsQueuedSubmissionRequest {
+    pub color_types: Vec<Option<GraphicsTypedColorAttachment>>,
     pub generation: u64,
     pub point: GraphicsQueuePoint,
     pub waits: Vec<GraphicsQueuePoint>,
@@ -743,6 +781,7 @@ pub struct GraphicsQueuedSubmissionRequest {
 /// Exact logical layout for bounded whole-resource copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsCopyLayout {
+    TypedTexture(GraphicsTypedTextureDesc),
     Rgba8Array {
         extent: (usize, usize),
         mip_levels: u32,
@@ -763,6 +802,7 @@ pub enum GraphicsCopyLayout {
 impl GraphicsCopyLayout {
     fn byte_len(self) -> Result<usize, GraphicsError> {
         match self {
+            Self::TypedTexture(desc) => desc.byte_len(),
             Self::Rgba8Array {
                 extent,
                 mip_levels,
@@ -792,6 +832,7 @@ impl GraphicsCopyLayout {
     }
     fn produced(self) -> GraphicsProducedLayout {
         match self {
+            Self::TypedTexture(desc) => desc.produced(),
             Self::Rgba8Array {
                 extent,
                 mip_levels,
@@ -813,6 +854,11 @@ impl GraphicsCopyLayout {
 /// Texel origin or byte-addressed rows for an image-copy endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsImageCopyLocation {
+    Texture {
+        mip: u32,
+        slice: u32,
+        origin: (usize, usize),
+    },
     Rgba8Mip {
         mip: u32,
         slice: u32,
@@ -927,6 +973,7 @@ impl GraphicsImageCopyLocation {
 /// Authoritative produced storage kind, independent of output-slot identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsProducedLayout {
+    TypedTexture(GraphicsTypedTextureDesc),
     Rgba8Array {
         extent: (usize, usize),
         mip_levels: u32,
@@ -949,6 +996,7 @@ pub enum GraphicsProducedLayout {
 
 #[derive(Clone, Debug)]
 pub enum GraphicsCopyInput {
+    HostDepth(GraphicsDepthSnapshot),
     Host(Arc<[u8]>),
     Produced(GraphicsProducedVersion),
 }
@@ -1131,6 +1179,9 @@ struct SubmissionCommit {
     extent: (usize, usize),
     outputs: usize,
     byte_count: usize,
+    color_bytes: Vec<usize>,
+    color_formats: Vec<TextureFormat>,
+    typed_colors: bool,
     draw_count: usize,
     backend: GraphicsBackendId,
 }
@@ -1165,6 +1216,7 @@ pub type StatefulRenderer = dyn Fn(
     + Sync;
 
 struct DepthResource {
+    typed_desc: GraphicsTypedTextureDesc,
     extent: (usize, usize),
     state: ResourceStates,
     snapshot: Option<GraphicsDepthSnapshot>,
@@ -1208,6 +1260,8 @@ pub struct GraphicsContext {
     image_copy_backend: bool,
     mip_copy_backend: bool,
     array_copy_backend: bool,
+    typed_copy_capabilities: GraphicsTypedCopyCapabilities,
+    resource_roles: GraphicsResourceRoleCapabilities,
     unaligned_buffer_region_backend: bool,
     graph_backend: bool,
     geometry_backend: bool,
@@ -1291,6 +1345,8 @@ impl GraphicsContext {
             image_copy_backend: false,
             mip_copy_backend: false,
             array_copy_backend: false,
+            typed_copy_capabilities: GraphicsTypedCopyCapabilities::default(),
+            resource_roles: GraphicsResourceRoleCapabilities::default(),
             unaligned_buffer_region_backend: false,
             graph_backend: false,
             geometry_backend: false,
@@ -1331,6 +1387,8 @@ impl GraphicsContext {
         self.image_copy_backend = false;
         self.mip_copy_backend = false;
         self.array_copy_backend = false;
+        self.typed_copy_capabilities = GraphicsTypedCopyCapabilities::default();
+        self.resource_roles = GraphicsResourceRoleCapabilities::default();
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -1558,8 +1616,9 @@ impl GraphicsContext {
         }
         let output_bytes = prepared
             .commit
-            .byte_count
-            .checked_mul(prepared.commit.outputs)
+            .color_bytes
+            .iter()
+            .try_fold(0usize, |sum, n| sum.checked_add(*n))
             .ok_or(GraphicsError::InvalidDescriptor)?;
         let geometry_allocation_bytes = prepared
             .geometry
@@ -1662,35 +1721,34 @@ impl GraphicsContext {
                         if let Some(version) =
                             handles[slot].and_then(|h| preparation.produced.get(&h))
                         {
-                            // Match the exact produced backing, including every mip level.
-                            if !matches!(
-                                version.output,
-                                GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
-                            ) || preparation.layouts.get(&handles[slot].unwrap())
-                                != Some(&if let Some(array_layers) = snapshot.array_layers {
-                                    GraphicsProducedLayout::Rgba8Array {
-                                        extent: (snapshot.width, snapshot.height),
-                                        mip_levels: snapshot.mip_levels,
-                                        array_layers,
-                                    }
-                                } else if snapshot.mip_levels == 1 {
-                                    GraphicsProducedLayout::Rgba8 {
-                                        extent: (snapshot.width, snapshot.height),
-                                    }
-                                } else {
-                                    GraphicsProducedLayout::Rgba8MipChain {
-                                        extent: (snapshot.width, snapshot.height),
-                                        mip_levels: snapshot.mip_levels,
-                                    }
-                                })
+                            let desc = GraphicsTypedTextureDesc {
+                                format: snapshot.format,
+                                extent: (snapshot.width, snapshot.height),
+                                mip_levels: snapshot.mip_levels,
+                                array_layers: snapshot.array_layers,
+                            };
+                            if preparation
+                                .layouts
+                                .get(&handles[slot].expect("produced handle"))
+                                != Some(&desc.produced())
+                                || !matches!(
+                                    version.output,
+                                    GraphicsProducedOutput::Color(_)
+                                        | GraphicsProducedOutput::Copy(0)
+                                        | GraphicsProducedOutput::Depth
+                                )
                                 || (matches!(version.output, GraphicsProducedOutput::Copy(_))
                                     && !self.copy_backend)
                                 || (snapshot.mip_levels != 1 && !self.mip_copy_backend)
-                                || snapshot.format != TextureFormat::Rgba8Unorm
                             {
                                 return Err(GraphicsError::InvalidDescriptor);
                             }
-                            if let Some(array_layers) = snapshot.array_layers {
+                            if snapshot.format != TextureFormat::Rgba8Unorm {
+                                GraphicsTextureInput::ProducedTyped {
+                                    version: *version,
+                                    desc,
+                                }
+                            } else if let Some(array_layers) = snapshot.array_layers {
                                 GraphicsTextureInput::ProducedArray {
                                     version: *version,
                                     width: snapshot.width,
@@ -1727,6 +1785,7 @@ impl GraphicsContext {
             });
         }
         let request = GraphicsQueuedSubmissionRequest {
+            color_types: prepared.request.colors.iter().map(|c| c.typed).collect(),
             generation,
             point,
             waits: closure.iter().map(|h| self.queued[h].point).collect(),
@@ -1761,9 +1820,14 @@ impl GraphicsContext {
                                         extent: prepared.commit.extent,
                                     }
                                 }
-                                _ => GraphicsProducedLayout::Rgba8 {
+                                GraphicsProducedOutput::Color(slot) => GraphicsTypedTextureDesc {
+                                    format: prepared.commit.color_formats[slot as usize],
                                     extent: prepared.commit.extent,
-                                },
+                                    mip_levels: 1,
+                                    array_layers: None,
+                                }
+                                .produced(),
+                                _ => unreachable!("render output"),
                             },
                         )
                     })
@@ -1927,6 +1991,7 @@ impl GraphicsContext {
         let mut region = None;
         let mut image = None;
         let mut mip_copy = false;
+        let mut typed_copy = false;
         for command in &commands.commands {
             match *command {
                 GraphicsCommand::ResourceBarrier {
@@ -1934,11 +1999,7 @@ impl GraphicsContext {
                     before,
                     after,
                 } => {
-                    let initial = self
-                        .resources
-                        .get(&resource)
-                        .ok_or(GraphicsError::InvalidResourceHandle)?
-                        .state;
+                    let initial = self.copy_resource_state(resource)?;
                     if states.get(&resource).copied().unwrap_or(initial) != before {
                         return Err(GraphicsError::ResourceLifetimeViolation);
                     }
@@ -1970,6 +2031,12 @@ impl GraphicsContext {
                         if !self.image_copy_backend {
                             return Err(GraphicsError::NativeMetalRequired);
                         }
+                        typed_copy =
+                            matches!(source_location, GraphicsImageCopyLocation::Texture { .. })
+                                || matches!(
+                                    destination_location,
+                                    GraphicsImageCopyLocation::Texture { .. }
+                                );
                         mip_copy =
                             matches!(source_location, GraphicsImageCopyLocation::Rgba8Mip { .. })
                                 || matches!(
@@ -1997,9 +2064,9 @@ impl GraphicsContext {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
                     let source_layout =
-                        self.copy_layout_for_transfer(source, image.is_none(), mip_copy, mip_copy)?;
+                        self.copy_submission_layout(source, image.is_none(), mip_copy, typed_copy)?;
                     let layout =
-                        self.copy_layout_for_transfer(destination, false, mip_copy, mip_copy)?;
+                        self.copy_submission_layout(destination, false, mip_copy, typed_copy)?;
                     if (matches!(source_layout, GraphicsCopyLayout::Rgba8Array { .. })
                         || matches!(layout, GraphicsCopyLayout::Rgba8Array { .. }))
                         && !self.array_copy_backend
@@ -2016,8 +2083,19 @@ impl GraphicsContext {
                         ) {
                             return Err(GraphicsError::InvalidDescriptor);
                         }
-                        source_location.validate(source_layout, extent)?;
-                        destination_location.validate(layout, extent)?;
+                        if typed_copy {
+                            self.validate_typed_pair(
+                                source_layout,
+                                layout,
+                                source_location,
+                                destination_location,
+                                extent,
+                                true,
+                            )?;
+                        } else {
+                            source_location.validate(source_layout, extent)?;
+                            destination_location.validate(layout, extent)?;
+                        }
                         reads.insert(destination);
                     } else if let Some((source_offset, destination_offset, byte_len)) = region {
                         let (
@@ -2055,12 +2133,12 @@ impl GraphicsContext {
                     if states
                         .get(&source)
                         .copied()
-                        .unwrap_or(self.resources[&source].state)
+                        .unwrap_or(self.copy_resource_state(source)?)
                         != ResourceStates::COPY_SOURCE
                         || states
                             .get(&destination)
                             .copied()
-                            .unwrap_or(self.resources[&destination].state)
+                            .unwrap_or(self.copy_resource_state(destination)?)
                             != ResourceStates::COPY_DEST
                     {
                         return Err(GraphicsError::ResourceLifetimeViolation);
@@ -2085,9 +2163,14 @@ impl GraphicsContext {
             }
         }
         let source_layout =
-            self.copy_layout_for_transfer(source, image.is_none(), mip_copy, mip_copy)?;
+            self.copy_submission_layout(source, image.is_none(), mip_copy, typed_copy)?;
         let produced = preparation.produced.get(&source).copied();
-        if produced.is_some() && self.resources[&source].guest_backing_addr.is_some() {
+        if produced.is_some()
+            && self
+                .resources
+                .get(&source)
+                .is_some_and(|r| r.guest_backing_addr.is_some())
+        {
             return Err(GraphicsError::InvalidDescriptor);
         }
         let prior = if region.is_some() || image.is_some() {
@@ -2100,6 +2183,13 @@ impl GraphicsContext {
                 || !match layout {
                     GraphicsCopyLayout::Buffer { .. } => {
                         version.output == GraphicsProducedOutput::Copy(0)
+                    }
+                    GraphicsCopyLayout::TypedTexture(desc) => {
+                        matches!(version.output, GraphicsProducedOutput::Copy(0))
+                            || (desc.format == TextureFormat::Depth32Float
+                                && version.output == GraphicsProducedOutput::Depth)
+                            || (desc.format == TextureFormat::Rgba8Unorm
+                                && matches!(version.output, GraphicsProducedOutput::Color(_)))
                     }
                     GraphicsCopyLayout::Rgba8 { .. }
                     | GraphicsCopyLayout::Rgba8MipChain { .. }
@@ -2119,6 +2209,13 @@ impl GraphicsContext {
                     GraphicsCopyLayout::Buffer { .. } => {
                         version.output == GraphicsProducedOutput::Copy(0)
                     }
+                    GraphicsCopyLayout::TypedTexture(desc) => {
+                        matches!(version.output, GraphicsProducedOutput::Copy(0))
+                            || (desc.format == TextureFormat::Depth32Float
+                                && version.output == GraphicsProducedOutput::Depth)
+                            || (desc.format == TextureFormat::Rgba8Unorm
+                                && matches!(version.output, GraphicsProducedOutput::Color(_)))
+                    }
                     GraphicsCopyLayout::Rgba8 { .. }
                     | GraphicsCopyLayout::Rgba8MipChain { .. }
                     | GraphicsCopyLayout::Rgba8Array { .. } => {
@@ -2137,7 +2234,8 @@ impl GraphicsContext {
                 .checked_add(3)
                 .map(|n| n & !3)
                 .ok_or(GraphicsError::InvalidDescriptor)?,
-            GraphicsCopyLayout::Rgba8 { .. }
+            GraphicsCopyLayout::TypedTexture(_)
+            | GraphicsCopyLayout::Rgba8 { .. }
             | GraphicsCopyLayout::Rgba8MipChain { .. }
             | GraphicsCopyLayout::Rgba8Array { .. } => bytes,
         };
@@ -2145,7 +2243,8 @@ impl GraphicsContext {
             (_, true) => 2,
             (GraphicsCopyLayout::Buffer { .. }, false) => 4,
             (
-                GraphicsCopyLayout::Rgba8 { .. }
+                GraphicsCopyLayout::TypedTexture(_)
+                | GraphicsCopyLayout::Rgba8 { .. }
                 | GraphicsCopyLayout::Rgba8MipChain { .. }
                 | GraphicsCopyLayout::Rgba8Array { .. },
                 false,
@@ -2189,6 +2288,16 @@ impl GraphicsContext {
                 .checked_mul(factor)
                 .ok_or(GraphicsError::InvalidDescriptor)?
         };
+        let copy_allocation_bytes = if typed_copy {
+            typed_copy::copy_reservation(
+                source_layout,
+                layout,
+                produced.is_none(),
+                prior.is_none(),
+            )?
+        } else {
+            copy_allocation_bytes
+        };
         // This ledger bounds native payload/scratch, not just logical publication.
         // The byte-patch kernel copies four u32 parameters into command storage.
         let copy_allocation_bytes = copy_allocation_bytes
@@ -2227,6 +2336,21 @@ impl GraphicsContext {
         let input = |handle, version| -> Result<GraphicsCopyInput, GraphicsError> {
             if let Some(version) = version {
                 return Ok(GraphicsCopyInput::Produced(version));
+            }
+            if let Some(depth) = self.depth_resources.get(&handle) {
+                let snapshot = depth
+                    .snapshot
+                    .as_ref()
+                    .ok_or(GraphicsError::InvalidDescriptor)?;
+                if let Some(packed) = snapshot.downcast_ref::<GraphicsTypedDepthSnapshot>() {
+                    if packed.desc != depth.typed_desc
+                        || packed.bytes.len() != depth.typed_desc.byte_len()?
+                    {
+                        return Err(GraphicsError::InvalidDescriptor);
+                    }
+                    return Ok(GraphicsCopyInput::Host(packed.bytes.clone()));
+                }
+                return Ok(GraphicsCopyInput::HostDepth(snapshot.clone()));
             }
             let resource = &self.resources[&handle];
             let bytes = if resource.guest_backing_addr.is_some() {
@@ -2293,7 +2417,7 @@ impl GraphicsContext {
                 states
                     .get(handle)
                     .copied()
-                    .unwrap_or(self.resources[handle].state),
+                    .unwrap_or(self.copy_resource_state(*handle)?),
             );
         }
         let ticket = self
@@ -2360,6 +2484,9 @@ impl GraphicsContext {
         // The admitted layout, not the current backend capability, selects the
         // validation contract. Legacy receipts still require a single mip.
         let allow_mips = matches!(commit.layout, GraphicsCopyLayout::Rgba8MipChain { .. });
+        if matches!(layout, GraphicsCopyLayout::TypedTexture(_)) {
+            return self.commit_typed_copy(commit, layout, bytes);
+        }
         if self.resources.contains_key(&commit.destination)
             && self.copy_layout_for_transfer(
                 commit.destination,
@@ -3147,6 +3274,8 @@ impl GraphicsContext {
         self.image_copy_backend = false;
         self.mip_copy_backend = false;
         self.array_copy_backend = false;
+        self.typed_copy_capabilities = GraphicsTypedCopyCapabilities::default();
+        self.resource_roles = GraphicsResourceRoleCapabilities::default();
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -3219,7 +3348,7 @@ impl GraphicsContext {
             + self
                 .retired_depth
                 .values()
-                .map(|depth| depth.extent.0 * depth.extent.1 * 4)
+                .map(|depth| depth.typed_desc.byte_len().expect("validated depth layout"))
                 .sum::<usize>()
     }
 
@@ -3455,6 +3584,8 @@ impl GraphicsContext {
         self.image_copy_backend = false;
         self.mip_copy_backend = false;
         self.array_copy_backend = false;
+        self.typed_copy_capabilities = GraphicsTypedCopyCapabilities::default();
+        self.resource_roles = GraphicsResourceRoleCapabilities::default();
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -3521,6 +3652,7 @@ impl GraphicsContext {
                 return Err(GraphicsError::InvalidDescriptor);
             }
             renderer(draws, extent, clears, clear_depth).map(|colors| GraphicsPassOutput {
+                color_layouts: None,
                 colors,
                 depth: None,
             })
@@ -3574,6 +3706,8 @@ impl GraphicsContext {
         self.image_copy_backend = false;
         self.mip_copy_backend = false;
         self.array_copy_backend = false;
+        self.typed_copy_capabilities = GraphicsTypedCopyCapabilities::default();
+        self.resource_roles = GraphicsResourceRoleCapabilities::default();
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -3599,6 +3733,8 @@ impl GraphicsContext {
         self.image_copy_backend = false;
         self.mip_copy_backend = false;
         self.array_copy_backend = false;
+        self.typed_copy_capabilities = GraphicsTypedCopyCapabilities::default();
+        self.resource_roles = GraphicsResourceRoleCapabilities::default();
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -3890,7 +4026,7 @@ impl GraphicsContext {
                 width
             }
             ResourceDimension::Texture2D if is_texture_array => PackedTextureArrayLayout::new(
-                TextureFormat::Rgba8Unorm,
+                texture_format.ok_or(GraphicsError::InvalidDescriptor)?,
                 width,
                 desc.height as usize,
                 u32::from(desc.mip_levels),
@@ -3921,7 +4057,7 @@ impl GraphicsContext {
             + self
                 .depth_resources
                 .values()
-                .map(|depth| depth.extent.0 * depth.extent.1 * 4)
+                .map(|depth| depth.typed_desc.byte_len().expect("validated depth layout"))
                 .sum::<usize>();
         if size > MAX_CONTEXT_RESOURCE_BYTES.saturating_sub(live_bytes + self.retired_bytes()) {
             return Err(MemoryError::AllocationFailed.into());
@@ -3953,22 +4089,34 @@ impl GraphicsContext {
         vertex: &[u8],
         pixel: &[u8],
     ) -> Result<GraphicsHandle, GraphicsError> {
+        self.create_typed_graphics_pipeline(device, vertex, pixel, Default::default())
+    }
+
+    pub fn create_typed_graphics_pipeline(
+        &mut self,
+        device: GraphicsHandle,
+        vertex: &[u8],
+        pixel: &[u8],
+        types: xenora_shader::GraphicsPipelineTypes,
+    ) -> Result<GraphicsHandle, GraphicsError> {
         if !self.devices.contains_key(&device) {
             return Err(GraphicsError::InvalidDeviceHandle);
         }
         if self.pipelines.len() + self.retired_pipelines.len() >= 256 {
             return Err(GraphicsError::InvalidDescriptor);
         }
-        let compiled = xenora_shader::compile_graphics_pipeline(
+        let compiled = xenora_shader::compile_graphics_pipeline_typed(
             xenora_shader::Architecture::Gfx1030,
             vertex,
             pixel,
+            types,
         )
         .map_err(|error| GraphicsError::BackendError(format!("shader translation: {error}")))?;
         if compiled.shader.msl.len() > 65536 {
             return Err(GraphicsError::InvalidDescriptor);
         }
         let pipeline = Arc::new(GraphicsPipeline {
+            types: compiled.types,
             msl: compiled.shader.msl,
             required_uniform_mask: compiled.required_uniform_mask,
             color_targets: compiled.color_targets,
@@ -4050,20 +4198,14 @@ impl GraphicsContext {
         if self.guest_object_count() >= crate::graphics_service::MAX_GUEST_OBJECTS {
             return Err(GraphicsError::ResourceLifetimeViolation);
         }
-        let resource = self
-            .resources
-            .get(&backing)
-            .ok_or(GraphicsError::InvalidResourceHandle)?;
-        if resource.is_texture_array
-            || resource.desc.dimension != ResourceDimension::Texture2D
-            || resource.texture_format != Some(desc.format.storage_format())
-            || resource.desc.depth_or_array_size != 1
-            || resource.guest_backing_addr.is_some()
+        let texture = self.sampled_resource_desc(backing)?;
+        if texture.array_layers.is_some()
+            || texture.format != desc.format.storage_format()
             || desc.mip_count == 0
             || desc
                 .base_mip
                 .checked_add(desc.mip_count)
-                .is_none_or(|end| end > u32::from(resource.desc.mip_levels))
+                .is_none_or(|end| end > texture.mip_levels)
         {
             return Err(GraphicsError::InvalidDescriptor);
         }
@@ -4092,20 +4234,16 @@ impl GraphicsContext {
         if self.guest_object_count() >= crate::graphics_service::MAX_GUEST_OBJECTS {
             return Err(GraphicsError::ResourceLifetimeViolation);
         }
-        let resource = self
-            .resources
-            .get(&backing)
-            .ok_or(GraphicsError::InvalidResourceHandle)?;
-        if !resource.is_texture_array
-            || resource.texture_format != Some(TextureFormat::Rgba8Unorm)
-            || resource.guest_backing_addr.is_some()
-            || desc.format.storage_format() != TextureFormat::Rgba8Unorm
-            || desc.slice >= u32::from(resource.desc.depth_or_array_size)
+        let texture = self.sampled_resource_desc(backing)?;
+        if texture
+            .array_layers
+            .is_none_or(|layers| desc.slice >= layers)
+            || texture.format != desc.format.storage_format()
             || desc.mip_count == 0
             || desc
                 .base_mip
                 .checked_add(desc.mip_count)
-                .is_none_or(|n| n > u32::from(resource.desc.mip_levels))
+                .is_none_or(|end| end > texture.mip_levels)
         {
             return Err(GraphicsError::InvalidDescriptor);
         }
@@ -4277,21 +4415,14 @@ impl GraphicsContext {
             .validate()
             .map_err(|_| GraphicsError::InvalidDescriptor)?;
         if let Some(handle) = texture {
-            let resource = self
-                .resources
-                .get(&handle)
-                .ok_or(GraphicsError::InvalidResourceHandle)?;
-            if resource.is_texture_array
-                || resource.desc.dimension != ResourceDimension::Texture2D
-                || resource.texture_format.is_none()
-                || resource.guest_backing_addr.is_some()
-            {
+            let texture = self.sampled_resource_desc(handle)?;
+            if texture.array_layers.is_some() {
                 return Err(GraphicsError::InvalidDescriptor);
             }
             let metadata = xenora_texture::TextureMetadata::new(
-                resource.desc.width as usize,
-                resource.desc.height as usize,
-                u32::from(resource.desc.mip_levels),
+                texture.extent.0,
+                texture.extent.1,
+                texture.mip_levels,
             )
             .map_err(|_| GraphicsError::InvalidDescriptor)?;
             sampler
@@ -4319,15 +4450,7 @@ impl GraphicsContext {
         samplers: [Option<xenora_texture::SamplerDesc>; 2],
     ) -> Result<(), GraphicsError> {
         for handle in textures.iter().flatten() {
-            let resource = self
-                .resources
-                .get(handle)
-                .ok_or(GraphicsError::InvalidResourceHandle)?;
-            if resource.is_texture_array
-                || resource.desc.dimension != ResourceDimension::Texture2D
-                || resource.texture_format.is_none()
-                || resource.guest_backing_addr.is_some()
-            {
+            if self.sampled_resource_desc(*handle)?.array_layers.is_some() {
                 return Err(GraphicsError::InvalidDescriptor);
             }
         }
@@ -4405,7 +4528,7 @@ impl GraphicsContext {
             + self
                 .depth_resources
                 .values()
-                .map(|d| d.extent.0 * d.extent.1 * 4)
+                .map(|d| d.typed_desc.byte_len().expect("validated depth layout"))
                 .sum::<usize>();
         if bytes > MAX_CONTEXT_RESOURCE_BYTES.saturating_sub(live + self.retired_bytes()) {
             return Err(MemoryError::AllocationFailed.into());
@@ -4414,6 +4537,12 @@ impl GraphicsContext {
         self.depth_resources.insert(
             handle,
             DepthResource {
+                typed_desc: GraphicsTypedTextureDesc {
+                    format: TextureFormat::Depth32Float,
+                    extent,
+                    mip_levels: 1,
+                    array_layers: None,
+                },
                 extent,
                 state: ResourceStates::DEPTH_WRITE,
                 snapshot: None,
@@ -4435,6 +4564,13 @@ impl GraphicsContext {
             return Err(GraphicsError::InvalidDescriptor);
         }
         if target.is_none() && load == GraphicsDepthLoad::Load {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
+        if target.is_some_and(|h| {
+            self.depth_resources.get(&h).is_some_and(|d| {
+                d.typed_desc.mip_levels != 1 || d.typed_desc.array_layers.is_some()
+            })
+        }) {
             return Err(GraphicsError::InvalidDescriptor);
         }
         if target.is_some_and(|h| !self.depth_resources.contains_key(&h)) {
@@ -4547,9 +4683,36 @@ impl GraphicsContext {
         memory: &GuestMemory,
     ) -> Result<(), GraphicsError> {
         let range = self.transfer_range(resource, offset, size, ResourceStates::COPY_DEST)?;
-        let mut bytes = vec![0; size];
+        let mut bytes = Vec::new();
+        bytes
+            .try_reserve_exact(size)
+            .map_err(|_| MemoryError::AllocationFailed)?;
+        bytes.resize(size, 0);
         memory.read_bytes(address, &mut bytes)?;
-        self.resources.get_mut(&resource).unwrap().data[range].copy_from_slice(&bytes);
+        if let Some(depth) = self.depth_resources.get_mut(&resource) {
+            let len = depth.typed_desc.byte_len()?;
+            let mut full = Vec::new();
+            full.try_reserve_exact(len)
+                .map_err(|_| MemoryError::AllocationFailed)?;
+            if range.start == 0 && range.end == len {
+                full.extend_from_slice(&bytes);
+            } else {
+                let packed = depth
+                    .snapshot
+                    .as_ref()
+                    .and_then(|s| s.downcast_ref::<GraphicsTypedDepthSnapshot>())
+                    .filter(|s| s.desc == depth.typed_desc && s.bytes.len() == len)
+                    .ok_or(GraphicsError::InvalidDescriptor)?;
+                full.extend_from_slice(&packed.bytes);
+                full[range].copy_from_slice(&bytes);
+            }
+            depth.snapshot = Some(Arc::new(GraphicsTypedDepthSnapshot {
+                desc: depth.typed_desc,
+                bytes: Arc::from(full),
+            }));
+        } else {
+            self.resources.get_mut(&resource).unwrap().data[range].copy_from_slice(&bytes);
+        }
         Ok(())
     }
 
@@ -4564,7 +4727,20 @@ impl GraphicsContext {
         memory: &mut GuestMemory,
     ) -> Result<(), GraphicsError> {
         let range = self.transfer_range(resource, offset, size, ResourceStates::COPY_SOURCE)?;
-        memory.write_bytes(address, &self.resources[&resource].data[range])?;
+        if let Some(depth) = self.depth_resources.get(&resource) {
+            let packed = depth
+                .snapshot
+                .as_ref()
+                .and_then(|s| s.downcast_ref::<GraphicsTypedDepthSnapshot>())
+                .filter(|s| {
+                    s.desc == depth.typed_desc
+                        && s.bytes.len() == depth.typed_desc.byte_len().unwrap_or(0)
+                })
+                .ok_or(GraphicsError::InvalidDescriptor)?;
+            memory.write_bytes(address, &packed.bytes[range])?;
+        } else {
+            memory.write_bytes(address, &self.resources[&resource].data[range])?;
+        }
         Ok(())
     }
 
@@ -4577,6 +4753,18 @@ impl GraphicsContext {
     ) -> Result<std::ops::Range<usize>, GraphicsError> {
         if self.is_pinned(resource) {
             return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        if let Some(depth) = self.depth_resources.get(&resource) {
+            if depth.state != state {
+                return Err(GraphicsError::ResourceLifetimeViolation);
+            }
+            let end = offset
+                .checked_add(size)
+                .ok_or(GraphicsError::IndexOutOfRange)?;
+            if end > depth.typed_desc.byte_len()? {
+                return Err(GraphicsError::IndexOutOfRange);
+            }
+            return Ok(offset..end);
         }
         let resource = self
             .resources
@@ -4850,6 +5038,14 @@ impl GraphicsContext {
         allow_mips: bool,
         allow_arrays: bool,
     ) -> Result<(), GraphicsError> {
+        if matches!(source_location, GraphicsImageCopyLocation::Texture { .. })
+            || matches!(
+                destination_location,
+                GraphicsImageCopyLocation::Texture { .. }
+            )
+        {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
         let commands = self
             .command_lists
             .get(&list)
@@ -5001,7 +5197,19 @@ impl GraphicsContext {
             if targets[..slot].contains(handle)
                 || resource.desc.dimension != ResourceDimension::Texture2D
                 || resource.is_texture_array
-                || resource.texture_format != Some(TextureFormat::Rgba8Unorm)
+                || resource.texture_format
+                    != Some(match loads[slot] {
+                        GraphicsColorLoad::Typed { attachment, .. } => {
+                            attachment.validate()?;
+                            if !self.resource_roles.color(attachment.format)
+                                || resource.desc.mip_levels != 1
+                            {
+                                return Err(GraphicsError::InvalidDescriptor);
+                            }
+                            attachment.format
+                        }
+                        _ => TextureFormat::Rgba8Unorm,
+                    })
                 || resource.guest_backing_addr.is_some()
                 || extent.is_some_and(|value| value != current)
             {
@@ -5413,6 +5621,9 @@ impl GraphicsContext {
             let vertex = match &indices {
                 None => Some(i64::from(start) + row as i64),
                 Some(index) => match &index.buffer.source {
+                    GraphicsCopyInput::HostDepth(_) => {
+                        return Err(GraphicsError::InvalidDescriptor);
+                    }
                     GraphicsCopyInput::Produced(_) => None,
                     GraphicsCopyInput::Host(bytes) => {
                         let at = index.offset + (start as usize + row) * index.format.size();
@@ -5593,10 +5804,18 @@ impl GraphicsContext {
                             .depth_resources
                             .get(handle)
                             .ok_or(GraphicsError::InvalidResourceHandle)?;
-                        let produced = queued.and_then(|q| q.produced.get(handle));
-                        if produced
-                            .is_some_and(|version| version.output != GraphicsProducedOutput::Depth)
+                        if depth.typed_desc.mip_levels != 1
+                            || depth.typed_desc.array_layers.is_some()
                         {
+                            return Err(GraphicsError::InvalidDescriptor);
+                        }
+                        let produced = queued.and_then(|q| q.produced.get(handle));
+                        if produced.is_some_and(|version| {
+                            !matches!(
+                                version.output,
+                                GraphicsProducedOutput::Depth | GraphicsProducedOutput::Copy(0)
+                            )
+                        }) {
                             return Err(GraphicsError::InvalidDescriptor);
                         }
                         if *load == GraphicsDepthLoad::Load
@@ -5640,7 +5859,7 @@ impl GraphicsContext {
                         .iter()
                         .map(|load| match load {
                             GraphicsColorLoad::Clear(clear) => *clear,
-                            GraphicsColorLoad::Load => [0; 4],
+                            GraphicsColorLoad::Load | GraphicsColorLoad::Typed { .. } => [0; 4],
                         })
                         .collect();
                     clear_color = color_clears[0];
@@ -5674,8 +5893,15 @@ impl GraphicsContext {
                         .or_else(|| self.depth_resources.get(resource).map(|r| r.state))
                         .ok_or(GraphicsError::InvalidResourceHandle)?;
                     if self.depth_resources.contains_key(resource)
-                        && ![ResourceStates::DEPTH_READ, ResourceStates::DEPTH_WRITE]
-                            .contains(after)
+                        && ![
+                            ResourceStates::DEPTH_READ,
+                            ResourceStates::DEPTH_WRITE,
+                            ResourceStates::COMMON,
+                            ResourceStates::COPY_SOURCE,
+                            ResourceStates::COPY_DEST,
+                            ResourceStates::PIXEL_SHADER_RESOURCE,
+                        ]
+                        .contains(after)
                     {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
@@ -5775,11 +6001,9 @@ impl GraphicsContext {
                     {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
-                    if sampled_textures
-                        .iter()
-                        .flatten()
-                        .any(|handle| color_targets.contains(handle))
-                    {
+                    if sampled_textures.iter().flatten().any(|handle| {
+                        color_targets.contains(handle) || depth_target == Some(*handle)
+                    }) {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
                     if pipeline_handle.is_some()
@@ -5868,7 +6092,8 @@ impl GraphicsContext {
                             ),
                             &pending_states,
                             &mut texture_snapshots,
-                            color_clears.len(),
+                            &color_loads,
+                            queued,
                         )?;
                         let colors = if gather.is_some() {
                             Vec::new()
@@ -5930,11 +6155,9 @@ impl GraphicsContext {
                     {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
-                    if sampled_textures
-                        .iter()
-                        .flatten()
-                        .any(|handle| color_targets.contains(handle))
-                    {
+                    if sampled_textures.iter().flatten().any(|handle| {
+                        color_targets.contains(handle) || depth_target == Some(*handle)
+                    }) {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
                     if pipeline_handle.is_some()
@@ -6046,7 +6269,8 @@ impl GraphicsContext {
                             ),
                             &pending_states,
                             &mut texture_snapshots,
-                            color_clears.len(),
+                            &color_loads,
+                            queued,
                         )?;
                         let colors = if gather.is_some() {
                             Vec::new()
@@ -6109,64 +6333,70 @@ impl GraphicsContext {
             .filter(|&count| (1..=pixel_limit).contains(&count))
             .ok_or(GraphicsError::InvalidViewport)?;
         let byte_count = pixel_count * 4;
-        for target in &color_targets {
+        let color_formats: Vec<_> = color_loads
+            .iter()
+            .map(|load| match load {
+                GraphicsColorLoad::Typed { attachment, .. } => attachment.format,
+                _ => TextureFormat::Rgba8Unorm,
+            })
+            .collect();
+        let color_bytes: Vec<_> = color_formats
+            .iter()
+            .map(|format| pixel_count * format.block_bytes())
+            .collect();
+        for (slot, target) in color_targets.iter().enumerate() {
             let resource = self
                 .resources
                 .get(target)
                 .ok_or(GraphicsError::InvalidResourceHandle)?;
-            if resource.data.len() < byte_count {
+            if resource.data.len() < color_bytes[slot] {
                 return Err(GraphicsError::IndexOutOfRange);
             }
         }
         let mut color_bindings = Vec::with_capacity(color_loads.len());
         let mut queued_colors = Vec::with_capacity(color_loads.len());
-        for (slot, load) in color_loads.iter().enumerate() {
-            let (binding, input) = match load {
-                GraphicsColorLoad::Clear(clear) => (
-                    GraphicsColorBinding {
-                        clear: *clear,
-                        previous: None,
-                    },
-                    GraphicsQueuedColorInput::Clear(*clear),
-                ),
-                GraphicsColorLoad::Load => {
-                    let target = color_targets[slot];
-                    if let Some(version) = queued.and_then(|q| q.produced.get(&target)) {
-                        // Initial produced attachment contract is whole, single-mip RGBA8.
-                        if !matches!(
-                            version.output,
-                            GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
-                        ) || (matches!(version.output, GraphicsProducedOutput::Copy(_))
-                            && !self.copy_backend)
-                            || self.resources[&target].desc.mip_levels != 1
-                            || queued.unwrap().layouts.get(&target)
-                                != Some(&GraphicsProducedLayout::Rgba8 { extent: viewport })
-                        {
-                            return Err(GraphicsError::InvalidDescriptor);
-                        }
-                        // The synchronous request is not dispatched for queued work.
-                        // In particular, never snapshot stale host bytes for this Load.
-                        (
-                            GraphicsColorBinding {
-                                clear: [0; 4],
-                                previous: None,
-                            },
-                            GraphicsQueuedColorInput::Produced(*version),
-                        )
-                    } else {
-                        let bytes: Arc<[u8]> =
-                            Arc::from(&self.resources[&target].data[..byte_count]);
-                        (
-                            GraphicsColorBinding {
-                                clear: [0; 4],
-                                previous: Some(bytes.clone()),
-                            },
-                            GraphicsQueuedColorInput::Host(bytes),
-                        )
-                    }
-                }
+        for (slot, action) in color_loads.iter().enumerate() {
+            let (typed, load, clear) = match action {
+                GraphicsColorLoad::Clear(clear) => (None, false, *clear),
+                GraphicsColorLoad::Load => (None, true, [0; 4]),
+                GraphicsColorLoad::Typed { attachment, load } => (Some(*attachment), *load, [0; 4]),
             };
-            color_bindings.push(binding);
+            let target = color_targets.get(slot).copied();
+            let (previous, input) = if !load {
+                (None, GraphicsQueuedColorInput::Clear(clear))
+            } else if let Some(version) =
+                target.and_then(|t| queued.and_then(|q| q.produced.get(&t)))
+            {
+                let target = target.expect("produced target");
+                let desc = GraphicsTypedTextureDesc {
+                    format: color_formats[slot],
+                    extent: viewport,
+                    mip_levels: 1,
+                    array_layers: None,
+                };
+                if !matches!(
+                    version.output,
+                    GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
+                ) || (matches!(version.output, GraphicsProducedOutput::Copy(_))
+                    && !self.copy_backend)
+                    || self.resources[&target].desc.mip_levels != 1
+                    || queued.expect("produced queue").layouts.get(&target)
+                        != Some(&desc.produced())
+                {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                (None, GraphicsQueuedColorInput::Produced(*version))
+            } else {
+                let target = target.ok_or(GraphicsError::InvalidDescriptor)?;
+                let bytes: Arc<[u8]> =
+                    Arc::from(&self.resources[&target].data[..color_bytes[slot]]);
+                (Some(bytes.clone()), GraphicsQueuedColorInput::Host(bytes))
+            };
+            color_bindings.push(GraphicsColorBinding {
+                typed,
+                clear,
+                previous,
+            });
             queued_colors.push(input);
         }
         if let Some(queued) = queued {
@@ -6186,11 +6416,13 @@ impl GraphicsContext {
                         GraphicsDepthLoad::Clear(value) => GraphicsQueuedDepthInput::Clear(value),
                         GraphicsDepthLoad::Load => {
                             if let Some(version) = queued.and_then(|q| q.produced.get(&handle)) {
-                                if version.output != GraphicsProducedOutput::Depth
-                                    || queued.unwrap().layouts.get(&handle)
-                                        != Some(&GraphicsProducedLayout::Depth32Float {
-                                            extent: viewport,
-                                        })
+                                if !matches!(
+                                    version.output,
+                                    GraphicsProducedOutput::Depth | GraphicsProducedOutput::Copy(0)
+                                ) || queued.unwrap().layouts.get(&handle)
+                                    != Some(&GraphicsProducedLayout::Depth32Float {
+                                        extent: viewport,
+                                    })
                                 {
                                     return Err(GraphicsError::InvalidDescriptor);
                                 }
@@ -6235,6 +6467,11 @@ impl GraphicsContext {
                 extent: viewport,
                 outputs: color_clears.len(),
                 byte_count,
+                color_bytes,
+                color_formats,
+                typed_colors: color_loads
+                    .iter()
+                    .any(|l| matches!(l, GraphicsColorLoad::Typed { .. })),
                 draw_count,
                 backend: backend_id,
             },
@@ -6262,8 +6499,12 @@ impl GraphicsContext {
             None,
         )?;
         let request = prepared.request;
-        let output = if prepared.vertices.is_empty() && request.depth.is_none() {
+        let output = if prepared.vertices.is_empty()
+            && request.depth.is_none()
+            && request.colors.iter().all(|c| c.typed.is_none())
+        {
             GraphicsPassOutput {
+                color_layouts: None,
                 colors: request
                     .colors
                     .iter()
@@ -6305,6 +6546,7 @@ impl GraphicsContext {
                 )?
             };
             GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![pixels],
                 depth: None,
             }
@@ -6317,16 +6559,49 @@ impl GraphicsContext {
         commit: SubmissionCommit,
         output: GraphicsPassOutput,
     ) -> Result<ExecutionOutcome, GraphicsError> {
-        if output.colors.len() != commit.outputs
+        let expected_layouts: Vec<_> = commit
+            .color_formats
+            .iter()
+            .map(|format| GraphicsTypedTextureDesc {
+                format: *format,
+                extent: commit.extent,
+                mip_levels: 1,
+                array_layers: None,
+            })
+            .collect();
+        if (commit.typed_colors && output.color_layouts.is_none())
+            || output
+                .color_layouts
+                .as_ref()
+                .is_some_and(|actual| *actual != expected_layouts)
+            || output.colors.len() != commit.outputs
             || output
                 .colors
                 .iter()
-                .any(|bytes| bytes.len() != commit.byte_count)
+                .zip(&commit.color_bytes)
+                .any(|(bytes, expected)| bytes.len() != *expected)
             || output.depth.is_some() != commit.depth.is_some()
         {
             return Err(GraphicsError::BackendError(
                 "invalid submission outputs".into(),
             ));
+        }
+        if let Some(depth) = output
+            .depth
+            .as_ref()
+            .and_then(|d| d.downcast_ref::<GraphicsTypedDepthSnapshot>())
+        {
+            let expected = GraphicsTypedTextureDesc {
+                format: TextureFormat::Depth32Float,
+                extent: commit.extent,
+                mip_levels: 1,
+                array_layers: None,
+            };
+            if depth.desc != expected || depth.bytes.len() != expected.byte_len()? {
+                return Err(GraphicsError::BackendError(
+                    "invalid depth output layout".into(),
+                ));
+            }
         }
         // All destinations are pinned or synchronously validated. Acquire the only
         // fallible commit lock before touching colors, depth, barriers or history.
@@ -6338,7 +6613,7 @@ impl GraphicsContext {
             // Destruction invalidates the guest destination permanently. Native
             // produced versions remain owned by tickets for admitted consumers.
             if let Some(resource) = self.resources.get_mut(target) {
-                resource.data[..commit.byte_count].copy_from_slice(bytes);
+                resource.data[..bytes.len()].copy_from_slice(bytes);
             }
         }
         if let Some(handle) = commit.depth
@@ -6363,9 +6638,10 @@ impl GraphicsContext {
         }
         history.push(commit.list);
         let pixels = output.colors[0].clone();
-        if commit
-            .serial
-            .is_none_or(|serial| serial >= self.published_serial)
+        if commit.color_formats[0] == TextureFormat::Rgba8Unorm
+            && commit
+                .serial
+                .is_none_or(|serial| serial >= self.published_serial)
         {
             if let Some(serial) = commit.serial {
                 self.published_serial = serial;
@@ -6422,8 +6698,10 @@ impl GraphicsContext {
         sampled: RecordedSampledBindings,
         states: &HashMap<GraphicsHandle, ResourceStates>,
         snapshots: &mut HashMap<GraphicsHandle, Arc<[u8]>>,
-        outputs: usize,
+        color_loads: &[GraphicsColorLoad],
+        queued: Option<&QueuedPreparation>,
     ) -> Result<DrawBindings, GraphicsError> {
+        let outputs = color_loads.len();
         let (textures, samplers, views, array_views, uniforms) = sampled;
         if array_views.iter().any(Option::is_some) && !self.array_view_backend {
             return Err(GraphicsError::InvalidDescriptor);
@@ -6445,6 +6723,17 @@ impl GraphicsContext {
             && (!self.uniform_backend || uniforms.is_none())
         {
             return Err(GraphicsError::InvalidDescriptor);
+        }
+        for (slot, load) in color_loads.iter().enumerate() {
+            let uint = matches!(load, GraphicsColorLoad::Typed { attachment, .. } if attachment.format == TextureFormat::R32Uint);
+            let export = pipeline
+                .as_ref()
+                .map_or(xenora_shader::GraphicsExportType::Float, |p| {
+                    p.types.colors[slot]
+                });
+            if uint != (export == xenora_shader::GraphicsExportType::Uint) {
+                return Err(GraphicsError::InvalidDescriptor);
+            }
         }
         let pairs = pipeline.as_ref().map_or(0, |p| p.sampled_pairs);
         if pairs & !15 != 0
@@ -6472,22 +6761,36 @@ impl GraphicsContext {
         };
         for (slot, handle) in textures.into_iter().enumerate() {
             if let Some(handle) = handle {
-                let texture = self
-                    .resources
-                    .get(&handle)
-                    .ok_or(GraphicsError::InvalidResourceHandle)?;
-                let format = texture
-                    .texture_format
-                    .ok_or(GraphicsError::InvalidDescriptor)?;
-                if !self.texture_capabilities.supports(format) {
+                let texture = self.sampled_resource_desc(handle)?;
+                let format = texture.format;
+                if !self.texture_capabilities.supports(format)
+                    && !self.resource_roles.sampled(format)
+                {
                     return Err(GraphicsError::InvalidDescriptor);
                 }
-                if states.get(&handle).copied().unwrap_or(texture.state)
+                let expected = match format {
+                    TextureFormat::R32Uint => xenora_shader::GraphicsSampleType::Uint,
+                    TextureFormat::Depth32Float => xenora_shader::GraphicsSampleType::Depth,
+                    _ => xenora_shader::GraphicsSampleType::Float,
+                };
+                if pipeline
+                    .as_ref()
+                    .is_none_or(|p| p.types.textures[slot] != expected)
+                {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                let state = self
+                    .resources
+                    .get(&handle)
+                    .map(|r| r.state)
+                    .or_else(|| self.depth_resources.get(&handle).map(|r| r.state))
+                    .ok_or(GraphicsError::InvalidResourceHandle)?;
+                if states.get(&handle).copied().unwrap_or(state)
                     != ResourceStates::PIXEL_SHADER_RESOURCE
                 {
                     return Err(GraphicsError::ResourceLifetimeViolation);
                 }
-                if texture.is_texture_array != array_views[slot].is_some() {
+                if texture.array_layers.is_some() != array_views[slot].is_some() {
                     return Err(GraphicsError::InvalidDescriptor);
                 }
                 let effective_view =
@@ -6498,16 +6801,12 @@ impl GraphicsContext {
                     }));
                 let (width, height, mips) = if let Some(view) = effective_view {
                     (
-                        (texture.desc.width as usize >> view.base_mip).max(1),
-                        (texture.desc.height as usize >> view.base_mip).max(1),
+                        (texture.extent.0 >> view.base_mip).max(1),
+                        (texture.extent.1 >> view.base_mip).max(1),
                         view.mip_count,
                     )
                 } else {
-                    (
-                        texture.desc.width as usize,
-                        texture.desc.height as usize,
-                        u32::from(texture.desc.mip_levels),
-                    )
+                    (texture.extent.0, texture.extent.1, texture.mip_levels)
                 };
                 let metadata = xenora_texture::TextureMetadata::new(width, height, mips)
                     .map_err(|_| GraphicsError::InvalidDescriptor)?;
@@ -6520,19 +6819,22 @@ impl GraphicsContext {
                             .map_err(|_| GraphicsError::InvalidDescriptor)?;
                     }
                 }
-                let pixels = snapshots
-                    .entry(handle)
-                    .or_insert_with(|| Arc::from(texture.data.as_slice()))
-                    .clone();
+                let pixels = if queued.is_some_and(|q| q.produced.contains_key(&handle)) {
+                    Arc::from([])
+                } else if let Some(bytes) = snapshots.get(&handle) {
+                    bytes.clone()
+                } else {
+                    let bytes = self.sampled_resource_bytes(handle)?;
+                    snapshots.insert(handle, bytes.clone());
+                    bytes
+                };
                 bindings.textures[slot] = Some(GraphicsTextureSnapshot {
-                    array_layers: texture
-                        .is_texture_array
-                        .then_some(u32::from(texture.desc.depth_or_array_size)),
+                    array_layers: texture.array_layers,
                     format,
-                    width: texture.desc.width as usize,
-                    height: texture.desc.height as usize,
+                    width: texture.extent.0,
+                    height: texture.extent.1,
                     pixels,
-                    mip_levels: u32::from(texture.desc.mip_levels),
+                    mip_levels: texture.mip_levels,
                 });
             }
         }
@@ -7130,6 +7432,7 @@ mod submission_history_tests {
                 colors[0].pop();
             }
             Ok(GraphicsPassOutput {
+                color_layouts: None,
                 colors,
                 depth: if mode == 1 {
                     None

@@ -217,6 +217,7 @@ fn pending_positions_are_admitted_without_stale_host_fetch() {
         h.complete(
             1,
             GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![9, 17, 33, 255]],
                 depth: None,
             }),
@@ -317,6 +318,7 @@ fn exact_produced_version_and_host_colors_are_owned() {
         h.complete(
             1,
             GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![13, 17, 19, 23]],
                 depth: None,
             }),
@@ -406,6 +408,7 @@ fn logical_bounds_and_mixed_host_nan_reject_before_dispatch_then_retry() {
         h.complete(
             1,
             GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                color_layouts: None,
                 colors: vec![vec![29, 31, 37, 41]],
                 depth: None,
             }),
@@ -462,6 +465,7 @@ fn cached_render_success_cannot_publish_after_invalid_geometry_producer_output()
     h.complete(
         1,
         GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![vec![255; 4]],
             depth: None,
         }),
@@ -516,6 +520,7 @@ fn backend_admission_error_does_not_consume_point_or_commit_state() {
     h.complete(
         1,
         GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+            color_layouts: None,
             colors: vec![vec![2, 3, 5, 7]],
             depth: None,
         }),
@@ -579,6 +584,7 @@ fn mixed_host_indices_validate_final_index_and_signed_base_before_dispatch() {
             h.complete(
                 1,
                 GraphicsQueuedWorkOutput::Render(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![2, 3, 5, 7]],
                     depth: None,
                 }),

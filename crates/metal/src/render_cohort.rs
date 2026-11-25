@@ -19,6 +19,10 @@ use xenora_texture::{PackedTextureArrayLayout, PackedTextureLayout, TextureForma
 #[path = "render_geometry.rs"]
 pub(super) mod geometry;
 
+#[path = "typed_copy.rs"]
+mod typed_copy;
+pub use typed_copy::RenderTypedTextureOutput;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RenderQueue {
     First,
@@ -51,6 +55,7 @@ impl RenderDepthOutput {
 }
 pub struct OwnedRenderOutput {
     pub colors: Vec<Vec<u8>>,
+    pub color_layouts: Vec<crate::TypedTextureDesc>,
     pub depth: Option<DepthSnapshot>,
 }
 struct Generation {
@@ -196,6 +201,12 @@ impl RenderColorOutput {
 }
 #[derive(Clone)]
 pub enum QueuedSampledBinding {
+    ProducedTypedView {
+        view: crate::RenderTypedTextureView,
+        sampler: crate::MetalSampler,
+        texture_slot: crate::BindingSlot,
+        sampler_slot: crate::BindingSlot,
+    },
     Uploaded(crate::BoundSampledTexture),
     Viewed {
         view: crate::MetalTextureView,
@@ -216,9 +227,9 @@ pub enum QueuedSampledBinding {
         sampler_slot: crate::BindingSlot,
     },
 }
-// Two active passes: at most 2 * 8 * 1Mi pixels * 4 = 64 MiB.
-// Historical output clones are additionally charged, with a conservative 256 MiB
-// total color-version ceiling. One exported slot pins its entire submission charge.
+// A typed pass has at most 8 targets * 1Mi pixels * 8 bytes = 64 MiB.
+// Concurrent passes and historical output clones share a conservative 256 MiB
+// payload ceiling. One exported slot pins its entire submission charge.
 // Also reserve submission geometry/uniform copies, depth staging and readbacks.
 // Borrowed caller uploads, returned host results and opaque driver overhead are not
 // owned here. Conservative charges remain while command-owning points survive.
@@ -285,6 +296,7 @@ struct PendingCopy {
 enum PendingWork {
     Render(Box<PendingRender<'static>>),
     Copy(PendingCopy),
+    TypedCopy(typed_copy::PendingTypedCopy),
 }
 struct Entry {
     point: RenderPoint,
@@ -314,7 +326,7 @@ pub(super) struct SubmissionSync {
     pub export_depth: bool,
     pub depth_source_owner: Option<RenderDepthOutput>,
     pub depth_lease: Option<Rc<ColorLease>>,
-    pub color_sources: Vec<Option<RenderColorOutput>>,
+    pub color_sources: Vec<Option<RenderTypedTextureOutput>>,
     pub color_lease: Rc<ColorLease>,
     pub temporary_lease: Rc<ColorLease>,
     waits: Vec<Rc<Point>>,
@@ -362,7 +374,7 @@ impl SubmissionSync {
             .ok_or_else(|| error("color copy encoder failed"))?;
         for (source, destination) in self.color_sources.iter().zip(destinations) {
             if let Some(source) = source {
-                let [width, height] = source.extent;
+                let [width, height] = source.desc.extent;
                 // SAFETY: Preflight verifies matching device, RGBA8 format and extent.
                 // Both fresh destination and immutable source stay owned until completion.
                 unsafe {
@@ -1551,6 +1563,9 @@ impl RenderCohort {
     }
 
     pub fn copy_output(&self, point: &RenderPoint) -> Result<RenderCopyOutput, MetalError> {
+        if self.is_typed_copy(point)? {
+            return self.typed_copy_output(point);
+        }
         self.validate_point(point)?;
         let entry = self.entries[self.entry_slot(point)?]
             .as_ref()
@@ -1577,6 +1592,9 @@ impl RenderCohort {
     }
 
     pub fn collect_copy(&mut self, point: &RenderPoint) -> Result<OwnedCopyOutput, MetalError> {
+        if self.is_typed_copy(point)? {
+            return self.collect_typed_copy(point);
+        }
         self.validate_point(point)?;
         let slot = self.entry_slot(point)?;
         let entry = self.entries[slot].as_ref().expect("validated entry");
@@ -1672,11 +1690,52 @@ impl RenderCohort {
             .get(slot)
             .ok_or_else(|| error("color slot out of range"))?
             .clone();
+        if pending.color_formats.get(slot) != Some(&TextureFormat::Rgba8Unorm) {
+            return Err(error("legacy color output requires RGBA8"));
+        }
         Ok(RenderColorOutput {
             point: point.clone(),
             texture,
             extent: pending.extent,
             _lease: pending
+                ._color_lease
+                .as_ref()
+                .expect("cohort charge")
+                .clone(),
+        })
+    }
+    pub fn typed_color_output(
+        &self,
+        point: &RenderPoint,
+        slot: usize,
+    ) -> Result<RenderTypedTextureOutput, MetalError> {
+        self.validate_point(point)?;
+        let PendingWork::Render(pending) = &self.entries[self.entry_slot(point)?]
+            .as_ref()
+            .expect("entry")
+            .pending
+        else {
+            return Err(error("not a render"));
+        };
+        let texture = pending
+            .textures
+            .get(slot)
+            .ok_or_else(|| error("color slot out of range"))?
+            .clone();
+        let format = *pending
+            .color_formats
+            .get(slot)
+            .ok_or_else(|| error("color format missing"))?;
+        Ok(RenderTypedTextureOutput {
+            point: point.clone(),
+            texture,
+            desc: crate::TypedTextureDesc {
+                format,
+                extent: pending.extent,
+                mip_levels: 1,
+                array_layers: None,
+            },
+            lease: pending
                 ._color_lease
                 .as_ref()
                 .expect("cohort charge")
@@ -1736,6 +1795,7 @@ impl RenderCohort {
             dependencies,
             None,
             None,
+            None,
         )
     }
 
@@ -1769,6 +1829,7 @@ impl RenderCohort {
             dependencies,
             Some(uniforms),
             None,
+            None,
         )
     }
 
@@ -1799,6 +1860,7 @@ impl RenderCohort {
             dependencies,
             Some(uniforms),
             None,
+            None,
         )
     }
 
@@ -1824,6 +1886,7 @@ impl RenderCohort {
             color_loads,
             dependencies,
             Some(uniforms),
+            None,
             None,
         )
     }
@@ -1852,6 +1915,43 @@ impl RenderCohort {
             dependencies,
             Some(uniforms),
             Some(geometry),
+            None,
+        )
+    }
+
+    /// Typed attachments retain the same queue graph, geometry and failure contract.
+    #[allow(clippy::too_many_arguments)]
+    pub fn submit_with_typed_attachments(
+        &mut self,
+        queue: RenderQueue,
+        shaders: &[TriangleShader<'_>],
+        pass: &crate::TypedTriangleTargetsPass<'_>,
+        bindings: &[Vec<QueuedSampledBinding>],
+        depth: Option<QueuedDepthInput>,
+        color_loads: &[QueuedColorLoad<'_>],
+        dependencies: &[RenderPoint],
+        uniforms: &[DrawUniforms],
+        geometry: &[Option<crate::QueuedGeometry<'_>>],
+    ) -> Result<RenderPoint, MetalError> {
+        let clears = vec![[0; 4]; pass.colors.len()];
+        let legacy = crate::TriangleTargetsPass {
+            draws: pass.draws,
+            states: pass.states,
+            extent: pass.extent,
+            clears: &clears,
+            clear_depth: pass.clear_depth,
+        };
+        self.submit_internal(
+            queue,
+            shaders,
+            &legacy,
+            bindings,
+            depth.map(DepthInput::Queued),
+            color_loads,
+            dependencies,
+            Some(uniforms),
+            Some(geometry),
+            Some(pass.colors),
         )
     }
 
@@ -1867,6 +1967,7 @@ impl RenderCohort {
         dependencies: &[RenderPoint],
         uniforms: Option<&[DrawUniforms]>,
         geometry: Option<&[Option<crate::QueuedGeometry<'_>>]>,
+        typed_colors: Option<&[crate::TypedColorAttachment]>,
     ) -> Result<RenderPoint, MetalError> {
         validate_uniforms(pass.draws.len(), uniforms)?;
         if geometry.is_some_and(|g| {
@@ -1896,24 +1997,58 @@ impl RenderCohort {
         if !(1..=8).contains(&pass.clears.len()) || color_loads.len() != pass.clears.len() {
             return Err(error("invalid color load count"));
         }
+        if let Some(colors) = typed_colors {
+            if colors.len() != pass.clears.len() {
+                return Err(error("typed color count"));
+            }
+            for color in colors {
+                color.validate()?;
+            }
+        }
+        let formats: Vec<_> = (0..pass.clears.len())
+            .map(|i| typed_colors.map_or(TextureFormat::Rgba8Unorm, |c| c[i].format))
+            .collect();
         let mut host_loads = Vec::with_capacity(color_loads.len());
         let mut color_sources = Vec::with_capacity(color_loads.len());
-        for load in color_loads {
+        for (slot, load) in color_loads.iter().enumerate() {
             match load {
                 QueuedColorLoad::Clear => {
                     host_loads.push(None);
                     color_sources.push(None);
                 }
                 QueuedColorLoad::Host(bytes) => {
-                    if bytes.len() != pixels * 4 {
+                    if bytes.len() != pixels * formats[slot].block_bytes() {
                         return Err(error("color load byte length mismatch"));
                     }
                     host_loads.push(Some(*bytes));
                     color_sources.push(None);
                 }
+                QueuedColorLoad::ProducedTyped(output) => {
+                    if typed_colors.is_none() {
+                        return Err(error("typed Load requires typed pass"));
+                    }
+                    self.validate_point(&output.point)?;
+                    if output.desc
+                        != (crate::TypedTextureDesc {
+                            format: formats[slot],
+                            extent: pass.extent,
+                            mip_levels: 1,
+                            array_layers: None,
+                        })
+                        || output.texture.device().registryID()
+                            != self.queues[index].device.registryID()
+                        || output.texture.pixelFormat()
+                            != crate::texture_pipeline::storage_pixel_format(formats[slot])
+                    {
+                        return Err(error("typed Load backing mismatch"));
+                    }
+                    host_loads.push(None);
+                    color_sources.push(Some(output.clone()));
+                }
                 QueuedColorLoad::Produced(output) => {
                     self.validate_point(&output.point)?;
-                    if output.extent != pass.extent
+                    if formats[slot] != TextureFormat::Rgba8Unorm
+                        || output.extent != pass.extent
                         || output.is_array()
                         || output.mip_levels() != 1
                         || output.texture.device().registryID()
@@ -1923,7 +2058,17 @@ impl RenderCohort {
                         return Err(error("produced color device/format/extent mismatch"));
                     }
                     host_loads.push(None);
-                    color_sources.push(Some(output.clone()));
+                    color_sources.push(Some(RenderTypedTextureOutput {
+                        point: output.point.clone(),
+                        texture: output.texture.clone(),
+                        desc: crate::TypedTextureDesc {
+                            format: TextureFormat::Rgba8Unorm,
+                            extent: output.extent,
+                            mip_levels: 1,
+                            array_layers: None,
+                        },
+                        lease: output._lease.clone(),
+                    }));
                 }
             }
         }
@@ -1960,7 +2105,14 @@ impl RenderCohort {
         let _ = aggregate;
         let (geometry, validation, geometry_sources) =
             self.prepare_geometry(index, geometry_inputs)?;
-        let bytes = pixels * 4 * pass.clears.len();
+        let bytes = formats
+            .iter()
+            .try_fold(0usize, |total, f| {
+                pixels
+                    .checked_mul(f.block_bytes())
+                    .and_then(|n| total.checked_add(n))
+            })
+            .ok_or_else(|| error("typed color bytes overflow"))?;
         let color_lease = ColorLease::reserve(&self.color_bytes, bytes)?;
         let vertices = pass
             .draws
@@ -2027,6 +2179,16 @@ impl RenderCohort {
                         texture_slot,
                         sampler_slot,
                     } => view.bind(sampler.clone(), *texture_slot, *sampler_slot)?,
+                    QueuedSampledBinding::ProducedTypedView {
+                        view,
+                        sampler,
+                        texture_slot,
+                        sampler_slot,
+                    } => {
+                        add(&view.output.point)?;
+                        view.view
+                            .bind(sampler.clone(), *texture_slot, *sampler_slot)?
+                    }
                     QueuedSampledBinding::ProducedView {
                         view,
                         sampler,
@@ -2109,14 +2271,23 @@ impl RenderCohort {
                 leases.push(output._lease.clone());
             }
         };
-        for source in color_sources.iter().flatten() {
-            retain_color(source);
-        }
         for binding in bindings.iter().flatten() {
             match binding {
                 QueuedSampledBinding::Produced { output, .. } => retain_color(output),
                 QueuedSampledBinding::ProducedView { view, .. } => retain_color(&view.output),
                 _ => {}
+            }
+        }
+        for source in color_sources.iter().flatten() {
+            if !leases.iter().any(|old| Rc::ptr_eq(old, &source.lease)) {
+                leases.push(source.lease.clone());
+            }
+        }
+        for binding in bindings.iter().flatten() {
+            if let QueuedSampledBinding::ProducedTypedView { view, .. } = binding
+                && !leases.iter().any(|old| Rc::ptr_eq(old, &view.output.lease))
+            {
+                leases.push(view.output.lease.clone());
             }
         }
         // Completed successful ancestors need no stored edge: the generation
@@ -2206,7 +2377,7 @@ impl RenderCohort {
             event: self.events[index].clone(),
             value,
         };
-        let pending = gpu.submit_targets_internal(
+        let pending = gpu.submit_targets_typed_internal(
             "",
             ["", ""],
             pass.draws,
@@ -2220,6 +2391,7 @@ impl RenderCohort {
             Some((shaders, &normalized)),
             Some(sync),
             uniforms,
+            typed_colors,
         )?;
         let point = RenderPoint {
             inner: Rc::new(Point {
@@ -2338,8 +2510,13 @@ impl RenderCohort {
             } else {
                 None
             };
+            let color_layouts = pending.color_layouts();
             let colors = (*pending).wait()?;
-            Ok(OwnedRenderOutput { colors, depth })
+            Ok(OwnedRenderOutput {
+                colors,
+                color_layouts,
+                depth,
+            })
         })();
         if result.is_err() {
             self.generation.poisoned.set(true);
@@ -3250,6 +3427,9 @@ mod color_budget_tests {
                     assert!(to_buffer);
                     assert_eq!(bytes, [1, 2, 3, 4, 31, 47, 61, 79, 99]);
                 }
+                OwnedCopyOutput::TypedTexture { .. } => {
+                    panic!("legacy image copy returned typed texture")
+                }
                 OwnedCopyOutput::Rgba8Array { .. } | OwnedCopyOutput::Rgba8MipChain { .. } => {
                     panic!("legacy copy returned mip chain")
                 }
@@ -3371,6 +3551,9 @@ mod color_budget_tests {
                         )
                     };
                     assert_eq!(padded, &[1, 2, 3, 4, 31, 47, 61, 79, 99, 0, 0, 0]);
+                }
+                OwnedCopyOutput::TypedTexture { .. } => {
+                    panic!("legacy image copy returned typed texture")
                 }
                 OwnedCopyOutput::Rgba8Array { .. } | OwnedCopyOutput::Rgba8MipChain { .. } => {
                     panic!("legacy copy returned mip chain")
@@ -3806,3 +3989,7 @@ mod graph_admission_tests {
 #[cfg(test)]
 #[path = "mip_array_budget_tests.rs"]
 mod mip_array_budget_tests;
+
+#[cfg(test)]
+#[path = "typed_copy_budget_tests.rs"]
+mod typed_copy_budget_tests;

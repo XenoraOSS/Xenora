@@ -208,6 +208,7 @@ fn cpu_array_views_full_immutable_snapshots_exclusive_metadata_and_array_one() {
                 assert_eq!(snapshot.pixels.len(), 72 * layers as usize);
                 capture.lock().unwrap().push(snapshot.pixels.clone());
                 Ok(GraphicsPassOutput {
+                    color_layouts: None,
                     colors: vec![vec![19; 8]],
                     depth: None,
                 })

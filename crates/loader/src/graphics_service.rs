@@ -105,12 +105,13 @@ pub fn graphics_call_v1(
         1 => 0,
         2 | 3 | 12 | 26 | 27 | 31 | 32 | 33 | 36 | 38 | 47 => 1,
         4 | 11 | 14 | 25 | 28 | 30 | 34 | 39 | 48 => 2,
-        5 | 7 | 15 | 17 | 29 | 41 | 42 => 3,
+        5 | 7 | 15 | 17 | 29 | 41 | 42 | 56 => 3,
         9 | 10 | 13 | 16 | 18 | 19 | 20 | 35 | 46 | 49 => 4,
         6 | 8 | 21 | 23 | 37 | 45 => 5,
-        24 | 40 | 43 | 51 | 52 => 6,
+        24 | 40 | 43 | 51 | 52 | 55 => 6,
         44 => 11,
-        50 => 13,
+        50 | 54 => 13,
+        53 => 7,
         22 => 12,
         _ => return Ok(STATUS_INVALID_CALL),
     };
@@ -127,7 +128,9 @@ pub fn graphics_call_v1(
         || opcode == 46
         || opcode == 49
         || opcode == 51
-        || opcode == 52)
+        || opcode == 52
+        || opcode == 53
+        || opcode == 55)
         && graphics.guest_object_count() >= MAX_GUEST_OBJECTS
     {
         return Ok(STATUS_GRAPHICS_ERROR);
@@ -143,7 +146,9 @@ pub fn graphics_call_v1(
         || opcode == 43
         || opcode == 44
         || opcode == 48
-        || opcode == 50)
+        || opcode == 50
+        || opcode == 54
+        || opcode == 56)
         && graphics
             .guest_command_count(args.handle(0))
             .is_some_and(|count| count >= MAX_GUEST_COMMANDS)
@@ -332,12 +337,127 @@ pub fn graphics_call_v1(
                     graphics.cmd_set_sampled_bindings(args.handle(0), textures, samplers)?;
                 }
             }
-            52 => {
-                let format = match args.0[5] {
-                    0 => GraphicsTextureViewFormat::Rgba8Unorm,
-                    1 => GraphicsTextureViewFormat::Rgba8UnormSrgb,
+            55 => {
+                use xenora_shader::{
+                    GraphicsExportType, GraphicsPipelineTypes, GraphicsSampleType,
+                };
+                let bits = args.0[5];
+                if bits & !0xff0f != 0 {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                let mut types = GraphicsPipelineTypes::default();
+                for (slot, sample_type) in types.textures.iter_mut().enumerate() {
+                    *sample_type = match (bits >> (slot * 2)) & 3 {
+                        0 => GraphicsSampleType::Float,
+                        1 => GraphicsSampleType::Uint,
+                        2 => GraphicsSampleType::Depth,
+                        _ => return Err(GraphicsError::InvalidDescriptor),
+                    };
+                }
+                for (slot, export_type) in types.colors.iter_mut().enumerate() {
+                    if bits & (1 << (8 + slot)) != 0 {
+                        *export_type = GraphicsExportType::Uint;
+                    }
+                }
+                let vertex = code(memory, args.0[1], args.0[2])?;
+                let pixel = code(memory, args.0[3], args.0[4])?;
+                value = graphics
+                    .create_typed_graphics_pipeline(args.handle(0), &vertex, &pixel, types)?
+                    .to_u64();
+            }
+            56 => {
+                let count = args.size(1)?;
+                if !(1..=8).contains(&count) {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                let mut bytes = [0u8; 512];
+                memory.read_bytes(args.0[2], &mut bytes[..count * 64])?;
+                let mut targets = Vec::with_capacity(count);
+                let mut loads = Vec::with_capacity(count);
+                for record in bytes[..count * 64].as_chunks::<64>().0 {
+                    let words: [u64; 8] = std::array::from_fn(|i| {
+                        u64::from_le_bytes(record[i * 8..i * 8 + 8].try_into().unwrap())
+                    });
+                    let target = GraphicsHandle::from_u64(words[0]);
+                    if words[1] > 1 || words[2] > 1 {
+                        return Err(GraphicsError::InvalidDescriptor);
+                    }
+                    let clear = match words[3] {
+                        0 => GraphicsTypedColorClear::Float(std::array::from_fn(|i| {
+                            f64::from_bits(words[i + 4])
+                        })),
+                        1 => {
+                            if words[4..].iter().any(|v| *v > u64::from(u32::MAX)) {
+                                return Err(GraphicsError::InvalidDescriptor);
+                            }
+                            GraphicsTypedColorClear::Uint(std::array::from_fn(|i| {
+                                words[i + 4] as u32
+                            }))
+                        }
+                        _ => return Err(GraphicsError::InvalidDescriptor),
+                    };
+                    let format = graphics.sampled_resource_desc(target)?.format;
+                    targets.push(target);
+                    loads.push(GraphicsColorLoad::Typed {
+                        attachment: GraphicsTypedColorAttachment {
+                            format,
+                            clear,
+                            blend_enabled: words[2] != 0,
+                        },
+                        load: words[1] != 0,
+                    });
+                }
+                graphics.cmd_set_color_targets_with_loads(args.handle(0), &targets, &loads)?;
+            }
+            53 => {
+                let format = match args.u32(5)? {
+                    0 => xenora_texture::TextureFormat::Rgba8Unorm,
+                    1 => xenora_texture::TextureFormat::Bc1RgbaUnorm,
+                    2 => xenora_texture::TextureFormat::Bc3RgbaUnorm,
+                    3 => xenora_texture::TextureFormat::R8Unorm,
+                    4 => xenora_texture::TextureFormat::Rg8Unorm,
+                    5 => xenora_texture::TextureFormat::Bgra8Unorm,
+                    6 => xenora_texture::TextureFormat::Rgba16Float,
+                    7 => xenora_texture::TextureFormat::R32Float,
+                    8 => xenora_texture::TextureFormat::R32Uint,
+                    9 => xenora_texture::TextureFormat::Depth32Float,
                     _ => return Err(GraphicsError::InvalidDescriptor),
                 };
+                let layers = args.u32(4)?;
+                value = graphics
+                    .create_typed_texture_resource(
+                        args.handle(0),
+                        crate::graphics::GraphicsTypedTextureDesc {
+                            format,
+                            extent: (args.size(1)?, args.size(2)?),
+                            mip_levels: args.u32(3)?,
+                            array_layers: (layers != 0).then_some(layers),
+                        },
+                        ResourceStates(args.u32(6)?),
+                    )?
+                    .to_u64();
+            }
+            54 => {
+                let location = |index| -> Result<GraphicsImageCopyLocation, GraphicsError> {
+                    match args.mip_image_location(index)? {
+                        GraphicsImageCopyLocation::Rgba8Mip { mip, slice, origin } => {
+                            Ok(GraphicsImageCopyLocation::Texture { mip, slice, origin })
+                        }
+                        value @ GraphicsImageCopyLocation::Buffer { .. } => Ok(value),
+                        _ => Err(GraphicsError::InvalidDescriptor),
+                    }
+                };
+                graphics.cmd_copy_typed_image(
+                    args.handle(0),
+                    args.handle(1),
+                    location(2)?,
+                    args.handle(6),
+                    location(7)?,
+                    (args.size(11)?, args.size(12)?),
+                )?;
+            }
+            52 => {
+                let format = view_format(args.0[5])?;
                 value = graphics
                     .create_array_slice_view(
                         args.handle(0),
@@ -436,16 +556,7 @@ pub fn graphics_call_v1(
                     .to_u64();
             }
             37 | 45 => {
-                let format = match args.0[4] {
-                    0 => GraphicsTextureViewFormat::Rgba8Unorm,
-                    1 => GraphicsTextureViewFormat::Rgba8UnormSrgb,
-                    2 => GraphicsTextureViewFormat::Bc1RgbaUnorm,
-                    3 => GraphicsTextureViewFormat::Bc1RgbaUnormSrgb,
-                    4 => GraphicsTextureViewFormat::Bc3RgbaUnorm,
-                    5 => GraphicsTextureViewFormat::Bc3RgbaUnormSrgb,
-                    6 => GraphicsTextureViewFormat::R8Unorm,
-                    _ => return Err(GraphicsError::InvalidDescriptor),
-                };
+                let format = view_format(args.0[4])?;
                 let desc = GraphicsTextureViewDesc {
                     base_mip: args.u32(2)?,
                     mip_count: args.u32(3)?,
@@ -652,4 +763,25 @@ pub fn graphics_call_v1(
         }
         Err(_) => Ok(STATUS_GRAPHICS_ERROR),
     }
+}
+
+fn view_format(code: u64) -> Result<GraphicsTextureViewFormat, GraphicsError> {
+    use GraphicsTextureViewFormat::*;
+    Ok(match code {
+        0 => Rgba8Unorm,
+        1 => Rgba8UnormSrgb,
+        2 => Bc1RgbaUnorm,
+        3 => Bc1RgbaUnormSrgb,
+        4 => Bc3RgbaUnorm,
+        5 => Bc3RgbaUnormSrgb,
+        6 => R8Unorm,
+        7 => Rg8Unorm,
+        8 => Bgra8Unorm,
+        9 => Bgra8UnormSrgb,
+        10 => Rgba16Float,
+        11 => R32Float,
+        12 => R32Uint,
+        13 => Depth32Float,
+        _ => return Err(GraphicsError::InvalidDescriptor),
+    })
 }

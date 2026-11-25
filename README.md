@@ -37,7 +37,7 @@ The latest verified milestones include **translated gfx1030 vertex and pixel sha
 | X7 — Imported services | Named imports, guest-to-host service dispatch and result validation | Verified |
 | X8 — Translated compute | Original gfx1030 compute shaders executing on Metal, partial Wave32 handling and BC1 readback | Verified subset |
 | X9 — Translated graphics | Persistent resource handles, translated vertex/pixel stages and offscreen Metal rendering | Verified subset |
-| X10 — Texture sampling | Translated image instructions are still planned; upload, readback and decode of BC compressed formats is implemented (see [Texture support](#texture-support)) | Planned |
+| X10 — Texture sampling | Bounded translated 2D sampling with explicit texture/sampler slots and read-only views; broader image instructions remain planned (see [Texture support](#texture-support)) | Implemented subset |
 | X11 — Graphics pipeline | Bounded multi-draw passes into offscreen RGBA8 targets: translated vertex and pixel stages, indexed triangle draws, colour write masks and blend state | Implemented |
 | X12 — Wave execution | Expand Wave32/Wave64 semantics, divergent control flow, cross-lane operations, LDS and barriers | Planned |
 | X13 — Advanced shaders | Mesh, geometry and additional compute shader capabilities with verified Metal execution | Planned |
