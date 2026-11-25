@@ -178,6 +178,7 @@ service ucrtbase.dll putchar(character: i32) -> i32
     handler putchar
     status implemented
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails never: writing stdout cannot fail, as the output is captured
     ref stdio.h putchar
     test vfprintf_s_and_putchar_write_to_the_streams
@@ -194,6 +195,7 @@ service ucrtbase.dll fwrite(buffer: ptr, size: u64, count: u64, stream: ptr) -> 
     handler fwrite
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails 0 with errno EINVAL for a null buffer or stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream
     ref stdio.h fwrite
     test fwrite_and_fputs_write_to_the_captured_standard_streams
@@ -202,6 +204,7 @@ service ucrtbase.dll fputs(text: ptr, stream: ptr) -> i32
     handler fputs
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails EOF with errno EINVAL for a null string or stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream
     ref stdio.h fputs
     test fwrite_and_fputs_write_to_the_captured_standard_streams
@@ -210,6 +213,7 @@ service ucrtbase.dll fflush(stream: ptr) -> i32
     handler fflush
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails stops the guest for a pointer that is no stream
     ref stdio.h fflush
     test fflush_and_setvbuf_return_their_documented_results
@@ -218,6 +222,7 @@ service ucrtbase.dll setvbuf(stream: ptr, buffer: ptr, mode: i32, size: u64) -> 
     handler setvbuf
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno EINVAL for a null stream, an unknown mode or a size outside 2 to INT_MAX; stops the guest for a pointer that is no stream
     ref stdio.h setvbuf
     test fflush_and_setvbuf_return_their_documented_results
@@ -228,6 +233,7 @@ service ucrtbase.dll fopen(name: ptr, mode: ptr) -> ptr
     handler fopen
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails null with errno EINVAL, ENOENT, EACCES, EMFILE, ENOSPC or ENOMEM
     ref stdio.h fopen
     test a_file_written_through_a_stream_reads_back_line_by_line
@@ -236,6 +242,7 @@ service ucrtbase.dll fclose(stream: ptr) -> i32
     handler fclose
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails EOF with errno EINVAL for a null stream; stops the guest for a standard stream or a pointer that is no stream
     ref stdio.h fclose
     test a_file_written_through_a_stream_reads_back_line_by_line
@@ -244,6 +251,7 @@ service ucrtbase.dll fgets(buffer: ptr, count: i32, stream: ptr) -> ptr
     handler fgets
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails null at end of file; null with errno EINVAL or EBADF; stops the guest for a pointer that is no stream
     ref stdio.h fgets
     test fgets_reads_lines_within_its_count
@@ -305,6 +313,7 @@ service ucrtbase.dll feof(stream: ptr) -> i32
     handler feof
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails the indicator of the standard input and of file streams; the output streams report 0; -1 with errno EINVAL for a null stream
     ref stdio.h feof
     test stdin_lines_follow_iso_c_at_the_edges
@@ -324,6 +333,7 @@ service ucrtbase.dll clearerr(stream: ptr) -> void
     handler clearerr
     status implemented
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails never; errno EINVAL for a null stream; stops the guest for a pointer that is no stream
     ref stdio.h clearerr
     test secure_fopen_and_stream_indicators_follow_iso_c
@@ -373,6 +383,7 @@ service ucrtbase.dll rename(from: ptr, to: ptr) -> i32
     handler rename
     status partial
     alias api-ms-win-crt-filesystem-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno ENOENT when the old name holds nothing, EACCES when the new name exists or its directory does not, EINVAL for a null or rejected name; stops the guest for a directory
     ref stdio.h rename
     test file_positions_round_trip_and_files_are_removed_and_renamed
@@ -399,6 +410,7 @@ service ucrtbase.dll _open(name: ptr, flags: i32, mode: i32) -> i32
     handler _open
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno ENOENT missing, EACCES for a directory, EEXIST with _O_CREAT|_O_EXCL, EINVAL for a null or rejected name or bad access bits, EMFILE at 8192 descriptors, ENOSPC when the drive is full; stops the guest for the wide text modes
     ref io.h _open
     test descriptors_share_files_with_streams
@@ -407,6 +419,7 @@ service ucrtbase.dll _close(fd: i32) -> i32
     handler _close
     status implemented
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno EBADF for a descriptor that is not open; stops the guest for a standard descriptor
     ref io.h _close
     test descriptors_share_files_with_streams
@@ -415,6 +428,7 @@ service ucrtbase.dll _read(fd: i32, buffer: ptr, count: u32) -> i32
     handler _read
     status implemented
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno EBADF for a descriptor that is not open or not readable, EINVAL for a null buffer or a count over the transfer limit; stops the guest for a buffer it cannot write
     ref io.h _read
     test descriptors_share_files_with_streams
@@ -423,6 +437,7 @@ service ucrtbase.dll _write(fd: i32, buffer: ptr, count: u32) -> i32
     handler _write
     status implemented
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno EBADF for a descriptor that is not open or not writable, EINVAL for a null buffer or a count over the transfer limit, ENOSPC when the drive is full; stops the guest for a buffer it cannot read
     ref io.h _write
     test descriptors_share_files_with_streams
@@ -439,6 +454,7 @@ service ucrtbase.dll _fileno(stream: ptr) -> i32
     handler _fileno
     status implemented
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno EINVAL for a null stream; stops the guest for a pointer that is no stream
     ref io.h _fileno
     test descriptors_share_files_with_streams
@@ -447,6 +463,7 @@ service ucrtbase.dll _isatty(fd: i32) -> i32
     handler _isatty
     status implemented
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails 0 always, as nothing here is a character device; errno EBADF for a descriptor that is not open
     ref io.h _isatty
     test descriptors_share_files_with_streams
@@ -455,6 +472,7 @@ service ucrtbase.dll _access(name: ptr, mode: i32) -> i32
     handler _access
     status implemented
     alias api-ms-win-crt-filesystem-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno ENOENT for a missing or rejected name, EINVAL for a null or empty name or mode bits other than 0, 2, 4 and 6
     ref io.h _access
     test descriptors_share_files_with_streams
@@ -463,6 +481,7 @@ service ucrtbase.dll _unlink(name: ptr) -> i32
     handler _unlink
     status implemented
     alias api-ms-win-crt-filesystem-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno ENOENT missing, EACCES for a directory, EINVAL for a null or empty name; it is remove by another name
     ref io.h _unlink
     test descriptors_share_files_with_streams
@@ -474,6 +493,7 @@ service ucrtbase.dll _gmtime64(time: ptr) -> ptr
     handler _gmtime64
     status implemented
     alias api-ms-win-crt-time-l1-1-0.dll
+    alias msvcrt.dll
     fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
     ref time.h _gmtime64
     test c_time_breaks_down_and_composes_the_injected_clock
@@ -482,6 +502,7 @@ service ucrtbase.dll _localtime64(time: ptr) -> ptr
     handler _gmtime64
     status implemented
     alias api-ms-win-crt-time-l1-1-0.dll
+    alias msvcrt.dll
     fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
     ref time.h _localtime64
     test c_time_breaks_down_and_composes_the_injected_clock
@@ -490,6 +511,7 @@ service ucrtbase.dll _mktime64(tm: ptr) -> ptr
     handler _mktime64
     status implemented
     alias api-ms-win-crt-time-l1-1-0.dll
+    alias msvcrt.dll
     fails -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000
     ref time.h _mktime64
     test c_time_breaks_down_and_composes_the_injected_clock
@@ -506,6 +528,7 @@ service ucrtbase.dll _ctime64(time: ptr) -> ptr
     handler _ctime64
     status implemented
     alias api-ms-win-crt-time-l1-1-0.dll
+    alias msvcrt.dll
     fails null with errno EINVAL for a null pointer or a time outside 1970-to-3000
     ref time.h _ctime64
     test c_time_formats_and_measures_as_the_crt_does
@@ -530,6 +553,7 @@ service ucrtbase.dll clock() -> u64
     handler clock
     status implemented
     alias api-ms-win-crt-time-l1-1-0.dll
+    alias msvcrt.dll
     fails never
     ref time.h clock
     test c_time_formats_and_measures_as_the_crt_does
@@ -546,6 +570,7 @@ service ucrtbase.dll strftime(out: ptr, size: u64, format: ptr, tm: ptr) -> u64
     handler strftime
     status implemented
     alias api-ms-win-crt-time-l1-1-0.dll
+    alias msvcrt.dll
     fails 0 when the result does not fit; EINVAL for null arguments or invalid fields
     ref time.h strftime
     test c_time_formats_and_measures_as_the_crt_does
@@ -766,6 +791,7 @@ service ucrtbase.dll fputc(character: i32, stream: ptr) -> i32
     handler fputc
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
     fails EOF with errno EINVAL for a null stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream
     ref stdio.h fputc
     test fputc_writes_one_character_to_a_stream
@@ -774,6 +800,7 @@ service ucrtbase.dll strerror(code: i32) -> ptr
     handler strerror
     status partial
     alias api-ms-win-crt-runtime-l1-1-0.dll
+    alias msvcrt.dll
     fails never; the message is valid until the next call
     ref string.h strerror
     test strerror_names_the_error_numbers_the_runtime_uses
@@ -782,6 +809,7 @@ service ucrtbase.dll localeconv() -> ptr
     handler localeconv
     status partial
     alias api-ms-win-crt-locale-l1-1-0.dll
+    alias msvcrt.dll
     fails stops the guest when the block cannot be allocated
     ref corecrt_locale.h localeconv and struct lconv
     test localeconv_returns_the_c_locale
@@ -1682,6 +1710,7 @@ service ucrtbase.dll __setusermatherr(handler: ptr) -> void
     handler set_user_math_error
     status partial
     alias api-ms-win-crt-math-l1-1-0.dll
+    alias msvcrt.dll
     fails never
     ref corecrt_startup.h __setusermatherr
     test crt_app_type_and_math_error_handler_are_recorded
@@ -1714,6 +1743,7 @@ service ucrtbase.dll signal(signal: i32, handler: ptr) -> ptr
     handler signal
     status partial
     alias api-ms-win-crt-runtime-l1-1-0.dll
+    alias msvcrt.dll
     fails SIG_ERR with errno EINVAL for a signal the documentation does not list
     ref signal.h signal
     test crt_startup_handlers_return_the_previous_handler
