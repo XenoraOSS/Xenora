@@ -250,3 +250,137 @@ fn sleeping_advances_the_injected_clock() {
     assert_eq!(guest.fails("SleepEx", &[60_000, 0]), RUNTIME_LIMIT);
     assert_eq!(guest.call("GetTickCount64", &[]), 255);
 }
+
+/// `IsProcessorFeaturePresent` must agree with what translated guest code sees
+/// when it executes `CPUID`, bit for bit, per the CPUID feature flags in the
+/// public Intel and AMD manuals and the `PF_*` numbers in winnt.h.
+#[test]
+fn processor_features_agree_with_guest_cpuid() {
+    const FEATURES: &[(&str, &str)] = &[
+        ("kernel32.dll", "IsProcessorFeaturePresent"),
+        (
+            "api-ms-win-core-processthreads-l1-1-0.dll",
+            "IsProcessorFeaturePresent",
+        ),
+    ];
+    // mov eax, leaf; xor ecx, ecx; cpuid; hlt
+    let leaf = |n: u8| vec![0xB8, n, 0, 0, 0, 0x31, 0xC9, 0x0F, 0xA2, 0xF4];
+    let mut guest = Guest::new(FEATURES, &[leaf(1), leaf(7)]);
+    let registers = |guest: &mut Guest, index| {
+        use xenora_loader::cpu::{ExitReason, Register};
+        let (cpu, exit) = guest.execute(routine(index), 16);
+        assert_eq!(exit, ExitReason::Halt);
+        (
+            cpu.get(Register::Rbx) as u32,
+            cpu.get(Register::Rcx) as u32,
+            cpu.get(Register::Rdx) as u32,
+        )
+    };
+    let (_, ecx1, edx1) = registers(&mut guest, 0);
+    let (ebx7, _, _) = registers(&mut guest, 1);
+    let cases = [
+        (2, edx1 & (1 << 8) != 0),
+        (3, edx1 & (1 << 23) != 0),
+        (6, edx1 & (1 << 25) != 0),
+        (8, edx1 & (1 << 4) != 0),
+        (10, edx1 & (1 << 26) != 0),
+        (13, ecx1 & 1 != 0),
+        (14, ecx1 & (1 << 13) != 0),
+        (17, ecx1 & (3 << 26) == 3 << 26),
+        (28, ecx1 & (1 << 30) != 0),
+        (36, ecx1 & (1 << 9) != 0),
+        (37, ecx1 & (1 << 19) != 0),
+        (38, ecx1 & (1 << 20) != 0),
+        (39, ecx1 & (1 << 28) != 0),
+        (40, ebx7 & (1 << 5) != 0),
+    ];
+    for (feature, expected) in cases {
+        let answer = guest.call("IsProcessorFeaturePresent", &[feature]);
+        assert_eq!(answer, u64::from(expected), "PF {feature}");
+    }
+    // No CPUID test exists for these, so they are not claimed:
+    // PF_NX_ENABLED (12), PF_FASTFAIL_AVAILABLE (23), and unknown numbers.
+    for feature in [12, 23, 9999, u32::MAX as u64] {
+        assert_eq!(guest.call("IsProcessorFeaturePresent", &[feature]), 0);
+    }
+}
+
+/// `TIME_ZONE_INFORMATION` (172 bytes) and `TIME_ZONE_ID_UNKNOWN` per the
+/// public GetTimeZoneInformation page: a zone without daylight saving.
+#[test]
+fn time_zone_is_utc_without_daylight_saving() {
+    const ZONE: &[(&str, &str)] = &[
+        (
+            "api-ms-win-core-timezone-l1-1-0.dll",
+            "GetTimeZoneInformation",
+        ),
+        ("kernel32.dll", "GetLastError"),
+    ];
+    let mut guest = Guest::new(ZONE, &[]);
+    guest.memory.write_bytes(SCRATCH, &[0xCC; 176]).unwrap();
+    assert_eq!(guest.call("GetTimeZoneInformation", &[SCRATCH]), 0);
+    let name = |offset: u64| {
+        let units: Vec<u16> = (0..32)
+            .map(|i| guest.u16_at(SCRATCH + offset + 2 * i))
+            .collect();
+        String::from_utf16(&units[..units.iter().position(|&u| u == 0).unwrap()]).unwrap()
+    };
+    assert_eq!(name(4), "Coordinated Universal Time");
+    assert_eq!(name(88), "Coordinated Universal Time");
+    assert_eq!(guest.u32_at(SCRATCH), 0, "Bias");
+    for (offset, length) in [(68, 20), (152, 20)] {
+        for byte in 0..length {
+            assert_eq!(guest.memory.read_u8(SCRATCH + offset + byte).unwrap(), 0);
+        }
+    }
+    assert_eq!(
+        guest.u32_at(SCRATCH + 172),
+        0xCCCC_CCCC,
+        "nothing past the struct"
+    );
+    assert_eq!(guest.call("GetTimeZoneInformation", &[0]), u32::MAX as u64);
+    assert_eq!(guest.error(), 998);
+}
+
+/// SYSTEM_LOGICAL_PROCESSOR_INFORMATION entries are 32 bytes on x64; a short
+/// buffer fails with ERROR_INSUFFICIENT_BUFFER and the required length.
+#[test]
+fn processor_topology_follows_the_guest_profile() {
+    const TOPOLOGY: &[(&str, &str)] = &[
+        (
+            "api-ms-win-core-sysinfo-l1-1-0.dll",
+            "GetLogicalProcessorInformation",
+        ),
+        ("kernel32.dll", "GetLastError"),
+    ];
+    let length = SCRATCH + 0x800;
+    let mut state = ServicesState::new(Arc::new(MockClock::new(0)));
+    state.guest_profile = GuestSystemProfile { processors: 2 };
+    let mut guest = Guest::with_state(TOPOLOGY, &[], state);
+    guest.memory.write_u32(length, 0).unwrap();
+    assert_eq!(
+        guest.call("GetLogicalProcessorInformation", &[0, length]),
+        0
+    );
+    assert_eq!(guest.error(), 122);
+    // Two cores and one package.
+    assert_eq!(guest.u32_at(length), 3 * 32);
+    assert_eq!(
+        guest.call("GetLogicalProcessorInformation", &[SCRATCH, length]),
+        1
+    );
+    let entry = |index: u64| {
+        (
+            guest.u64_at(SCRATCH + 32 * index),
+            guest.u32_at(SCRATCH + 32 * index + 8),
+        )
+    };
+    assert_eq!(entry(0), (0b01, 0), "RelationProcessorCore");
+    assert_eq!(entry(1), (0b10, 0), "RelationProcessorCore");
+    assert_eq!(entry(2), (0b11, 3), "RelationProcessorPackage");
+    assert_eq!(
+        guest.call("GetLogicalProcessorInformation", &[SCRATCH, 0]),
+        0
+    );
+    assert_eq!(guest.error(), 998);
+}

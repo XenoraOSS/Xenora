@@ -18,11 +18,22 @@ fn test_builtin_db_classifies_crt_string() {
     let strlen_cls = db.get("api-ms-win-crt-string-l1-1-0.dll", "strlen");
     assert!(matches!(strlen_cls, Some(Classification::StandardService)));
 
-    let strcat_s_cls = db.get("api-ms-win-crt-string-l1-1-0.dll", "strcat_s");
     assert!(matches!(
-        strcat_s_cls,
-        Some(Classification::CrtWrapper { .. })
+        db.get("api-ms-win-crt-string-l1-1-0.dll", "strtok"),
+        Some(Classification::StandardService)
     ));
+
+    // Bounds-checked copies must reach the runtime service, never an
+    // unchecked libc wrapper that ignores the destination size.
+    for symbol in ["strcat_s", "strcpy_s", "strncpy_s", "wcscpy_s"] {
+        assert!(
+            matches!(
+                db.get("api-ms-win-crt-string-l1-1-0.dll", symbol),
+                Some(Classification::StandardService)
+            ),
+            "{symbol}"
+        );
+    }
 }
 
 #[test]
@@ -71,9 +82,9 @@ fn typed_csv_preserves_ordinals_and_identically_spelled_names() {
 fn test_manifest_and_codegen_pipeline() {
     let csv_content = r#""module","symbol_or_ordinal","iat_rva"
 "api-ms-win-crt-math-l1-1-0.dll","acos",0x1000
-"api-ms-win-crt-string-l1-1-0.dll","tolower",0x1008
-"API-MS-WIN-CRT-STRING-L1-1-0.DLL","tolower",0x1048
-"api-ms-win-core-processthreads-l1-1-0.dll","CreateThread",0x1010
+"custom-crt.dll","toupper",0x1008
+"CUSTOM-CRT.DLL","toupper",0x1048
+"api-ms-win-core-processthreads-l1-1-2.dll","CreateThread",0x1010
 "custom.dll","UnknownCustomFunc",0x1018
 "kernel32.dll","QueryPerformanceCounter",0x1020
 "api-ms-win-core-profile-l1-1-0.dll","QueryPerformanceFrequency",0x1028
@@ -90,7 +101,18 @@ fn test_manifest_and_codegen_pipeline() {
     let records = parse_csv(csv_file.to_str().unwrap()).unwrap();
     assert_eq!(records.len(), 10);
 
-    let db = SymbolDb::builtin();
+    // Every built-in symbol with a generated adapter is now a runtime
+    // service, so the adapter path is exercised through a project-specific
+    // module classified as native.
+    let mut db = SymbolDb::builtin();
+    db.insert(
+        "custom-crt.dll",
+        "toupper",
+        Classification::CrtNative {
+            libc_sym: "toupper",
+            note: "test-only native mapping",
+        },
+    );
     let manifest = Manifest::build(&records, &db);
     let summary = manifest.summary();
 
@@ -113,7 +135,7 @@ fn test_manifest_and_codegen_pipeline() {
 
     let files = generate(&manifest, &db);
     assert!(files.crt_rs.contains("register_generated_crt_services"));
-    assert_eq!(files.crt_rs.matches("\"tolower\"").count(), 1);
+    assert_eq!(files.crt_rs.matches("\"toupper\"").count(), 1);
     let acos = files.crt_rs.split_once("\"acos\"").unwrap().1;
     let acos = acos.split("registry.register_with_status").next().unwrap();
     assert!(acos.contains("ServiceStatus::Stub"));
@@ -131,7 +153,7 @@ fn test_manifest_and_codegen_pipeline() {
     assert!(!files.stubs_rs.contains("GetThreadId"));
     assert!(!files.stubs_rs.contains("DuplicateHandle"));
     assert!(!files.stubs_rs.contains("GetTickCount64"));
-    assert!(files.tests_rs.contains("generated_test_tolower"));
+    assert!(files.tests_rs.contains("generated_test_toupper"));
 
     let out_dir = tmp_dir.join("out");
     files.write_all(out_dir.to_str().unwrap()).unwrap();
@@ -147,6 +169,10 @@ fn test_catalog_describes_windows_wide_string_signatures() {
 
     let catalog = MetadataCatalog::builtin();
     let wide = AbiType::StringWide;
+    let wide_pointer = AbiType::Pointer {
+        is_const: false,
+        pointee: "wchar_t".into(),
+    };
     for (symbol, return_type, parameters) in [
         ("wcslen", AbiType::U64, vec![wide.clone()]),
         ("wcsnlen", AbiType::U64, vec![wide.clone(), AbiType::U64]),
@@ -154,7 +180,31 @@ fn test_catalog_describes_windows_wide_string_signatures() {
         (
             "wcsncmp",
             AbiType::I32,
-            vec![wide.clone(), wide, AbiType::U64],
+            vec![wide.clone(), wide.clone(), AbiType::U64],
+        ),
+        (
+            "wcsstr",
+            wide_pointer.clone(),
+            vec![wide.clone(), wide.clone()],
+        ),
+        (
+            "wcspbrk",
+            wide_pointer.clone(),
+            vec![wide.clone(), wide.clone()],
+        ),
+        ("wcsspn", AbiType::U64, vec![wide.clone(), wide.clone()]),
+        ("wcscspn", AbiType::U64, vec![wide.clone(), wide.clone()]),
+        (
+            "wcstok",
+            wide_pointer.clone(),
+            vec![
+                wide_pointer,
+                wide,
+                AbiType::Pointer {
+                    is_const: false,
+                    pointee: "wchar_t *".into(),
+                },
+            ],
         ),
     ] {
         let signature = catalog.lookup("ucrtbase.dll", symbol).unwrap();

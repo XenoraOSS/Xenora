@@ -34,13 +34,26 @@ struct Queue {
     ports: [u64; 2],
 }
 
-struct ScheduledCallback {
+pub(super) struct ScheduledCallback {
     owner: u64,
     ready_at: Instant,
     callback: GuestCallback,
 }
 
+/// Build a delayed/immediate scheduled callback for queue submission.
+pub(super) fn scheduled(ready_at: Instant, callback: GuestCallback) -> ScheduledCallback {
+    ScheduledCallback {
+        owner: 0,
+        ready_at,
+        callback,
+    }
+}
+
 impl QueueHandles {
+    pub(super) fn has_handle(&self, handle: u64) -> bool {
+        self.queues.contains_key(&handle)
+    }
+
     /// Task-queue handles the guest has open.
     pub(super) fn open_count(&self) -> usize {
         self.queues.len()
@@ -100,7 +113,7 @@ impl QueueHandles {
         }
     }
 
-    fn submit(
+    pub(super) fn submit(
         &mut self,
         handle: u64,
         selector: u32,
@@ -255,15 +268,15 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 {
                     return Ok(E_ABORT);
                 }
-                let callback = ScheduledCallback {
-                    owner: 0,
-                    ready_at: Instant::now() + Duration::from_millis(u64::from(delay)),
-                    callback: GuestCallback {
+                let callback = scheduled(
+                    Instant::now() + Duration::from_millis(u64::from(delay)),
+                    GuestCallback {
                         entry,
                         context,
                         cancelled: false,
+                        task: None,
                     },
-                };
+                );
                 let result = queues.submit(args.rcx, args.rdx as u32, callback);
                 if result.is_ok() {
                     submit.gdk_queue_changed.notify_all();

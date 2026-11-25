@@ -226,11 +226,6 @@ pub(super) fn register(registry: &mut ImportRegistry) {
             }
         },
     );
-    // The environment table is empty (see crt_arguments.rs), so no variable is set.
-    registry.register_with_status(UCRT, "getenv", ServiceStatus::Partial, |args, _, memory| {
-        memory.read_u8(args.rcx).map_err(fault)?;
-        Ok(0)
-    });
     // Nothing allocates local memory, so only a null handle can be freed.
     registry.register_with_status(
         KERNEL32,
@@ -260,7 +255,6 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         ("api-ms-win-crt-private-l1-1-0.dll", "strchr"),
         ("api-ms-win-crt-string-l1-1-0.dll", "memchr"),
         ("api-ms-win-crt-string-l1-1-0.dll", "strchr"),
-        ("api-ms-win-crt-environment-l1-1-0.dll", "getenv"),
         ("api-ms-win-crt-utility-l1-1-0.dll", "rand_s"),
         ("api-ms-win-crt-stdio-l1-1-0.dll", "_read"),
     ] {

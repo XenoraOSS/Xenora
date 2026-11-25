@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+mod coverage;
 mod demo;
 mod runner;
 mod shaders;
@@ -147,9 +148,10 @@ fn main() -> ExitCode {
 /// `xenora imports generate --pe <path> [--out <dir>]`
 /// `xenora imports metadata sync [--out <dir>]`
 /// `xenora imports verify`
+/// `xenora imports coverage [--out <file>]`
 fn imports_command(args: Vec<String>) -> ExitCode {
     if args.is_empty() {
-        eprintln!("usage: xenora imports <sync|generate|metadata|verify> [options]");
+        eprintln!("usage: xenora imports <sync|generate|metadata|verify|coverage> [options]");
         return ExitCode::from(2);
     }
 
@@ -158,9 +160,10 @@ fn imports_command(args: Vec<String>) -> ExitCode {
         "sync" => run_imports_sync_cli(&args[1..]),
         "metadata" => run_imports_metadata_cli(&args[1..]),
         "verify" => run_imports_verify_cli(&args[1..]),
+        "coverage" => coverage::command(&args[1..]),
         other => {
             eprintln!("unknown imports subcommand: {other}");
-            eprintln!("usage: xenora imports <sync|generate|metadata|verify> [options]");
+            eprintln!("usage: xenora imports <sync|generate|metadata|verify|coverage> [options]");
             ExitCode::from(2)
         }
     }

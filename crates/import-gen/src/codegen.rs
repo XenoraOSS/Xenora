@@ -342,8 +342,9 @@ fn symbol_to_ident_lower(sym: &str) -> String {
 pub(crate) fn crt_dispatch_expr(symbol: &str) -> Option<String> {
     Some(match symbol {
         // abs(int) -> int
+        // Windows long is 32 bits. The minimum wraps, as x86 neg does.
         "abs" | "labs" => r#"let x = args.rcx as i32;
-            Ok(x.abs() as u64)"#
+            Ok(u64::from(x.wrapping_abs() as u32))"#
             .to_string(),
         "llabs" => r#"let x = args.rcx as i64;
             Ok(x.unsigned_abs())"#

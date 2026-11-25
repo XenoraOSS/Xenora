@@ -316,7 +316,9 @@ Windows or with an Xbox console.
 
 ### CRT strings and byte memory
 
-The standard registry provides `strlen` and `strnlen` under UCRT and the CRT
+The standard registry provides `strlen`, `strnlen`, `strcpy`, `strncpy`,
+`strcat`, `strncat`, `memchr`, `strstr`, `strspn`, `strcspn`, and the wide
+forms `wcscpy`, `wcsncpy`, `wcscat`, `wcschr` and `wcsrchr` under UCRT and the CRT
 string API set. They count bytes using checked guest memory. The scan stops at
 a null byte or the requested bound for `strnlen`. A scan that would continue
 past 1 MiB reports an unsupported-service fault. See the
@@ -326,7 +328,9 @@ The same modules expose `strcmp` and `strncmp`. These compare unsigned bytes
 and stop at the first difference, null byte, or supplied comparison bound.
 They share the 1 MiB scan budget. `wcslen`, `wcsnlen`, `wcscmp`, and
 `wcsncmp` apply the same rules to unsigned 16-bit Windows code units.
-Counts and bounds for the wide variants are in code units.
+Counts and bounds for the wide variants are in code units. `_stricmp`,
+`_strnicmp`, `_wcsicmp` and `_wcsnicmp` use the same rules with C-locale ASCII
+case folding only (`A`–`Z`); they are not Unicode case mapping.
 
 The same modules expose `memset`, `memcpy`, `memmove`, and `memcmp` for spans
 up to 1 MiB. Each nonempty span must be fully mapped with the required permissions.
@@ -563,10 +567,232 @@ whitespace, explicit bases 2–36 and automatic base selection, and writes
 the first unparsed guest address to a supplied end pointer. Overflow
 clamps the result and sets ERANGE. Scans have a 1 MiB input budget. The long-long variants and
 Microsoft's _strtoi64, _strtoui64, _wcstoi64, and _wcstoui64 apply the
-same rules with 64-bit results.
+same rules with 64-bit results. `atoi`, `atol`, `atoll`, `_atoi64`,
+`_wtoi`, `_wtol` and `_wtoi64` reuse that parser with base 10 and no end
+pointer; on Windows LLP64, `atol` matches `atoi` (32-bit `long`).
+
+### CRT locale and formatted output
+
+`setlocale` accepts only the C locale (`"C"`, `"POSIX"`, empty string, and
+ASCII-case variants of `C.UTF-8`). Querying with a null locale name returns
+a durable `"C"` string. Other locale names fail with `EINVAL` and a null
+result. `localeconv` returns a guest `lconv` for that C locale. Thread
+locales and `_create_locale` remain unsupported.
+
+C-locale `ctype.h` predicates (`isalnum`, `isalpha`, `isdigit`, `islower`,
+`isupper`, `isspace`, `isxdigit`, `isprint`, `iscntrl`, `ispunct`) and
+`tolower` / `toupper` accept `EOF` or an `unsigned char` value. Other
+`int` arguments stop the guest.
+
+### Process environment
+
+`getenv`, `GetEnvironmentVariableA` and `GetEnvironmentVariableW` read a
+runtime-owned environment block (defaults include `OS=Windows_NT`).
+`_putenv` (`NAME=value`) and `SetEnvironmentVariableA` /
+`SetEnvironmentVariableW` update or delete entries in that block. The host
+process environment is not visible unless an entry is installed here.
+
+### CRT calendar time
+
+`time`, `_time64`, `gmtime_s`, `localtime_s`, `_gmtime64_s` and
+`_localtime64_s` use the injectable guest clock (the same FILETIME source as
+`GetSystemTimeAsFileTime`). There is no guest timezone database: local time
+matches UTC and `tm_isdst` is always zero. 32-bit `time` saturates at the
+2038 bounds rather than wrapping.
+
+### CRT `rand`
+
+`srand` and `rand` use the publicly documented MSVC LCG
+(`seed = seed * 214013 + 2531011`, return `(seed >> 16) & 0x7fff`). The seed is
+process-wide. `rand_s` is refused: it has to be cryptographically strong.
+
+### Process-local Winsock UDP and TCP loopback
+
+`ws2_32.dll` exposes a process-local IPv4 UDP loopback: `WSAStartup` /
+`WSACleanup`, `socket` (AF_INET / SOCK_DGRAM / IPPROTO_UDP only),
+`closesocket`, `bind`, `connect`, `send`, `recv`, `sendto`, `recvfrom`,
+`getsockname`, `getpeername`, `getsockopt` (`SO_TYPE`, `SO_MAX_MSG_SIZE`),
+`WSAPoll`, byte-order helpers, and `inet_ntop` / `inet_pton` for IPv4.
+Datagrams stay in the runtime; nothing reaches the host network stack. Bound
+addresses report `127.0.0.1`. At most 64 sockets, 16 pending datagrams per
+socket and 65,507 bytes per datagram. `recv` / `recvfrom` are non-blocking
+(`WSAEWOULDBLOCK` when empty). `sendto` may auto-bind an ephemeral port.
+`WSAPoll` timeouts are capped at 1 second.
+
+TCP streams (`socket` with SOCK_STREAM and protocol 0 or IPPROTO_TCP) connect
+only to a listening guest socket on `127.0.0.1`, also inside the process.
+`listen` clamps the backlog to 1–16 (SOMAXCONN included); a full queue or a
+port with no listener reports `WSAECONNREFUSED`. `connect` completes at once,
+and `accept` is non-blocking (`WSAEWOULDBLOCK` with nothing waiting). Each
+socket buffers up to 64 KiB of unread bytes; `send` then takes what fits and
+reports `WSAEWOULDBLOCK` when nothing fits, without reading the guest bytes it
+does not report. `recv` returns 0 at end of file, after the peer's
+`shutdown(SD_SEND)` or `closesocket`; sending to a closed peer reports
+`WSAECONNRESET`, and `WSAPoll` reports `POLLHUP`. Closing a listener closes
+connections it has not accepted. TCP and UDP ports are separate. `sendto`,
+`recvfrom` and socket options other than `SO_TYPE` are not supported on
+streams, and `shutdown` is not supported on datagram sockets. Raw sockets,
+IPv6, blocking waits on streams and host interfaces remain unsupported.
+`ioctlsocket` supports `FIONREAD` (unread stream bytes, or the size of the
+next datagram; `WSAEINVAL` on a listening socket) and `FIONBIO` with a nonzero
+argument. Every socket is already non-blocking, so asking for blocking mode
+returns `WSAEOPNOTSUPP` instead of being ignored.
+
+### Bounds-checked string copies
+
+`strcpy_s`, `strcat_s`, `strncpy_s`, `strncat_s`, `wcscpy_s`, `wcscat_s`,
+`wcsncpy_s` and `wcsncat_s` are registered on `ucrtbase.dll` and
+`api-ms-win-crt-string-l1-1-0.dll`. Sizes and counts are in characters. A null
+or zero-sized destination returns `EINVAL` and leaves it untouched. A null
+source (with a nonzero count), an unterminated append destination, or a result
+that does not fit returns `EINVAL` or `ERANGE` and leaves the destination
+empty. A count of `_TRUNCATE` copies what fits and returns `STRUNCATE`, which
+is not stored in `errno`; a count of zero writes only the terminator. Every
+other error is also stored in `errno`. The invalid-parameter handler is not
+modelled.
+
+### CRT block sizes and aligned allocation
+
+`_msize`, `_recalloc`, `_aligned_malloc`, `_aligned_realloc`, `_aligned_msize`
+and `_aligned_free` are registered on `ucrtbase.dll` and
+`api-ms-win-crt-heap-l1-1-0.dll`, using the same CRT heap as `malloc`.
+`_msize` reports the requested size. `_recalloc` checks `count * size` for
+overflow (`ENOMEM`, block unchanged), zeroes bytes past the old size, and frees
+the block for a size of zero.
+
+Heap blocks start on 64 KiB boundaries, so an aligned block is an ordinary
+heap block whose address is checked. Alignments that are not powers of two
+return `NULL` with `EINVAL`; alignments above 64 KiB return `NULL` with
+`ENOMEM` instead of a misaligned block. `_aligned_realloc` resizes in place
+when it can and otherwise moves the contents to a new aligned block.
+`_aligned_offset_malloc` is not provided, so `_aligned_msize` with a nonzero
+offset returns `EINVAL`. Aligned blocks are recorded: passing `_aligned_free`,
+`_aligned_realloc` or `_aligned_msize` a pointer that `_aligned_malloc` did not
+return, or one already freed, stops the guest with a memory fault. Calls the
+UCRT sends to the invalid-parameter handler set `errno` and return the
+documented failure value; the handler is not modelled.
+
+### C++ type identity
+
+`__std_type_info_compare`, `__std_type_info_hash`, `__std_type_info_name` and
+`__std_type_info_destroy_list` are registered on `vcruntime140.dll`. They back
+`typeid` equality, `type_info::before`, `hash_code` and `name`. Each takes the
+type descriptor's data: an 8-byte cached-name slot followed by the decorated
+name, as in the publicly described MSVC RTTI type descriptor.
+
+Two descriptors with the same decorated name compare equal and hash equally,
+so a type seen from two modules is one type. The hash is FNV-1a over the
+decorated name and is not claimed to match Microsoft's runtime. `name`
+undecorates plain class, struct, union and int-based enum names with their
+namespaces (`.?AVWidget@ui@@` becomes `class ui::Widget`), allocates the text
+on the guest heap and caches it in the descriptor; `destroy_list` frees those
+names. Templates, back-references, anonymous namespaces and non-class types
+stop the guest instead of returning a wrong name.
+
+`__std_exception_copy` and `__std_exception_destroy` manage the message record
+inside `std::exception`: the message pointer, then a one-byte flag that says
+whether the exception owns the text. A copy duplicates an owned message on the
+CRT heap, so `what()` stays the same after the original is destroyed, and
+shares a borrowed one. If the duplicate cannot be allocated, the copy gets an
+empty record. Destroy frees an owned message (guest `free` and these helpers
+use the same heap) and clears the record. Destroying an owned pointer the heap
+never allocated stops the guest with a memory fault.
+
+Throwing and catching exceptions, `dynamic_cast` and thread-safe static
+initialization are not implemented. `terminate` and `_purecall` are described
+under abnormal termination below.
+
+### Abnormal CRT termination
+
+`terminate` and `_purecall` (on `ucrtbase.dll` and
+`api-ms-win-crt-runtime-l1-1-0.dll`) and `__std_terminate` and `_purecall` (on
+`vcruntime140.dll`) end the guest process with exit code 3. Their default
+handlers call `abort`, and 3 is the code the Microsoft C runtime documents for
+`abort` without a `SIGABRT` handler. They use the same process exit as
+`ExitProcess`: handles close, the first exit decides the status, and the host
+process never ends. `abort` and `_exit` themselves are left to the separate
+CRT exit task.
+
+No handler can be installed: `signal`, `set_terminate` and
+`_set_purecall_handler` are not runtime services, so a guest that calls them
+stops there instead of getting a handler that is silently ignored. Debug-CRT message
+boxes and error reporting are not modelled.
+
+### CRT integer absolute value and division
+
+`abs`, `labs`, `llabs`, `div`, `ldiv` and `lldiv` are registered on
+`ucrtbase.dll` and `api-ms-win-crt-utility-l1-1-0.dll`. They follow the
+Windows LLP64 model, where `long` is 32 bits, so `labs` and `ldiv` match `abs`
+and `div` and ignore the upper half of each argument register. `div_t` and
+`ldiv_t` return in RAX with the quotient in the low 32 bits and the remainder
+in the high 32 bits. `lldiv_t` is 16 bytes, so the caller passes a result
+pointer in RCX, the operands arrive in RDX and R8, and RAX returns the pointer.
+Quotients truncate toward zero. The absolute value of the minimum integer
+wraps to itself. Division by zero and the minimum divided by -1 stop the guest
+with a divide error, as the x86 `idiv` instruction does.
+
+### CRT floating-point string conversion
+
+`strtod`, `strtof`, `wcstod`, `wcstof`, `atof` and `_wtof` are registered on
+`ucrtbase.dll` and `api-ms-win-crt-convert-l1-1-0.dll` and return their
+result in XMM0. They parse the ISO C grammar in the "C" locale: leading white
+space, an optional sign, then decimal digits with an optional `.` and an
+optional exponent (consumed only if a digit follows `e`), `inf`, `infinity`,
+or `nan` with an optional closed `(n-char-sequence)`, all case-insensitive.
+Decimal input is rounded once, directly to the result type, so `strtof` does
+not round through `double`. With no conversion the result is 0 and the end
+pointer is the string itself.
+
+Overflow returns a signed infinity and sets `ERANGE`, and so do nonzero digits
+that round to zero. Whether the UCRT also sets `ERANGE` for a subnormal
+nonzero result is not established from public documentation, so Xenora
+leaves `errno` unchanged there. A NaN payload is accepted and ignored; the
+result is the default quiet NaN with the parsed sign. Hexadecimal floating
+constants such as `0x1.8p3` stop the guest rather than being parsed as `0`.
+
+### XInput controllers
+
+`XInputGetState`, `XInputSetState`, `XInputGetCapabilities` and
+`XInputEnable` are registered on `xinput1_4.dll`; `xinput1_3.dll` and
+`xinput9_1_0.dll` reach the same services (`xinput9_1_0.dll` has no
+`XInputEnable`). Readings come from a `ControllerSource` the host connects
+with `ServicesState::set_controllers`. Without one, every slot reports
+`ERROR_DEVICE_NOT_CONNECTED`. `SimulatedControllers` is a deterministic source
+for tests; no physical controller or app input path is connected yet.
+
+The functions return their error code and leave last-error alone: a slot of 4
+or more, a null buffer or unknown capability flags return
+`ERROR_BAD_ARGUMENTS`, and an unmapped buffer returns `ERROR_NOACCESS`.
+`dwPacketNumber` advances only when the reading changes. While
+`XInputEnable(FALSE)` is in effect, `XInputGetState` reports a neutral
+controller and the motors stop; the last vibration request is applied again
+when XInput is enabled. Capabilities report a gamepad with every defined
+button, full trigger and stick resolution, and force feedback only when the
+source says the controller can vibrate. Battery, keystroke and audio-device
+functions are not implemented.
+
+### XAsync helpers
+
+`XAsyncRun`, `XAsyncGetStatus`, `XAsyncCancel` and `XAsyncGetResultSize` are
+registered on `xgameruntime.dll`. With a null queue in the `XAsyncBlock`, the
+work callback and optional completion callback run on the calling thread
+before `XAsyncRun` returns (immediate dispatch). With a non-null manual
+`XTaskQueue` handle, work is submitted to the work port and completion to the
+completion port; the guest must `XTaskQueueDispatch` those ports.
+`XAsyncGetStatus` with `wait=true` returns `ERROR_NOT_SUPPORTED`.
 
 ### Guest modules
 
+GetModuleHandleA and GetModuleHandleW recognize synthetic Kernel32 and UCRT
+module names and their registered API-set aliases. GetProcAddress resolves
+case-sensitive named exports to guest service trampolines. The registry
+captures built-in bindings at standard service registration and excludes
+stubs. Missing names and unsupported ordinals fail explicitly. These APIs
+expose synthetic module handles and never load host libraries.
+`GetModuleFileNameA` / `GetModuleFileNameW` return synthetic paths:
+`C:\xenora\guest.exe` for a null handle, and
+`C:\Windows\System32\<module>` for built-in DLL handles. They do not reveal
+host filesystem paths.
 The program's module handle is the base address its image was loaded at.
 `GetModuleHandleA` and `GetModuleHandleW` return it for a null name, and
 otherwise recognize the built-in Kernel32, KernelBase and UCRT modules and the
@@ -618,6 +844,146 @@ can be open. Same-process file handle duplicates share the file position and kee
 original sharing reservation until the last duplicate closes. Access can
 be reduced per handle. DOS wildcard edge cases, persistence, and
 asynchronous I/O remain outside this subset.
+
+### Host-backed guest drives
+
+`ServicesState::mount` exposes a host directory to the guest as a drive
+letter from D: to Z:, through `HostMount::new(drive, root, writable)`. Without
+a mount, nothing on the host is reachable through these services. Mounts are
+read-only unless created writable.
+
+The partial `GetFileAttributesExA/W` services return attributes and 64-bit
+sizes for `GetFileExInfoStandard`. Host-mounted entries carry access and
+modification timestamps and creation time where the host supplies it.
+Synthetic files use the guest clock and accept explicit timestamp changes. Directory enumeration uses the same
+timestamp representation. `GetFileTime` reads these values from an open
+file with read access and accepts null pointers for omitted values.
+The partial `SetFileTime` service updates access and modification times on
+writable mounted files. On synthetic files it also accepts creation-time
+updates. Null inputs and zero FILETIMEs leave fields unchanged. Host
+creation-time updates and host timestamp suppression are unsupported.
+Synthetic handles accept all-ones access and write times to suppress
+automatic updates for that open file.
+Synthetic files update access time after a nonempty read and modification
+time after a nonempty write or truncation.
+The ANSI form accepts ASCII paths.
+
+The partial `FlushFileBuffers` service requires a writable file handle.
+It synchronizes the backing file on a host mount. Synthetic file writes
+are already visible in the guest's in-memory filesystem.
+
+The ANSI forms `CreateFileA`, `DeleteFileA`, and `GetFileAttributesA`
+accept ASCII paths and use the same guest namespace and mount rules as the
+wide forms.
+
+The partial `GetTempPathA/W` services use the first nonempty guest value
+among `TMP`, `TEMP`, and `USERPROFILE`, falling back to the synthetic
+`C:\` root. They add a trailing separator without checking whether the
+directory exists. The narrow entry point accepts ASCII. No host environment
+is consulted.
+
+The partial `GetTempFileNameW` service accepts ASCII prefixes on the synthetic
+drive and explicitly mounted drives. Automatic creation requires a writable
+mount and uses exclusive creation inside the resolved directory. A nonzero unique value formats a name without creating a file. A zero
+value picks an available name using the guest clock and creates an empty file
+without retaining a handle. Callers can remove it with `DeleteFileW`.
+
+The confinement policy below is enforced in `services/host_files.rs` and
+covered by `crates/loader/tests/runtime_host_files.rs` and unit tests in that
+module. Guest path confinement for this boundary was reviewed by Cursor
+security-review and implementation-review agents (not a human audit).
+
+- **Path resolution.** The root directory is opened once with
+  `O_DIRECTORY | O_NOFOLLOW`, so a symlink mount root is rejected. Every
+  operation resolves the guest path from that descriptor one component at a
+  time with `openat` and `O_NOFOLLOW`. `.` and `..` components, device names,
+  Windows-invalid characters and drive-relative paths are rejected. Names
+  match the host listing ignoring ASCII case. Two host entries that match
+  the same name under this rule are refused as ambiguous. Non-ASCII letters
+  must match the spelling in the listing. If the host filesystem treats a
+  different spelling as a collision, exclusive file creation returns
+  `ERROR_FILE_EXISTS` and directory creation returns `ERROR_ALREADY_EXISTS`.
+- **Hidden entries.** The guest cannot see or open symbolic links, devices,
+  sockets, FIFOs, non-UTF-8 names, or regular files with more than one hard
+  link. Hiding multiply linked files prevents a hard link from aliasing a
+  host file outside the root. The cost is that legitimately hard-linked files
+  are hidden too.
+- **Descriptor verification.** After each `openat`, the descriptor is
+  checked with `fstat`: it must be the expected type, a file must have one
+  link, and the device and inode must match what the listing reported. A host
+  change that swaps an entry between the listing and the open fails with
+  `ERROR_ACCESS_DENIED`. Removal opens and re-verifies the entry, re-checks
+  the directory listing, then uses name-based `unlinkat`. A concurrent host
+  rename in that window can still remove a different entry inside the mount
+  (never outside it). Host writers under the mount are trusted for that
+  residual race. A file unlink that did not drop the held inode's link count
+  fails closed; directories have no post-unlink check.
+- **File identity.** Reads, writes and truncation use the verified
+  descriptor, so they reach the same file after a host rename. Sharing checks
+  and the open-file check in DeleteFileW compare the live device and inode of
+  every open handle, not guest paths. A truncating open is checked for
+  sharing before it truncates. If an open handle's identity cannot be read,
+  the check treats it as the same file, so failures deny access rather than
+  grant it.
+- **Read-only enforcement.** Read-only mounts reject creation, truncation,
+  writes, deletion and directory changes with `ERROR_ACCESS_DENIED`. They also
+  open every file `O_RDONLY`, so the host kernel refuses writes as well.
+- **Resource limits.** A directory listing is bounded at 4,096 visible
+  entries. Larger directories report `ERROR_NOT_ENOUGH_MEMORY` rather than a
+  partial listing. Open handles share the 1,024-handle object table.
+  Transfers are limited to 1 MiB per call. On writable mounts, writes and
+  truncation cannot make a file larger than the mount's limit
+  (`HostMount::with_max_file_size`, 1 GiB by default); they report
+  `ERROR_DISK_FULL` instead.
+- **Mount quota.** `HostMount::with_quota(bytes, entries)` optionally bounds
+  the net bytes and the net number of files and directories that guest
+  operations add to a writable mount, relative to its contents when mounted.
+  Writes, extending `SetEndOfFile`, `CreateFileW`, `CreateDirectoryW` and
+  `GetTempFileNameW` are charged; shrinking, `DeleteFileW`
+  and `RemoveDirectoryW` give the amount back, never below zero. An operation
+  that would exceed a limit fails with `ERROR_DISK_FULL` and
+  leaves the host unchanged. CRT streams reach only the synthetic C: drive.
+  Changes made by host processes are not counted, and
+  `HostMount::usage` reports the current amounts. No quota is set by default.
+- **Errors.** Errors from reading a directory or examining an entry are
+  reported, except an entry removed while it is being listed. Host errors map
+  to specific Win32 codes (for example `ENOENT` to `ERROR_FILE_NOT_FOUND`,
+  `ENOTEMPTY` to `ERROR_DIR_NOT_EMPTY`, `ENOSPC` to `ERROR_DISK_FULL`);
+  unrecognized errors report `ERROR_GEN_FAILURE`.
+
+Not covered: another host process that moves a directory or file the guest
+already holds open out of the mount. The guest keeps its handle to that
+object, because handles refer to opened files, not paths. Host processes with
+write access to a mounted directory are therefore trusted if confinement
+matters against concurrent host writers. Name-based removal still has a short
+in-mount TOCTOU against such writers (check-then-unlink by name). Some file
+systems do not keep inode numbers stable (exFAT renumbers a file when its
+storage is first allocated), so identities are compared live rather than
+cached; if an open handle's identity cannot be read, sharing checks fail
+closed.
+
+CreateFileW, ReadFile, WriteFile, GetFileSizeEx, SetFilePointerEx,
+SetEndOfFile, GetFileAttributesW, FindFirstFileW and FindNextFileW work on
+mounted drives with the same handle types, rights, sharing modes and file
+positions as the synthetic drive. CreateDirectoryW, RemoveDirectoryW and
+DeleteFileW also work on writable mounts. Files on read-only mounts report
+`FILE_ATTRIBUTE_READONLY`. MoveFileW renames a closed file or a directory
+within one writable mount with an exclusive host rename, so it never replaces
+an existing name (`ERROR_ALREADY_EXISTS`); a change of case alone renames in
+place. An open file reports `ERROR_SHARING_VIOLATION`, since
+`FILE_SHARE_DELETE` is not supported. MoveFileExW accepts
+`MOVEFILE_REPLACE_EXISTING`, which atomically replaces a closed file (never a
+directory, `ERROR_ACCESS_DENIED`), `MOVEFILE_WRITE_THROUGH`, which flushes both
+host directories before returning, and `MOVEFILE_COPY_ALLOWED`; other flags
+return `ERROR_NOT_SUPPORTED`. The synthetic C: drive follows the same rules
+for files. Moves between drives return `ERROR_NOT_SAME_DEVICE`, or
+`ERROR_NOT_SUPPORTED` with `MOVEFILE_COPY_ALLOWED` (and from MoveFileW), since
+the copy Windows would then make is not implemented. As with deletion, the source
+is matched by name after a final listing check, so a concurrent host rename
+can move a different entry inside the mount, never one outside it.
+Times, alternate names and asynchronous I/O are not reported. The mount
+tests need a temporary directory that supports hard links and POSIX
+permissions: `/tmp`, or the directory named by `XENORA_TEST_TMP`.
 
 ### Event and semaphore signaling
 
@@ -719,6 +1085,18 @@ separately, for diagnostics.
   `0x10000`–`0x7FFFFFFEFFFF`. The processor count comes from the profile and
   defaults to one, because guest code runs on one thread at a time. The
   processor level and revision are zero, because no CPU model is simulated.
+- `IsProcessorFeaturePresent` answers from the same fixed table that guest
+  `CPUID` returns, so the two always agree. A feature is present only when
+  every CPUID bit it depends on is set; today that table sets none of the
+  features the function can report, so every answer is `FALSE`. Features
+  with no CPUID test, such as `PF_NX_ENABLED` and `PF_FASTFAIL_AVAILABLE`,
+  and unknown numbers report `FALSE`.
+- `GetLogicalProcessorInformation` reports one core per profile processor
+  and one package holding them, 32 bytes each. No cache or NUMA entries are
+  reported, because no cache hierarchy is simulated. A short buffer fails with
+  `ERROR_INSUFFICIENT_BUFFER` and the required length.
+- `GetTimeZoneInformation` reports UTC: zero bias, both names "Coordinated
+  Universal Time", no daylight transition, and `TIME_ZONE_ID_UNKNOWN`.
 - `GlobalMemoryStatusEx` requires `dwLength` to be 64. Guest physical memory is
   the virtual-allocation and heap budgets together, 128 MiB. Available memory
   and `dwMemoryLoad` reflect current guest allocations. There is no paging
