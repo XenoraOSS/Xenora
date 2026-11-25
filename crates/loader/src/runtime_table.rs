@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 168] = [
+pub static SERVICES: [ServiceMetadata; 169] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -173,6 +173,17 @@ pub static SERVICES: [ServiceMetadata; 168] = [
         failure: "-1 with errno EINVAL for a null format or a null buffer with a nonzero count, or an invalid format; -1 without errno for a legacy truncation; stops the guest when both behaviour bits are set or for what is not modelled",
         reference: "corecrt_stdio_config.h __stdio_common_vsprintf; Microsoft Learn, snprintf and _snprintf",
         tests: &["snprintf_writes_inside_the_buffer_and_returns_the_would_be_length", "legacy_snprintf_truncates_without_a_terminator_and_returns_minus_one", "sprintf_faults_inside_the_buffer_stop_the_guest_and_nothing_leaves_it"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "__stdio_common_vswprintf",
+        parameters: &[Parameter { name: "options", kind: "u64" }, Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "count", kind: "u64" }, Parameter { name: "format", kind: "ptr" }, Parameter { name: "locale", kind: "ptr" }, Parameter { name: "arguments", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "-1 with errno EINVAL for a null format or an invalid one; stops the guest for what is not modelled",
+        reference: "corecrt_stdio_config.h __stdio_common_vswprintf; Microsoft Learn, swprintf and format specification syntax",
+        tests: &["wide_buffer_formatting_counts_in_wide_units"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -1989,6 +2000,19 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a5 = call.u64(5)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::vsprintf(&mut context, a0, a1, a2, a3, a4, a5)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "__stdio_common_vswprintf", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u64(4)?;
+        let a5 = call.u64(5)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::vswprintf(&mut context, a0, a1, a2, a3, a4, a5)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();

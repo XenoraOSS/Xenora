@@ -401,8 +401,6 @@ of the restartable forms, and the ASCII classification.
 fail. `crates/cli/tests/run_program.rs` runs all three through
 `xenora run`. Provenance is as for Gate A2.
 
-||||||| parent of 5e8bb0d (Serve wide stream io in the C locale, with the C stream orientation)
-=======
 ## C runtime wide stream io
 
 `tests/compat_fixtures/crt_wstream.c` (#459) is a hosted C program that writes
@@ -418,7 +416,21 @@ to fail where it succeeds, so check 2 fails, as a control.
 `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
 Provenance is as for Gate A2.
 
->>>>>>> 5e8bb0d (Serve wide stream io in the C locale, with the C stream orientation)
+||||||| parent of 226e489 (Serve the wide buffer forms of printf)
+=======
+## C runtime wide buffer formatting
+
+`tests/compat_fixtures/crt_swprintf.c` (#459) is a hosted C program that
+formats into wide buffers with `swprintf`: both string kinds and both
+character kinds, padding, bases, a width from the arguments, a precision on
+a wide string, and the CRT's default truncation behavior — count characters
+without a terminator and -1, no size query. `build-crt-swprintf.sh` builds
+it with mingw-w64 (UCRT flavour) at `-O0` and `-O2`, and once at `-O1` with
+`CRT_SWPRINTF_BREAK`, which expects the integer conversion to fail, so check
+1 fails, as a control. `crates/cli/tests/run_program.rs` runs all three
+through `xenora run`. Provenance is as for Gate A2.
+
+>>>>>>> 226e489 (Serve the wide buffer forms of printf)
 ## C runtime mathematics
 
 `tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the
