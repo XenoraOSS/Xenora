@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 200] = [
+pub static SERVICES: [ServiceMetadata; 204] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -2209,6 +2209,50 @@ pub static SERVICES: [ServiceMetadata; 200] = [
         reference: "errhandlingapi.h SetUnhandledExceptionFilter",
         tests: &["crt_startup_handlers_return_the_previous_handler"],
     },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "__set_app_type",
+        parameters: &[Parameter { name: "kind", kind: "i32" }],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "never",
+        reference: "corecrt_startup.h _set_app_type, the same value under its legacy name",
+        tests: &["legacy_startup_records_the_app_type"],
+    },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "__getmainargs",
+        parameters: &[Parameter { name: "argc", kind: "ptr" }, Parameter { name: "argv", kind: "ptr" }, Parameter { name: "envp", kind: "ptr" }, Parameter { name: "dowildcard", kind: "i32" }, Parameter { name: "start_info", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL when any of the three output pointers is null; the start-up information is not written",
+        reference: "msvcrt.dll export of the legacy CRT startup, as publicly documented for the legacy __getmainargs",
+        tests: &["legacy_startup_builds_the_main_arguments"],
+    },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "___mb_cur_max_func",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "never",
+        reference: "legacy CRT MB_CUR_MAX; one byte, coherent with the C-locale conversions of crt_wide.rs",
+        tests: &["legacy_mb_cur_max_is_one_byte"],
+    },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_amsg_exit",
+        parameters: &[Parameter { name: "code", kind: "i32" }],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "never returns; the runtime-error message of the CRT is not written",
+        reference: "msvcrt.dll export of the legacy CRT runtime error exit",
+        tests: &["legacy_amsg_exit_ends_the_process"],
+    },
 ];
 
 /// Register every generated service and its API-set aliases.
@@ -3967,6 +4011,41 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: u64 = handlers::set_unhandled_exception_filter(&mut context, a0)?;
         Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "__set_app_type", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::set_app_type(&mut context, a0)?;
+        Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "__getmainargs", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let a4 = call.u64(4)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::getmainargs(&mut context, a0, a1, a2, a3, a4)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "___mb_cur_max_func", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::mb_cur_max_legacy(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_amsg_exit", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::amsg_exit(&mut context, a0)?;
+        Ok(0)
     });
     for service in &SERVICES {
         for alias in service.aliases {

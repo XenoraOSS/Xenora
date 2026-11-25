@@ -2534,6 +2534,59 @@ pub(crate) mod handlers {
         Ok(())
     }
 
+    // The legacy CRT's way into the same startup state (#632). `__getmainargs`
+    // is how the statically linked startup of a msvcrt-linked program reaches
+    // the arguments; the answers are the same table the modern configuration
+    // builds, copied through the caller's pointers.
+
+    pub fn getmainargs(
+        context: &mut ServiceContext<'_>,
+        argc: u64,
+        argv: u64,
+        envp: u64,
+        dowildcard: i32,
+        _start_info: u64,
+    ) -> Outcome<i32> {
+        if argc == 0 || argv == 0 || envp == 0 {
+            crt::set_errno(context.memory, context.teb, crt::EINVAL)?;
+            return Ok(-1);
+        }
+        let fault = crate::cpu::ExitReason::MemoryFault;
+        let mut arguments = context.state.crt_arguments();
+        // A nonzero `dowildcard` asks for wildcard expansion. Xenora does not
+        // expand either way, as `_configure_narrow_argv` already documents:
+        // the two modes build the same table.
+        let mode = if dowildcard == 0 { 1 } else { 2 };
+        arguments.configure(context.memory, mode)?;
+        arguments.initialize_environment(context.memory)?;
+        let count_address = arguments.address(context.memory, crt_arguments::Variable::Argc)?;
+        let argv_address = arguments.address(context.memory, crt_arguments::Variable::Argv)?;
+        let environ_address =
+            arguments.address(context.memory, crt_arguments::Variable::Environ)?;
+        let count = context.memory.read_u32(count_address).map_err(fault)?;
+        let table = context.memory.read_u64(argv_address).map_err(fault)?;
+        let environment = context.memory.read_u64(environ_address).map_err(fault)?;
+        context.memory.write_u32(argc, count).map_err(fault)?;
+        context.memory.write_u64(argv, table).map_err(fault)?;
+        context.memory.write_u64(envp, environment).map_err(fault)?;
+        Ok(0)
+    }
+
+    /// The legacy CRT's largest multibyte character in the C locale: one
+    /// byte, coherent with the byte-oriented narrow conversions of the C
+    /// locale documented in `crt_wide.rs`.
+    pub fn mb_cur_max_legacy(_: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(1)
+    }
+
+    /// `_amsg_exit` ends the process after a runtime error. Partial: the
+    /// message the CRT writes is not modelled.
+    pub fn amsg_exit(context: &mut ServiceContext<'_>, code: i32) -> Outcome<()> {
+        Err(crate::cpu::ExitReason::ProcessExit(
+            context.state.exit_process(code as u32),
+        ))
+    }
+
     pub fn set_invalid_parameter_handler(
         context: &mut ServiceContext<'_>,
         handler: u64,

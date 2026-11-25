@@ -1755,3 +1755,35 @@ service kernel32.dll SetUnhandledExceptionFilter(filter: ptr) -> ptr
     fails never
     ref errhandlingapi.h SetUnhandledExceptionFilter
     test crt_startup_handlers_return_the_previous_handler
+
+# The legacy CRT startup path of a msvcrt-linked program (#632). These are
+# not aliases of the ucrtbase entries because the legacy names differ; they
+# share the implementations and the state.
+
+service msvcrt.dll __set_app_type(kind: i32) -> void
+    handler set_app_type
+    status partial
+    fails never
+    ref corecrt_startup.h _set_app_type, the same value under its legacy name
+    test legacy_startup_records_the_app_type
+
+service msvcrt.dll __getmainargs(argc: ptr, argv: ptr, envp: ptr, dowildcard: i32, start_info: ptr) -> i32
+    handler getmainargs
+    status partial
+    fails -1 with errno EINVAL when any of the three output pointers is null; the start-up information is not written
+    ref msvcrt.dll export of the legacy CRT startup, as publicly documented for the legacy __getmainargs
+    test legacy_startup_builds_the_main_arguments
+
+service msvcrt.dll ___mb_cur_max_func() -> u32
+    handler mb_cur_max_legacy
+    status partial
+    fails never
+    ref legacy CRT MB_CUR_MAX; one byte, coherent with the C-locale conversions of crt_wide.rs
+    test legacy_mb_cur_max_is_one_byte
+
+service msvcrt.dll _amsg_exit(code: i32) -> void
+    handler amsg_exit
+    status partial
+    fails never returns; the runtime-error message of the CRT is not written
+    ref msvcrt.dll export of the legacy CRT runtime error exit
+    test legacy_amsg_exit_ends_the_process
