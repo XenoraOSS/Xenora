@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 114] = [
+pub static SERVICES: [ServiceMetadata; 115] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -206,6 +206,17 @@ pub static SERVICES: [ServiceMetadata; 114] = [
         failure: "never: writing stdout cannot fail, as the output is captured",
         reference: "stdio.h putchar",
         tests: &["vfprintf_s_and_putchar_write_to_the_streams"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "puts",
+        parameters: &[Parameter { name: "text", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "EOF with errno EINVAL for a null string; writing stdout cannot otherwise fail, as the output is captured",
+        reference: "stdio.h puts",
+        tests: &["puts_writes_the_line_to_the_captured_stdout"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -1428,6 +1439,14 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a0 = call.i32(0)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::putchar(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "puts", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::puts(&mut context, a0)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();

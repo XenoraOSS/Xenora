@@ -173,6 +173,14 @@ service ucrtbase.dll putchar(character: i32) -> i32
     ref stdio.h putchar
     test vfprintf_s_and_putchar_write_to_the_streams
 
+service ucrtbase.dll puts(text: ptr) -> i32
+    handler puts
+    status implemented
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails EOF with errno EINVAL for a null string; writing stdout cannot otherwise fail, as the output is captured
+    ref stdio.h puts
+    test puts_writes_the_line_to_the_captured_stdout
+
 service ucrtbase.dll fwrite(buffer: ptr, size: u64, count: u64, stream: ptr) -> u64
     handler fwrite
     status partial

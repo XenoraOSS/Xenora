@@ -1124,6 +1124,17 @@ pub(crate) mod handlers {
         or_errno(context, outcome)
     }
 
+    /// `puts`: the string and a newline to stdout. Returns a nonnegative
+    /// value, or `EOF` with `errno` set.
+    pub fn puts(context: &mut ServiceContext<'_>, text: u64) -> Outcome<i32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.put_line_stdout(context.memory, &mut drive, text)
+        };
+        or_errno(context, outcome)
+    }
+
     pub fn getchar(context: &mut ServiceContext<'_>) -> Outcome<i32> {
         Ok(context.state.crt_streams().character_stdin())
     }

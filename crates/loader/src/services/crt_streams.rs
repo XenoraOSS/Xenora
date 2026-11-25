@@ -466,6 +466,28 @@ impl StandardStreams {
         })
     }
 
+    /// `puts`: the string and a newline to `stdout`. Returns a nonnegative
+    /// value (zero here), or `EOF` with `errno` set.
+    pub(super) fn put_line_stdout(
+        &mut self,
+        memory: &GuestMemory,
+        drive: &mut ObjectState,
+        text: u64,
+    ) -> Outcome<i32> {
+        if text == 0 {
+            return Ok(Err(Failed(-1, EINVAL)));
+        }
+        let mut bytes = c_string(memory, text, MAX_TRANSFER + 1).map_err(fault)?;
+        if bytes.len() as u64 > MAX_TRANSFER {
+            return Err(RUNTIME_LIMIT);
+        }
+        bytes.push(b'\n');
+        Ok(match self.write(drive, Stream::Output, &bytes)? {
+            Ok(()) => Ok(0),
+            Err(errno) => Err(Failed(-1, errno)),
+        })
+    }
+
     /// `fwrite`. Returns the number of whole items written.
     pub(super) fn write_items(
         &mut self,

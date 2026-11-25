@@ -1177,6 +1177,26 @@ fn sprintf_faults_inside_the_buffer_stop_the_guest_and_nothing_leaves_it() {
 }
 
 #[test]
+#[test]
+fn puts_writes_the_line_to_the_captured_stdout() {
+    let (mut guest, _) = stdio_guest();
+    let text = place(&mut guest, STRINGS, b"a line");
+    let (cpu, exit) = guest.run("puts", &[text]);
+    assert_eq!(
+        (cpu.get(Register::Rax) & 0xFFFF_FFFF, exit),
+        (0, ExitReason::Halt)
+    );
+    // The newline is written in text mode like any other output.
+    assert_eq!(guest.state.standard_output(), b"a line\r\n");
+    // A null string is EOF with EINVAL.
+    let (cpu, exit) = guest.run("puts", &[0]);
+    assert_eq!(
+        (cpu.get(Register::Rax) & 0xFFFF_FFFF, exit),
+        (u32::MAX as u64, ExitReason::Halt)
+    );
+}
+
+#[test]
 fn vfprintf_s_and_putchar_write_to_the_streams() {
     let (mut guest, [_, out, _]) = stdio_guest();
     let one = place(&mut guest, STRINGS, b"one");
