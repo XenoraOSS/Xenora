@@ -555,6 +555,21 @@ later operations fail with `EBADF`. `fseek`, `ftell` and `rewind` remain
 unprovided here; #312 holds them. `remove` is `implemented`, the other five
 `partial`.
 
+**The wide conversions and classification (#459, package 6, first
+part).** `mbtowc`/`wctomb`/`mblen`/`mbstowcs`/`wcstombs`/`mbsrtowcs`/
+`wcsrtombs` through `api-ms-win-crt-convert-l1-1-0.dll`, and `iswctype`,
+`iswalpha` and its siblings, `towlower`/`towupper`, `wcsncat` and
+`_wcsdup` through `api-ms-win-crt-string-l1-1-0.dll`. The C locale is the
+only one the emulator has, and its multibyte encoding is documented as
+the answer: every byte is the wide character of the same value,
+zero-extended, and a wide character above 255 fails the conversion with
+`EILSEQ`. The restartable forms have no shift state to keep and say so.
+The classification is the ASCII table, through `iswctype`'s bits — the
+form mingw-w64 actually imports, as the `isw*` macros inline to it. All
+`implemented`. The wide stream operations and the wide printf forms are
+the rest of package 6 and are not served yet: they need the stream
+orientation machinery, which is their own work.
+
 ### CRT integer conversion
 
 UCRT and the CRT conversion API set expose strtol, strtoul, wcstol, and

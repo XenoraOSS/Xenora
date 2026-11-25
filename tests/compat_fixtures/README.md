@@ -344,6 +344,17 @@ with `CRT_FILES_BREAK`, which expects a text position without the carriage
 returns, so check 17 fails, as a control. `crates/cli/tests/run_program.rs`
 runs all three through `xenora run`. Provenance is as for Gate A2.
 
+## Wide characters
+
+`tests/compat_fixtures/crt_wide.c` (#459, package 6, first part) is a
+hosted C program that converts between multibyte and wide strings in both
+directions, checks the failure above character 255, the pointer advance
+of the restartable forms, and the ASCII classification.
+`build-crt-wide.sh` builds it with mingw-w64 (UCRT flavour) at `-O0` and
+`-O2`, and once at `-O1` with `CRT_WIDE_BREAK`, whose control check must
+fail. `crates/cli/tests/run_program.rs` runs all three through
+`xenora run`. Provenance is as for Gate A2.
+
 ## C runtime mathematics
 
 `tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the
