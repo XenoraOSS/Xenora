@@ -523,6 +523,20 @@ streams' own. All five services are `partial`: there is one locale, the C
 locale, and no multi-byte encoding. None of this has been compared with
 Windows.
 
+### Wide buffer formatting in the C runtime
+
+`__stdio_common_vswprintf` formats into wide buffers: the syntax and the
+conversions are the narrow engine's, with the wide family's turned-around
+character and string types — `%c` and `%s` are wide, `%C` and `%S` narrow,
+`h` forces narrow and `l` wide. Everything is counted in wide units. The
+default behavior is the CRT's legacy one, measured against a mingw-w64
+binary: truncation writes the count characters without a terminator and
+answers -1, a null buffer answers -1 with `EINVAL` — there is no size query.
+A program that sets the standard-snprintf option bit gets the standard rules
+instead, as the narrow buffer forms implement them. The service is `partial`:
+the wide printf forms for streams (`wprintf`, `fwprintf`) do not exist yet.
+None of this has been compared with Windows.
+
 ### Files through the C runtime
 
 `fopen`, `fclose` and `fgets` give a hosted C program files, and the output
@@ -592,7 +606,6 @@ later operations fail with `EBADF`. `fseek`, `ftell` and `rewind` remain
 unprovided here; #312 holds them. `remove` is `implemented`, the other five
 `partial`.
 
-<<<<<<< HEAD
 **Temporary files (#493, last part).** `tmpfile` opens a stream for
 reading and writing in binary on a file no other stream uses; closing the
 stream deletes the file, as the Microsoft page says. `tmpnam` writes a
@@ -652,8 +665,6 @@ after 3000 are `EINVAL`, as the Microsoft pages say. All `implemented`.
 `GetDateFormatW` and `GetTimeFormatW` belong to the locale package and are
 not served.
 
-||||||| parent of 981871e (runtime: the wide conversions and classification of package 6 of #459)
-=======
 **The wide conversions and classification (#459, package 6, first
 part).** `mbtowc`/`wctomb`/`mblen`/`mbstowcs`/`wcstombs`/`mbsrtowcs`/
 `wcsrtombs` through `api-ms-win-crt-convert-l1-1-0.dll`, and `iswctype`,
@@ -669,7 +680,6 @@ form mingw-w64 actually imports, as the `isw*` macros inline to it. All
 the rest of package 6 and are not served yet: they need the stream
 orientation machinery, which is their own work.
 
->>>>>>> 981871e (runtime: the wide conversions and classification of package 6 of #459)
 ### CRT integer conversion
 
 UCRT and the CRT conversion API set expose strtol, strtoul, wcstol, and

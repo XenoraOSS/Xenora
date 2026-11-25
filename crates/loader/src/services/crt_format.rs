@@ -72,7 +72,7 @@ pub(super) trait Source {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Size {
+pub(super) enum Size {
     None,
     Char,
     Short,
@@ -90,19 +90,19 @@ enum Size {
 }
 
 #[derive(Default)]
-struct Flags {
-    left: bool,
-    plus: bool,
-    space: bool,
-    alternate: bool,
-    zero: bool,
+pub(super) struct Flags {
+    pub(super) left: bool,
+    pub(super) plus: bool,
+    pub(super) space: bool,
+    pub(super) alternate: bool,
+    pub(super) zero: bool,
 }
 
-struct Spec {
-    flags: Flags,
-    width: usize,
-    precision: Option<usize>,
-    size: Size,
+pub(super) struct Spec {
+    pub(super) flags: Flags,
+    pub(super) width: usize,
+    pub(super) precision: Option<usize>,
+    pub(super) size: Size,
 }
 
 struct Parser<'a> {
@@ -181,11 +181,11 @@ impl Parser<'_> {
 }
 
 /// An `int` argument is the low half of its slot.
-fn int(slot: u64) -> i32 {
+pub(super) fn int(slot: u64) -> i32 {
     slot as u32 as i32
 }
 
-fn bounded(value: usize) -> Result<usize, FormatError> {
+pub(super) fn bounded(value: usize) -> Result<usize, FormatError> {
     if value > MAX_OUTPUT {
         Err(FormatError::TooLong)
     } else {
@@ -195,7 +195,7 @@ fn bounded(value: usize) -> Result<usize, FormatError> {
 
 /// Pad `body` to the field width. `zeros` puts the padding after the first
 /// `lead` bytes (a sign or prefix) as zeros instead of before them as blanks.
-fn pad(out: &mut Vec<u8>, spec: &Spec, lead: usize, body: &[u8], zeros: bool) {
+pub(super) fn pad(out: &mut Vec<u8>, spec: &Spec, lead: usize, body: &[u8], zeros: bool) {
     let fill = spec.width.saturating_sub(body.len());
     if spec.flags.left {
         out.extend_from_slice(body);
@@ -228,7 +228,12 @@ fn digits(mut value: u64, base: u64, upper: bool) -> Vec<u8> {
     reversed
 }
 
-fn integer(out: &mut Vec<u8>, spec: &Spec, kind: u8, slot: u64) -> Result<(), FormatError> {
+pub(super) fn integer(
+    out: &mut Vec<u8>,
+    spec: &Spec,
+    kind: u8,
+    slot: u64,
+) -> Result<(), FormatError> {
     let signed = matches!(kind, b'd' | b'i');
     // Without a size prefix an integer argument is a 32-bit int, and so is a
     // long. `hh` and `h` arguments arrive as an int and are converted back.
@@ -390,7 +395,7 @@ fn hexadecimal(magnitude: f64, precision: Option<usize>, alternate: bool, upper:
 }
 
 /// One of `f`, `e`, `g` and `a` or its capital, for the `double` in `slot`.
-fn float(
+pub(super) fn float(
     out: &mut Vec<u8>,
     spec: &Spec,
     kind: u8,

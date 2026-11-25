@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 168 |
-| Generated adapters | 168 |
-| Unique handler implementations | 161 |
+| Services with a declared ABI | 169 |
+| Generated adapters | 169 |
+| Unique handler implementations | 162 |
 | Implemented | 68 |
-| Partial | 98 |
+| Partial | 99 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 168 |
-| API-set aliases (not services) | 168 |
+| Conformance-tested through guest dispatch | 169 |
+| API-set aliases (not services) | 169 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -33,6 +33,7 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!__acrt_iob_func` | `(index: u32) -> ptr` | partial | stops the guest for an index above 2 or when the streams cannot be allocated |
 | `ucrtbase.dll!__stdio_common_vfprintf` | `(options: u64, stream: ptr, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null stream or format or an invalid format; stops the guest for what is not modelled |
 | `ucrtbase.dll!__stdio_common_vsprintf` | `(options: u64, buffer: ptr, count: u64, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null format or a null buffer with a nonzero count, or an invalid format; -1 without errno for a legacy truncation; stops the guest when both behaviour bits are set or for what is not modelled |
+| `ucrtbase.dll!__stdio_common_vswprintf` | `(options: u64, buffer: ptr, count: u64, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null format or an invalid one; stops the guest for what is not modelled |
 | `ucrtbase.dll!__stdio_common_vsprintf_s` | `(options: u64, buffer: ptr, count: u64, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null buffer, a zero count, a null or invalid format, or ERANGE when the text does not fit, and the buffer becomes empty; the invalid parameter handler is not modelled, so execution always continues |
 | `ucrtbase.dll!__stdio_common_vfprintf_s` | `(options: u64, stream: ptr, format: ptr, locale: ptr, arguments: ptr) -> i32` | partial | -1 with errno EINVAL for a null stream or format or an invalid format; identical to the plain form here because %n is always invalid |
 | `ucrtbase.dll!putchar` | `(character: i32) -> i32` | implemented | never: writing stdout cannot fail, as the output is captured |
