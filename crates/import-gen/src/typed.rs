@@ -3,7 +3,7 @@
 //! Typed runtime services: parse and validate the declarative registry, and
 //! generate Win64 adapters, static metadata and a coverage report.
 
-use crate::apiset::get_api_sets_for_canonical;
+use crate::apiset::{get_api_sets_for_canonical, get_compat_modules_for_canonical};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
@@ -204,10 +204,16 @@ fn validate(services: &[Service], test_source: &str) -> Result<(), String> {
             }
         }
         let documented = get_api_sets_for_canonical(&service.library);
+        let compat = get_compat_modules_for_canonical(&service.library);
         let modules = std::iter::once(&service.library).chain(&service.aliases);
         for module in modules {
-            if module != &service.library && !documented.contains(&module.as_str()) {
-                return fail(format!("{module} is not a listed API set of its library"));
+            if module != &service.library
+                && !documented.contains(&module.as_str())
+                && !compat.contains(&module.as_str())
+            {
+                return fail(format!(
+                    "{module} is not a listed API set or compatibility module of its library"
+                ));
             }
             if keys
                 .insert((module.clone(), &service.symbol), index)

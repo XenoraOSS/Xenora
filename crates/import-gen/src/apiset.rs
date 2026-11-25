@@ -94,6 +94,23 @@ pub fn get_api_sets_for_canonical(canonical: &str) -> &'static [&'static str] {
     }
 }
 
+/// Legacy modules Xenora serves with the same implementation as the canonical
+/// host, as a documented approximation. These are *not* API sets: on real
+/// Windows they are separate DLLs with their own CRT implementations and do
+/// not forward to the canonical module. `msvcrt.dll` is the legacy CRT that
+/// freestanding mingw-w64 binaries link against by default; the entry points
+/// it shares with the modern CRT carry the same ABI, and the behavioural
+/// differences (the legacy `printf` is not C99-exact, for example) sit in
+/// corners a correct implementation accepts, so programs written against the
+/// legacy module keep running. Where a real divergence is found, the entry
+/// point must grow its own implementation instead of relying on this mapping.
+pub fn get_compat_modules_for_canonical(canonical: &str) -> &'static [&'static str] {
+    match canonical {
+        "ucrtbase.dll" => &["msvcrt.dll"],
+        _ => &[],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -116,6 +133,13 @@ mod tests {
             resolve_api_set_canonical("API-MS-Win-Core-Memory-L1-1-0.DLL"),
             "kernel32.dll"
         );
+    }
+
+    #[test]
+    fn compat_modules_are_not_api_sets() {
+        assert_eq!(resolve_api_set_canonical("msvcrt.dll"), "unknown.dll");
+        assert_eq!(get_compat_modules_for_canonical("ucrtbase.dll"), &["msvcrt.dll"]);
+        assert!(get_compat_modules_for_canonical("kernel32.dll").is_empty());
     }
 
     #[test]
