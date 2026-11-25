@@ -74,6 +74,11 @@ fn crt_sprintf(name: &str) -> PathBuf {
     build("build-crt-sprintf.sh", "run-program-crt-sprintf", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_codepages(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-codepages.sh", "run-program-crt-codepages", &OUT).join(format!("{name}.exe"))
+}
+
 /// The SHA-256 of a file, from the host's `shasum`.
 fn digest(path: &Path) -> String {
     let output = Command::new("shasum")
@@ -835,5 +840,25 @@ fn a_program_using_the_buffer_forms_of_printf_runs_and_detects_a_wrong_result() 
     assert_eq!(
         run.stdout,
         "!\r\ncheck 31 failed: control\r\ncrt_sprintf: 30 of 31 checks passed\r\n"
+    );
+}
+
+#[test]
+fn a_program_using_the_encoding_conversions_runs_and_detects_a_wrong_result() {
+    for name in ["crt-codepages-O0", "crt-codepages-O2"] {
+        let run = run_program(&crt_codepages(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {:?}", run.stdout);
+        assert_eq!(
+            run.stdout, "crt-codepages: 23/23 checks passed\r\n",
+            "{name}"
+        );
+        assert_eq!(run.stderr, "", "{name}");
+    }
+    // The control must fail its last check: the exit code is its number.
+    let run = run_program(&crt_codepages("crt-codepages-break"), &[], &[]);
+    assert_eq!(run.code, Some(24), "control: {:?}", run.stdout);
+    assert_eq!(
+        run.stdout,
+        "check 24 failed: the control fails\r\ncrt-codepages: 1/24 checks failed, first 24\r\n"
     );
 }

@@ -313,6 +313,19 @@ the standard, legacy and secure forms, the guards before and after the
 buffer included. It is built at `-O0` and `-O2`, and once at `-O1` with
 `CRT_SPRINTF_BREAK`, which expects a wrong length on purpose as a control.
 `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+
+## The encoding conversions
+
+`tests/compat_fixtures/crt_codepages.c` (package 7 of #459) is a hosted C
+program that converts between bytes and wide characters with
+`MultiByteToWideChar` and `WideCharToMultiByte` in UTF-8 and in
+Windows-1252, queries the pages with `GetACP`, `GetOEMCP`,
+`IsValidCodePage` and `GetCPInfo`, and checks the documented error codes
+of the strict and small-buffer failures. Built by `build-crt-codepages.sh`
+with mingw-w64, the calls are imports of `kernel32.dll`. It is built at
+`-O0` and `-O2`, and once at `-O1` with `CRT_CODEPAGES_BREAK`, which
+expects a wrong count on purpose as a control.
+`crates/cli/tests/run_program.rs` runs all three through `xenora run`.
 Provenance is as for Gate A2: the source and script are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.
 
