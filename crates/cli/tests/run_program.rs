@@ -180,6 +180,11 @@ fn run_program_with_input(path: &Path, arguments: &[&str], input: &[u8]) -> Run 
     }
 }
 
+fn crt_secure(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-secure.sh", "run-program-crt-secure", &OUT).join(format!("{name}.exe"))
+}
+
 fn crt_stdin(name: &str) -> PathBuf {
     static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-crt-stdin.sh", "run-program-crt-stdin", &OUT).join(format!("{name}.exe"))
@@ -422,6 +427,26 @@ fn a_program_using_file_descriptors_passes_its_checks() {
     assert_eq!(run.code, Some(36), "{}", run.stderr);
     assert!(
         run.stdout.contains("check 36 failed: control"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_program_using_fopen_s_and_stream_indicators_passes_its_checks() {
+    for name in ["crt-secure-O0", "crt-secure-O2"] {
+        let run = run_program(&crt_secure(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.stdout, "crt_secure: 16 of 16 checks passed\r\n",
+            "{name}"
+        );
+        assert_eq!(run.stderr, "", "{name}");
+    }
+    let run = run_program(&crt_secure("crt-secure-break"), &[], &[]);
+    assert_eq!(run.code, Some(17), "{}", run.stderr);
+    assert!(
+        run.stdout.contains("check 17 failed: control"),
         "{}",
         run.stdout
     );

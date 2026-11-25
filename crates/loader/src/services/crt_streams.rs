@@ -842,13 +842,83 @@ impl StandardStreams {
     /// `feof`: the end-of-file indicator of the stream. Only the standard
     /// input can end here; the captured output streams cannot be read, and
     /// file streams do not expose theirs yet.
+    /// `feof`: the end-of-file indicator of the stream. The captured output
+    /// streams cannot be read and report 0.
     pub(super) fn end_of_file(&mut self, file: u64) -> Outcome<i32> {
         if file == 0 {
             return Ok(Err(Failed(-1, EINVAL)));
         }
         match self.stream(file)? {
             Stream::Input => Ok(Ok(i32::from(self.input.eof))),
-            _ => Ok(Ok(0)),
+            Stream::File(file) => Ok(Ok(i32::from(self.opened.end_of_file(file)))),
+            Stream::Output | Stream::Error => Ok(Ok(0)),
+        }
+    }
+
+    /// `clearerr`: the end-of-file and error indicators off. Nothing is
+    /// returned; a null stream only sets `errno` to `EINVAL`, which the
+    /// handler does. The captured output streams have no indicators.
+    pub(super) fn clear_errors(&mut self, file: u64) -> Result<(), ExitReason> {
+        if file == 0 {
+            return Ok(());
+        }
+        match self.stream(file)? {
+            Stream::Input => self.input.eof = false,
+            Stream::File(file) => {
+                self.opened.clear_errors(file);
+            }
+            Stream::Output | Stream::Error => {}
+        }
+        Ok(())
+    }
+
+    /// `fopen_s`: `fopen` through a pointer, as the secure form. The error
+    /// number is the result and `errno` at once, and the pointer holds null
+    /// whenever the call does not succeed. A null argument, an empty or
+    /// overlong name or mode, or a string it cannot read is `EINVAL`; the
+    /// invalid parameter handler is not modelled. An output pointer it
+    /// cannot write stops the guest with a fault.
+    pub(super) fn open_secure(
+        &mut self,
+        memory: &mut GuestMemory,
+        drive: &mut ObjectState,
+        file: u64,
+        name: u64,
+        mode: u64,
+    ) -> Outcome<i32> {
+        // Null the output, then answer EINVAL as both the result and errno.
+        let invalid = |memory: &mut GuestMemory| -> Outcome<i32> {
+            memory.write_u64(file, 0).map_err(fault)?;
+            Ok(Err(Failed(EINVAL as i32, EINVAL)))
+        };
+        if file == 0 {
+            return Ok(Err(Failed(EINVAL as i32, EINVAL)));
+        }
+        if name == 0 || mode == 0 {
+            return invalid(memory);
+        }
+        let (Ok(name_bytes), Ok(mode_bytes)) = (
+            c_string(memory, name, MAX_NAME + 1),
+            c_string(memory, mode, MAX_NAME + 1),
+        ) else {
+            return invalid(memory);
+        };
+        if name_bytes.is_empty()
+            || mode_bytes.is_empty()
+            || name_bytes.len() as u64 > MAX_NAME
+            || mode_bytes.len() as u64 > MAX_NAME
+        {
+            return invalid(memory);
+        }
+        match self.opened.open(memory, drive, &name_bytes, &mode_bytes) {
+            Ok(stream) => {
+                memory.write_u64(file, stream).map_err(fault)?;
+                Ok(Ok(0))
+            }
+            Err(errno) => {
+                memory.write_u64(file, 0).map_err(fault)?;
+                Ok(Err(Failed(errno as i32, errno)))
+            }
         }
     }
 
