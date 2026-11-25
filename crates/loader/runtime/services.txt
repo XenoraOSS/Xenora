@@ -240,6 +240,48 @@ service ucrtbase.dll fgets(buffer: ptr, count: i32, stream: ptr) -> ptr
     test fgets_reads_lines_within_its_count
     test stdin_lines_follow_iso_c_at_the_edges
 
+# Wide stream io in the C locale: every byte is its wide character. Streams
+# carry the C orientation; the wrong kind of io on an oriented stream fails.
+service ucrtbase.dll fputws(text: ptr, stream: ptr) -> u32
+    handler fputws
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails WEOF for a wide character above 255 (C locale), on a byte-oriented stream, or with errno EINVAL or EBADF
+    ref wchar.h fputws
+    test wide_stream_io_writes_and_reads_in_the_c_locale
+
+service ucrtbase.dll fgetws(buffer: ptr, count: i32, stream: ptr) -> ptr
+    handler fgetws
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails null at end of file, on a byte-oriented stream, or with errno EINVAL or EBADF
+    ref wchar.h fgetws
+    test wide_stream_io_writes_and_reads_in_the_c_locale
+
+service ucrtbase.dll putwchar(unit: u32) -> u32
+    handler putwchar
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails WEOF for a wide character above 255 or once stdout is byte-oriented
+    ref wchar.h putwchar
+    test wide_stream_io_writes_and_reads_in_the_c_locale
+
+service ucrtbase.dll fputwc(unit: u32, stream: ptr) -> u32
+    handler fputwc
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails WEOF for a wide character above 255 (C locale), on a byte-oriented stream, or with errno EINVAL or EBADF
+    ref wchar.h fputwc
+    test wide_stream_io_writes_and_reads_in_the_c_locale
+
+service ucrtbase.dll getwchar() -> u32
+    handler getwchar
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails WEOF at end of input or once stdin is byte-oriented
+    ref wchar.h getwchar
+    test wide_stream_io_writes_and_reads_in_the_c_locale
+
 # The standard input stream (#467): bytes supplied by the host before the
 # run, read with text-mode translation.
 service ucrtbase.dll getchar() -> i32

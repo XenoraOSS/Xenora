@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 163] = [
+pub static SERVICES: [ServiceMetadata; 168] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -294,6 +294,61 @@ pub static SERVICES: [ServiceMetadata; 163] = [
         failure: "null at end of file; null with errno EINVAL or EBADF; stops the guest for a pointer that is no stream",
         reference: "stdio.h fgets",
         tests: &["fgets_reads_lines_within_its_count", "stdin_lines_follow_iso_c_at_the_edges"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "fputws",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "stream", kind: "ptr" }],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "WEOF for a wide character above 255 (C locale), on a byte-oriented stream, or with errno EINVAL or EBADF",
+        reference: "wchar.h fputws",
+        tests: &["wide_stream_io_writes_and_reads_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "fgetws",
+        parameters: &[Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "count", kind: "i32" }, Parameter { name: "stream", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "null at end of file, on a byte-oriented stream, or with errno EINVAL or EBADF",
+        reference: "wchar.h fgetws",
+        tests: &["wide_stream_io_writes_and_reads_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "putwchar",
+        parameters: &[Parameter { name: "unit", kind: "u32" }],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "WEOF for a wide character above 255 or once stdout is byte-oriented",
+        reference: "wchar.h putwchar",
+        tests: &["wide_stream_io_writes_and_reads_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "fputwc",
+        parameters: &[Parameter { name: "unit", kind: "u32" }, Parameter { name: "stream", kind: "ptr" }],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "WEOF for a wide character above 255 (C locale), on a byte-oriented stream, or with errno EINVAL or EBADF",
+        reference: "wchar.h fputwc",
+        tests: &["wide_stream_io_writes_and_reads_in_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "getwchar",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "WEOF at end of input or once stdin is byte-oriented",
+        reference: "wchar.h getwchar",
+        tests: &["wide_stream_io_writes_and_reads_in_the_c_locale"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -2041,6 +2096,49 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a2 = call.u64(2)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: u64 = handlers::fgets(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "fputws", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::fputws(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "fgetws", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.i32(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::fgetws(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "putwchar", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::putwchar(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "fputwc", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::fputwc(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "getwchar", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::getwchar(&mut context)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();

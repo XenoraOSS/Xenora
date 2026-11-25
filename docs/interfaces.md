@@ -492,7 +492,7 @@ serving the diagnostic channel, means no input. Text mode applies when the
 input is stored: a CR LF pair becomes one line feed, a CR alone stays. The
 end-of-file indicator follows ISO C: a read that meets the end sets it, so
 a last line without a newline sets it while one that ends at a line feed
-does not. `scanf` and wide input are not provided.
+does not. `scanf` is not provided. Wide input and output in the C locale are in the wide stream io section below.
 
 Everything else that is not modelled stops the guest with the runtime-limit
 fault and writes nothing, so that nothing is printed wrongly: the
@@ -507,6 +507,21 @@ Choices where the documentation leaves room, each marked in the source:
 a string as it pads a number; a precision also limits `(null)`; `%#.0o` of
 zero prints `0`, which is ISO C's rule. All six services are `partial`. None
 of this has been compared with Windows.
+
+### Wide stream io in the C runtime
+
+`fputws`, `fgetws`, `fputwc`, `putwchar` and `getwchar` read and write wide
+characters in the C locale: every byte is the wide character of the same
+value, and a wide character above 255 cannot convert, so the write fails with
+`WEOF` and `EILSEQ`. Streams carry the C orientation: the first io operation
+on a stream fixes it byte or wide, and the other kind then fails — byte io on
+a wide-oriented stream answers `EOF` or `WEOF`, wide io on a byte-oriented
+one answers `WEOF` or null. This holds for the files and for the three
+standard streams alike; mixing `printf` and `putwchar` on stdout is a
+conflict, as it is in the CRT. The text-mode translations are the byte
+streams' own. All five services are `partial`: there is one locale, the C
+locale, and no multi-byte encoding. None of this has been compared with
+Windows.
 
 ### Files through the C runtime
 

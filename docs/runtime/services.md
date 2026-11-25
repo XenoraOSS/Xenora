@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 163 |
-| Generated adapters | 163 |
-| Unique handler implementations | 156 |
+| Services with a declared ABI | 168 |
+| Generated adapters | 168 |
+| Unique handler implementations | 161 |
 | Implemented | 68 |
-| Partial | 93 |
+| Partial | 98 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 163 |
-| API-set aliases (not services) | 163 |
+| Conformance-tested through guest dispatch | 168 |
+| API-set aliases (not services) | 168 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -44,6 +44,11 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!fopen` | `(name: ptr, mode: ptr) -> ptr` | partial | null with errno EINVAL, ENOENT, EACCES, EMFILE, ENOSPC or ENOMEM |
 | `ucrtbase.dll!fclose` | `(stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null stream; stops the guest for a standard stream or a pointer that is no stream |
 | `ucrtbase.dll!fgets` | `(buffer: ptr, count: i32, stream: ptr) -> ptr` | partial | null at end of file; null with errno EINVAL or EBADF; stops the guest for a pointer that is no stream |
+| `ucrtbase.dll!fputws` | `(text: ptr, stream: ptr) -> u32` | partial | WEOF for a wide character above 255 (C locale), on a byte-oriented stream, or with errno EINVAL or EBADF |
+| `ucrtbase.dll!fgetws` | `(buffer: ptr, count: i32, stream: ptr) -> ptr` | partial | null at end of file, on a byte-oriented stream, or with errno EINVAL or EBADF |
+| `ucrtbase.dll!putwchar` | `(unit: u32) -> u32` | partial | WEOF for a wide character above 255 or once stdout is byte-oriented |
+| `ucrtbase.dll!fputwc` | `(unit: u32, stream: ptr) -> u32` | partial | WEOF for a wide character above 255 (C locale), on a byte-oriented stream, or with errno EINVAL or EBADF |
+| `ucrtbase.dll!getwchar` | `() -> u32` | partial | WEOF at end of input or once stdin is byte-oriented |
 | `ucrtbase.dll!getchar` | `() -> i32` | implemented | EOF at end of input; the input is what the host supplied, never interactive |
 | `ucrtbase.dll!feof` | `(stream: ptr) -> i32` | partial | the indicator of the standard input and of file streams; the output streams report 0; -1 with errno EINVAL for a null stream |
 | `ucrtbase.dll!fopen_s` | `(file: ptr, name: ptr, mode: ptr) -> i32` | partial | the error number as its result and in errno, with the output pointer null; EINVAL for a null or empty argument, or a name or mode it cannot read; stops the guest for an output pointer it cannot write; the invalid parameter handler is not modelled |
