@@ -12,6 +12,7 @@
 mod crt;
 mod crt_arguments;
 mod crt_callbacks;
+mod crt_clock;
 mod crt_files;
 mod crt_format;
 mod crt_math;
@@ -226,6 +227,7 @@ pub struct ServicesState {
     startup: Mutex<startup_info::StartupState>,
     synch: Mutex<synch::Synch>,
     crt_streams: Mutex<crt_streams::StandardStreams>,
+    crt_clock: Mutex<crt_clock::ClockServices>,
     pub(crate) threads: Mutex<threads::ThreadTable>,
     pub(crate) hooks: Arc<threads::SchedulerHooks>,
     /// Functions registered with `atexit`, run in reverse order by `_cexit`.
@@ -263,6 +265,7 @@ impl ServicesState {
             startup: Mutex::default(),
             synch: Mutex::default(),
             crt_streams: Mutex::default(),
+            crt_clock: Mutex::default(),
             threads: Mutex::default(),
             hooks: Arc::default(),
             atexit: Mutex::default(),
@@ -1638,6 +1641,107 @@ pub(crate) mod handlers {
     // The Universal C runtime services that a C++ guest's runtime imports.
     // Their implementations are in `crt.rs` and `crt_streams.rs`.
     pub use super::crt::{_lock_file, _unlock_file, fputc, localeconv, mbrtowc, strerror, wcrtomb};
+
+    // The C time services of package 5 of #459. `crt_clock.rs` documents
+    // the UTC clock they share.
+    pub fn _gmtime64(context: &mut ServiceContext<'_>, time: u64) -> Outcome<u64> {
+        context
+            .state
+            .crt_clock()
+            .break_time(context.memory, context.teb, time)
+    }
+
+    pub fn _mktime64(context: &mut ServiceContext<'_>, tm: u64) -> Outcome<u64> {
+        context
+            .state
+            .crt_clock()
+            .compose_time(context.memory, context.teb, tm)
+    }
+
+    pub fn asctime(context: &mut ServiceContext<'_>, tm: u64) -> Outcome<u64> {
+        context
+            .state
+            .crt_clock()
+            .ascii_time(context.memory, context.teb, tm)
+    }
+
+    pub fn _ctime64(context: &mut ServiceContext<'_>, time: u64) -> Outcome<u64> {
+        context
+            .state
+            .crt_clock()
+            .ascii_clock(context.memory, context.teb, time)
+    }
+
+    pub fn asctime_s(
+        context: &mut ServiceContext<'_>,
+        buffer: u64,
+        size: u64,
+        tm: u64,
+    ) -> Outcome<u32> {
+        context
+            .state
+            .crt_clock()
+            .ascii_time_s(context.memory, context.teb, buffer, size, tm)
+            .map(|value| value as u32)
+    }
+
+    pub fn _ctime64_s(
+        context: &mut ServiceContext<'_>,
+        buffer: u64,
+        size: u64,
+        time: u64,
+    ) -> Outcome<u32> {
+        context
+            .state
+            .crt_clock()
+            .ascii_clock_s(context.memory, context.teb, buffer, size, time)
+            .map(|value| value as u32)
+    }
+
+    pub fn strftime(
+        context: &mut ServiceContext<'_>,
+        out: u64,
+        size: u64,
+        format: u64,
+        tm: u64,
+    ) -> Outcome<u64> {
+        context
+            .state
+            .crt_clock()
+            .format_time(context.memory, context.teb, out, size, format, tm)
+    }
+
+    pub fn clock(context: &mut ServiceContext<'_>) -> Outcome<u64> {
+        // `clock` counts in units of CLOCKS_PER_SEC, 1000; the performance
+        // count is in 100-nanosecond ticks, so ten thousand of them are
+        // one of its units.
+        Ok(context.state.clock.performance_count() / 10_000)
+    }
+
+    pub fn _difftime64(
+        _context: &mut ServiceContext<'_>,
+        time1: u64,
+        time2: u64,
+    ) -> Outcome<Float64> {
+        Ok(Float64(
+            (time1 as i64 as f64 - time2 as i64 as f64).to_bits(),
+        ))
+    }
+
+    pub fn file_time_to_local_file_time(
+        context: &mut ServiceContext<'_>,
+        input: u64,
+        output: u64,
+    ) -> Outcome<u32> {
+        // The machine's local time is UTC, so the conversion is the
+        // identity. Failure for an unrepresentable time cannot occur.
+        let time = context.memory.read_u64(input).map_err(crt_streams::fault)?;
+        context
+            .memory
+            .write_u64(output, time)
+            .map_err(crt_streams::fault)?;
+        Ok(1)
+    }
 
     // The rest of math.h (#468); `crt_math.rs` says which are exact.
     pub use super::crt_math::{

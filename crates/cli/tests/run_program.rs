@@ -64,6 +64,11 @@ fn crt_fds(name: &str) -> PathBuf {
     build("build-crt-fds.sh", "run-program-crt-fds", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_clock(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-clock.sh", "run-program-crt-clock", &OUT).join(format!("{name}.exe"))
+}
+
 fn crt_files(name: &str) -> PathBuf {
     static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-crt-files.sh", "run-program-crt-files", &OUT).join(format!("{name}.exe"))
@@ -447,6 +452,26 @@ fn a_program_using_fopen_s_and_stream_indicators_passes_its_checks() {
     assert_eq!(run.code, Some(17), "{}", run.stderr);
     assert!(
         run.stdout.contains("check 17 failed: control"),
+        "{}",
+        run.stdout
+    );
+}
+
+#[test]
+fn a_program_using_the_c_clock_passes_its_checks() {
+    for name in ["crt-clock-O0", "crt-clock-O2"] {
+        let run = run_program(&crt_clock(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {}{}", run.stdout, run.stderr);
+        assert_eq!(
+            run.stdout, "crt_clock: 18 of 18 checks passed\r\n",
+            "{name}"
+        );
+        assert_eq!(run.stderr, "", "{name}");
+    }
+    let run = run_program(&crt_clock("crt-clock-break"), &[], &[]);
+    assert_eq!(run.code, Some(19), "{}", run.stderr);
+    assert!(
+        run.stdout.contains("check 19 failed: control"),
         "{}",
         run.stdout
     );

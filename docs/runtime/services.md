@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 128 |
-| Generated adapters | 128 |
-| Unique handler implementations | 128 |
-| Implemented | 34 |
-| Partial | 92 |
+| Services with a declared ABI | 145 |
+| Generated adapters | 145 |
+| Unique handler implementations | 138 |
+| Implemented | 50 |
+| Partial | 93 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 128 |
-| API-set aliases (not services) | 128 |
+| Conformance-tested through guest dispatch | 145 |
+| API-set aliases (not services) | 145 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -65,6 +65,23 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!_isatty` | `(fd: i32) -> i32` | implemented | 0 always, as nothing here is a character device; errno EBADF for a descriptor that is not open |
 | `ucrtbase.dll!_access` | `(name: ptr, mode: i32) -> i32` | implemented | -1 with errno ENOENT for a missing or rejected name, EINVAL for a null or empty name or mode bits other than 0, 2, 4 and 6 |
 | `ucrtbase.dll!_unlink` | `(name: ptr) -> i32` | implemented | -1 with errno ENOENT missing, EACCES for a directory, EINVAL for a null or empty name; it is remove by another name |
+| `ucrtbase.dll!_gmtime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!_localtime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!_mktime64` | `(tm: ptr) -> ptr` | implemented | -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!asctime` | `(tm: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or out-of-range fields |
+| `ucrtbase.dll!_ctime64` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!asctime_s` | `(buffer: ptr, size: u64, tm: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
+| `ucrtbase.dll!_ctime64_s` | `(buffer: ptr, size: u64, time: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
+| `ucrtbase.dll!clock` | `() -> u64` | implemented | never |
+| `ucrtbase.dll!_difftime64` | `(time1: u64, time2: u64) -> f64` | implemented | never |
+| `ucrtbase.dll!strftime` | `(out: ptr, size: u64, format: ptr, tm: ptr) -> u64` | implemented | 0 when the result does not fit; EINVAL for null arguments or invalid fields |
+| `ucrtbase.dll!gmtime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!localtime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!mktime` | `(tm: ptr) -> ptr` | implemented | -1 with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!ctime` | `(time: ptr) -> ptr` | implemented | null with errno EINVAL for a null pointer or a time outside 1970-to-3000 |
+| `ucrtbase.dll!ctime_s` | `(buffer: ptr, size: u64, time: ptr) -> u32` | implemented | EINVAL for null arguments or a buffer under 26 bytes, emptying the buffer |
+| `ucrtbase.dll!difftime` | `(time1: u64, time2: u64) -> f64` | implemented | never |
+| `kernel32.dll!FileTimeToLocalFileTime` | `(input: ptr, output: ptr) -> u32` | partial | never in range; the machine's local time is UTC, so the conversion is the identity; guest fault on an invalid pointer |
 | `ucrtbase.dll!perror` | `(message: ptr) -> void` | partial | never |
 | `ucrtbase.dll!fputc` | `(character: i32, stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
 | `ucrtbase.dll!strerror` | `(code: i32) -> ptr` | partial | never; the message is valid until the next call |

@@ -1793,6 +1793,145 @@ fn secure_fopen_and_stream_indicators_follow_iso_c() {
     assert!(matches!(exit, ExitReason::MemoryFault(_)), "{exit:?}");
 }
 
+/// The C time services of package 5 of #459. The expectations are the
+/// civil calendar itself: 2001-09-09 01:46:40 UTC is the second
+/// 1_000_000_000, and 1970-01-01 was a Thursday.
+#[test]
+fn c_time_breaks_down_and_composes_the_injected_clock() {
+    let (mut guest, _) = stdio_guest();
+    // 1_000_000_000 seconds after the epoch.
+    guest.memory.write_u64(LINE, 1_000_000_000).unwrap();
+    let tm = guest.call("_gmtime64", &[LINE]);
+    assert_ne!(tm, 0);
+    fn field(guest: &Guest, tm: u64, index: u64) -> i32 {
+        guest.memory.read_u32(tm + 4 * index).unwrap() as i32
+    }
+    macro_rules! field {
+        ($index:expr) => {
+            field(&guest, tm, $index)
+        };
+    }
+    assert_eq!(field!(0), 40, "tm_sec");
+    assert_eq!(field!(1), 46, "tm_min");
+    assert_eq!(field!(2), 1, "tm_hour");
+    assert_eq!(field!(3), 9, "tm_mday");
+    assert_eq!(field!(4), 8, "tm_mon: September is 8");
+    assert_eq!(field!(5), 101, "tm_year: 2001 is 101");
+    assert_eq!(field!(6), 0, "tm_wday: a Sunday");
+    assert_eq!(field!(7), 251, "tm_yday");
+    assert_eq!(field!(8), 0, "tm_isdst: the clock is UTC");
+    // The same address answers `_localtime64`: the machine's local time is
+    // UTC, and one static buffer serves both, as the CRT keeps one.
+    assert_eq!(guest.call("_localtime64", &[LINE]), tm);
+    // The epoch itself: Thursday, January 1, 1970.
+    guest.memory.write_u64(LINE, 0).unwrap();
+    assert_eq!(guest.call("_gmtime64", &[LINE]), tm);
+    assert_eq!(field!(6), 4, "the epoch was a Thursday");
+    // Negative and post-3000 times are EINVAL with a null return.
+    guest.memory.write_u64(LINE, u64::MAX).unwrap();
+    assert_eq!(guest.call("_gmtime64", &[LINE]), 0);
+    assert_eq!(guest.errno(), 22);
+    guest.memory.write_u64(LINE, 32_535_216_000).unwrap();
+    assert_eq!(guest.call("_gmtime64", &[LINE]), 0);
+    assert_eq!(guest.errno(), 22);
+
+    // `mktime` composes what `gmtime` breaks down, normalizes the fields in
+    // place, and fills the weekday.
+    guest.memory.write_u64(LINE, 1_000_000_000).unwrap();
+    guest.call("_gmtime64", &[LINE]);
+    // Copy the static tm into scratch memory mktime can normalize.
+    let mut fields = [0u8; 36];
+    guest.memory.read_bytes(tm, &mut fields).unwrap();
+    guest.memory.write_bytes(LINE + 0x100, &fields).unwrap();
+    let made = guest.call("_mktime64", &[LINE + 0x100]);
+    assert_eq!(made, 1_000_000_000);
+    // A month of 13 normalizes into the next year.
+    guest.memory.write_u32(LINE + 0x100 + 16, 13).unwrap();
+    guest.memory.write_u32(LINE + 0x100 + 20, 100).unwrap();
+    let made = guest.call("_mktime64", &[LINE + 0x100]);
+    // February of 2001, day 9, same time of day.
+    guest.memory.write_u64(LINE, made).unwrap();
+    guest.call("_gmtime64", &[LINE]);
+    assert_eq!(field!(4), 1, "month 13 of 2000 is February 2001");
+    assert_eq!(field!(5), 101);
+    // 1969 is outside the CRT's range.
+    guest.memory.write_u32(LINE + 0x100 + 20, 69).unwrap();
+    assert_eq!(guest.call("_mktime64", &[LINE + 0x100]), u64::MAX);
+    assert_eq!(guest.errno(), 22);
+}
+
+/// The string forms, `clock` and `difftime`, and the identity
+/// `FileTimeToLocalFileTime`.
+#[test]
+fn c_time_formats_and_measures_as_the_crt_does() {
+    let (mut guest, _) = stdio_guest();
+    guest.memory.write_u64(LINE, 1_000_000_000).unwrap();
+    let tm = guest.call("_gmtime64", &[LINE]);
+    // `asctime` is the fixed 24-character shape the CRT writes.
+    let text = guest.call("asctime", &[tm]);
+    assert_ne!(text, 0);
+    let mut bytes = [0u8; 26];
+    guest.memory.read_bytes(text, &mut bytes).unwrap();
+    assert_eq!(&bytes, b"Sun Sep  9 01:46:40 2001\n\0");
+    // `_ctime64` of the same second is the same string, in the same buffer.
+    assert_eq!(guest.call("_ctime64", &[LINE]), text);
+    // Two-digit days pad with a zero, single-digit with a space: check the
+    // tenth of September too.
+    guest
+        .memory
+        .write_u64(LINE, 1_000_000_000 + 86_400)
+        .unwrap();
+    assert_eq!(guest.call("_ctime64", &[LINE]), text);
+    guest.memory.read_bytes(text, &mut bytes).unwrap();
+    assert_eq!(&bytes[8..10], b"10", "day 10");
+    assert_eq!(&bytes[..19], b"Mon Sep 10 01:46:40");
+    // `asctime_s` validates the buffer size and empties it on failure.
+    let rc = guest.call("asctime_s", &[LINE + 0x200, 26, tm]);
+    assert_eq!(rc, 0);
+    guest.memory.read_bytes(LINE + 0x200, &mut bytes).unwrap();
+    assert_eq!(&bytes[..5], b"Mon S");
+    assert_eq!(guest.call("asctime_s", &[LINE + 0x200, 25, tm]), 22);
+    assert_eq!(guest.memory.read_u8(LINE + 0x200).unwrap(), 0, "emptied");
+    assert_eq!(guest.errno(), 22);
+    // `strftime` for the C locale.
+    let tm = guest.call("_gmtime64", &[LINE]);
+    let format = LINE + 0x400;
+    guest
+        .memory
+        .write_bytes(
+            format,
+            b"%Y-%m-%d %H:%M:%S %a %A %b %B %j %U %W %w %p %I %x %X %y %% %z %Z\0",
+        )
+        .unwrap();
+    let len = guest.call("strftime", &[LINE + 0x600, 200, format, tm]);
+    assert_ne!(len, 0);
+    let mut out = vec![0u8; len as usize];
+    guest.memory.read_bytes(LINE + 0x600, &mut out).unwrap();
+    // 2001-09-10 01:46:40, Monday, the 253rd day, AM.
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "2001-09-10 01:46:40 Mon Monday Sep September 253 36 37 1 AM 01 09/10/01 01:46:40 01 % +0000 UTC"
+    );
+    // An unknown conversion copies verbatim, and too small a buffer is 0.
+    guest.memory.write_bytes(format, b"%Q\0").unwrap();
+    assert_eq!(guest.call("strftime", &[LINE + 0x600, 200, format, tm]), 2);
+    assert_eq!(guest.call("strftime", &[LINE + 0x600, 2, format, tm]), 0);
+    // `clock` reads the injected clock's performance count in milliseconds.
+    assert_eq!(guest.call("clock", &[]), 0);
+    // `difftime` subtracts. A double returns in XMM0, not the integer
+    // register, so the call goes through the floating-point path.
+    let diff = math_call(&mut guest, "_difftime64", &[], &[2_000_000_000, 1_500_000_000]);
+    assert_eq!(
+        f64::from_bits(diff as u64),
+        500_000_000.0,
+        "the difference is exact in a double"
+    );
+    // `FileTimeToLocalFileTime` copies: the machine's local time is UTC.
+    guest.memory.write_u64(LINE, 123_456_789).unwrap();
+    assert_eq!(guest.call("FileTimeToLocalFileTime", &[LINE, LINE + 8]), 1);
+    assert_eq!(guest.memory.read_u64(LINE + 8).unwrap(), 123_456_789);
+}
+
 #[test]
 fn formatted_output_refuses_what_it_cannot_print_correctly() {
     let (mut guest, [input, out, _]) = stdio_guest();
@@ -4314,7 +4453,7 @@ fn generated_metadata_matches_the_live_registry() {
         );
         assert!(
             registry
-                .resolve("api-ms-win-core-file-l1-1-0.dll", &named(service.symbol))
+                .resolve("api-ms-win-core-file-l2-1-0.dll", &named(service.symbol))
                 .is_none()
         );
     }

@@ -608,8 +608,6 @@ files as readable and writable, so only existence decides. `_unlink` is
 `remove` by another name. All nine services are `implemented` except
 `_open`, which is `partial` for the wide modes.
 
-||||||| parent of e03e466 (runtime: fopen_s, clearerr and the end-of-file indicator (#493))
-=======
 **The secure open and the stream indicators (#493, second part).**
 `fopen_s` is `fopen` through a pointer: the error number is the result and
 `errno` at once, and the pointer holds null whenever the call does not
@@ -622,7 +620,26 @@ and error indicators. Nothing raises the error indicator yet, as a failed
 read or write reports its `errno` at the call. `clearerr` is `implemented`;
 `fopen_s` is `partial` for the unmodelled handler.
 
->>>>>>> e03e466 (runtime: fopen_s, clearerr and the end-of-file indicator (#493))
+||||||| parent of c43c9fe (runtime: the C time services of package 5 of #459)
+=======
+**The C time services (#459, package 5).** `_gmtime64`/`gmtime`,
+`_localtime64`/`localtime`, `_mktime64`/`mktime`, `asctime`, `_ctime64`/
+`ctime`, `asctime_s`, `_ctime64_s`/`ctime_s`, `clock`, `_difftime64`/
+`difftime` and `strftime` come in through `api-ms-win-crt-time-l1-1-0.dll`.
+The calendar arithmetic is exact (Hinnant's public-domain civil
+conversions). The machine's clock is UTC throughout: Xenora has no answer
+for what zone it stands in, so local time is UTC, `tm_isdst` is 0, and
+`mktime` composes what `gmtime` breaks down. The CRT's shared static
+buffers are reproduced: one `struct tm` for `gmtime`/`localtime`, one
+string for `asctime`/`ctime`. `clock` reads the injected clock's
+performance count in milliseconds. `strftime` covers the documented C
+locale conversions and copies unknown ones verbatim. Times before 1970 or
+after 3000 are `EINVAL`, as the Microsoft pages say. All `implemented`.
+`FileTimeToLocalFileTime` is the identity under the UTC clock (`partial`).
+`GetDateFormatW` and `GetTimeFormatW` belong to the locale package and are
+not served.
+
+>>>>>>> c43c9fe (runtime: the C time services of package 5 of #459)
 ### CRT integer conversion
 
 UCRT and the CRT conversion API set expose strtol, strtoul, wcstol, and
