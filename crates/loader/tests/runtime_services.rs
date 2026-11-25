@@ -1514,6 +1514,200 @@ fn temporary_files_are_uniquely_named_and_deleted_on_close() {
     assert!(matches!(exit, ExitReason::MemoryFault(_)), "{exit:?}");
 }
 
+/// The descriptor layer (#493, third part): `_open`, `_read`, `_write`,
+/// `_lseek`, `_close`, `_fileno`, `_isatty`, `_access` and `_unlink`. The
+/// expectations are the Microsoft pages for each function, the `<fcntl.h>`
+/// values from mingw-w64, and the bytes written here.
+#[test]
+fn descriptors_share_files_with_streams() {
+    const EEXIST: u32 = 17;
+    let (mut guest, [stdin, out, err]) = stdio_guest();
+    let buf = TEXT + 0x4000;
+    // `_open` a new file for reading and writing, in binary, and write.
+    guest.memory.write_bytes(NAME, b"fd.bin\0").unwrap();
+    let fd = guest.call("_open", &[NAME, 2 | 0x100 | 0x200 | 0x8000, 0]) & 0xFFFF_FFFF;
+    assert!((3..0x8000).contains(&fd), "{fd:x}");
+    guest.memory.write_bytes(buf, b"abcdef").unwrap();
+    assert_eq!(guest.call("_write", &[fd, buf, 6]) & 0xFFFF_FFFF, 6);
+    // `_lseek` back and `_read` the bytes; the end is a 0 count, no error.
+    assert_eq!(guest.call("_lseek", &[fd, 0, 0]) & 0xFFFF_FFFF, 0);
+    guest.memory.write_bytes(buf, &[0xEE; 8]).unwrap();
+    assert_eq!(guest.call("_read", &[fd, buf, 8]) & 0xFFFF_FFFF, 6);
+    let mut bytes = [0u8; 6];
+    guest.memory.read_bytes(buf, &mut bytes).unwrap();
+    assert_eq!(&bytes, b"abcdef");
+    assert_eq!(guest.call("_read", &[fd, buf, 8]) & 0xFFFF_FFFF, 0);
+    // Text mode: a line feed written is CR LF on the drive, and CR LF read
+    // is one line feed.
+    assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
+    guest.memory.write_bytes(NAME, b"fd.txt\0").unwrap();
+    let text = guest.call("_open", &[NAME, 2 | 0x100 | 0x200, 0]) & 0xFFFF_FFFF;
+    assert!(text >= 3, "{text:x}");
+    guest.memory.write_bytes(buf, b"x\ny").unwrap();
+    assert_eq!(guest.call("_write", &[text, buf, 3]) & 0xFFFF_FFFF, 3);
+    assert_eq!(guest.call("_lseek", &[text, 0, 0]) & 0xFFFF_FFFF, 0);
+    guest.memory.write_bytes(buf, &[0xEE; 8]).unwrap();
+    assert_eq!(guest.call("_read", &[text, buf, 8]) & 0xFFFF_FFFF, 3);
+    let mut bytes = [0u8; 3];
+    guest.memory.read_bytes(buf, &mut bytes).unwrap();
+    assert_eq!(&bytes, b"x\ny", "CR LF became one line feed");
+    // The raw bytes on the drive, through the binary descriptor.
+    assert_eq!(guest.call("_close", &[text]) & 0xFFFF_FFFF, 0);
+    // A closed descriptor number fails with EBADF until it is recycled.
+    assert_eq!(
+        guest.call("_lseek", &[77, 0, 0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_read", &[77, buf, 1]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.errno(), EBADF);
+    guest.memory.write_bytes(NAME, b"fd.txt\0").unwrap();
+    let raw = guest.call("_open", &[NAME, 0x8000, 0]) & 0xFFFF_FFFF;
+    guest.memory.write_bytes(buf, &[0xEE; 8]).unwrap();
+    assert_eq!(guest.call("_read", &[raw, buf, 8]) & 0xFFFF_FFFF, 4);
+    let mut bytes = [0u8; 4];
+    guest.memory.read_bytes(buf, &mut bytes).unwrap();
+    assert_eq!(&bytes, b"x\r\ny", "the drive holds CR LF");
+    assert_eq!(guest.call("_close", &[raw]) & 0xFFFF_FFFF, 0);
+
+    // `_fileno` shares the stream's state: a write through the descriptor
+    // moves where `fgets` reads.
+    store(&mut guest, "shared.bin", b"0123456789");
+    let stream = opened(&mut guest, "shared.bin", "r+b");
+    let shared = guest.call("_fileno", &[stream]) & 0xFFFF_FFFF;
+    assert!(shared >= 3, "{shared:x}");
+    assert_eq!(line(&mut guest, stream, 4).unwrap(), b"012");
+    // The lowest free descriptor is reused: the fd just closed.
+    assert_eq!(shared, raw, "the lowest free descriptor");
+    guest.memory.write_bytes(buf, b"ZZ").unwrap();
+    assert_eq!(guest.call("_lseek", &[shared, 3, 0]) & 0xFFFF_FFFF, 3);
+    assert_eq!(guest.call("_write", &[shared, buf, 2]) & 0xFFFF_FFFF, 2);
+    // The stream's position moved with the descriptor's write.
+    assert_eq!(line(&mut guest, stream, 8).unwrap(), b"56789");
+    // The same stream gives the same descriptor again.
+    assert_eq!(guest.call("_fileno", &[stream]) & 0xFFFF_FFFF, shared);
+    // `_fileno` of the standard streams, of null and of no stream.
+    assert_eq!(guest.call("_fileno", &[stdin]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.call("_fileno", &[out]) & 0xFFFF_FFFF, 1);
+    assert_eq!(guest.call("_fileno", &[err]) & 0xFFFF_FFFF, 2);
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_fileno", &[0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.errno(), STDIO_EINVAL);
+    assert_eq!(guest.run("_fileno", &[TEXT]).1, LIMIT);
+    // `_close` of the shared descriptor closes the underlying file: the
+    // stream is dangling afterwards, and using it stops the guest like any
+    // pointer that is no stream — in the CRT this is undefined behaviour.
+    assert_eq!(guest.call("_close", &[shared]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.run("fclose", &[stream]).1, LIMIT);
+
+    // Descriptor 0 reads what the host supplied; 1 and 2 write to the
+    // captured streams; seeking them is EBADF.
+    guest.state.set_standard_input(b"pipe\r\n");
+    guest.memory.write_bytes(buf, &[0xEE; 8]).unwrap();
+    assert_eq!(
+        guest.call("_read", &[0, buf, 8]) & 0xFFFF_FFFF,
+        5,
+        "CR LF became one line feed at load"
+    );
+    let mut bytes = [0u8; 5];
+    guest.memory.read_bytes(buf, &mut bytes).unwrap();
+    assert_eq!(&bytes, b"pipe\n");
+    guest.memory.write_bytes(buf, b"hi\n").unwrap();
+    assert_eq!(guest.call("_write", &[1, buf, 3]) & 0xFFFF_FFFF, 3);
+    assert!(guest.state.standard_output().ends_with(b"hi\r\n"));
+    assert_eq!(guest.call("_write", &[2, buf, 3]) & 0xFFFF_FFFF, 3);
+    assert!(guest.state.standard_error().ends_with(b"hi\r\n"));
+    assert_eq!(
+        guest.call("_write", &[0, buf, 3]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(
+        guest.call("_read", &[1, buf, 3]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(
+        guest.call("_lseek", &[0, 0, 0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    // `_isatty`: nothing is a character device; a bad fd is EBADF.
+    assert_eq!(guest.call("_isatty", &[0]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.call("_isatty", &[1]) & 0xFFFF_FFFF, 0);
+    guest.set_errno(0);
+    assert_eq!(guest.call("_isatty", &[40]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.errno(), EBADF);
+
+    // Failures: ENOENT without `_O_CREAT`, EEXIST with `_O_EXCL`, EINVAL for
+    // access bits 3, EBADF for unknown descriptors, EINVAL before the start.
+    guest.memory.write_bytes(NAME, b"nope.bin\0").unwrap();
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_open", &[NAME, 0, 0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.errno(), ENOENT);
+    guest.memory.write_bytes(NAME, b"shared.bin\0").unwrap();
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_open", &[NAME, 0x100 | 0x400, 0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.errno(), EEXIST);
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_open", &[NAME, 3, 0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.errno(), STDIO_EINVAL);
+    assert_eq!(
+        guest.call("_close", &[77]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.run("_close", &[0]).1, LIMIT);
+    assert_eq!(
+        guest.run("_open", &[NAME, 0x1_0000, 0]).1,
+        LIMIT,
+        "wide text stops the guest"
+    );
+    // `_access`: 0 for a file in any mode, ENOENT when missing, EINVAL for
+    // bits other than 0, 2, 4 and 6.
+    guest.memory.write_bytes(NAME, b"shared.bin\0").unwrap();
+    for mode in [0, 2, 4, 6] {
+        assert_eq!(
+            guest.call("_access", &[NAME, mode]) & 0xFFFF_FFFF,
+            0,
+            "{mode}"
+        );
+    }
+    guest.memory.write_bytes(NAME, b"nope.bin\0").unwrap();
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_access", &[NAME, 0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.errno(), ENOENT);
+    guest.memory.write_bytes(NAME, b"shared.bin\0").unwrap();
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_access", &[NAME, 8]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.errno(), STDIO_EINVAL);
+    // `_unlink` is `remove` by another name.
+    assert_eq!(guest.call("_unlink", &[NAME]) & 0xFFFF_FFFF, 0);
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_unlink", &[NAME]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    assert_eq!(guest.errno(), ENOENT);
+}
+
 #[test]
 fn formatted_output_refuses_what_it_cannot_print_correctly() {
     let (mut guest, [input, out, _]) = stdio_guest();

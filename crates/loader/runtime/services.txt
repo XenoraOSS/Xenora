@@ -324,6 +324,79 @@ service ucrtbase.dll tmpnam(buffer: ptr) -> ptr
     ref stdio.h tmpnam
     test temporary_files_are_uniquely_named_and_deleted_on_close
 
+# The descriptor layer (#493, third part of package 4 of #459).
+service ucrtbase.dll _open(name: ptr, flags: i32, mode: i32) -> i32
+    handler _open
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails -1 with errno ENOENT missing, EACCES for a directory, EEXIST with _O_CREAT|_O_EXCL, EINVAL for a null or rejected name or bad access bits, EMFILE at 8192 descriptors, ENOSPC when the drive is full; stops the guest for the wide text modes
+    ref io.h _open
+    test descriptors_share_files_with_streams
+
+service ucrtbase.dll _close(fd: i32) -> i32
+    handler _close
+    status implemented
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails -1 with errno EBADF for a descriptor that is not open; stops the guest for a standard descriptor
+    ref io.h _close
+    test descriptors_share_files_with_streams
+
+service ucrtbase.dll _read(fd: i32, buffer: ptr, count: u32) -> i32
+    handler _read
+    status implemented
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails -1 with errno EBADF for a descriptor that is not open or not readable, EINVAL for a null buffer or a count over the transfer limit; stops the guest for a buffer it cannot write
+    ref io.h _read
+    test descriptors_share_files_with_streams
+
+service ucrtbase.dll _write(fd: i32, buffer: ptr, count: u32) -> i32
+    handler _write
+    status implemented
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails -1 with errno EBADF for a descriptor that is not open or not writable, EINVAL for a null buffer or a count over the transfer limit, ENOSPC when the drive is full; stops the guest for a buffer it cannot read
+    ref io.h _write
+    test descriptors_share_files_with_streams
+
+service ucrtbase.dll _lseek(fd: i32, offset: i32, origin: i32) -> i32
+    handler _lseek
+    status implemented
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails -1 with errno EBADF for a descriptor that is not open, EINVAL for an unknown origin, a position before the start or one no 32-bit long holds
+    ref io.h _lseek
+    test descriptors_share_files_with_streams
+
+service ucrtbase.dll _fileno(stream: ptr) -> i32
+    handler _fileno
+    status implemented
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails -1 with errno EINVAL for a null stream; stops the guest for a pointer that is no stream
+    ref io.h _fileno
+    test descriptors_share_files_with_streams
+
+service ucrtbase.dll _isatty(fd: i32) -> i32
+    handler _isatty
+    status implemented
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails 0 always, as nothing here is a character device; errno EBADF for a descriptor that is not open
+    ref io.h _isatty
+    test descriptors_share_files_with_streams
+
+service ucrtbase.dll _access(name: ptr, mode: i32) -> i32
+    handler _access
+    status implemented
+    alias api-ms-win-crt-filesystem-l1-1-0.dll
+    fails -1 with errno ENOENT for a missing or rejected name, EINVAL for a null or empty name or mode bits other than 0, 2, 4 and 6
+    ref io.h _access
+    test descriptors_share_files_with_streams
+
+service ucrtbase.dll _unlink(name: ptr) -> i32
+    handler _unlink
+    status implemented
+    alias api-ms-win-crt-filesystem-l1-1-0.dll
+    fails -1 with errno ENOENT missing, EACCES for a directory, EINVAL for a null or empty name; it is remove by another name
+    ref io.h _unlink
+    test descriptors_share_files_with_streams
+
 service ucrtbase.dll perror(message: ptr) -> void
     handler perror
     status partial

@@ -1274,6 +1274,96 @@ pub(crate) mod handlers {
         or_errno(context, outcome)
     }
 
+    pub fn _open(
+        context: &mut ServiceContext<'_>,
+        name: u64,
+        flags: i32,
+        mode: i32,
+    ) -> Outcome<i32> {
+        let _ = mode;
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.open_descriptor(context.memory, &mut drive, name, flags as u32)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn _close(context: &mut ServiceContext<'_>, fd: i32) -> Outcome<i32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.close_descriptor(context.memory, &mut drive, fd)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn _read(
+        context: &mut ServiceContext<'_>,
+        fd: i32,
+        buffer: u64,
+        count: u32,
+    ) -> Outcome<i32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let drive = context.state.objects.lock().expect("guest object state");
+            streams.read_descriptor(context.memory, &drive, fd, buffer, count)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn _write(
+        context: &mut ServiceContext<'_>,
+        fd: i32,
+        buffer: u64,
+        count: u32,
+    ) -> Outcome<i32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.write_descriptor(context.memory, &mut drive, fd, buffer, count)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn _lseek(
+        context: &mut ServiceContext<'_>,
+        fd: i32,
+        offset: i32,
+        origin: i32,
+    ) -> Outcome<i32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let drive = context.state.objects.lock().expect("guest object state");
+            streams.seek_descriptor(&drive, fd, offset, origin)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn _fileno(context: &mut ServiceContext<'_>, stream: u64) -> Outcome<i32> {
+        let outcome = context.state.crt_streams().descriptor_of(stream);
+        or_errno(context, outcome)
+    }
+
+    pub fn _isatty(context: &mut ServiceContext<'_>, fd: i32) -> Outcome<i32> {
+        let outcome = context.state.crt_streams().is_terminal(fd);
+        or_errno(context, outcome)
+    }
+
+    pub fn _access(context: &mut ServiceContext<'_>, name: u64, mode: i32) -> Outcome<i32> {
+        let outcome = {
+            let streams = context.state.crt_streams();
+            let drive = context.state.objects.lock().expect("guest object state");
+            streams.access(context.memory, &drive, name, mode)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn _unlink(context: &mut ServiceContext<'_>, name: u64) -> Outcome<i32> {
+        // `_unlink` is `remove` by another name, as Microsoft's page says.
+        remove(context, name)
+    }
+
     pub fn perror(context: &mut ServiceContext<'_>, message: u64) -> Outcome<()> {
         let address = context
             .memory

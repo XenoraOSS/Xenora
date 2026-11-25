@@ -354,6 +354,19 @@ with mingw-w64 (UCRT flavour) at `-O0` and `-O2`, and once at `-O1` with
 `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
 Provenance is as for Gate A2.
 
+## The descriptor layer
+
+`tests/compat_fixtures/crt_fds.c` (#493, third part) is a hosted C program
+that opens files with `_open`, moves through them with `_lseek`, reads and
+writes with `_read` and `_write` in binary and text mode, takes the
+descriptor of a stream with `_fileno` and writes through it so the stream's
+position moves, and checks `_isatty`, `_access` and `_unlink`. Every
+expected value follows from the bytes it writes and the Microsoft pages for
+each function. `build-crt-fds.sh` builds it with mingw-w64 (UCRT flavour)
+at `-O0` and `-O2`, and once at `-O1` with `CRT_FDS_BREAK`, whose control
+check must fail. `crates/cli/tests/run_program.rs` runs all three through
+`xenora run`. Provenance is as for Gate A2.
+
 ## C runtime mathematics
 
 `tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the
