@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/validate-graphics.sh [quick|full]
 
 quick (default): focused CPU and native Metal checks for produced geometry,
-                 views, samplers, guest-backed copies, R8 sampling, mip/slice transfers and compute caching.
+                 views, samplers, guest-backed copies, R8 sampling, mip/slice transfers, array-slice views and compute caching.
 full:            all nine repository validation gates, including the GPU suite.
 
 Run on native Apple Silicon with the repository build dependencies installed.
@@ -102,12 +102,16 @@ if [[ "$mode" == quick ]]; then
     run_tests array-layout cargo test --locked -p xenora-texture --test packed_layout array_ -- --nocapture
     run_tests mip-loader cargo test --locked -p xenora-loader --test mip_transfers -- --nocapture
     run_tests array-loader cargo test --locked -p xenora-loader --test array_transfers -- --nocapture
+    run_tests array-views-loader cargo test --locked -p xenora-loader --test array_views -- --nocapture
     run_tests r8-layout cargo test --locked -p xenora-texture --test packed_layout r8_ -- --nocapture
     run_tests r8-upload cargo test --locked -p xenora-metal --lib r8_ -- --nocapture
     run_tests r8-loader cargo test --locked -p xenora-loader --test pipeline cpu_r8_ -- --nocapture
     run_tests subresource-budget cargo test --locked -p xenora-metal --features gpu-tests --lib native_mip_array_ -- --nocapture --test-threads=1
     run_tests array-native cargo test --locked -p xenora-metal --features gpu-tests --test native_compute array_transfers:: -- --nocapture --test-threads=1
     run_tests array-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_array_transfers_ -- --nocapture --test-threads=1
+    run_tests array-views-budget cargo test --locked -p xenora-metal --features gpu-tests --lib native_array_view_ -- --nocapture --test-threads=1
+    run_tests array-views-native cargo test --locked -p xenora-metal --features gpu-tests --test native_compute array_views:: -- --nocapture --test-threads=1
+    run_tests array-views-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_array_views_ -- --nocapture --test-threads=1
     run_tests mip-native cargo test --locked -p xenora-metal --features gpu-tests --test native_compute mip_transfers:: -- --nocapture --test-threads=1
     run_tests mip-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_mip_transfers_ -- --nocapture --test-threads=1
     run_tests geometry-gpu cargo test --locked -p xenora-metal --features gpu-tests --test native_compute produced_geometry:: -- --nocapture --test-threads=1

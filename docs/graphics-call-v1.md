@@ -99,6 +99,7 @@ loader ResourceStates bits. Unsupported formats and layouts fail.
 | 49 | CreateGuestBackedBuffer | device, byte length, initial state u32, guest address | resource handle |
 | 50 | CopyImageSubresource | list, destination, destination kind, destination subresource, destination A, destination B, source, source kind, source subresource, source A, source B, width, height | 0 |
 | 51 | CreateTextureArray | device, width, height u32, mip count u32, array layer count u32, initial state u32 | RGBA8 array resource handle |
+| 52 | CreateArraySliceView | device, array backing, slice u32, base mip u32, mip count u32, format | read-only 2D view handle |
 
 CreatePipeline reads nonempty, four-byte-aligned shader blobs of at most 1024 bytes
 each. Decoding and translation must succeed before a pipeline handle is allocated.
@@ -251,9 +252,26 @@ The child has its own handle and lifetime. Destroying an otherwise destroyable
 parent does not invalidate the child, which independently retains the root backing.
 Existing object budgets, binding/retirement rules and whole-resource alias checks
 still apply. Opcode 38 destroys children and opcode 39 binds them like other views.
-This adds read-only mip-range nesting, not texture arrays or writable views.
+For array-slice parents created through opcode52, the child inherits the selected
+slice and independently retains the complete array backing. Neither form permits
+writable views.
 Six focused CPU checks, two original guest tests across three adapters and all
 nine repository gates passed. See the [validation guide](testing/local-graphics-checkpoint.md).
+
+CreateArraySliceView (opcode52) selects one slice of an explicit RGBA8 array as a
+read-only 2D view. Arguments are `[device, backing, slice, base_mip, mip_count,
+format]`; slice and both mip fields require zero upper32 bits. Slice must fit the
+array, and the nonempty checked mip range must fit its chain. Only format codes0
+and1 are accepted. Ordinary 2D resources reject, including when their layout has
+the same byte length as a one-layer array. Opcode37 continues to reject arrays.
+
+These views bind through existing opcodes39/48 and nest through opcode45. They
+sample the selected slice using existing 2D coordinates and view-relative LODs;
+shader-selected array indexing is not introduced. The array-view backend must be
+installed explicitly. Older backend registrations reject these draws before
+render dispatch. Pending GPU-backed views retain the exact producer version and
+complete backing; host snapshots retain the full array rather than cropping a
+selected slice. Whole-backing hazards and byte budgets remain in force.
 
 SampledViews (opcode 39) uses the same ten-u64, 80-byte little-endian layout as
 SampledBindings above, except words 0 and 1 contain **view handles**, not resource

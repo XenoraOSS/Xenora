@@ -462,3 +462,6 @@ mod mip_transfers;
 
 #[path = "native/array_transfers.rs"]
 mod array_transfers;
+
+#[path = "native/array_views.rs"]
+mod array_views;

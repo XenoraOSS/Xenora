@@ -663,6 +663,29 @@ support, filter/address modes and wider synchronization. Explicit sampler mip se
 remains LOD clamping; the separate actual texture-view interface below selects storage. Stage 3 still needs general loops, divergent EXEC/VCC paths and reconvergence. Runtime
 uniform scalar branches are described below; they do not supply those semantics.
 
+### Selected array-slice read-only views
+
+`GraphicsArraySliceViewDesc { slice, base_mip, mip_count, format }` and
+`create_array_slice_view` select one slice of an explicitly typed RGBA8 array.
+The resulting view uses existing 2D shader coordinates; child views inherit the
+slice and normalize relative mip ranges to the root. Complete backing metadata,
+immutable snapshots and whole-backing hazards remain authoritative, including
+for one-layer arrays. No writable role or shader array indexing is implied.
+
+Native `MetalRgba8ArrayTexture::upload` validates and initializes every subresource
+before exposing immutable storage. Its `array_slice_view(ArraySliceViewDesc)`
+creates a shared-storage `MetalTextureView`. The corresponding
+`RenderColorOutput::array_slice_view` returns a `RenderColorView` retaining its
+exact producer point and storage lease. Existing 2D-only methods reject arrays.
+Caches distinguish complete backing identity, slice, mip range and interpretation.
+Host views do not expose upload methods; produced views cannot become ordinary
+host bindings. Unsupported format families and invalid ranges fail explicitly.
+
+The loader's array-view attachment, asynchronous and queued installers explicitly
+enable this contract. Replacing them with older installers revokes support.
+Queued sampling consumes exact produced array versions without host reconstruction;
+collection and retirement preserve dependencies and complete backing ownership.
+
 ### Immutable sampled mip-range and linear/sRGB views
 
 `TextureViewDesc { base_mip, mip_count, format }` selects a checked, nonempty mip

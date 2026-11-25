@@ -28,10 +28,11 @@ pub use sampler::MetalSampler;
 
 #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
 pub use texture_pipeline::{
-    BcMipUpload, BcTextureDesc, BindingSlot, BoundSampledTexture, MAX_BC_TEXTURE_BYTES,
-    MAX_R8_TEXTURE_BYTES, MetalBcTexture, MetalR8Texture, MetalRgba8Texture, MetalTextureView,
-    R8MipUpload, R8TextureDesc, Rgba8MipLevel, Rgba8TextureDesc as MetalRgba8TextureDesc,
-    SampledBinding, TextureViewDesc, TextureViewFormat,
+    ArraySliceViewDesc, BcMipUpload, BcTextureDesc, BindingSlot, BoundSampledTexture,
+    MAX_BC_TEXTURE_BYTES, MAX_R8_TEXTURE_BYTES, MetalBcTexture, MetalR8Texture,
+    MetalRgba8ArrayTexture, MetalRgba8Texture, MetalTextureView, R8MipUpload, R8TextureDesc,
+    Rgba8ArrayMipUpload, Rgba8ArrayTextureDesc, Rgba8MipLevel,
+    Rgba8TextureDesc as MetalRgba8TextureDesc, SampledBinding, TextureViewDesc, TextureViewFormat,
 };
 
 /// Whole-resource source for a queued GPU copy. Produced inputs retain provenance.

@@ -10,29 +10,31 @@ use std::sync::{Arc, Mutex, mpsc};
 use std::thread::{self, JoinHandle};
 
 use xenora_loader::graphics::{
-    CommandListType, ExecutionOutcome, GraphicsBlendMode, GraphicsColorBinding, GraphicsContext,
-    GraphicsDepthBinding, GraphicsDepthCompare, GraphicsDepthLoad, GraphicsDepthSnapshot,
-    GraphicsDraw, GraphicsDrawState, GraphicsError, GraphicsHandle, GraphicsPassOutput,
-    GraphicsPendingSubmission, GraphicsSubmissionRequest, GraphicsTextureCapabilities,
-    GraphicsTextureSnapshot, GraphicsTextureViewDesc, GraphicsTextureViewFormat, ResourceDesc,
-    ResourceDimension, ResourceStates,
+    CommandListType, ExecutionOutcome, GraphicsArraySliceViewDesc, GraphicsBlendMode,
+    GraphicsColorBinding, GraphicsContext, GraphicsDepthBinding, GraphicsDepthCompare,
+    GraphicsDepthLoad, GraphicsDepthSnapshot, GraphicsDraw, GraphicsDrawState, GraphicsError,
+    GraphicsHandle, GraphicsPassOutput, GraphicsPendingSubmission, GraphicsSubmissionRequest,
+    GraphicsTextureCapabilities, GraphicsTextureSnapshot, GraphicsTextureViewDesc,
+    GraphicsTextureViewFormat, ResourceDesc, ResourceDimension, ResourceStates,
 };
 use xenora_loader::memory::{GuestMemory, MemoryPermissions};
 use xenora_metal::{
-    BcMipUpload, BcTextureDesc, BindingSlot, BlendFactor as F, BlendOperation as O, BlendState,
-    BoundSampledTexture, ColorWriteMask, DepthCompare, DepthLoad, DepthSnapshot, DepthState,
-    MetalBcTexture, MetalR8Texture, MetalRgba8Texture, MetalRgba8TextureDesc, MetalSampler,
-    MetalTextureView, NativeCompute, R8MipUpload, R8TextureDesc, Rgba8MipLevel, SampledBinding,
-    TextureViewDesc, TextureViewFormat, TriangleDraw, TriangleShader, TriangleState,
-    TriangleTargetsPass,
+    ArraySliceViewDesc, BcMipUpload, BcTextureDesc, BindingSlot, BlendFactor as F,
+    BlendOperation as O, BlendState, BoundSampledTexture, ColorWriteMask, DepthCompare, DepthLoad,
+    DepthSnapshot, DepthState, MetalBcTexture, MetalR8Texture, MetalRgba8ArrayTexture,
+    MetalRgba8Texture, MetalRgba8TextureDesc, MetalSampler, MetalTextureView, NativeCompute,
+    R8MipUpload, R8TextureDesc, Rgba8ArrayMipUpload, Rgba8ArrayTextureDesc, Rgba8MipLevel,
+    SampledBinding, TextureViewDesc, TextureViewFormat, TriangleDraw, TriangleShader,
+    TriangleState, TriangleTargetsPass,
 };
 use xenora_shader::{PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT};
-use xenora_texture::{PackedTextureLayout, TextureFormat};
+use xenora_texture::{PackedTextureArrayLayout, PackedTextureLayout, TextureFormat};
 
 const VERTICES: u64 = 0x10000;
 const MAX_VERTICES: usize = 768;
 
 struct UploadedTexture {
+    array_layers: Option<u32>,
     pixels: Arc<[u8]>,
     width: usize,
     height: usize,
@@ -42,6 +44,8 @@ struct UploadedTexture {
 }
 
 struct UploadedView {
+    array_desc: Option<GraphicsArraySliceViewDesc>,
+    array_layers: Option<u32>,
     pixels: Arc<[u8]>,
     backing: (TextureFormat, usize, usize, u32),
     desc: GraphicsTextureViewDesc,
@@ -50,22 +54,24 @@ struct UploadedView {
 
 #[derive(Clone)]
 enum UploadedStorage {
+    Array(MetalRgba8ArrayTexture),
     Rgba8(MetalRgba8Texture),
     Bc(MetalBcTexture),
     R8(MetalR8Texture),
 }
 impl UploadedStorage {
-    fn view(&self, desc: TextureViewDesc) -> Result<MetalTextureView, xenora_metal::MetalError> {
+    fn view(&self, desc: TextureViewDesc) -> Result<MetalTextureView, GraphicsError> {
         match self {
-            Self::Rgba8(t) => t.view(desc),
-            Self::Bc(t) => t.view(desc),
-            Self::R8(t) => t.view(desc),
+            Self::Array(_) => Err(GraphicsError::InvalidDescriptor),
+            Self::Rgba8(t) => t.view(desc).map_err(metal_error),
+            Self::Bc(t) => t.view(desc).map_err(metal_error),
+            Self::R8(t) => t.view(desc).map_err(metal_error),
         }
     }
     fn rgba8(&self) -> Result<MetalRgba8Texture, GraphicsError> {
         match self {
             Self::Rgba8(t) => Ok(t.clone()),
-            Self::Bc(_) | Self::R8(_) => Err(GraphicsError::InvalidDescriptor),
+            Self::Array(_) | Self::Bc(_) | Self::R8(_) => Err(GraphicsError::InvalidDescriptor),
         }
     }
 }
@@ -124,6 +130,9 @@ fn upload_view(
     textures: &mut Vec<UploadedTexture>,
     views: &mut Vec<UploadedView>,
 ) -> Result<MetalTextureView, GraphicsError> {
+    if snapshot.array_layers.is_some() {
+        return Err(GraphicsError::InvalidDescriptor);
+    }
     let backing = (
         snapshot.format,
         snapshot.width,
@@ -131,19 +140,101 @@ fn upload_view(
         snapshot.mip_levels,
     );
     if let Some(cached) = views.iter().find(|view| {
-        Arc::ptr_eq(&view.pixels, &snapshot.pixels) && view.backing == backing && view.desc == desc
+        view.array_desc.is_none()
+            && view.array_layers.is_none()
+            && Arc::ptr_eq(&view.pixels, &snapshot.pixels)
+            && view.backing == backing
+            && view.desc == desc
     }) {
         return Ok(cached.view.clone());
     }
     let texture = upload_texture(gpu, snapshot, textures)?;
-    let view = texture.view(native_view_desc(desc)).map_err(metal_error)?;
+    let view = texture.view(native_view_desc(desc))?;
     views.push(UploadedView {
+        array_desc: None,
+        array_layers: None,
         pixels: snapshot.pixels.clone(),
         backing,
         desc,
         view: view.clone(),
     });
     Ok(view)
+}
+
+fn native_array_view_desc(desc: GraphicsArraySliceViewDesc) -> ArraySliceViewDesc {
+    ArraySliceViewDesc {
+        slice: desc.slice,
+        base_mip: desc.base_mip,
+        mip_count: desc.mip_count,
+        format: native_view_desc(GraphicsTextureViewDesc {
+            base_mip: desc.base_mip,
+            mip_count: desc.mip_count,
+            format: desc.format,
+        })
+        .format,
+    }
+}
+fn upload_array_view(
+    gpu: &NativeCompute,
+    snapshot: &GraphicsTextureSnapshot,
+    desc: GraphicsArraySliceViewDesc,
+    textures: &mut Vec<UploadedTexture>,
+    views: &mut Vec<UploadedView>,
+) -> Result<MetalTextureView, GraphicsError> {
+    if snapshot.array_layers.is_none() {
+        return Err(GraphicsError::InvalidDescriptor);
+    }
+    let backing = (
+        snapshot.format,
+        snapshot.width,
+        snapshot.height,
+        snapshot.mip_levels,
+    );
+    if let Some(cached) = views.iter().find(|v| {
+        Arc::ptr_eq(&v.pixels, &snapshot.pixels)
+            && v.backing == backing
+            && v.array_layers == snapshot.array_layers
+            && v.array_desc == Some(desc)
+    }) {
+        return Ok(cached.view.clone());
+    }
+    let UploadedStorage::Array(owner) = upload_texture(gpu, snapshot, textures)? else {
+        return Err(GraphicsError::InvalidDescriptor);
+    };
+    let view = owner
+        .array_slice_view(native_array_view_desc(desc))
+        .map_err(metal_error)?;
+    views.push(UploadedView {
+        pixels: snapshot.pixels.clone(),
+        backing,
+        array_layers: snapshot.array_layers,
+        array_desc: Some(desc),
+        desc: GraphicsTextureViewDesc {
+            base_mip: desc.base_mip,
+            mip_count: desc.mip_count,
+            format: desc.format,
+        },
+        view: view.clone(),
+    });
+    Ok(view)
+}
+fn upload_selected_view(
+    gpu: &NativeCompute,
+    snapshot: &GraphicsTextureSnapshot,
+    desc: Option<GraphicsTextureViewDesc>,
+    array_desc: Option<GraphicsArraySliceViewDesc>,
+    textures: &mut Vec<UploadedTexture>,
+    views: &mut Vec<UploadedView>,
+) -> Result<Option<MetalTextureView>, GraphicsError> {
+    match (snapshot.array_layers, desc, array_desc) {
+        (Some(_), None, Some(desc)) => {
+            upload_array_view(gpu, snapshot, desc, textures, views).map(Some)
+        }
+        (None, desc, None) => sampled_view_desc(snapshot, desc)
+            .map(|desc| upload_view(gpu, snapshot, desc, textures, views))
+            .transpose(),
+        _ => Err(GraphicsError::InvalidDescriptor),
+    }
 }
 
 fn upload_texture(
@@ -158,7 +249,27 @@ fn upload_texture(
         sampled.mip_levels,
     )
     .map_err(|_| GraphicsError::InvalidDescriptor)?;
-    if sampled.pixels.len() != layout.byte_len() {
+    let array_layout = sampled
+        .array_layers
+        .map(|layers| {
+            PackedTextureArrayLayout::new(
+                sampled.format,
+                sampled.width,
+                sampled.height,
+                sampled.mip_levels,
+                layers,
+            )
+            .map_err(|_| GraphicsError::InvalidDescriptor)
+        })
+        .transpose()?;
+    if sampled.array_layers.is_some() && sampled.format != TextureFormat::Rgba8Unorm {
+        return Err(GraphicsError::InvalidDescriptor);
+    }
+    if sampled.pixels.len()
+        != array_layout
+            .as_ref()
+            .map_or(layout.byte_len(), |l| l.byte_len())
+    {
         return Err(GraphicsError::InvalidDescriptor);
     }
     if let Some(uploaded) = textures.iter().find(|uploaded| {
@@ -166,79 +277,112 @@ fn upload_texture(
             && uploaded.width == sampled.width
             && uploaded.height == sampled.height
             && uploaded.mips == sampled.mip_levels
+            && uploaded.array_layers == sampled.array_layers
             && uploaded.format == sampled.format
     }) {
         return Ok(uploaded.texture.clone());
     }
-    let texture = match sampled.format {
-        TextureFormat::Rgba8Unorm => {
-            let desc =
-                MetalRgba8TextureDesc::new(sampled.width, sampled.height, sampled.mip_levels)
-                    .map_err(metal_error)?;
-            let texture = MetalRgba8Texture::allocate(gpu.device(), desc).map_err(metal_error)?;
-            for (level, mip) in layout.levels().iter().enumerate() {
-                texture
-                    .upload_mip(&Rgba8MipLevel::new_packed(
-                        level as u32,
-                        mip.width,
-                        mip.height,
-                        &sampled.pixels[mip.offset..mip.offset + mip.byte_len],
-                    ))
-                    .map_err(metal_error)?;
+    let texture = if let Some(array) = array_layout {
+        let mut uploads = Vec::new();
+        for slice in 0..array.layers() {
+            for level in 0..sampled.mip_levels {
+                let mip = array
+                    .footprint(slice, level)
+                    .map_err(|_| GraphicsError::InvalidDescriptor)?;
+                uploads.push(Rgba8ArrayMipUpload {
+                    slice,
+                    level,
+                    row_pitch: mip.row_bytes,
+                    bytes: &sampled.pixels[mip.offset..mip.offset + mip.byte_len],
+                });
             }
-            UploadedStorage::Rgba8(texture)
         }
-        TextureFormat::R8Unorm => {
-            let uploads: Vec<_> = layout
-                .levels()
-                .iter()
-                .enumerate()
-                .map(|(level, mip)| R8MipUpload {
-                    level: level as u32,
-                    row_pitch: mip.row_bytes,
-                    bytes: &sampled.pixels[mip.offset..mip.offset + mip.byte_len],
-                })
-                .collect();
-            UploadedStorage::R8(
-                MetalR8Texture::upload(
-                    gpu.device(),
-                    R8TextureDesc {
-                        width: sampled.width,
-                        height: sampled.height,
-                        mips: sampled.mip_levels,
-                    },
-                    &uploads,
-                )
-                .map_err(metal_error)?,
+        UploadedStorage::Array(
+            MetalRgba8ArrayTexture::upload(
+                gpu.device(),
+                Rgba8ArrayTextureDesc {
+                    width: sampled.width,
+                    height: sampled.height,
+                    mips: sampled.mip_levels,
+                    array_layers: array.layers(),
+                },
+                &uploads,
             )
-        }
-        format @ (TextureFormat::Bc1RgbaUnorm | TextureFormat::Bc3RgbaUnorm) => {
-            let uploads: Vec<_> = layout
-                .levels()
-                .iter()
-                .enumerate()
-                .map(|(level, mip)| BcMipUpload {
-                    level: level as u32,
-                    row_pitch: mip.row_bytes,
-                    bytes: &sampled.pixels[mip.offset..mip.offset + mip.byte_len],
-                })
-                .collect();
-            UploadedStorage::Bc(
-                MetalBcTexture::upload(
-                    gpu.device(),
-                    BcTextureDesc {
-                        width: sampled.width,
-                        height: sampled.height,
-                        mips: sampled.mip_levels,
-                        format,
-                    },
-                    &uploads,
+            .map_err(metal_error)?,
+        )
+    } else {
+        match sampled.format {
+            TextureFormat::Rgba8Unorm => {
+                let desc =
+                    MetalRgba8TextureDesc::new(sampled.width, sampled.height, sampled.mip_levels)
+                        .map_err(metal_error)?;
+                let texture =
+                    MetalRgba8Texture::allocate(gpu.device(), desc).map_err(metal_error)?;
+                for (level, mip) in layout.levels().iter().enumerate() {
+                    texture
+                        .upload_mip(&Rgba8MipLevel::new_packed(
+                            level as u32,
+                            mip.width,
+                            mip.height,
+                            &sampled.pixels[mip.offset..mip.offset + mip.byte_len],
+                        ))
+                        .map_err(metal_error)?;
+                }
+                UploadedStorage::Rgba8(texture)
+            }
+            TextureFormat::R8Unorm => {
+                let uploads: Vec<_> = layout
+                    .levels()
+                    .iter()
+                    .enumerate()
+                    .map(|(level, mip)| R8MipUpload {
+                        level: level as u32,
+                        row_pitch: mip.row_bytes,
+                        bytes: &sampled.pixels[mip.offset..mip.offset + mip.byte_len],
+                    })
+                    .collect();
+                UploadedStorage::R8(
+                    MetalR8Texture::upload(
+                        gpu.device(),
+                        R8TextureDesc {
+                            width: sampled.width,
+                            height: sampled.height,
+                            mips: sampled.mip_levels,
+                        },
+                        &uploads,
+                    )
+                    .map_err(metal_error)?,
                 )
-                .map_err(metal_error)?,
-            )
+            }
+            format @ (TextureFormat::Bc1RgbaUnorm | TextureFormat::Bc3RgbaUnorm) => {
+                let uploads: Vec<_> = layout
+                    .levels()
+                    .iter()
+                    .enumerate()
+                    .map(|(level, mip)| BcMipUpload {
+                        level: level as u32,
+                        row_pitch: mip.row_bytes,
+                        bytes: &sampled.pixels[mip.offset..mip.offset + mip.byte_len],
+                    })
+                    .collect();
+                UploadedStorage::Bc(
+                    MetalBcTexture::upload(
+                        gpu.device(),
+                        BcTextureDesc {
+                            width: sampled.width,
+                            height: sampled.height,
+                            mips: sampled.mip_levels,
+                            format,
+                        },
+                        &uploads,
+                    )
+                    .map_err(metal_error)?,
+                )
+            }
         }
     };
     textures.push(UploadedTexture {
+        array_layers: sampled.array_layers,
         pixels: sampled.pixels.clone(),
         width: sampled.width,
         height: sampled.height,
@@ -255,7 +399,7 @@ fn upload_texture(
 pub fn install_pipeline_backend(context: &mut GraphicsContext) -> Result<(), GraphicsError> {
     let gpu = NativeCompute::new().map_err(metal_error)?;
     let capabilities = texture_capabilities(&gpu);
-    context.set_metal_uniform_attachment_backend(
+    context.set_metal_array_view_attachment_backend(
         capabilities,
         move |draws, extent, attachments, transient_clear, binding| {
             render_pipeline_request(
@@ -352,18 +496,19 @@ fn render_pipeline_request(
                 .enumerate()
                 .map(
                     |(slot, desc)| match draw.sampled_bindings.textures[slot].as_ref() {
-                        Some(snapshot) => sampled_view_desc(snapshot, *desc)
-                            .map(|desc| {
-                                upload_view(
-                                    gpu,
-                                    snapshot,
-                                    desc,
-                                    &mut texture_cache,
-                                    &mut view_cache,
-                                )
-                            })
-                            .transpose(),
-                        None if desc.is_none() => Ok(None),
+                        Some(snapshot) => upload_selected_view(
+                            gpu,
+                            snapshot,
+                            *desc,
+                            draw.sampled_bindings.array_views[slot],
+                            &mut texture_cache,
+                            &mut view_cache,
+                        ),
+                        None if desc.is_none()
+                            && draw.sampled_bindings.array_views[slot].is_none() =>
+                        {
+                            Ok(None)
+                        }
                         None => Err(GraphicsError::InvalidDescriptor),
                     },
                 )
@@ -619,7 +764,7 @@ where
     let capabilities = ready.recv().map_err(|_| {
         GraphicsError::BackendError("native worker initialization disconnected".into())
     })??;
-    context.set_metal_uniform_async_backend(capabilities, move |request| {
+    context.set_metal_array_view_async_backend(capabilities, move |request| {
         let (committed, acknowledgement) = mpsc::sync_channel(1);
         let (completed, completion) = mpsc::channel();
         worker

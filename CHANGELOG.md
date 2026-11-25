@@ -18,6 +18,12 @@ remains unsupported.
 - Extended the read-only RDNA2 planning CLI (`python3 -m qa rdna2`) with family/status filters, compact summaries, Codex-ready manifests under `artifacts/`, active-claim exclusion (family claims exclude those families; path-only claims block overlapping permitted files), coverage reconcile against `semantic_coverage` without inflating counts, and inventory diffs. Covered by `tests/qa/test_rdna2_plan.py`; planning only, no GPU production edits.
 
 ### Added
+- Read-only 2D views of selected RGBA8 array slices through guest opcode52,
+  with nested mip ranges and exact queued GPU versions. Existing view bindings
+  accept these handles; full backing ownership and whole-resource hazards remain
+  enforced. Shader array indexing and writable views remain unsupported.
+  Quick validation passes 116 checks across 33 steps, all nine repository gates
+  pass, and wrong-slice, wrong-mip and missing-wait mutations fail assertions.
 - Bounded RGBA8 array storage through guest opcode51 and explicit slice/mip copies
   through opcode50. Transfers preserve every untouched subresource and retain exact
   GPU versions; copying a slice into a 2D texture enables existing sampled views.

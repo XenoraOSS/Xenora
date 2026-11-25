@@ -1030,6 +1030,7 @@ fn submit_native(
     let mut cache = Vec::new();
     let mut view_cache = Vec::new();
     let mut produced_views: HashMap<_, xenora_metal::RenderColorView> = HashMap::new();
+    let mut produced_array_views: HashMap<_, xenora_metal::RenderColorView> = HashMap::new();
     let mut bindings = Vec::new();
     for draw in &request.draws {
         let samplers = draw
@@ -1048,8 +1049,44 @@ fn submit_native(
             .ok_or(GraphicsError::InvalidDescriptor)?
             .sampled_pairs;
         for (texture_slot, texture) in draw.textures.iter().enumerate() {
-            let Some(texture) = texture else { continue };
+            let Some(texture) = texture else {
+                if draw.array_views[texture_slot].is_some() || draw.views[texture_slot].is_some() {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                continue;
+            };
+            let array_desc = draw.array_views[texture_slot];
+            let is_array = match texture {
+                GraphicsTextureInput::Host(t) => t.array_layers.is_some(),
+                GraphicsTextureInput::ProducedArray { .. } => true,
+                _ => false,
+            };
+            if is_array != array_desc.is_some()
+                || (array_desc.is_some() && draw.views[texture_slot].is_some())
+            {
+                return Err(GraphicsError::InvalidDescriptor);
+            }
             let uploaded = match texture {
+                GraphicsTextureInput::ProducedArray {
+                    version,
+                    width,
+                    height,
+                    mip_levels,
+                    array_layers,
+                } => {
+                    if !request.waits.contains(&version.point) {
+                        return Err(GraphicsError::InvalidDescriptor);
+                    }
+                    let output = produced_output(entries, *version)?;
+                    if !output.is_array()
+                        || output.extent() != [*width, *height]
+                        || output.mip_levels() != *mip_levels
+                        || output.array_layers() != *array_layers
+                    {
+                        return Err(GraphicsError::InvalidDescriptor);
+                    }
+                    None
+                }
                 GraphicsTextureInput::Host(snapshot) => {
                     Some(upload_texture(gpu, snapshot, &mut cache)?)
                 }
@@ -1070,29 +1107,52 @@ fn submit_native(
                 }
             };
             let viewed = match texture {
-                GraphicsTextureInput::Host(snapshot) => {
-                    sampled_view_desc(snapshot, draw.views[texture_slot])
-                        .map(|desc| upload_view(gpu, snapshot, desc, &mut cache, &mut view_cache))
-                        .transpose()?
-                }
+                GraphicsTextureInput::Host(snapshot) => upload_selected_view(
+                    gpu,
+                    snapshot,
+                    draw.views[texture_slot],
+                    array_desc,
+                    &mut cache,
+                    &mut view_cache,
+                )?,
                 _ => None,
             };
-            let produced_view = match (texture, draw.views[texture_slot]) {
-                (GraphicsTextureInput::Produced { version, .. }, Some(desc)) => {
+            let produced_view =
+                if let (GraphicsTextureInput::ProducedArray { version, .. }, Some(desc)) =
+                    (texture, array_desc)
+                {
                     let key = (*version, desc);
-                    let view = match produced_views.entry(key) {
-                        std::collections::hash_map::Entry::Occupied(entry) => entry.get().clone(),
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            let view = produced_output(entries, *version)?
-                                .view(native_view_desc(desc))
-                                .map_err(metal_error)?;
-                            entry.insert(view).clone()
-                        }
+                    let view = match produced_array_views.entry(key) {
+                        std::collections::hash_map::Entry::Occupied(e) => e.get().clone(),
+                        std::collections::hash_map::Entry::Vacant(e) => e
+                            .insert(
+                                produced_output(entries, *version)?
+                                    .array_slice_view(native_array_view_desc(desc))
+                                    .map_err(metal_error)?,
+                            )
+                            .clone(),
                     };
                     Some(view)
-                }
-                _ => None,
-            };
+                } else {
+                    match (texture, draw.views[texture_slot]) {
+                        (GraphicsTextureInput::Produced { version, .. }, Some(desc)) => {
+                            let key = (*version, desc);
+                            let view = match produced_views.entry(key) {
+                                std::collections::hash_map::Entry::Occupied(entry) => {
+                                    entry.get().clone()
+                                }
+                                std::collections::hash_map::Entry::Vacant(entry) => {
+                                    let view = produced_output(entries, *version)?
+                                        .view(native_view_desc(desc))
+                                        .map_err(metal_error)?;
+                                    entry.insert(view).clone()
+                                }
+                            };
+                            Some(view)
+                        }
+                        _ => None,
+                    }
+                };
             for (sampler_slot, sampler) in samplers.iter().enumerate() {
                 if mask & (1 << (texture_slot * 2 + sampler_slot)) == 0 {
                     continue;
@@ -1112,7 +1172,10 @@ fn submit_native(
                             sampler_slot,
                         }
                     }
-                    GraphicsTextureInput::Produced { .. } if produced_view.is_some() => {
+                    GraphicsTextureInput::Produced { .. }
+                    | GraphicsTextureInput::ProducedArray { .. }
+                        if produced_view.is_some() =>
+                    {
                         QueuedSampledBinding::ProducedView {
                             view: produced_view.as_ref().unwrap().clone(),
                             sampler,
@@ -1129,6 +1192,9 @@ fn submit_native(
                         )
                         .map_err(metal_error)?,
                     ),
+                    GraphicsTextureInput::ProducedArray { .. } => {
+                        return Err(GraphicsError::InvalidDescriptor);
+                    }
                     GraphicsTextureInput::Produced { version, .. } => {
                         QueuedSampledBinding::Produced {
                             output: produced_output(entries, *version)?,
@@ -1340,7 +1406,7 @@ where
         thread: Mutex::new(Some(thread)),
     });
     let capabilities = ready.recv().map_err(|_| disconnected())??;
-    context.set_metal_array_copy_queued_backend(capabilities, move |request| {
+    context.set_metal_array_view_queued_backend(capabilities, move |request| {
         let point = match &request {
             GraphicsQueuedWorkRequest::Render(request) => request.point,
             GraphicsQueuedWorkRequest::ImageCopy(request) => request.point,

@@ -1,7 +1,7 @@
 # Local graphics checkpoint
 
 This summary records the accumulated graphics checkpoint and the subsequent
-nested-view, compute-cache, sampler-handle, guest-copy, R8 and mip/slice increments on 25 November 2026. It is not release certification or a
+nested-view, compute-cache, sampler-handle, guest-copy, R8, mip/slice and array-view increments on 25 November 2026. It is not release certification or a
 claim of Xbox hardware equivalence. Supporting raw logs, mutation records and
 source manifests remain local and are not distributed with the repository.
 
@@ -15,6 +15,50 @@ run ends with `PASS`. Quick mode also rejects filters that select no passing tes
 Use `--help` for prerequisites. These tests render offscreen and compare pixels;
 they do not open an application window. Avoid other GPU test runs at the same time.
 
+## Selected array-slice view checkpoint
+
+Guest opcode52 creates a read-only 2D view of a selected RGBA8 array slice and mip
+range. Existing view bindings and nested mip views accept these handles. Host arrays
+are uploaded as complete immutable backings; queued views retain exact GPU-produced
+versions. One-layer arrays retain their identity. Ordinary 2D APIs and older backend
+installers reject array views explicitly. Writable views, shader-selected array
+indexing and independent subresource concurrency remain unsupported.
+
+Quick validation passed **116 tests across 33 steps**, with zero failures or ignored
+tests. New coverage includes three loader tests, four native view tests, two native
+ownership/failure tests and two original guest tests. Host guest cases exercise all
+three adapters, one- and two-layer arrays and changed uploads. Queued cases exercise
+both collection orders with poisoned host bytes and exact produced versions.
+
+The native tests compare distinct literal slice/mip pixels, linear and sRGB views,
+relative LOD and parent-independent ownership. The budget test retains only a view
+after producer collection/reset and checks the complete root charge until final
+release. A controlled terminal-state injection after real GPU completion verifies
+failure propagation to descendant polling/collection; it does not simulate a native
+device fault or establish hardware-fault recovery.
+
+Three deliberate production mutations fail decisive assertions: wrong slice,
+wrong native mip level and a missing produced-view dependency. The first two fail
+literal pixel comparisons. The third observes a consumer GPU marker before producer
+release, rather than relying on a timeout. Restored source hashes match the originals.
+
+All nine repository gates passed: **884 workspace tests passed, zero failed,
+100 ignored**; the GPU suite reported **376 passed, zero failed, one manual test
+ignored**. GPU-suite totals include CPU checks and overlapping workspace coverage.
+Native ARM64 binaries and system Metal linkage were verified on Apple M4 Max with
+macOS27.2.1. The first build caught an adapter using a private error constructor;
+the fix maps native errors through the existing adapter boundary. Its failure log
+is retained separately from the passing run.
+
+Focused commands (use the Metal validation environment below):
+
+```sh
+cargo test --locked -p xenora-loader --test array_views
+cargo test --locked -p xenora-metal --features gpu-tests --test native_compute array_views:: -- --nocapture --test-threads=1
+cargo test --locked -p xenora-metal --features gpu-tests --lib native_array_view_ -- --nocapture --test-threads=1
+cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_array_views_ -- --nocapture --test-threads=1
+```
+
 ## Explicit mip and array-slice transfer checkpoint
 
 Guest opcode50 records selected RGBA8 mip/slice transfers; opcode51 creates bounded,
@@ -25,7 +69,7 @@ single-level restrictions; mip-only backends reject arrays, including slice0.
 
 Produced versions stay on the GPU and retain exact storage kind, extent, mip count
 and layer count. Copying an array slice into a 2D mip chain creates a 2D output that
-can feed existing sampled views. Array views/sampling, attachment roles, compressed
+can feed existing sampled views. At that checkpoint, array views/sampling, attachment roles, compressed
 or depth transfers, and independent subresource concurrency remain unsupported.
 Limits are 256 layers, 4096 subresources and existing complete-backing byte budgets.
 

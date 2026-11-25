@@ -484,7 +484,16 @@ pub struct GraphicsTextureViewDesc {
     pub format: GraphicsTextureViewFormat,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct GraphicsArraySliceViewDesc {
+    pub slice: u32,
+    pub base_mip: u32,
+    pub mip_count: u32,
+    pub format: GraphicsTextureViewFormat,
+}
+
 struct GraphicsTextureView {
+    slice: Option<u32>,
     backing: GraphicsHandle,
     desc: GraphicsTextureViewDesc,
 }
@@ -500,6 +509,7 @@ pub struct GraphicsSampledTexture {
 
 #[derive(Clone, Debug)]
 pub struct GraphicsTextureSnapshot {
+    pub array_layers: Option<u32>,
     pub format: TextureFormat,
     pub width: usize,
     pub height: usize,
@@ -509,6 +519,7 @@ pub struct GraphicsTextureSnapshot {
 
 #[derive(Clone, Debug, Default)]
 pub struct GraphicsSampledBindings {
+    pub array_views: [Option<GraphicsArraySliceViewDesc>; 2],
     pub views: [Option<GraphicsTextureViewDesc>; 2],
     pub textures: [Option<GraphicsTextureSnapshot>; 2],
     pub samplers: [Option<xenora_texture::SamplerDesc>; 2],
@@ -530,6 +541,7 @@ type RecordedSampledBindings = (
     [Option<GraphicsHandle>; 2],
     [Option<xenora_texture::SamplerDesc>; 2],
     [Option<GraphicsTextureViewDesc>; 2],
+    [Option<GraphicsArraySliceViewDesc>; 2],
     Option<[u32; 8]>,
 );
 
@@ -625,6 +637,13 @@ pub struct GraphicsProducedVersion {
 
 #[derive(Clone, Debug)]
 pub enum GraphicsTextureInput {
+    ProducedArray {
+        version: GraphicsProducedVersion,
+        width: usize,
+        height: usize,
+        mip_levels: u32,
+        array_layers: u32,
+    },
     Host(GraphicsTextureSnapshot),
     Produced {
         version: GraphicsProducedVersion,
@@ -678,6 +697,7 @@ impl GraphicsGeometryInput {
 
 #[derive(Clone, Debug)]
 pub struct GraphicsQueuedDraw {
+    pub array_views: [Option<GraphicsArraySliceViewDesc>; 2],
     /// Some selects GPU gather and requires empty expanded vertices/colors.
     pub geometry: Option<GraphicsGeometryInput>,
     pub uniforms: Option<[u32; 8]>,
@@ -1178,6 +1198,7 @@ pub struct GraphicsContext {
     async_backend: Option<Arc<AsyncRenderer>>,
     multislot_backend: bool,
     view_backend: bool,
+    array_view_backend: bool,
     texture_capabilities: GraphicsTextureCapabilities,
     uniform_backend: bool,
     produced_color_backend: bool,
@@ -1260,6 +1281,7 @@ impl GraphicsContext {
             async_backend: None,
             multislot_backend: false,
             view_backend: false,
+            array_view_backend: false,
             texture_capabilities: GraphicsTextureCapabilities::default(),
             uniform_backend: false,
             produced_color_backend: false,
@@ -1313,6 +1335,7 @@ impl GraphicsContext {
         self.graph_backend = false;
         self.geometry_backend = false;
         self.view_backend = false;
+        self.array_view_backend = false;
         self.backend = None;
         self.pass_backend = None;
         self.async_backend = None;
@@ -1644,7 +1667,13 @@ impl GraphicsContext {
                                 version.output,
                                 GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
                             ) || preparation.layouts.get(&handles[slot].unwrap())
-                                != Some(&if snapshot.mip_levels == 1 {
+                                != Some(&if let Some(array_layers) = snapshot.array_layers {
+                                    GraphicsProducedLayout::Rgba8Array {
+                                        extent: (snapshot.width, snapshot.height),
+                                        mip_levels: snapshot.mip_levels,
+                                        array_layers,
+                                    }
+                                } else if snapshot.mip_levels == 1 {
                                     GraphicsProducedLayout::Rgba8 {
                                         extent: (snapshot.width, snapshot.height),
                                     }
@@ -1661,11 +1690,21 @@ impl GraphicsContext {
                             {
                                 return Err(GraphicsError::InvalidDescriptor);
                             }
-                            GraphicsTextureInput::Produced {
-                                version: *version,
-                                width: snapshot.width,
-                                height: snapshot.height,
-                                mip_levels: snapshot.mip_levels,
+                            if let Some(array_layers) = snapshot.array_layers {
+                                GraphicsTextureInput::ProducedArray {
+                                    version: *version,
+                                    width: snapshot.width,
+                                    height: snapshot.height,
+                                    mip_levels: snapshot.mip_levels,
+                                    array_layers,
+                                }
+                            } else {
+                                GraphicsTextureInput::Produced {
+                                    version: *version,
+                                    width: snapshot.width,
+                                    height: snapshot.height,
+                                    mip_levels: snapshot.mip_levels,
+                                }
                             }
                         } else {
                             GraphicsTextureInput::Host(snapshot)
@@ -1676,6 +1715,7 @@ impl GraphicsContext {
             draws.push(GraphicsQueuedDraw {
                 geometry,
                 uniforms: draw.uniforms,
+                array_views: draw.sampled_bindings.array_views,
                 views: draw.sampled_bindings.views,
                 vertices: draw.vertices,
                 colors: draw.colors,
@@ -2684,6 +2724,22 @@ impl GraphicsContext {
     }
 
     /// Opt in to transfer-only arrays, preserving full backing and explicit array kind.
+    pub fn set_metal_array_view_queued_backend<F>(
+        &mut self,
+        capabilities: GraphicsTextureCapabilities,
+        renderer: F,
+    ) where
+        F: Fn(
+                GraphicsQueuedWorkRequest,
+            ) -> Result<Box<dyn GraphicsQueuedPendingWork>, GraphicsError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.set_metal_array_copy_queued_backend(capabilities, renderer);
+        self.array_view_backend = true;
+    }
+
     pub fn set_metal_array_copy_queued_backend<F>(
         &mut self,
         capabilities: GraphicsTextureCapabilities,
@@ -2887,6 +2943,26 @@ impl GraphicsContext {
             .sum()
     }
 
+    pub fn set_metal_array_view_attachment_backend<F>(
+        &mut self,
+        capabilities: GraphicsTextureCapabilities,
+        renderer: F,
+    ) where
+        F: Fn(
+                &[GraphicsDraw],
+                (usize, usize),
+                &[GraphicsColorBinding],
+                f32,
+                Option<GraphicsDepthBinding>,
+            ) -> Result<GraphicsPassOutput, GraphicsError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.set_metal_uniform_attachment_backend(capabilities, renderer);
+        self.array_view_backend = true;
+    }
+
     pub fn set_metal_uniform_attachment_backend<F>(
         &mut self,
         capabilities: GraphicsTextureCapabilities,
@@ -2905,6 +2981,22 @@ impl GraphicsContext {
     {
         self.set_metal_typed_attachment_backend(capabilities, renderer);
         self.uniform_backend = true;
+    }
+
+    pub fn set_metal_array_view_async_backend<F>(
+        &mut self,
+        capabilities: GraphicsTextureCapabilities,
+        renderer: F,
+    ) where
+        F: Fn(
+                GraphicsSubmissionRequest,
+            ) -> Result<Box<dyn GraphicsPendingSubmission>, GraphicsError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.set_metal_uniform_async_backend(capabilities, renderer);
+        self.array_view_backend = true;
     }
 
     pub fn set_metal_uniform_async_backend<F>(
@@ -3059,6 +3151,7 @@ impl GraphicsContext {
         self.graph_backend = false;
         self.geometry_backend = false;
         self.view_backend = false;
+        self.array_view_backend = false;
         self.multislot_backend = false;
         self.backend = None;
         self.pass_backend = None;
@@ -3366,6 +3459,7 @@ impl GraphicsContext {
         self.graph_backend = false;
         self.geometry_backend = false;
         self.view_backend = false;
+        self.array_view_backend = false;
         self.multislot_backend = false;
         self.async_backend = None;
         self.pass_backend = None;
@@ -3484,6 +3578,7 @@ impl GraphicsContext {
         self.graph_backend = false;
         self.geometry_backend = false;
         self.view_backend = false;
+        self.array_view_backend = false;
         self.multislot_backend = false;
         self.backend = None;
         self.async_backend = None;
@@ -3508,6 +3603,7 @@ impl GraphicsContext {
         self.graph_backend = false;
         self.geometry_backend = false;
         self.view_backend = false;
+        self.array_view_backend = false;
         self.multislot_backend = false;
         self.backend = None;
         self.async_backend = None;
@@ -3972,8 +4068,60 @@ impl GraphicsContext {
             return Err(GraphicsError::InvalidDescriptor);
         }
         let handle = self.allocate_handle();
-        self.texture_views
-            .insert(handle, GraphicsTextureView { backing, desc });
+        self.texture_views.insert(
+            handle,
+            GraphicsTextureView {
+                backing,
+                desc,
+                slice: None,
+            },
+        );
+        Ok(handle)
+    }
+
+    /// Select one explicit array slice without copying any backing bytes.
+    pub fn create_array_slice_view(
+        &mut self,
+        device: GraphicsHandle,
+        backing: GraphicsHandle,
+        desc: GraphicsArraySliceViewDesc,
+    ) -> Result<GraphicsHandle, GraphicsError> {
+        if !self.devices.contains_key(&device) {
+            return Err(GraphicsError::InvalidDeviceHandle);
+        }
+        if self.guest_object_count() >= crate::graphics_service::MAX_GUEST_OBJECTS {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        let resource = self
+            .resources
+            .get(&backing)
+            .ok_or(GraphicsError::InvalidResourceHandle)?;
+        if !resource.is_texture_array
+            || resource.texture_format != Some(TextureFormat::Rgba8Unorm)
+            || resource.guest_backing_addr.is_some()
+            || desc.format.storage_format() != TextureFormat::Rgba8Unorm
+            || desc.slice >= u32::from(resource.desc.depth_or_array_size)
+            || desc.mip_count == 0
+            || desc
+                .base_mip
+                .checked_add(desc.mip_count)
+                .is_none_or(|n| n > u32::from(resource.desc.mip_levels))
+        {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
+        let handle = self.allocate_handle();
+        self.texture_views.insert(
+            handle,
+            GraphicsTextureView {
+                backing,
+                slice: Some(desc.slice),
+                desc: GraphicsTextureViewDesc {
+                    base_mip: desc.base_mip,
+                    mip_count: desc.mip_count,
+                    format: desc.format,
+                },
+            },
+        );
         Ok(handle)
     }
 
@@ -4003,6 +4151,18 @@ impl GraphicsContext {
             .base_mip
             .checked_add(desc.base_mip)
             .ok_or(GraphicsError::InvalidDescriptor)?;
+        if let Some(slice) = parent.slice {
+            return self.create_array_slice_view(
+                device,
+                parent.backing,
+                GraphicsArraySliceViewDesc {
+                    slice,
+                    base_mip,
+                    mip_count: desc.mip_count,
+                    format: desc.format,
+                },
+            );
+        }
         // Reuse root storage-family, device, budget and complete-chain validation.
         // Allocation occurs only after every validation succeeds.
         self.create_texture_view(
@@ -5362,6 +5522,7 @@ impl GraphicsContext {
         let mut uniforms = None;
         let mut sampled_textures = [None; 2];
         let mut sampled_views = [None; 2];
+        let mut sampled_array_views = [None; 2];
         let mut sampled_samplers = [None; 2];
         let mut vertex_colors = None;
         let mut texture_snapshots = HashMap::new();
@@ -5387,16 +5548,34 @@ impl GraphicsContext {
                 GraphicsCommand::SetSampledViews { views, samplers } => {
                     sampled_textures =
                         views.map(|handle| handle.map(|h| self.texture_views[&h].backing));
-                    sampled_views = views.map(|handle| handle.map(|h| self.texture_views[&h].desc));
+                    sampled_views = views.map(|handle| {
+                        handle.and_then(|h| {
+                            let v = &self.texture_views[&h];
+                            v.slice.is_none().then_some(v.desc)
+                        })
+                    });
+                    sampled_array_views = views.map(|handle| {
+                        handle.and_then(|h| {
+                            let v = &self.texture_views[&h];
+                            v.slice.map(|slice| GraphicsArraySliceViewDesc {
+                                slice,
+                                base_mip: v.desc.base_mip,
+                                mip_count: v.desc.mip_count,
+                                format: v.desc.format,
+                            })
+                        })
+                    });
                     sampled_samplers = *samplers;
                 }
                 GraphicsCommand::SetSampledTexture { texture, sampler } => {
                     sampled_views[0] = None;
+                    sampled_array_views[0] = None;
                     sampled_textures[0] = *texture;
                     sampled_samplers[0] = texture.map(|_| *sampler);
                 }
                 GraphicsCommand::SetSampledBindings { textures, samplers } => {
                     sampled_views = [None; 2];
+                    sampled_array_views = [None; 2];
                     sampled_textures = *textures;
                     sampled_samplers = *samplers;
                 }
@@ -5680,7 +5859,13 @@ impl GraphicsContext {
                         }
                         let (pipeline, sampled, sampled_bindings) = self.draw_bindings(
                             pipeline_handle,
-                            (sampled_textures, sampled_samplers, sampled_views, uniforms),
+                            (
+                                sampled_textures,
+                                sampled_samplers,
+                                sampled_views,
+                                sampled_array_views,
+                                uniforms,
+                            ),
                             &pending_states,
                             &mut texture_snapshots,
                             color_clears.len(),
@@ -5852,7 +6037,13 @@ impl GraphicsContext {
                         }
                         let (pipeline, sampled, sampled_bindings) = self.draw_bindings(
                             pipeline_handle,
-                            (sampled_textures, sampled_samplers, sampled_views, uniforms),
+                            (
+                                sampled_textures,
+                                sampled_samplers,
+                                sampled_views,
+                                sampled_array_views,
+                                uniforms,
+                            ),
                             &pending_states,
                             &mut texture_snapshots,
                             color_clears.len(),
@@ -6233,7 +6424,10 @@ impl GraphicsContext {
         snapshots: &mut HashMap<GraphicsHandle, Arc<[u8]>>,
         outputs: usize,
     ) -> Result<DrawBindings, GraphicsError> {
-        let (textures, samplers, views, uniforms) = sampled;
+        let (textures, samplers, views, array_views, uniforms) = sampled;
+        if array_views.iter().any(Option::is_some) && !self.array_view_backend {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
         if views.iter().any(Option::is_some) && !self.view_backend {
             return Err(GraphicsError::InvalidDescriptor);
         }
@@ -6271,6 +6465,7 @@ impl GraphicsContext {
             }
         }
         let mut bindings = GraphicsSampledBindings {
+            array_views,
             views,
             samplers,
             ..Default::default()
@@ -6292,7 +6487,16 @@ impl GraphicsContext {
                 {
                     return Err(GraphicsError::ResourceLifetimeViolation);
                 }
-                let (width, height, mips) = if let Some(view) = views[slot] {
+                if texture.is_texture_array != array_views[slot].is_some() {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                let effective_view =
+                    views[slot].or(array_views[slot].map(|v| GraphicsTextureViewDesc {
+                        base_mip: v.base_mip,
+                        mip_count: v.mip_count,
+                        format: v.format,
+                    }));
+                let (width, height, mips) = if let Some(view) = effective_view {
                     (
                         (texture.desc.width as usize >> view.base_mip).max(1),
                         (texture.desc.height as usize >> view.base_mip).max(1),
@@ -6321,6 +6525,9 @@ impl GraphicsContext {
                     .or_insert_with(|| Arc::from(texture.data.as_slice()))
                     .clone();
                 bindings.textures[slot] = Some(GraphicsTextureSnapshot {
+                    array_layers: texture
+                        .is_texture_array
+                        .then_some(u32::from(texture.desc.depth_or_array_size)),
                     format,
                     width: texture.desc.width as usize,
                     height: texture.desc.height as usize,
@@ -6331,6 +6538,7 @@ impl GraphicsContext {
         }
         let sampled = if pairs == 1
             && views[0].is_none()
+            && array_views[0].is_none()
             && bindings.textures[0]
                 .as_ref()
                 .is_some_and(|t| t.format == TextureFormat::Rgba8Unorm)

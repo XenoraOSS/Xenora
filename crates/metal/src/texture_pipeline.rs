@@ -15,7 +15,9 @@ use objc2_metal::{
     MTLDevice, MTLOrigin, MTLPixelFormat, MTLRegion, MTLResource, MTLResourceOptions, MTLSize,
     MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage,
 };
-use xenora_texture::{PackedTextureLayout, SamplerError, TextureFormat, TextureMetadata};
+use xenora_texture::{
+    PackedTextureArrayLayout, PackedTextureLayout, SamplerError, TextureFormat, TextureMetadata,
+};
 
 use crate::MetalError;
 use crate::sampler::MetalSampler;
@@ -125,6 +127,14 @@ pub struct TextureViewDesc {
     pub mip_count: u32,
     pub format: TextureViewFormat,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ArraySliceViewDesc {
+    pub slice: u32,
+    pub base_mip: u32,
+    pub mip_count: u32,
+    pub format: TextureViewFormat,
+}
+
 /// Immutable native shared-storage view. No upload, raw texture or public
 /// conversion to the upload-capable whole-texture binding is available.
 /// The owner of the original uploaded texture must still serialize its uploads.
@@ -145,10 +155,14 @@ pub struct TextureViewDesc {
 /// ```
 #[derive(Clone, Debug)]
 pub struct MetalTextureView {
+    slice: Option<u32>,
     texture: NativeSampledTexture,
     desc: TextureViewDesc,
 }
 impl MetalTextureView {
+    pub fn slice(&self) -> Option<u32> {
+        self.slice
+    }
     pub fn desc(&self) -> TextureViewDesc {
         self.desc
     }
@@ -217,6 +231,41 @@ impl NativeSampledTexture {
         std::ptr::eq(self.raw(), other.raw())
     }
     fn view(&self, desc: TextureViewDesc) -> Result<MetalTextureView, MetalError> {
+        if self.texture.textureType() == MTLTextureType::Type2DArray {
+            return Err(MetalError::new(
+                "texture view",
+                "array requires selected slice",
+            ));
+        }
+        self.view_internal(desc, None)
+    }
+    fn array_slice_view(&self, desc: ArraySliceViewDesc) -> Result<MetalTextureView, MetalError> {
+        if self.texture.textureType() != MTLTextureType::Type2DArray
+            || desc.slice as usize >= self.texture.arrayLength()
+            || !matches!(
+                desc.format,
+                TextureViewFormat::Rgba8Unorm | TextureViewFormat::Rgba8UnormSrgb
+            )
+        {
+            return Err(MetalError::new(
+                "array view",
+                "invalid array slice or format",
+            ));
+        }
+        self.view_internal(
+            TextureViewDesc {
+                base_mip: desc.base_mip,
+                mip_count: desc.mip_count,
+                format: desc.format,
+            },
+            Some(desc.slice),
+        )
+    }
+    fn view_internal(
+        &self,
+        desc: TextureViewDesc,
+        slice: Option<u32>,
+    ) -> Result<MetalTextureView, MetalError> {
         let end = desc
             .base_mip
             .checked_add(desc.mip_count)
@@ -254,7 +303,7 @@ impl NativeSampledTexture {
                 ));
             }
         };
-        // SAFETY: Checked nonempty mip range and slice zero; only same-family
+        // SAFETY: Checked nonempty mip range and selected root slice; only same-family
         // linear/sRGB casts are accepted. These do not require PixelFormatView.
         let texture = unsafe {
             self.texture
@@ -262,11 +311,12 @@ impl NativeSampledTexture {
                     pixel_format,
                     MTLTextureType::Type2D,
                     NSRange::new(desc.base_mip as usize, desc.mip_count as usize),
-                    NSRange::new(0, 1),
+                    NSRange::new(slice.unwrap_or(0) as usize, 1),
                 )
         }
         .ok_or_else(|| MetalError::new("texture view", "native view creation failed"))?;
         Ok(MetalTextureView {
+            slice,
             texture: Self {
                 texture,
                 _parent: Some(self.texture.clone()),
@@ -636,6 +686,167 @@ impl MetalR8Texture {
                 },
                 desc,
             })
+        })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rgba8ArrayTextureDesc {
+    pub width: usize,
+    pub height: usize,
+    pub mips: u32,
+    pub array_layers: u32,
+}
+#[derive(Clone, Copy, Debug)]
+pub struct Rgba8ArrayMipUpload<'a> {
+    pub slice: u32,
+    pub level: u32,
+    pub row_pitch: usize,
+    pub bytes: &'a [u8],
+}
+/// Fully initialized immutable array. Changed bytes require a new owner.
+#[derive(Clone, Debug)]
+pub struct MetalRgba8ArrayTexture {
+    texture: NativeSampledTexture,
+    desc: Rgba8ArrayTextureDesc,
+}
+impl MetalRgba8ArrayTexture {
+    pub fn desc(&self) -> Rgba8ArrayTextureDesc {
+        self.desc
+    }
+    pub fn array_slice_view(
+        &self,
+        desc: ArraySliceViewDesc,
+    ) -> Result<MetalTextureView, MetalError> {
+        self.texture.array_slice_view(desc)
+    }
+    pub(crate) fn from_render_output(
+        texture: Retained<ProtocolObject<dyn MTLTexture>>,
+        desc: Rgba8ArrayTextureDesc,
+    ) -> Result<Self, MetalError> {
+        if texture.textureType() != MTLTextureType::Type2DArray
+            || texture.pixelFormat() != MTLPixelFormat::RGBA8Unorm
+            || texture.width() != desc.width
+            || texture.height() != desc.height
+            || texture.mipmapLevelCount() != desc.mips as usize
+            || texture.arrayLength() != desc.array_layers as usize
+        {
+            return Err(MetalError::new("array view", "native backing mismatch"));
+        }
+        Ok(Self {
+            texture: NativeSampledTexture {
+                texture,
+                _parent: None,
+                width: desc.width,
+                height: desc.height,
+                mips: desc.mips,
+                format: TextureFormat::Rgba8Unorm,
+            },
+            desc,
+        })
+    }
+    pub fn upload(
+        device: &ProtocolObject<dyn MTLDevice>,
+        desc: Rgba8ArrayTextureDesc,
+        uploads: &[Rgba8ArrayMipUpload<'_>],
+    ) -> Result<Self, MetalError> {
+        if desc.width > MAX_TEXTURE_DIMENSION
+            || desc.height > MAX_TEXTURE_DIMENSION
+            || desc.array_layers == 0
+            || desc.array_layers > 256
+            || desc
+                .mips
+                .checked_mul(desc.array_layers)
+                .is_none_or(|n| n > 4096)
+        {
+            return Err(MetalError::new(
+                "array upload",
+                "dimension/subresource limit",
+            ));
+        }
+        let layout = PackedTextureArrayLayout::new(
+            TextureFormat::Rgba8Unorm,
+            desc.width,
+            desc.height,
+            desc.mips,
+            desc.array_layers,
+        )
+        .map_err(|_| MetalError::new("array upload", "invalid layout"))?;
+        let count = desc.mips as usize * desc.array_layers as usize;
+        if layout.byte_len() > 64 * 1024 * 1024 || uploads.len() != count {
+            return Err(MetalError::new(
+                "array upload",
+                "byte or subresource count mismatch",
+            ));
+        }
+        let mut seen = vec![false; count];
+        let mut total = 0usize;
+        for upload in uploads {
+            let mip = layout
+                .footprint(upload.slice, upload.level)
+                .map_err(|_| MetalError::new("array upload", "invalid subresource"))?;
+            let index = upload.slice as usize * desc.mips as usize + upload.level as usize;
+            if seen[index]
+                || upload.row_pitch < mip.row_bytes
+                || !upload.row_pitch.is_multiple_of(4)
+                || upload.row_pitch >= i32::MAX as usize * 4
+                || upload.row_pitch.checked_mul(mip.height) != Some(upload.bytes.len())
+            {
+                return Err(MetalError::new(
+                    "array upload",
+                    "duplicate or invalid pitch/span",
+                ));
+            }
+            seen[index] = true;
+            total = total
+                .checked_add(upload.bytes.len())
+                .filter(|n| *n <= 64 * 1024 * 1024)
+                .ok_or_else(|| MetalError::new("array upload", "padded upload budget"))?;
+        }
+        autoreleasepool(|_| {
+            // SAFETY: Full dimensions and mip/layer counts validated before allocation.
+            let descriptor = unsafe {
+                MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+                    MTLPixelFormat::RGBA8Unorm,
+                    desc.width,
+                    desc.height,
+                    desc.mips > 1,
+                )
+            };
+            descriptor.setTextureType(MTLTextureType::Type2DArray);
+            unsafe {
+                descriptor.setMipmapLevelCount(desc.mips as usize);
+                descriptor.setArrayLength(desc.array_layers as usize);
+            }
+            descriptor.setStorageMode(MTLStorageMode::Shared);
+            descriptor.setUsage(MTLTextureUsage::ShaderRead);
+            let texture = device
+                .newTextureWithDescriptor(&descriptor)
+                .ok_or_else(|| MetalError::new("array upload", "allocation failed"))?;
+            for upload in uploads {
+                let mip = layout
+                    .footprint(upload.slice, upload.level)
+                    .expect("prevalidated subresource");
+                // SAFETY: Every initialized row span validated; fresh texture has no GPU users.
+                unsafe {
+                    texture.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(
+                        MTLRegion {
+                            origin: MTLOrigin { x: 0, y: 0, z: 0 },
+                            size: MTLSize {
+                                width: mip.width,
+                                height: mip.height,
+                                depth: 1,
+                            },
+                        },
+                        upload.level as usize,
+                        upload.slice as usize,
+                        NonNull::from(upload.bytes).cast(),
+                        if mip.height == 1 { 0 } else { upload.row_pitch },
+                        0,
+                    );
+                }
+            }
+            Self::from_render_output(texture, desc)
         })
     }
 }

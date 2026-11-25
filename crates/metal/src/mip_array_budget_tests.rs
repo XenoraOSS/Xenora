@@ -140,3 +140,121 @@ fn native_mip_array_both_produced_leases_survive_pruned_edges() {
         assert_eq!(budget.get(), 0);
     }
 }
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn native_array_view_only_owner_retains_full_root_after_collection_reset() {
+    let gpu = NativeCompute::new().unwrap();
+    let mut c = gpu.new_render_graph_cohort().unwrap();
+    let budget = c.color_bytes.clone();
+    let source = [17; 144];
+    let prior = [89; 144];
+    let point = submit(&mut c, true, host(&source, true), host(&prior, true)).unwrap();
+    let RenderCopyOutput::Color(output) = c.copy_output(&point).unwrap() else {
+        panic!("array")
+    };
+    let view = output
+        .array_slice_view(crate::ArraySliceViewDesc {
+            slice: 1,
+            base_mip: 2,
+            mip_count: 1,
+            format: crate::TextureViewFormat::Rgba8Unorm,
+        })
+        .unwrap();
+    c.collect_copy(&point).unwrap();
+    assert!(point.inner.dependencies.borrow().is_empty());
+    drop(output);
+    drop(point);
+    c.reinitialize().unwrap();
+    assert_eq!(view.extent(), [1, 1]);
+    assert_eq!(view.slice(), Some(1));
+    assert_eq!(
+        budget.get(),
+        576,
+        "one selected texel must not shrink the retained full-root/point lease"
+    );
+    let filler = ColorLease::reserve(&budget, MAX_COLOR_VERSION_BYTES - 576).unwrap();
+    assert!(ColorLease::reserve(&budget, 1).is_err());
+    drop(filler);
+    drop(view);
+    assert_eq!(budget.get(), 0);
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn native_array_view_controlled_failed_producer_suppresses_completed_descendant() {
+    // Controlled terminal-state injection after real commands finish, not a GPU fault.
+    struct Release(Retained<ProtocolObject<dyn MTLSharedEvent>>);
+    impl Drop for Release {
+        fn drop(&mut self) {
+            self.0.setSignaledValue(1);
+        }
+    }
+    let gpu = NativeCompute::new().unwrap();
+    let mut c = gpu.new_render_graph_cohort().unwrap();
+    let release = Release(gpu.device().newSharedEvent().unwrap());
+    let command = c.queue(RenderQueue::First).commandBuffer().unwrap();
+    command.encodeWaitForEvent_value(ProtocolObject::from_ref(&*release.0), 1);
+    command.commit();
+    let source = [17; 144];
+    let prior = [89; 144];
+    let point = submit(&mut c, true, host(&source, true), host(&prior, true)).unwrap();
+    let RenderCopyOutput::Color(output) = c.copy_output(&point).unwrap() else {
+        panic!("array")
+    };
+    let view = output
+        .array_slice_view(crate::ArraySliceViewDesc {
+            slice: 1,
+            base_mip: 2,
+            mip_count: 1,
+            format: crate::TextureViewFormat::Rgba8Unorm,
+        })
+        .unwrap();
+    let sampler =
+        crate::MetalSampler::new(gpu.device(), xenora_texture::SamplerDesc::nearest_clamp())
+            .unwrap();
+    let shader = "#include <metal_stdlib>\nusing namespace metal;struct V{float4 p [[position]];};vertex V vs(uint i [[vertex_id]],device const float4*p [[buffer(0)]]){return {p[i]};}fragment float4 ps(V v [[stage_in]],texture2d<float>t [[texture(0)]],sampler s [[sampler(0)]]){return t.sample(s,float2(.5));}";
+    let positions = [[-1., -1., 0., 1.], [3., -1., 0., 1.], [-1., 3., 0., 1.]];
+    let child = c
+        .submit_with_attachments(
+            RenderQueue::Second,
+            &[crate::TriangleShader {
+                source: shader,
+                entries: ["vs", "ps"],
+            }],
+            &crate::TriangleTargetsPass {
+                draws: &[crate::TriangleDraw {
+                    vertices: &positions,
+                    colors: &[[0.; 4]; 3],
+                    viewport: [1, 1],
+                }],
+                states: &[crate::TriangleState::default()],
+                extent: [1, 1],
+                clears: &[[0; 4]],
+                clear_depth: None,
+            },
+            &[vec![crate::QueuedSampledBinding::ProducedView {
+                view,
+                sampler,
+                texture_slot: crate::BindingSlot::new(0),
+                sampler_slot: crate::BindingSlot::new(0),
+            }]],
+            None,
+            &[crate::QueuedColorLoad::Clear],
+            &[],
+            &[crate::DrawUniforms::default()],
+        )
+        .unwrap();
+    drop(release);
+    point.inner.command.waitUntilCompleted();
+    child.inner.command.waitUntilCompleted();
+    point.inner.terminal.set(Some(false));
+    let polled = c.is_complete(&child);
+    let collected = c.collect(&child);
+    assert!(
+        collected.is_err(),
+        "completed GPU work cannot publish a rejected ancestor"
+    );
+    assert!(polled.is_err());
+    c.abort_and_drain("controlled producer rejection").unwrap();
+}

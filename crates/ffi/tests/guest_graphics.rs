@@ -5418,3 +5418,291 @@ fn guest_array_transfer_pair(direction: u8) {
         }
     }
 }
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_array_views_slices_nested_mips_snapshots_and_retirement() {
+    for layers in [1u64, 2] {
+        for (asynchronous, queued) in [(false, false), (true, false), (true, true)] {
+            let mut guest = GuestScript::new();
+            let device = guest.handle(1, &[]);
+            let queue = guest.handle(2, &[H(device)]);
+            let allocator = guest.handle(3, &[H(device)]);
+            let list = guest.handle(4, &[H(device), H(allocator)]);
+            let texture = guest.handle(51, &[H(device), I(5), I(3), I(3), I(layers), I(COPY_DEST)]);
+            // Opcode45 order matches37: device,parent,relative base,count,format.
+            // An sRGB parent does not silently override its linear child's format.
+            let parent = guest.handle(
+                52,
+                &[H(device), H(texture), I(layers - 1), I(1), I(2), I(1)],
+            );
+            let first_slice = guest.handle(52, &[H(device), H(texture), I(0), I(1), I(1), I(0)]);
+            let linear = guest.handle(45, &[H(device), H(parent), I(0), I(2), I(0)]);
+            let srgb = guest.handle(45, &[H(device), H(parent), I(0), I(2), I(1)]);
+            let last = guest.handle(45, &[H(device), H(linear), I(1), I(1), I(0)]);
+            let last_srgb = guest.handle(45, &[H(device), H(srgb), I(1), I(1), I(1)]);
+            guest.ok(38, &[H(parent)]);
+            guest.call(26, &[H(texture)], 2, Some(u64::MAX));
+            let target = guest.handle(6, &[H(device), I(8), I(2), I(1), I(RENDER_TARGET)]);
+            let vb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+            let cb = guest.handle(5, &[H(device), I(96), I(COPY_DEST)]);
+            let p = guest.bytes(&floats(&[
+                [-1., -1., 0., 1.],
+                [3., -1., 0., 1.],
+                [-1., 3., 0., 1.],
+            ]));
+            let uv = guest.bytes(&floats(&[
+                [0.25, 0.25, 0., 1.],
+                [0.25, 0.25, 0., 1.],
+                [0.25, 0.25, 0., 1.],
+                [0.75, 0.75, 0., 1.],
+                [0.75, 0.75, 0., 1.],
+                [0.75, 0.75, 0., 1.],
+            ]));
+            guest.ok(9, &[H(vb), I(0), I(p), I(48)]);
+            guest.ok(9, &[H(cb), I(0), I(uv), I(96)]);
+            let pipeline = guest_nested_view_pipeline(&mut guest, device);
+            let mut readbacks = Vec::new();
+            for frame in 0..2 {
+                let (top, decoded, bottom, tail, tail_decoded) = if frame == 0 {
+                    (
+                        [128u8, 64, 192, 128],
+                        [55, 13, 134, 128],
+                        [16, 32, 48, 96],
+                        [64, 128, 32, 192],
+                        [13, 55, 4, 192],
+                    )
+                } else {
+                    (
+                        [64, 128, 32, 192],
+                        [13, 55, 4, 192],
+                        [80, 160, 240, 32],
+                        [128, 64, 192, 128],
+                        [55, 13, 134, 128],
+                    )
+                };
+                // Selected slice: mip0 decoy; mip1 two distinct pixels; mip2 tail.
+                let mut bytes = Vec::new();
+                if layers == 2 {
+                    bytes.extend([7u8, 17, 27, 255].repeat(18));
+                }
+                bytes.extend([201u8, 9, 21, 255].repeat(15));
+                bytes.extend(top);
+                bytes.extend(bottom);
+                bytes.extend(tail);
+                let upload = guest.bytes(&bytes);
+                guest.ok(9, &[H(texture), I(0), I(upload), I(72 * layers)]);
+                guest.barrier(list, texture, COPY_DEST, PIXEL_RESOURCE);
+                if frame == 0 {
+                    guest.barrier(list, vb, COPY_DEST, VERTEX_BUFFER);
+                    guest.barrier(list, cb, COPY_DEST, VERTEX_BUFFER);
+                } else {
+                    guest.barrier(list, target, COPY_SOURCE, RENDER_TARGET);
+                }
+                guest.targets(list, &[target]);
+                guest.ok(17, &[H(list), I(8), I(2)]);
+                guest.ok(14, &[H(list), H(pipeline)]);
+                guest.ok(18, &[H(list), H(vb), I(0), I(16)]);
+                for (column, (view, mip)) in [
+                    (linear, 0),
+                    (srgb, 0),
+                    (linear, 1),
+                    (last, 0),
+                    (linear, 0),
+                    (last_srgb, 0),
+                    (srgb, 1),
+                    (first_slice, 0),
+                ]
+                .into_iter()
+                .enumerate()
+                {
+                    guest.ok(
+                        19,
+                        &[H(list), H(cb), I(if column == 4 { 48 } else { 0 }), I(16)],
+                    );
+                    let table =
+                        sampled_table(&mut guest, [Some(view), None], [Some(mip), None], false);
+                    guest.ok(39, &[H(list), I(table)]);
+                    guest.ok(
+                        22,
+                        &[
+                            H(list),
+                            I(0),
+                            I(0),
+                            I(0),
+                            I(15),
+                            I(0),
+                            I(0),
+                            I(1),
+                            I(column as u64),
+                            I(0),
+                            I(1),
+                            I(2),
+                        ],
+                    );
+                    guest.ok(23, &[H(list), I(3), I(1), I(0), I(0)]);
+                }
+                guest.barrier(list, texture, PIXEL_RESOURCE, COPY_DEST);
+                guest.barrier(list, target, RENDER_TARGET, COPY_SOURCE);
+                if asynchronous && frame == 1 {
+                    guest.ok(12, &[H(list)]);
+                    let receipt = guest.handle(30, &[H(queue), H(list)]);
+                    guest.ok(11, &[H(list), H(allocator)]);
+                    for view in [linear, srgb, last, last_srgb, first_slice] {
+                        guest.ok(38, &[H(view)]);
+                    }
+                    for resource in [texture, vb, cb] {
+                        guest.ok(26, &[H(resource)]);
+                    }
+                    guest.ok(27, &[H(pipeline)]);
+                    guest.call(32, &[H(receipt)], 0, Some(1));
+                    guest.ok(33, &[H(receipt)]);
+                } else {
+                    finish_guest_submission(&mut guest, queue, list, asynchronous, 8);
+                    guest.ok(11, &[H(list), H(allocator)]);
+                    if frame == 1 {
+                        for view in [linear, srgb, last, last_srgb, first_slice] {
+                            guest.ok(38, &[H(view)]);
+                        }
+                        guest.ok(26, &[H(texture)]);
+                    }
+                }
+                let expected = [
+                    top,
+                    decoded,
+                    tail,
+                    tail,
+                    bottom,
+                    tail_decoded,
+                    tail_decoded,
+                    if layers == 2 { [7, 17, 27, 255] } else { top },
+                ]
+                .as_flattened()
+                .repeat(2);
+                let output = guest.bytes(&[0xa5; 80]);
+                guest.ok(10, &[H(target), I(0), I(output + 8), I(64)]);
+                readbacks.push((output, expected));
+            }
+            let final_pixels = readbacks.last().unwrap().1.clone();
+            check_original_guest_backend(guest, asynchronous, queued, &readbacks, 2, &final_pixels);
+        }
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_array_views_pending_copy_sample_and_retirement() {
+    for producer_first in [false, true] {
+        let mut guest = GuestScript::new();
+        let device = guest.handle(1, &[]);
+        let queues = [guest.handle(2, &[H(device)]), guest.handle(2, &[H(device)])];
+        let allocators = [guest.handle(3, &[H(device)]), guest.handle(3, &[H(device)])];
+        let lists = [
+            guest.handle(4, &[H(device), H(allocators[0])]),
+            guest.handle(4, &[H(device), H(allocators[1])]),
+        ];
+        let root = guest.handle(51, &[H(device), I(5), I(3), I(3), I(2), I(COPY_DEST)]);
+        let source = guest.handle(5, &[H(device), I(8), I(COPY_DEST)]);
+        let poison = guest.bytes(&[0xee; 144]);
+        guest.ok(9, &[H(root), I(0), I(poison), I(144)]);
+        let bytes = guest.bytes(&[17, 53, 127, 193, 29, 71, 131, 197]);
+        guest.ok(9, &[H(source), I(0), I(bytes), I(8)]);
+        let parent = guest.handle(52, &[H(device), H(root), I(1), I(0), I(3), I(0)]);
+        let view = guest.handle(45, &[H(device), H(parent), I(1), I(1), I(0)]);
+        guest.ok(38, &[H(parent)]);
+        guest.barrier(lists[0], source, COPY_DEST, COPY_SOURCE);
+        guest.ok(
+            50,
+            &[
+                H(lists[0]),
+                H(root),
+                I(0),
+                I((1u64 << 32) | 1),
+                I(0),
+                I(0),
+                H(source),
+                I(1),
+                I(0),
+                I(0),
+                I(8),
+                I(2),
+                I(1),
+            ],
+        );
+        guest.barrier(lists[0], root, COPY_DEST, PIXEL_RESOURCE);
+        guest.ok(12, &[H(lists[0])]);
+        let target = guest.handle(6, &[H(device), I(2), I(1), I(1), I(RENDER_TARGET)]);
+        let vb = guest.handle(5, &[H(device), I(48), I(COPY_DEST)]);
+        let cb = guest.handle(5, &[H(device), I(96), I(COPY_DEST)]);
+        let pos = guest.bytes(&floats(&[
+            [-1., -1., 0., 1.],
+            [3., -1., 0., 1.],
+            [-1., 3., 0., 1.],
+        ]));
+        guest.ok(9, &[H(vb), I(0), I(pos), I(48)]);
+        let uv = guest.bytes(&floats(&[
+            [0.25, 0.5, 0., 1.],
+            [0.25, 0.5, 0., 1.],
+            [0.25, 0.5, 0., 1.],
+            [0.75, 0.5, 0., 1.],
+            [0.75, 0.5, 0., 1.],
+            [0.75, 0.5, 0., 1.],
+        ]));
+        guest.ok(9, &[H(cb), I(0), I(uv), I(96)]);
+        let pipeline = guest_nested_view_pipeline(&mut guest, device);
+        guest.barrier(lists[1], vb, COPY_DEST, VERTEX_BUFFER);
+        guest.barrier(lists[1], cb, COPY_DEST, VERTEX_BUFFER);
+        guest.targets(lists[1], &[target]);
+        guest.ok(17, &[H(lists[1]), I(2), I(1)]);
+        guest.ok(14, &[H(lists[1]), H(pipeline)]);
+        guest.ok(18, &[H(lists[1]), H(vb), I(0), I(16)]);
+        let table = sampled_table(&mut guest, [Some(view), None], [Some(0), None], false);
+        guest.ok(39, &[H(lists[1]), I(table)]);
+        for x in 0..2 {
+            guest.ok(19, &[H(lists[1]), H(cb), I(x * 48), I(16)]);
+            guest.ok(
+                22,
+                &[
+                    H(lists[1]),
+                    I(0),
+                    I(0),
+                    I(0),
+                    I(15),
+                    I(0),
+                    I(0),
+                    I(1),
+                    I(x),
+                    I(0),
+                    I(1),
+                    I(1),
+                ],
+            );
+            guest.ok(23, &[H(lists[1]), I(3), I(1), I(0), I(0)]);
+        }
+        guest.barrier(lists[1], target, RENDER_TARGET, COPY_SOURCE);
+        guest.ok(12, &[H(lists[1])]);
+        let a = guest.handle(35, &[H(queues[0]), H(lists[0]), I(0), I(0)]);
+        let point = guest.call(36, &[H(a)], 0, Some(1));
+        let wait = guest.bytes(&[0; 16]);
+        guest.copy_result(queues[0], wait);
+        guest.copy_result(point, wait + 8);
+        let b = guest.handle(35, &[H(queues[1]), H(lists[1]), I(wait), I(1)]);
+        for i in 0..2 {
+            guest.ok(11, &[H(lists[i]), H(allocators[i])]);
+        }
+        guest.ok(38, &[H(view)]);
+        for r in [root, source, vb, cb] {
+            guest.ok(26, &[H(r)]);
+        }
+        guest.ok(27, &[H(pipeline)]);
+        for receipt in if producer_first { [a, b] } else { [b, a] } {
+            guest.call(32, &[H(receipt)], 0, Some(1));
+        }
+        guest.ok(33, &[H(a)]);
+        guest.ok(33, &[H(b)]);
+        let out = guest.bytes(&[0xa5; 24]);
+        guest.ok(10, &[H(target), I(0), I(out + 8), I(8)]);
+        let expected = vec![17, 53, 127, 193, 29, 71, 131, 197];
+        check_original_guest_backend(guest, true, true, &[(out, expected.clone())], 1, &expected);
+    }
+}

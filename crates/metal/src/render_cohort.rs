@@ -124,6 +124,9 @@ pub struct RenderColorView {
     view: crate::MetalTextureView,
 }
 impl RenderColorView {
+    pub fn slice(&self) -> Option<u32> {
+        self.view.slice()
+    }
     pub fn desc(&self) -> crate::TextureViewDesc {
         self.view.desc()
     }
@@ -135,6 +138,28 @@ impl RenderColorView {
     }
 }
 impl RenderColorOutput {
+    pub fn array_slice_view(
+        &self,
+        desc: crate::ArraySliceViewDesc,
+    ) -> Result<RenderColorView, MetalError> {
+        if !self.is_array() || self.point.inner.generation.poisoned.get() {
+            return Err(error("invalid array view backing"));
+        }
+        let owner = crate::MetalRgba8ArrayTexture::from_render_output(
+            self.texture.clone(),
+            crate::Rgba8ArrayTextureDesc {
+                width: self.extent[0],
+                height: self.extent[1],
+                mips: self.mip_levels(),
+                array_layers: self.array_layers(),
+            },
+        )?;
+        Ok(RenderColorView {
+            output: self.clone(),
+            view: owner.array_slice_view(desc)?,
+        })
+    }
+
     pub fn is_array(&self) -> bool {
         self.texture.textureType() == MTLTextureType::Type2DArray
     }

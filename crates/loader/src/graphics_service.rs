@@ -108,7 +108,7 @@ pub fn graphics_call_v1(
         5 | 7 | 15 | 17 | 29 | 41 | 42 => 3,
         9 | 10 | 13 | 16 | 18 | 19 | 20 | 35 | 46 | 49 => 4,
         6 | 8 | 21 | 23 | 37 | 45 => 5,
-        24 | 40 | 43 | 51 => 6,
+        24 | 40 | 43 | 51 | 52 => 6,
         44 => 11,
         50 => 13,
         22 => 12,
@@ -126,7 +126,8 @@ pub fn graphics_call_v1(
         || opcode == 45
         || opcode == 46
         || opcode == 49
-        || opcode == 51)
+        || opcode == 51
+        || opcode == 52)
         && graphics.guest_object_count() >= MAX_GUEST_OBJECTS
     {
         return Ok(STATUS_GRAPHICS_ERROR);
@@ -330,6 +331,25 @@ pub fn graphics_call_v1(
                 } else {
                     graphics.cmd_set_sampled_bindings(args.handle(0), textures, samplers)?;
                 }
+            }
+            52 => {
+                let format = match args.0[5] {
+                    0 => GraphicsTextureViewFormat::Rgba8Unorm,
+                    1 => GraphicsTextureViewFormat::Rgba8UnormSrgb,
+                    _ => return Err(GraphicsError::InvalidDescriptor),
+                };
+                value = graphics
+                    .create_array_slice_view(
+                        args.handle(0),
+                        args.handle(1),
+                        GraphicsArraySliceViewDesc {
+                            slice: args.u32(2)?,
+                            base_mip: args.u32(3)?,
+                            mip_count: args.u32(4)?,
+                            format,
+                        },
+                    )?
+                    .to_u64();
             }
             51 => {
                 value = graphics
