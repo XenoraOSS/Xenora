@@ -1,4 +1,4 @@
-# Xenora engineering rules
+# BetterXen engineering rules
 
 ### Native Apple Silicon
 
@@ -7,7 +7,7 @@ Never introduce Rosetta 2, x86-64 host executables, MoltenVK, Vulkan runtime dep
 - SPIR-V is permitted as a compiler intermediate representation. It does not justify a Vulkan runtime.
 - All host executables and native dependencies must support ARM64. Verify with file, lipo -archs and otool -L.
 - Never run Intel binaries through Rosetta, even temporarily. Never add a dependency that requires Rosetta to build or run. If a dependency cannot run natively, find an alternative or document the limitation.
-- The guest architecture being decoded may be x86-64, but Xenora itself runs natively on ARM64.
+- The guest architecture being decoded may be x86-64, but BetterXen itself runs natively on ARM64.
 - Support M1 through M5 and future generations through runtime capability detection. Do not assume all Apple GPUs share capabilities.
 - Use aarch64-apple-darwin as the Rust target.
 
@@ -20,7 +20,7 @@ Never introduce Rosetta 2, x86-64 host executables, MoltenVK, Vulkan runtime dep
 - Never replace GPU tests with mocks and then claim GPU support.
 - Unknown information is classified as unknown and becomes a documented research task.
 - Every hardware claim carries an evidence class (section 9). Never present a lower-class claim as if it were a higher-class one.
-- Never claim "verified on Xbox hardware". Xenora has no Xbox hardware access. Agreement with a spec-derived reference is not agreement with Xbox hardware, and docs must say so.
+- Never claim "verified on Xbox hardware". BetterXen has no Xbox hardware access. Agreement with a spec-derived reference is not agreement with Xbox hardware, and docs must say so.
 - Do not hide errors behind fallbacks. Do not translate unsupported instructions into silent no-ops. Do not weaken or delete tests to make them pass. Do not change mutation counting, tolerances or gate definitions to improve a score.
 
 ### Independence of verification
@@ -32,9 +32,9 @@ Never introduce Rosetta 2, x86-64 host executables, MoltenVK, Vulkan runtime dep
 
 - Use only publicly accessible documentation and authorized materials. Never obtain or use leaked SDKs, confidential Xbox documentation, restricted console tools, firmware, encryption keys, or proprietary game binaries and shader collections. Do not attempt to bypass documentation access restrictions.
 - Contributors who have seen leaked or confidential Xbox materials must not contribute. State this in CONTRIBUTING.md and require a DCO sign-off (Signed-off-by) on contributions.
-- Include a plain statement in docs/legal.md: Xenora does not circumvent console security or DRM, does not load encrypted or protected content, and is a research project built from public documentation. Add a note that this is not legal advice and that contributors should know their local laws, including anti-circumvention provisions such as DMCA section 1201.
+- Include a plain statement in docs/legal.md: BetterXen does not circumvent console security or DRM, does not load encrypted or protected content, and is a research project built from public documentation. Add a note that this is not legal advice and that contributors should know their local laws, including anti-circumvention provisions such as DMCA section 1201.
 - Before copying or adapting any upstream code: verify the exact license of that file (not just the repo), check GPL-3.0-or-later compatibility, preserve copyright notices, record source repository and exact commit, document modifications, include required attribution. Never remove upstream copyright notices. If licensing is uncertain, stop using that code until resolved.
-- Keep Xenora's emulator implementation original. Never copy, port, translate or adapt emulator source from Leonida, KyTx, AnyPS5 or similar projects.
+- Keep BetterXen's emulator implementation original. Never copy, port, translate or adapt emulator source from Leonida, KyTx, AnyPS5 or similar projects.
 - Validate the technical compatibility and safety of user-provided files. Do not ask for ownership receipts, accounts or acquisition provenance as part of file loading. Contributor provenance and licensing obligations still apply.
 - Never place restricted material in the repository or its Git history.
 - Do not push, publish, or change remote visibility without explicit user authorization. Prepare locally and report readiness.

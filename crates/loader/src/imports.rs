@@ -219,6 +219,9 @@ pub(crate) struct GuestCallback {
     pub(crate) entry: u64,
     pub(crate) context: u64,
     pub(crate) cancelled: bool,
+    /// Optional host continuation after the guest callback returns. Used by
+    /// queued `XAsyncRun` so work can update status and schedule completion.
+    pub(crate) task: Option<Arc<Mutex<Box<dyn CallbackTask>>>>,
 }
 
 type CallbackDispatch = Box<
@@ -781,7 +784,7 @@ impl ImportRegistry {
                     CallbackFrame {
                         resume: ret_addr,
                         preserved,
-                        task: None,
+                        task: callback.task,
                         after,
                     },
                 );

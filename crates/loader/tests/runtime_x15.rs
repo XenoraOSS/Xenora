@@ -1087,6 +1087,8 @@ fn test_guest_crt_wide_strings_use_16_bit_units() {
     let slot = PROCESS_FIXTURE_OUTPUT;
     for module in ["ucrtbase.dll", "api-ms-win-crt-string-l1-1-0.dll"] {
         for (symbol, args, expected) in [
+            ("wcsspn", [slot, slot + 6, 0], 4),
+            ("wcscspn", [slot, slot + 8, 0], 4),
             ("wcslen", [slot, 0, 0], 4),
             ("wcsnlen", [slot, 3, 0], 3),
             ("wcsnlen", [slot, 7, 0], 4),
@@ -1100,6 +1102,18 @@ fn test_guest_crt_wide_strings_use_16_bit_units() {
                 expected
             );
         }
+        for (set, expected) in [(slot + 6, slot), (slot + 8, 0)] {
+            let result = call_service_fixture(&state, module, "wcspbrk", &[slot, set]);
+            assert_eq!(result.execution.final_state.get(Register::Rax), expected);
+        }
+        for (haystack, needle, expected) in [
+            (slot, slot + 2, slot),
+            (slot, slot + 8, slot),
+            (slot + 8, slot, 0),
+        ] {
+            let result = call_service_fixture(&state, module, "wcsstr", &[haystack, needle]);
+            assert_eq!(result.execution.final_state.get(Register::Rax), expected);
+        }
     }
 }
 
@@ -1109,6 +1123,18 @@ fn test_guest_crt_string_length_through_iat() {
     for module in ["ucrtbase.dll", "api-ms-win-crt-string-l1-1-0.dll"] {
         // The fixture seeds the output slot with eight 0xff bytes followed by zeroed stack bytes.
         for (symbol, address, bound, expected) in [
+            (
+                "strpbrk",
+                PROCESS_FIXTURE_OUTPUT,
+                PROCESS_FIXTURE_OUTPUT + 7,
+                PROCESS_FIXTURE_OUTPUT,
+            ),
+            (
+                "strpbrk",
+                PROCESS_FIXTURE_OUTPUT,
+                PROCESS_FIXTURE_OUTPUT + 8,
+                0,
+            ),
             ("strlen", PROCESS_FIXTURE_OUTPUT, 0, 8),
             ("strlen", PROCESS_FIXTURE_OUTPUT + 8, 0, 0),
             ("strnlen", PROCESS_FIXTURE_OUTPUT, 3, 3),
@@ -1619,8 +1645,22 @@ fn test_guest_synthetic_file_io_through_iat() {
                     access
                 },
             ),
-            ([0x49, 0xb8], 0),
-            ([0x49, 0xb9], 0),
+            (
+                [0x49, 0xb8],
+                if symbol == "GetTempFileNameW" {
+                    disposition
+                } else {
+                    0
+                },
+            ),
+            (
+                [0x49, 0xb9],
+                match (symbol, access) {
+                    ("GetTempFileNameW", 0) => PROCESS_FIXTURE_OUTPUT,
+                    ("GetTempFileNameW", address) => address,
+                    _ => 0,
+                },
+            ),
         ] {
             code.extend_from_slice(&register);
             code.extend_from_slice(&value.to_le_bytes());
@@ -1633,13 +1673,31 @@ fn test_guest_synthetic_file_io_through_iat() {
         append_import_call(&mut code, 0x2060);
         code.extend_from_slice(&[0x48, 0x83, 0xc4, 0x48, 0xf4]);
         code.resize(0x80, 0);
-        code.extend(name.encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
+        if matches!(
+            symbol,
+            "SetCurrentDirectoryA" | "GetFileAttributesA" | "CreateFileA"
+        ) {
+            code.extend_from_slice(name.as_bytes());
+            code.push(0);
+        } else {
+            code.extend(name.encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
+        }
         if let Some(target) = target {
             code.resize(0x180, 0);
             code.extend(target.encode_utf16().chain([0]).flat_map(u16::to_le_bytes));
         }
         let bytes = TestPeBuilder::new(IMAGE, 0x1000)
-            .add_import(MODULE, symbol)
+            .add_import(
+                if matches!(
+                    symbol,
+                    "SetCurrentDirectoryA" | "SetCurrentDirectoryW" | "SetEnvironmentVariableW"
+                ) {
+                    "kernel32.dll"
+                } else {
+                    MODULE
+                },
+                symbol,
+            )
             .code(&code)
             .build();
         let mut imports = ImportRegistry::new();
@@ -1669,11 +1727,119 @@ fn test_guest_synthetic_file_io_through_iat() {
     let namespace = |symbol, path| path_call(symbol, path, 0, 0, None);
     let call = |symbol, args: &[u64]| call_service_fixture(&state, "kernel32.dll", symbol, args);
     let output = PROCESS_FIXTURE_OUTPUT;
+    let temp = call("GetTempPathA", &[4, output]);
+    assert_eq!(temp.execution.final_state.get(Register::Rax), 3);
+    assert_eq!(
+        temp.image.memory.read_u32(output).unwrap().to_le_bytes(),
+        *b"C:\\\0"
+    );
+    let short = call("GetTempPathW", &[3, output]);
+    assert_eq!(short.execution.final_state.get(Register::Rax), 4);
+    assert_eq!(short.image.memory.read_u64(output).unwrap(), u64::MAX);
+    assert_eq!(
+        path_call("SetEnvironmentVariableW", "TEMP", 0, 0, Some("C:/work")),
+        1
+    );
+    assert_eq!(
+        path_call("SetEnvironmentVariableW", "TMP", 0, 0, Some("C:/scratch")),
+        1
+    );
+    let temp = call_service_fixture(&state, MODULE, "GetTempPathW", &[12, output]);
+    assert_eq!(temp.execution.final_state.get(Register::Rax), 11);
+    assert_eq!(
+        (0..12)
+            .map(|i| temp.image.memory.read_u16(output + i * 2).unwrap())
+            .collect::<Vec<_>>(),
+        "C:\\scratch\\"
+            .encode_utf16()
+            .chain([0])
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(namespace("CreateDirectoryW", "C:/work"), 1);
+    assert_eq!(namespace("SetCurrentDirectoryW", "C:/work"), 1);
+    let temp_file =
+        |directory, unique| path_result("GetTempFileNameW", directory, 0, unique, Some("prefix"));
+    let explicit = temp_file("C:/work", 0x1_002a);
+    assert_eq!(explicit.execution.final_state.get(Register::Rax), 0x1_002a);
+    let read_name = |result: &xenora_loader::startup::StartupResult| {
+        let units: Vec<_> = (0..64)
+            .map(|i| result.image.memory.read_u16(output + i * 2).unwrap())
+            .take_while(|&unit| unit != 0)
+            .collect();
+        String::from_utf16(&units).unwrap()
+    };
+    let suggested = read_name(&explicit);
+    assert_eq!(suggested, r"C:\work\pre002A.TMP");
+    assert_eq!(open(&suggested, 0x8000_0000, 3), u64::MAX);
+
+    let rejected = path_result("GetTempFileNameW", ".", 1, 0, Some("prefix"));
+    assert_eq!(rejected.execution.final_state.get(Register::Rax), 0);
+    for (number, expected) in [(1, r"C:\work\pre0001.TMP"), (2, r"C:\work\pre0002.TMP")] {
+        let created = temp_file(".", 0);
+        assert_eq!(created.execution.final_state.get(Register::Rax), number);
+        assert_eq!(read_name(&created), expected);
+        let handle = open(expected, 0x8000_0000, 3);
+        assert_ne!(handle, u64::MAX);
+        let size = call("GetFileSizeEx", &[handle, output]);
+        assert_eq!(size.execution.final_state.get(Register::Rax), 1);
+        assert_eq!(size.image.memory.read_u64(output).unwrap(), 0);
+        call("CloseHandle", &[handle]);
+    }
+    for expected in [r"C:\work\pre0001.TMP", r"C:\work\pre0002.TMP"] {
+        assert_eq!(namespace("DeleteFileW", expected), 1);
+    }
+    let narrow = call("GetCurrentDirectoryA", &[8, output]);
+    assert_eq!(narrow.execution.final_state.get(Register::Rax), 7);
+    assert_eq!(
+        narrow.image.memory.read_u64(output).unwrap().to_le_bytes(),
+        *b"C:\\work\0"
+    );
+    assert_eq!(
+        call("GetCurrentDirectoryW", &[0, 0])
+            .execution
+            .final_state
+            .get(Register::Rax),
+        8
+    );
+    let cwd = call("GetCurrentDirectoryW", &[8, output]);
+    assert_eq!(cwd.execution.final_state.get(Register::Rax), 7);
+    assert_eq!(
+        (0..8)
+            .map(|i| cwd.image.memory.read_u16(output + i * 2).unwrap())
+            .collect::<Vec<_>>(),
+        "C:\\work".encode_utf16().chain([0]).collect::<Vec<_>>()
+    );
+    assert_eq!(namespace("GetFileAttributesA", "C:/WORK"), 0x10);
+    assert_eq!(namespace("RemoveDirectoryW", "C:/work"), 0);
+    let relative = path_call("CreateFileA", "relative.dat", 0x4000_0000, 2, None);
+    assert_ne!(relative, u64::MAX);
+    call("CloseHandle", &[relative]);
+    assert_eq!(
+        namespace("GetFileAttributesW", "C:/work/relative.dat"),
+        0x80
+    );
+    assert_eq!(namespace("SetCurrentDirectoryA", "C:/"), 1);
+    assert_eq!(namespace("DeleteFileW", "C:/work/relative.dat"), 1);
+    assert_eq!(namespace("RemoveDirectoryW", "C:/work"), 1);
     assert_eq!(open("C:/../outside", 0x4000_0000, 2), u64::MAX);
     let writer = open("C:/Sample.dat", 0x4000_0000, 2);
     assert_ne!(writer, u64::MAX);
     assert_eq!(open("sample.dat", 0x8000_0000, 3), u64::MAX);
+    assert_eq!(
+        call("GetFileType", &[writer])
+            .execution
+            .final_state
+            .get(Register::Rax),
+        1
+    );
     let wrote = call("WriteFile", &[writer, output, 4, output + 8, 0]);
+    assert_eq!(
+        call("FlushFileBuffers", &[writer])
+            .execution
+            .final_state
+            .get(Register::Rax),
+        1
+    );
     assert_eq!(wrote.execution.final_state.get(Register::Rax), 1);
     assert_eq!(wrote.image.memory.read_u32(output + 8).unwrap(), 4);
     assert_eq!(
@@ -2167,14 +2333,14 @@ fn test_guest_crt_long_conversions_through_iat() {
         .unwrap();
         assert_eq!(result.bound_imports, 2);
         assert_eq!(result.execution.exit_reason, ExitReason::Halt);
+        let end = result
+            .image
+            .memory
+            .read_u64(PROCESS_FIXTURE_OUTPUT)
+            .unwrap();
         (
             result.execution.final_state.get(Register::Rbx),
-            result
-                .image
-                .memory
-                .read_u64(PROCESS_FIXTURE_OUTPUT)
-                .unwrap()
-                - INPUT,
+            end.saturating_sub(INPUT),
             result
                 .image
                 .memory
@@ -2230,6 +2396,21 @@ fn test_guest_crt_long_conversions_through_iat() {
     for symbol in ["wcstoll", "wcstoull", "_wcstoi64", "_wcstoui64"] {
         assert_eq!(run(symbol, &wide, 10), (4_294_967_296, 20, 0));
     }
+    // atoi family: fixed base 10 and no end pointer. Reuse the IAT fixture but
+    // only check the returned integer (the end slot is not written).
+    let atoi = |symbol, input: &[u8]| run(symbol, input, 10).0;
+    assert_eq!(atoi("atoi", b" -42x\0"), u64::from((-42i32) as u32));
+    assert_eq!(atoi("atol", b"2147483647\0"), i32::MAX as u64);
+    assert_eq!(atoi("atoll", b"9223372036854775807\0"), i64::MAX as u64);
+    assert_eq!(atoi("_atoi64", b"-9223372036854775808\0"), i64::MIN as u64);
+    let wide = " -7"
+        .encode_utf16()
+        .chain([0])
+        .flat_map(u16::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(atoi("_wtoi", &wide), u64::from((-7i32) as u32));
+    assert_eq!(atoi("_wtol", &wide), u64::from((-7i32) as u32));
+    assert_eq!(atoi("_wtoi64", &wide), (-7i64) as u64);
 }
 
 #[test]
@@ -2620,4 +2801,135 @@ fn test_virtual_allocation_release_through_iat() {
         let (_, value, error) = run(args, None);
         assert_eq!((value, error), (0, expected_error));
     }
+}
+
+#[test]
+fn guest_xasync_run_completes_on_the_calling_thread() {
+    const IMAGE: u64 = 0x140000000;
+    const MODULE: &str = "xgameruntime.dll";
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    let block = PROCESS_FIXTURE_STACK_TOP - 0x400;
+    let mut code = vec![0x48, 0x83, 0xec, 0x48];
+    // Zero the XAsyncBlock and point its completion callback at IMAGE+0x1110.
+    code.extend_from_slice(&[0x48, 0xb8]);
+    code.extend_from_slice(&block.to_le_bytes());
+    code.extend_from_slice(&[0x48, 0x31, 0xc9, 0x48, 0x89, 0x08, 0x48, 0x89, 0x48, 0x08]);
+    code.extend_from_slice(&[0x48, 0xb9]);
+    code.extend_from_slice(&(IMAGE + 0x1110).to_le_bytes());
+    code.extend_from_slice(&[0x48, 0x89, 0x48, 0x10]);
+    code.extend_from_slice(&[0x48, 0x89, 0x48, 0x18, 0x48, 0x89, 0x48, 0x20]);
+    code.extend_from_slice(&[0x48, 0x89, 0x48, 0x28, 0x48, 0x89, 0x48, 0x30]);
+    // XAsyncRun(block, work=IMAGE+0x1100)
+    code.extend_from_slice(&[0x48, 0x89, 0xc1]); // rcx = block
+    code.extend_from_slice(&[0x48, 0xba]);
+    code.extend_from_slice(&(IMAGE + 0x1100).to_le_bytes());
+    append_import_call(&mut code, 0x2060);
+    code.extend_from_slice(&[0x48, 0x89, 0xc3]); // rbx = XAsyncRun result
+    code.extend_from_slice(&[0x48, 0x89, 0xc8, 0x48, 0x31, 0xd2]); // rcx=block, rdx=0
+    append_import_call(&mut code, 0x21a0); // XAsyncGetStatus
+    code.extend_from_slice(&[0x48, 0x83, 0xc4, 0x48, 0xf4]);
+    code.resize(0x100, 0);
+    // work: return 0x2222_0001
+    code.extend_from_slice(&[0xb8, 0x01, 0x00, 0x22, 0x22, 0xc3]);
+    code.resize(0x110, 0);
+    // completion: mark internal[0] = 0xA5
+    code.extend_from_slice(&[0xc6, 0x41, 0x18, 0xa5, 0xc3]);
+    let image = TestPeBuilder::new(IMAGE, 0x1000)
+        .add_import(MODULE, "XAsyncRun")
+        .add_import(MODULE, "XAsyncGetStatus")
+        .code(&code)
+        .build();
+    let mut registry = ImportRegistry::new();
+    register_standard_services(&mut registry, Arc::clone(&state));
+    let result = run_synthetic_startup(
+        &image,
+        StartupLayout {
+            image_base: IMAGE,
+            stack_top: PROCESS_FIXTURE_STACK_TOP,
+            tls_base: 0x300000000,
+        },
+        registry,
+        200,
+    )
+    .unwrap();
+    assert_eq!(result.execution.exit_reason, ExitReason::Halt);
+    assert_eq!(result.execution.final_state.get(Register::Rbx), 0); // XAsyncRun S_OK
+    assert_eq!(result.execution.final_state.get(Register::Rax), 0x2222_0001);
+    assert_eq!(result.image.memory.read_u8(block + 0x18).unwrap(), 0xa5);
+}
+
+#[test]
+fn guest_xasync_run_schedules_work_and_completion_on_a_manual_queue() {
+    const IMAGE: u64 = 0x140000000;
+    const MODULE: &str = "xgameruntime.dll";
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    let call = |symbol, args: &[u64]| call_service_fixture(&state, MODULE, symbol, args);
+    let output = PROCESS_FIXTURE_STACK_TOP - 0x480;
+    let block = PROCESS_FIXTURE_STACK_TOP - 0x400;
+    let created = call("XTaskQueueCreate", &[0, 0, output]);
+    let queue = created.image.memory.read_u64(output).unwrap();
+
+    let mut code = vec![0x48, 0x83, 0xec, 0x48];
+    // XAsyncBlock: queue at +0, completion at +0x10, rest zeroed.
+    code.extend_from_slice(&[0x48, 0xb8]);
+    code.extend_from_slice(&block.to_le_bytes());
+    code.extend_from_slice(&[0x48, 0x31, 0xc9, 0x48, 0x89, 0x08, 0x48, 0x89, 0x48, 0x08]);
+    code.extend_from_slice(&[0x48, 0x89, 0x48, 0x10, 0x48, 0x89, 0x48, 0x18]);
+    code.extend_from_slice(&[
+        0x48, 0x89, 0x48, 0x20, 0x48, 0x89, 0x48, 0x28, 0x48, 0x89, 0x48, 0x30,
+    ]);
+    code.extend_from_slice(&[0x48, 0xb9]);
+    code.extend_from_slice(&queue.to_le_bytes());
+    code.extend_from_slice(&[0x48, 0x89, 0x08]); // block.queue = queue
+    code.extend_from_slice(&[0x48, 0xb9]);
+    code.extend_from_slice(&(IMAGE + 0x1110).to_le_bytes());
+    code.extend_from_slice(&[0x48, 0x89, 0x48, 0x10]); // block.callback
+    // XAsyncRun(block, work) — returns before work runs.
+    code.extend_from_slice(&[0x48, 0x89, 0xc1]);
+    code.extend_from_slice(&[0x48, 0xba]);
+    code.extend_from_slice(&(IMAGE + 0x1100).to_le_bytes());
+    append_import_call(&mut code, 0x2060);
+    code.extend_from_slice(&[0x48, 0x89, 0xc3]); // rbx = XAsyncRun result
+    // Dispatch work port, then completion port.
+    code.extend_from_slice(&[0x48, 0xb9]);
+    code.extend_from_slice(&queue.to_le_bytes());
+    code.extend_from_slice(&[0x31, 0xd2, 0x45, 0x31, 0xc0]); // port 0, timeout 0
+    append_import_call(&mut code, 0x21a0); // XTaskQueueDispatch
+    code.extend_from_slice(&[0x48, 0xb9]);
+    code.extend_from_slice(&queue.to_le_bytes());
+    code.extend_from_slice(&[0xba, 0x01, 0x00, 0x00, 0x00, 0x45, 0x31, 0xc0]); // port 1
+    append_import_call(&mut code, 0x21a0);
+    code.extend_from_slice(&[0x48, 0x83, 0xc4, 0x48, 0xf4]);
+    code.resize(0x100, 0);
+    code.extend_from_slice(&[0xb8, 0x01, 0x00, 0x22, 0x22, 0xc3]); // work
+    code.resize(0x110, 0);
+    code.extend_from_slice(&[0xc6, 0x41, 0x18, 0xa5, 0xc3]); // completion
+    let image = TestPeBuilder::new(IMAGE, 0x1000)
+        .add_import(MODULE, "XAsyncRun")
+        .add_import(MODULE, "XTaskQueueDispatch")
+        .code(&code)
+        .build();
+    let mut registry = ImportRegistry::new();
+    register_standard_services(&mut registry, Arc::clone(&state));
+    let result = run_synthetic_startup(
+        &image,
+        StartupLayout {
+            image_base: IMAGE,
+            stack_top: PROCESS_FIXTURE_STACK_TOP,
+            tls_base: 0x300000000,
+        },
+        registry,
+        400,
+    )
+    .unwrap();
+    assert_eq!(result.execution.exit_reason, ExitReason::Halt);
+    assert_eq!(result.execution.final_state.get(Register::Rbx), 0); // XAsyncRun S_OK
+    assert_eq!(result.image.memory.read_u8(block + 0x18).unwrap(), 0xa5);
+    assert_eq!(
+        call("XAsyncGetStatus", &[block, 0])
+            .execution
+            .final_state
+            .get(Register::Rax),
+        0x2222_0001
+    );
 }

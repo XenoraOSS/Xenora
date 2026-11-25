@@ -1,23 +1,25 @@
-# Xenora
+# BetterXen
+
+BetterXen is an independent continuation copied from [XenoraOSS/Xenora](https://github.com/XenoraOSS/Xenora). The original Git history, licenses and contributor attribution are retained. See the [migration notes](docs/migration.md) for imported issue and pull-request history.
 
 **Experimental Xbox Series X|S emulation research for Apple Silicon Macs.**
 
-Xenora is an open-source project written primarily in Rust that builds and verifies a native, bounded execution environment on Apple Silicon: an independent x86-64 guest path, original PE32+ loading, AMD RDNA 2 shader translation, and a native Apple Metal graphics backend.
+BetterXen is an open-source project written primarily in Rust that builds and verifies a native, bounded execution environment on Apple Silicon: an independent x86-64 guest path, original PE32+ loading, AMD RDNA 2 shader translation, and a native Apple Metal graphics backend.
 
 **No Wine. No CrossOver. No Rosetta. No Vulkan runtime.**
 
-Xenora is still experimental. Verified work is restricted to independently authored synthetic programs and shaders; authentic Xbox executable loading, system-service compatibility and commercial game execution remain unsupported. See the [current limitations](#current-limitations).
+BetterXen is still experimental. Verified work is restricted to independently authored synthetic programs and shaders; authentic Xbox executable loading, system-service compatibility and commercial game execution remain unsupported. See the [current limitations](#current-limitations).
 
 > [!CAUTION]
-> **Xenora strictly opposes piracy.** Xenora is an independent, clean-room, general-purpose emulation research project that neither distributes copyrighted game files nor supports unauthorized content, DRM circumvention, or leaked materials. Use only legally obtained software. Xenora is not affiliated with Microsoft or any other publisher or platform holder.
+> **BetterXen strictly opposes piracy.** BetterXen is an independent, clean-room, general-purpose emulation research project that neither distributes copyrighted game files nor supports unauthorized content, DRM circumvention, or leaked materials. Use only legally obtained software. BetterXen is not affiliated with Microsoft or any other publisher or platform holder.
 
-[![Native Rust checks](https://github.com/ranveersoni98/Xenora/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ranveersoni98/Xenora/actions/workflows/ci.yml)
+[![Native Rust checks](https://github.com/MacosPorters/betterxen/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MacosPorters/betterxen/actions/workflows/ci.yml)
 
 ---
 
 ## What works today?
 
-Xenora has progressed from executing individual x86-64 instructions to running original PE32+ guest programs that interact with translated GPU workloads on Apple Silicon.
+BetterXen has progressed from executing individual x86-64 instructions to running original PE32+ guest programs that interact with translated GPU workloads on Apple Silicon.
 
 The latest verified milestones include **translated gfx1030 vertex and pixel shaders executing through native Apple Metal**, the native Metal **blend pass** (`NativeCompute::render_blend`) and **indexed triangle draws** (`NativeCompute::render_indexed`) into offscreen targets, with rendered pixels compared against independently calculated reference results.
 
@@ -57,7 +59,7 @@ All existing verification refers to independently authored synthetic programs an
 
 ## Native graphics translation
 
-Xenora's graphics pipeline translates a supported subset of AMD RDNA 2 instructions into Metal Shading Language.
+BetterXen's graphics pipeline translates a supported subset of AMD RDNA 2 instructions into Metal Shading Language.
 
 The translation process is:
 
@@ -164,7 +166,7 @@ The resource system remains experimental. Native GPU work already in flight duri
 
 ## Texture support
 
-Xenora includes original texture upload, readback and block-compression paths.
+BetterXen includes original texture upload, readback and block-compression paths.
 
 Implemented and tested functionality includes:
 
@@ -183,7 +185,7 @@ Xbox-specific texture layouts and additional compression formats require further
 
 ## Architecture
 
-Xenora is organized around three connected subsystems: guest execution, shader translation and native GPU execution.
+BetterXen is organized around three connected subsystems: guest execution, shader translation and native GPU execution.
 
 ```mermaid
 flowchart TD
@@ -230,7 +232,7 @@ flowchart TD
     end
 ```
 
-Xenora's host execution environment is native ARM64. The guest architecture being interpreted is x86-64.
+BetterXen's host execution environment is native ARM64. The guest architecture being interpreted is x86-64.
 
 The native graphics pipeline runs translated vertex and pixel stages, the indexed-draw and blend passes and the depth pass into offscreen Metal targets, with GPU readback compared against independent CPU references.
 
@@ -242,7 +244,7 @@ See [Interface Contracts](docs/interfaces.md) for the documented execution and r
 
 ## Current limitations
 
-Xenora is an engineering research project, not a working commercial-game emulator.
+BetterXen is an engineering research project, not a working commercial-game emulator.
 
 The following remain unsupported or incomplete:
 
@@ -257,13 +259,13 @@ The following remain unsupported or incomplete:
 | Performance | Production-scale workloads, CPU/GPU profiling and optimized execution |
 | Game compatibility | No demonstrated execution of commercial Xbox titles |
 
-Xenora's current shader fixtures target a bounded subset of desktop gfx1030 behavior. This is not equivalent to complete Xbox Series GPU compatibility.
+BetterXen's current shader fixtures target a bounded subset of desktop gfx1030 behavior. This is not equivalent to complete Xbox Series GPU compatibility.
 
 Progress is measured by reproducible tests rather than estimated game compatibility percentages.
 
 ---
 
-## Building Xenora
+## Building BetterXen
 
 ### Requirements
 
@@ -278,15 +280,15 @@ The recorded Apple M5 environment uses Rust 1.100.0 and Xcode 27.2.
 ### Clone
 
 ```sh
-git clone https://github.com/ranveersoni98/Xenora.git
-cd Xenora
+git clone https://github.com/MacosPorters/betterxen.git
+cd betterxen
 ```
 
 ### Build
 
 ```sh
 scripts/bootstrap.sh
-cargo build --locked -p xenora
+cargo build --locked -p betterxen
 ```
 
 ### Run core tests
@@ -361,14 +363,14 @@ See the [roadmap table](#development-milestones) for proposed milestones, and th
 
 ### Contributors
 
-[![Contributors](https://contrib.rocks/image?repo=ranveersoni98/Xenora)](https://github.com/ranveersoni98/Xenora/graphs/contributors)
+[![Contributors](https://contrib.rocks/image?repo=MacosPorters/betterxen)](https://github.com/MacosPorters/betterxen/graphs/contributors)
 
 ## License
 
-Xenora is licensed under the [GNU General Public License v3 or later](LICENSE).
+BetterXen is licensed under the [GNU General Public License v3 or later](LICENSE).
 
 See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party attribution and [docs/legal.md](docs/legal.md) for the project's research and legal boundaries.
 
-Xenora is an independent open-source project and is not affiliated with Microsoft, Xbox, Rockstar Games or Apple.
+BetterXen is an independent open-source project and is not affiliated with Microsoft, Xbox, Rockstar Games or Apple.
 
 ---

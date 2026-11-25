@@ -9,5 +9,5 @@ export MTL_SHADER_VALIDATION_REPORT_TO_STDERR=1
 export MTL_SHADER_VALIDATION_ABORT_ON_FAULT=1
 export CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS:-4}
 
-cargo build --locked -p xenora
-exec timeout 30s cargo run --locked -p xenora -- demo
+cargo build --locked -p betterxen
+exec timeout 30s cargo run --locked -p betterxen -- demo

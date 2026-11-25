@@ -88,6 +88,13 @@ impl SymbolDb {
         entries
     }
 
+    /// Add or replace one classification, for a project-specific module the
+    /// built-in database does not describe. `module` is matched
+    /// case-insensitively, like [`SymbolDb::get`].
+    pub fn insert(&mut self, module: &str, symbol: &str, classification: Classification) {
+        self.ins(module, symbol, classification);
+    }
+
     /// Build the built-in database.  Every entry here is derived exclusively from
     /// public Microsoft documentation and ISO/POSIX standards.
     pub fn builtin() -> Self {
@@ -111,6 +118,7 @@ impl SymbolDb {
         db.populate_win32_profile();
         db.populate_win32_sysinfo();
         db.populate_win32_file();
+        db.populate_registered_services();
         db.populate_unsupported();
         db
     }
@@ -215,60 +223,37 @@ impl SymbolDb {
         for module in [m, "ucrtbase.dll"] {
             for symbol in [
                 "strlen", "strnlen", "strcmp", "strncmp", "wcslen", "wcsnlen", "wcscmp", "wcsncmp",
-                "memset", "memcpy", "memmove", "memcmp",
+                "memset", "memcpy", "memmove", "memcmp", "memchr", "strcpy", "strncpy", "strcat",
+                "strncat", "strstr", "wcsstr", "strspn", "strcspn", "strtok", "strtok_s",
+                "strpbrk", "wcsspn", "wcscspn", "wcspbrk", "wcstok", "wcstok_s", "wcscpy",
+                "wcsncpy", "wcscat", "wcschr", "wcsrchr", "isalnum", "isalpha", "isdigit",
+                "islower", "isspace", "isxdigit", "isupper", "isprint", "iscntrl", "ispunct",
+                "tolower", "toupper",
             ] {
                 self.ins(module, symbol, Classification::StandardService);
             }
         }
-        for (sym, libc) in &[
-            ("isalnum", "isalnum"),
-            ("isalpha", "isalpha"),
-            ("isdigit", "isdigit"),
-            ("islower", "islower"),
-            ("isspace", "isspace"),
-            ("isxdigit", "isxdigit"),
-            ("isupper", "isupper"),
-            ("isprint", "isprint"),
-            ("iscntrl", "iscntrl"),
-            ("ispunct", "ispunct"),
-            ("tolower", "tolower"),
-            ("toupper", "toupper"),
-            ("memchr", "memchr"),
-            ("strcat", "strcat"),
-            ("strcpy", "strcpy"),
-            ("strcspn", "strcspn"),
-            ("strncat", "strncat"),
-            ("strncpy", "strncpy"),
-            ("strpbrk", "strpbrk"),
-            ("strspn", "strspn"),
-            ("strstr", "strstr"),
-            ("strtok", "strtok"),
-            ("wcscat", "wcscat"),
-            ("wcscpy", "wcscpy"),
-            ("wcsncpy", "wcsncpy"),
-            ("wcsstr", "wcsstr"),
-            ("wcstok", "wcstok"),
-            ("wcsspn", "wcsspn"),
-            ("wcscspn", "wcscspn"),
-            ("wcsrchr", "wcsrchr"),
-            ("wcschr", "wcschr"),
-            ("wcsicmp", "wcscasecmp"),
-        ] {
-            self.crt_native(m, sym, libc, "ISO C / POSIX — identical ABI on macOS");
-        }
-        // Safe-CRT variants — wrappers that ignore the buffer size (safe on our sandbox)
-        for sym in &[
-            "strcat_s",
-            "strcpy_s",
-            "strncpy_s",
-            "strncat_s",
-            "wcscpy_s",
-            "wcscat_s",
-        ] {
-            self.ins(m, sym, Classification::CrtWrapper {
-                libc_sym: &sym[..sym.len() - 2], // drop _s
-                wrapper_note: "Safe-CRT: delegates to libc equivalent, ignoring buffer-size arg",
-            });
+        self.crt_native(
+            m,
+            "wcsicmp",
+            "wcscasecmp",
+            "Legacy wide comparison candidate",
+        );
+        // Bounds-checked copies are runtime services: mapping them to the
+        // unchecked libc functions would drop the size check they exist for.
+        for module in [m, "ucrtbase.dll"] {
+            for symbol in [
+                "strcat_s",
+                "strcpy_s",
+                "strncpy_s",
+                "strncat_s",
+                "wcscpy_s",
+                "wcscat_s",
+                "wcsncpy_s",
+                "wcsncat_s",
+            ] {
+                self.ins(module, symbol, Classification::StandardService);
+            }
         }
         self.win32_stub(
             m,
@@ -296,34 +281,43 @@ impl SymbolDb {
 
     fn populate_crt_stdio(&mut self) {
         let m = "api-ms-win-crt-stdio-l1-1-0.dll";
+        for module in [m, "ucrtbase.dll"] {
+            for symbol in [
+                "sprintf",
+                "snprintf",
+                "fopen",
+                "fclose",
+                "fread",
+                "fwrite",
+                "fseek",
+                "ftell",
+                "feof",
+                "ferror",
+                "rewind",
+                "__acrt_iob_func",
+                "fprintf",
+                "printf",
+                "fputc",
+                "putc",
+                "puts",
+                "fgetc",
+                "getc",
+                "ungetc",
+            ] {
+                self.ins(module, symbol, Classification::StandardService);
+            }
+        }
         for (sym, libc) in &[
-            ("fclose", "fclose"),
             ("fflush", "fflush"),
-            ("fgetc", "fgetc"),
             ("fgetpos", "fgetpos"),
-            ("fopen", "fopen"),
-            ("fputc", "fputc"),
             ("fputs", "fputs"),
-            ("fread", "fread"),
-            ("fseek", "fseek"),
             ("fsetpos", "fsetpos"),
-            ("ftell", "ftell"),
-            ("fwrite", "fwrite"),
-            ("getc", "getc"),
-            ("putc", "putc"),
-            ("puts", "puts"),
-            ("rewind", "rewind"),
             ("remove", "remove"),
             ("rename", "rename"),
             ("setvbuf", "setvbuf"),
-            ("ungetc", "ungetc"),
             ("vsprintf", "vsprintf"),
             ("vsnprintf", "vsnprintf"),
             ("vfprintf", "vfprintf"),
-            ("sprintf", "sprintf"),
-            ("snprintf", "snprintf"),
-            ("fprintf", "fprintf"),
-            ("printf", "printf"),
             ("sscanf", "sscanf"),
             ("fscanf", "fscanf"),
             ("scanf", "scanf"),
@@ -342,7 +336,6 @@ impl SymbolDb {
             "__stdio_common_vswprintf_s",
             "__stdio_common_vswscanf",
             "__stdio_common_vsnwprintf_s",
-            "__acrt_iob_func",
         ] {
             self.win32_stub(
                 m,
@@ -390,7 +383,11 @@ impl SymbolDb {
             self.crt_native(m, sym, libc, "ISO C runtime — identical ABI on macOS");
         }
         for module in [m, "ucrtbase.dll"] {
-            for symbol in ["_errno", "_get_errno", "_set_errno"] {
+            for symbol in ["_errno", "_get_errno", "_set_errno", "getenv"] {
+                self.ins(module, symbol, Classification::StandardService);
+            }
+            // Abnormal termination ends the guest process, never the host.
+            for symbol in ["terminate", "_purecall"] {
                 self.ins(module, symbol, Classification::StandardService);
             }
         }
@@ -421,7 +418,6 @@ impl SymbolDb {
             false,
             "CRT invalid param abort",
         );
-        self.win32_stub(m, "_purecall", false, "pure virtual call trap");
         // Initializer and exit functions are guest code.
         for module in [m, "ucrtbase.dll"] {
             for symbol in [
@@ -468,7 +464,6 @@ impl SymbolDb {
         );
         self.win32_stub(m, "__p___argv", false, "argv pointer — returns null");
         self.win32_stub(m, "__p__commode", false, "_commode pointer — stub");
-        self.win32_stub(m, "terminate", false, "C++ terminate — calls abort");
         self.win32_stub(
             m,
             "__std_terminate",
@@ -495,7 +490,18 @@ impl SymbolDb {
     fn populate_crt_heap(&mut self) {
         let m = "api-ms-win-crt-heap-l1-1-0.dll";
         for module in [m, "ucrtbase.dll"] {
-            for symbol in ["malloc", "free", "calloc", "realloc"] {
+            for symbol in [
+                "malloc",
+                "free",
+                "calloc",
+                "realloc",
+                "_msize",
+                "_recalloc",
+                "_aligned_malloc",
+                "_aligned_realloc",
+                "_aligned_msize",
+                "_aligned_free",
+            ] {
                 self.ins(module, symbol, Classification::StandardService);
             }
         }
@@ -540,11 +546,8 @@ impl SymbolDb {
             }
         }
         for (sym, libc) in &[
-            ("strtod", "strtod"),
-            ("strtof", "strtof"),
             ("mbstowcs", "mbstowcs"),
             ("wcstombs", "wcstombs"),
-            ("wcstod", "wcstod"),
             ("wctob", "wctob"),
             ("btowc", "btowc"),
         ] {
@@ -554,21 +557,25 @@ impl SymbolDb {
         self.win32_stub(m, "_itoa_s", false, "Windows itoa_s — safe variant");
         self.win32_stub(m, "_wtoi", false, "Wide char to int");
         self.win32_stub(m, "_wtol", false, "Wide char to long");
-        self.win32_stub(m, "_wtof", false, "Wide char to float");
-        self.win32_stub(m, "atof", false, "atof ISO C — maps to libc");
-        // Note: atof already in runtime; just stub if it appears here too
+        // Floating conversions return in XMM0 and parse in the "C" locale.
+        for module in [m, "ucrtbase.dll"] {
+            for symbol in ["strtod", "strtof", "wcstod", "wcstof", "atof", "_wtof"] {
+                self.ins(module, symbol, Classification::StandardService);
+            }
+        }
     }
 
     // ---- api-ms-win-crt-utility --------------------------------------------
 
     fn populate_crt_utility(&mut self) {
         let m = "api-ms-win-crt-utility-l1-1-0.dll";
-        self.crt_native(m, "abs", "abs", "ISO C abs");
-        self.crt_native(m, "labs", "labs", "ISO C labs");
-        self.crt_native(m, "llabs", "llabs", "ISO C llabs");
-        self.crt_native(m, "div", "div", "ISO C div");
-        self.crt_native(m, "ldiv", "ldiv", "ISO C ldiv");
-        self.crt_native(m, "lldiv", "lldiv", "ISO C lldiv");
+        // Windows long is 32 bits and lldiv_t returns through a hidden
+        // pointer, so these cannot map to the LP64 host libc.
+        for module in [m, "ucrtbase.dll"] {
+            for symbol in ["abs", "labs", "llabs", "div", "ldiv", "lldiv"] {
+                self.ins(module, symbol, Classification::StandardService);
+            }
+        }
         // The comparators are guest code, so these cannot use host libc.
         for module in [m, "ucrtbase.dll"] {
             for symbol in ["qsort", "qsort_s", "bsearch", "bsearch_s"] {
@@ -599,13 +606,11 @@ impl SymbolDb {
 
     fn populate_crt_locale(&mut self) {
         let m = "api-ms-win-crt-locale-l1-1-0.dll";
-        self.crt_native(m, "localeconv", "localeconv", "ISO C localeconv");
-        self.win32_stub(
-            m,
-            "setlocale",
-            false,
-            "Windows setlocale — stub returning 'C'",
-        );
+        for module in [m, "ucrtbase.dll"] {
+            for symbol in ["setlocale", "localeconv"] {
+                self.ins(module, symbol, Classification::StandardService);
+            }
+        }
         self.win32_stub(
             m,
             "_create_locale",
@@ -619,6 +624,143 @@ impl SymbolDb {
             false,
             "Thread locale config — no-op",
         );
+    }
+
+    // ---- Services the loader registry provides ------------------------------
+
+    /// Standard services registered by `crates/loader/src/services` that no
+    /// other table classifies. Synthetic fixture modules are left out.
+    fn populate_registered_services(&mut self) {
+        for (module, symbols) in [
+            (
+                "api-ms-win-core-processthreads-l1-1-0.dll",
+                &["IsProcessorFeaturePresent"][..],
+            ),
+            (
+                "api-ms-win-core-timezone-l1-1-0.dll",
+                &["GetTimeZoneInformation"][..],
+            ),
+            (
+                "api-ms-win-core-sysinfo-l1-1-0.dll",
+                &["GetLogicalProcessorInformation"][..],
+            ),
+            (
+                "kernel32.dll",
+                &[
+                    "IsProcessorFeaturePresent",
+                    "GetTimeZoneInformation",
+                    "GetLogicalProcessorInformation",
+                    "CloseHandle",
+                    "FreeLibrary",
+                    "GetCurrentDirectoryA",
+                    "GetCurrentDirectoryW",
+                    "GetLastError",
+                    "GetModuleFileNameA",
+                    "GetModuleFileNameW",
+                    "GetProcessId",
+                    "GetProcessPriorityBoost",
+                    "LoadLibraryA",
+                    "LoadLibraryW",
+                    "OpenThread",
+                    "SetCurrentDirectoryA",
+                    "SetCurrentDirectoryW",
+                    "SetEnvironmentVariableA",
+                    "SetEnvironmentVariableW",
+                    "SetLastError",
+                    "SetProcessPriorityBoost",
+                    "VirtualAlloc",
+                    "VirtualFree",
+                ][..],
+            ),
+            (
+                "ucrtbase.dll",
+                &[
+                    "_atoi64",
+                    "_gmtime64_s",
+                    "_localtime64_s",
+                    "_putenv",
+                    "_stricmp",
+                    "_strnicmp",
+                    "_time64",
+                    "_wcsicmp",
+                    "_wcsnicmp",
+                    "_wtoi",
+                    "_wtoi64",
+                    "_wtol",
+                    "atoi",
+                    "atol",
+                    "atoll",
+                    "gmtime_s",
+                    "localtime_s",
+                    "rand",
+                    "rand_s",
+                    "srand",
+                    "time",
+                ][..],
+            ),
+            (
+                "ws2_32.dll",
+                &[
+                    "WSACleanup",
+                    "WSAGetLastError",
+                    "WSAPoll",
+                    "WSASetLastError",
+                    "WSAStartup",
+                    "accept",
+                    "bind",
+                    "closesocket",
+                    "connect",
+                    "getpeername",
+                    "getsockname",
+                    "getsockopt",
+                    "htonl",
+                    "htons",
+                    "inet_ntop",
+                    "inet_pton",
+                    "ioctlsocket",
+                    "listen",
+                    "ntohl",
+                    "ntohs",
+                    "recv",
+                    "recvfrom",
+                    "send",
+                    "sendto",
+                    "shutdown",
+                    "socket",
+                ][..],
+            ),
+            (
+                "xgameruntime.dll",
+                &[
+                    "XAsyncCancel",
+                    "XAsyncGetResultSize",
+                    "XAsyncGetStatus",
+                    "XAsyncRun",
+                    "XTaskQueueCloseHandle",
+                    "XTaskQueueCreate",
+                    "XTaskQueueCreateComposite",
+                    "XTaskQueueDispatch",
+                    "XTaskQueueDuplicateHandle",
+                    "XTaskQueueGetPort",
+                    "XTaskQueueSubmitCallback",
+                    "XTaskQueueSubmitDelayedCallback",
+                    "XTaskQueueTerminate",
+                ][..],
+            ),
+            (
+                "xinput1_4.dll",
+                &[
+                    "XInputEnable",
+                    "XInputGetCapabilities",
+                    "XInputGetState",
+                    "XInputSetState",
+                ][..],
+            ),
+        ] {
+            for symbol in symbols {
+                self.ins(module, symbol, Classification::StandardService);
+            }
+        }
     }
 
     // ---- VCRUNTIME140 / VCRUNTIME140_1 -------------------------------------
@@ -652,18 +794,33 @@ impl SymbolDb {
                 "__current_exception_context",
                 "current exception context — stub",
             );
-            self.runtime_helper(m, "__std_exception_copy", "std::exception copy — stub");
-            self.runtime_helper(
-                m,
-                "__std_exception_destroy",
-                "std::exception destroy — stub",
-            );
             self.runtime_helper(m, "__std_terminate", "std::terminate — calls abort");
-            self.runtime_helper(
-                m,
-                "__std_type_info_compare",
-                "type_info comparison — stub returning -1",
-            );
+            if *m == "vcruntime140.dll" {
+                for symbol in [
+                    "__std_type_info_compare",
+                    "__std_type_info_hash",
+                    "__std_type_info_name",
+                    "__std_type_info_destroy_list",
+                    "__std_exception_copy",
+                    "__std_exception_destroy",
+                    "__std_terminate",
+                    "_purecall",
+                ] {
+                    self.ins(m, symbol, Classification::StandardService);
+                }
+            } else {
+                self.runtime_helper(
+                    m,
+                    "__std_type_info_compare",
+                    "type_info comparison — stub returning -1",
+                );
+                self.runtime_helper(m, "__std_exception_copy", "std::exception copy — stub");
+                self.runtime_helper(
+                    m,
+                    "__std_exception_destroy",
+                    "std::exception destroy — stub",
+                );
+            }
             self.runtime_helper(m, "memcpy", "CRT memcpy delegate — same as libc");
             self.runtime_helper(m, "memset", "CRT memset delegate — same as libc");
             self.runtime_helper(m, "memmove", "CRT memmove delegate — same as libc");
@@ -716,35 +873,47 @@ impl SymbolDb {
                 "TerminateProcess — calls exit(1)",
             );
             self.win32_stub(m, "GetStartupInfoW", false, "GetStartupInfoW — fills zeros");
-            self.win32_stub(
-                m,
-                "GetCurrentThreadId",
-                false,
-                "returns synthetic thread ID",
-            );
-            self.win32_stub(
-                m,
-                "GetCurrentProcessId",
-                false,
-                "returns synthetic process ID",
-            );
-            self.win32_stub(m, "GetCurrentThread", false, "returns pseudo-handle");
-            self.win32_stub(m, "GetCurrentProcess", false, "returns pseudo-handle -1");
-            self.win32_stub(
-                m,
-                "SetThreadPriority",
-                false,
-                "no-op in single-thread context",
-            );
-            self.win32_stub(
-                m,
-                "GetThreadPriority",
-                false,
-                "returns THREAD_PRIORITY_NORMAL",
-            );
+            // Typed services in crates/loader/runtime/services.txt, which
+            // does not list the l1-1-2 API set for them.
+            for (symbol, note) in [
+                ("GetCurrentThreadId", "returns synthetic thread ID"),
+                ("GetCurrentProcessId", "returns synthetic process ID"),
+                ("GetCurrentThread", "returns pseudo-handle"),
+                ("GetCurrentProcess", "returns pseudo-handle -1"),
+                ("SetThreadPriority", "no-op in single-thread context"),
+                ("GetThreadPriority", "returns THREAD_PRIORITY_NORMAL"),
+            ] {
+                if *m == p2 {
+                    self.win32_stub(m, symbol, false, note);
+                } else {
+                    self.ins(m, symbol, Classification::StandardService);
+                }
+            }
             self.win32_stub(m, "Sleep", false, "Sleep — no-op (single-threaded)");
-            self.win32_stub(m, "ExitProcess", false, "ExitProcess — calls exit(0)");
+            self.win32_stub(
+                m,
+                "ExitProcess",
+                false,
+                "ExitProcess — not registered on this API set",
+            );
             self.win32_stub(m, "ExitThread", false, "ExitThread — calls exit(0)");
+        }
+        // The guest thread scheduler provides these on kernel32 and the
+        // l1-1-0 API set only; l1-1-2 keeps its stub classification.
+        for module in [p1, "kernel32.dll"] {
+            for symbol in [
+                "CreateThread",
+                "ExitThread",
+                "TerminateThread",
+                "GetExitCodeThread",
+                "SuspendThread",
+                "ResumeThread",
+                "SwitchToThread",
+                // Process exit (#331) ends the guest, never the host.
+                "ExitProcess",
+            ] {
+                self.ins(module, symbol, Classification::StandardService);
+            }
         }
         let err = "api-ms-win-core-errorhandling-l1-1-0.dll";
         self.win32_stub(err, "GetLastError", false, "returns last_error from TEB");
@@ -924,6 +1093,14 @@ impl SymbolDb {
                 self.ins(module, symbol, Classification::StandardService);
             }
         }
+        for module in [
+            "kernel32.dll",
+            "api-ms-win-core-processenvironment-l1-1-0.dll",
+        ] {
+            for symbol in ["GetEnvironmentVariableA", "GetEnvironmentVariableW"] {
+                self.ins(module, symbol, Classification::StandardService);
+            }
+        }
     }
 
     // ---- Win32 system info -------------------------------------------------
@@ -993,25 +1170,33 @@ impl SymbolDb {
 
     fn populate_win32_file(&mut self) {
         let m = "api-ms-win-core-file-l1-1-0.dll";
-        self.win32_stub(
-            m,
-            "CreateFileA",
-            false,
-            "CreateFile — stub returning INVALID_HANDLE_VALUE",
-        );
         for module in [m, "kernel32.dll"] {
             for symbol in [
+                "CreateFileA",
                 "CreateFileW",
                 "ReadFile",
                 "WriteFile",
+                "GetFileSize",
                 "GetFileSizeEx",
+                "GetFileType",
+                "GetFileTime",
+                "SetFileTime",
+                "FlushFileBuffers",
                 "SetFilePointerEx",
                 "SetEndOfFile",
                 "CreateDirectoryW",
                 "RemoveDirectoryW",
+                "DeleteFileA",
                 "DeleteFileW",
+                "GetFileAttributesA",
                 "GetFileAttributesW",
+                "GetFileAttributesExA",
+                "GetFileAttributesExW",
+                "GetTempPathA",
+                "GetTempPathW",
+                "GetTempFileNameW",
                 "MoveFileW",
+                "MoveFileExW",
                 "FindFirstFileW",
                 "FindNextFileW",
                 "FindClose",
@@ -1020,20 +1205,6 @@ impl SymbolDb {
             }
         }
         self.win32_stub(m, "CloseHandle", false, "CloseHandle — no-op stub");
-        self.win32_stub(m, "GetFileSize", false, "GetFileSize — stub returning 0");
-        self.win32_stub(
-            m,
-            "GetFileAttributesA",
-            false,
-            "GetFileAttributes — stub returning INVALID",
-        );
-        self.win32_stub(m, "DeleteFileA", false, "DeleteFile — stub returning FALSE");
-        self.win32_stub(
-            m,
-            "FlushFileBuffers",
-            false,
-            "FlushFileBuffers — no-op stub",
-        );
     }
 
     // ---- Proprietary / unavailable -----------------------------------------

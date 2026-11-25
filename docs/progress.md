@@ -1,6 +1,6 @@
 # Engineering progress
 
-Xenora is an experimental research project. Verified work is restricted to
+BetterXen is an experimental research project. Verified work is restricted to
 independently authored synthetic programs and shaders; commercial game
 execution and authentic Xbox startup are unsupported. Progress is measured by
 reproducible tests, not by estimated game compatibility percentages.

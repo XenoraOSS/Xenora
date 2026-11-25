@@ -175,6 +175,13 @@ impl Guest {
     /// Call an import with Win64 arguments. Arguments after the fourth go on
     /// the stack after the return address and the home area.
     pub fn run(&mut self, symbol: &str, args: &[u64]) -> (u64, ExitReason) {
+        let (cpu, exit) = self.run_state(symbol, args);
+        (cpu.get(Register::Rax), exit)
+    }
+
+    /// Like `run`, but returns the whole register state, for services that
+    /// return in XMM0.
+    pub fn run_state(&mut self, symbol: &str, args: &[u64]) -> (CpuState, ExitReason) {
         let index = self
             .imports
             .iter()
@@ -205,7 +212,7 @@ impl Guest {
                 assert_eq!(cpu.get(register), 0x5EED_0000 + index as u64, "{symbol}");
             }
         }
-        (cpu.get(Register::Rax), result.exit_reason)
+        (cpu, result.exit_reason)
     }
 
     /// Call an import as the main thread of a scheduled run: the engine runs

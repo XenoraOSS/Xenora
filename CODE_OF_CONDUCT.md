@@ -1,6 +1,6 @@
 # Code of Conduct
 
-Xenora welcomes contributors with different backgrounds and experience levels. Discussions should be about the technical work and conducted with respect.
+BetterXen welcomes contributors with different backgrounds and experience levels. Discussions should be about the technical work and conducted with respect.
 
 ## Expected behavior
 
@@ -19,4 +19,4 @@ If possible, use an available private contact channel for a repository maintaine
 
 Maintainers may remove content, limit participation or block accounts when necessary to protect the community. Responses should be proportionate to the behavior and protect the privacy of affected people. Do not retaliate against anyone reporting a concern in good faith.
 
-This policy applies to repository issues, pull requests, discussions and other spaces officially managed by Xenora.
+This policy applies to repository issues, pull requests, discussions and other spaces officially managed by BetterXen.

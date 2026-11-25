@@ -11,10 +11,23 @@
 
 mod crt;
 mod crt_callbacks;
+mod crt_ctype;
+mod crt_env;
+mod crt_exit;
+mod crt_float;
+mod crt_heap;
+mod crt_integer;
+mod crt_locale;
+mod crt_safe_string;
+mod crt_stdio;
+mod crt_time;
+mod cxx;
 mod events;
 mod files;
+mod gdk_async;
 mod gdk_queue;
 mod heap;
+pub mod host_files;
 mod modules;
 mod platform_fixture;
 mod process;
@@ -23,6 +36,7 @@ pub mod sysinfo;
 mod task_fixture;
 pub(crate) mod threads;
 mod winsock;
+pub mod xinput;
 
 use crate::runtime::HResult;
 
@@ -30,7 +44,7 @@ use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
 use crate::memory::{ALLOCATION_GRANULARITY, GuestMemory, MemoryError, MemoryPermissions};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Instant;
 
@@ -160,8 +174,9 @@ struct ObjectState {
     priority: i32,
     last_handle: u64,
     handles: BTreeMap<u64, GuestObject>,
-    files: BTreeMap<String, Vec<u8>>,
+    files: BTreeMap<String, files::SyntheticFile>,
     directories: BTreeSet<String>,
+    current_directory: String,
 }
 
 impl ObjectState {
@@ -198,6 +213,8 @@ pub struct ServicesState {
     /// Characteristics the guest is told it runs on. These are simulated and
     /// independent of the host; see [`sysinfo::HostCapabilities`] for the host.
     pub guest_profile: sysinfo::GuestSystemProfile,
+    /// Host directories exposed as guest drives; see [`ServicesState::mount`].
+    mounts: Vec<host_files::HostMount>,
     objects: Mutex<ObjectState>,
     last_errors: Mutex<BTreeMap<u64, u32>>,
     synch: Mutex<synch::Synch>,
@@ -208,10 +225,21 @@ pub struct ServicesState {
     /// The status the guest process exited with. Set once.
     exit_status: Mutex<Option<u32>>,
     winsock: Mutex<winsock::Winsock>,
+    /// Where XInput readings come from; see [`ServicesState::set_controllers`].
+    controllers: Arc<dyn xinput::ControllerSource>,
+    xinput: Mutex<xinput::XInput>,
+    type_names: Arc<Mutex<cxx::TypeNames>>,
+    aligned: Mutex<crt_heap::AlignedBlocks>,
     task_fixture: Mutex<task_fixture::TaskFixture>,
     platform_fixture: Mutex<platform_fixture::PlatformFixture>,
     gdk_queues: Mutex<gdk_queue::QueueHandles>,
     gdk_queue_changed: Condvar,
+    gdk_async: Arc<Mutex<gdk_async::AsyncOps>>,
+    locale: Mutex<crt_locale::LocaleState>,
+    stdio: Mutex<crt_stdio::StdioState>,
+    env: Mutex<crt_env::EnvState>,
+    /// Seed for the CRT `rand` / `srand` LCG (process-wide, like UCRT).
+    crt_rand: AtomicU32,
     winsock_changed: Condvar,
     pub next_alloc_addr: AtomicU64,
     pub graphics: Arc<Mutex<crate::graphics::GraphicsContext>>,
@@ -226,6 +254,7 @@ impl ServicesState {
             process_id: 0x4100, // Synthetic process ID
             thread_id: 0x4104,  // Synthetic main thread ID
             guest_profile: sysinfo::GuestSystemProfile::default(),
+            mounts: Vec::new(),
             objects: Mutex::new(ObjectState::default()),
             last_errors: Mutex::default(),
             synch: Mutex::default(),
@@ -234,15 +263,44 @@ impl ServicesState {
             atexit: Mutex::default(),
             exit_status: Mutex::default(),
             winsock: Mutex::default(),
+            controllers: Arc::new(xinput::NoControllers),
+            xinput: Mutex::default(),
+            type_names: Arc::default(),
+            aligned: Mutex::default(),
             task_fixture: Mutex::default(),
             platform_fixture: Mutex::default(),
             gdk_queues: Mutex::default(),
             gdk_queue_changed: Condvar::new(),
+            gdk_async: Arc::new(Mutex::default()),
+            locale: Mutex::default(),
+            stdio: Mutex::default(),
+            env: Mutex::default(),
+            crt_rand: AtomicU32::new(1),
             winsock_changed: Condvar::new(),
             next_alloc_addr: AtomicU64::new(0x0000_0002_0000_0000), // 8GB guest heap
             graphics: Arc::new(Mutex::new(crate::graphics::GraphicsContext::new())),
         }
     }
+    /// Connect a controller source to XInput. Without one, every slot reports
+    /// that no controller is connected.
+    pub fn set_controllers(&mut self, source: Arc<dyn xinput::ControllerSource>) {
+        self.controllers = source;
+    }
+
+    /// Expose a host directory to the guest. Each drive letter can be mounted
+    /// once. Nothing on the host is reachable unless it is mounted here.
+    pub fn mount(&mut self, mount: host_files::HostMount) -> Result<(), host_files::HostMount> {
+        if self
+            .mounts
+            .iter()
+            .any(|existing| existing.drive() == mount.drive())
+        {
+            return Err(mount);
+        }
+        self.mounts.push(mount);
+        Ok(())
+    }
+
     fn uptime_millis(&self) -> u64 {
         let ticks = self
             .clock
@@ -292,7 +350,7 @@ impl ServicesState {
             .expect("guest object state")
             .files
             .get(name)
-            .cloned()
+            .map(|file| file.data().to_vec())
     }
 
     /// End the guest process. The first exit decides the status; a later one
@@ -481,8 +539,16 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     files::register(registry, &state);
     crt::register(registry);
     crt::register_heap(registry);
+    crt_heap::register(registry, &state);
+    crt_safe_string::register(registry, &state);
     crt::register_errno(registry);
     crt::register_conversions(registry);
+    crt::register_rand(registry, &state);
+    crt_locale::register(registry, &state);
+    crt_ctype::register(registry);
+    crt_stdio::register(registry, &state);
+    crt_env::register(registry, &state);
+    crt_time::register(registry, &state);
     crt_callbacks::register(registry, &state);
     heap::register(registry, &state);
 
@@ -706,11 +772,17 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
         ServiceStatus::Implemented,
     );
     winsock::register(registry, &state);
+    xinput::register(registry, &state);
+    cxx::register(registry, &state);
     task_fixture::register(registry, &state);
     platform_fixture::register(registry, &state);
     gdk_queue::register(registry, &state);
+    gdk_async::register(registry, &state);
     modules::register(registry, &state);
     process::register(registry, &state);
+    crt_exit::register(registry, &state);
+    crt_integer::register(registry);
+    crt_float::register(registry);
 }
 
 /// Implementations behind the generated adapters. A failure the guest can

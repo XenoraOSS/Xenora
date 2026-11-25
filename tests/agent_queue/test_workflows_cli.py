@@ -132,7 +132,7 @@ class Cli(unittest.TestCase):
     def test_shipped_config_parses(self):
         r = self.run_cli("config-get", "upstream")
         self.assertEqual(r.returncode, 0, r.stderr)
-        self.assertEqual(r.stdout.strip(), "ranveersoni98/Xenora")
+        self.assertEqual(r.stdout.strip(), "MacosPorters/betterxen")
 
     def test_summary_accepts_now_after_subcommand(self):
         # Actions passes --now after `summary`; parent-only --now used to reject that.

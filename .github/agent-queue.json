@@ -1,9 +1,8 @@
 {
   "lease_hours": 168,
-  "upstream": "ranveersoni98/Xenora",
-  "maintainers": ["ranveersoni98"],
-  "contributors": {
-    "ranveersoni98": ["cpu", "shared", "qa"],
-    "elforeign": ["gpu", "shared", "qa"]
-  }
+  "upstream": "MacosPorters/betterxen",
+  "maintainers": [
+    "Arths17"
+  ],
+  "contributors": {}
 }

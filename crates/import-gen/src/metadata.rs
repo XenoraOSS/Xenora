@@ -257,6 +257,102 @@ impl MetadataCatalog {
             "<wchar.h>",
             "Compares up to count 16-bit Windows code units of two strings",
         );
+        for (character, string, header, tokenize, search, find_any, span, complement) in [
+            (
+                "char",
+                AbiType::StringAnsi,
+                "<string.h>",
+                "strtok",
+                "strstr",
+                "strpbrk",
+                "strspn",
+                "strcspn",
+            ),
+            (
+                "wchar_t",
+                AbiType::StringWide,
+                "<wchar.h>",
+                "wcstok",
+                "wcsstr",
+                "wcspbrk",
+                "wcsspn",
+                "wcscspn",
+            ),
+        ] {
+            let pointer = AbiType::Pointer {
+                is_const: false,
+                pointee: character.into(),
+            };
+            let mut params = vec![("str", pointer.clone()), ("delimiters", string.clone())];
+            if tokenize == "wcstok" {
+                params.push((
+                    "context",
+                    AbiType::Pointer {
+                        is_const: false,
+                        pointee: "wchar_t *".into(),
+                    },
+                ));
+            }
+            self.add(
+                "ucrtbase.dll",
+                tokenize,
+                pointer.clone(),
+                params,
+                header,
+                "Splits writable guest text into tokens",
+            );
+            self.add(
+                "ucrtbase.dll",
+                &format!("{tokenize}_s"),
+                pointer.clone(),
+                vec![
+                    ("str", pointer.clone()),
+                    ("delimiters", string.clone()),
+                    (
+                        "context",
+                        AbiType::Pointer {
+                            is_const: false,
+                            pointee: format!("{character} *"),
+                        },
+                    ),
+                ],
+                header,
+                "Splits writable guest text using a caller-owned continuation pointer",
+            );
+            for (symbol, argument, description) in [
+                (search, "needle", "Finds the first matching substring"),
+                (
+                    find_any,
+                    "accept",
+                    "Finds the first character in the supplied set",
+                ),
+            ] {
+                self.add(
+                    "ucrtbase.dll",
+                    symbol,
+                    pointer.clone(),
+                    vec![("str", string.clone()), (argument, string.clone())],
+                    header,
+                    description,
+                );
+            }
+            for (symbol, description) in [
+                (span, "Counts the leading units in the supplied set"),
+                (
+                    complement,
+                    "Counts the leading units outside the supplied set",
+                ),
+            ] {
+                self.add(
+                    "ucrtbase.dll",
+                    symbol,
+                    AbiType::U64,
+                    vec![("str", string.clone()), ("set", string.clone())],
+                    header,
+                    description,
+                );
+            }
+        }
         self.add(
             "ucrtbase.dll",
             "memset",

@@ -106,7 +106,7 @@ the tool's own run paths. The script writes the versions it used to
 test process under the Cargo target directory, so two runs that share a target
 directory do not overwrite each other's files; `cargo clean` removes them.
 
-Provenance. The source, the name lists and the script were written for Xenora
+Provenance. The source, the name lists and the script were written for BetterXen
 and are GPL-3.0-or-later. Nothing from a Windows SDK, a C runtime or another
 project is compiled or linked. The compiler and linker are LLVM projects
 under the Apache License 2.0 with LLVM exceptions; they are tools, not inputs.

@@ -7,7 +7,7 @@
 //! separate so detected host hardware is never presented to the guest as its
 //! own, and guest-visible values do not change from one Mac to another.
 
-use super::{ERROR_INVALID_PARAMETER, KERNEL32, ServicesState};
+use super::{ERROR_INVALID_PARAMETER, ERROR_NOACCESS, KERNEL32, ServicesState};
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
 use crate::memory::{ALLOCATION_GRANULARITY, DYNAMIC_BUDGET, GuestMemory, MemoryError};
@@ -39,6 +39,36 @@ const MILLIS_PER_DAY: u64 = 86_400_000;
 const DAYS_1601_TO_1970: i64 = 134_774;
 /// FILETIME values at or above this are rejected by FileTimeToSystemTime.
 const MAX_FILETIME: u64 = 0x8000_0000_0000_0000;
+const TIME_ZONE_INFORMATION_SIZE: usize = 172;
+const TIME_ZONE_ID_UNKNOWN: u32 = 0;
+const TIME_ZONE_ID_INVALID: u32 = u32::MAX;
+const UTC_NAME: &str = "Coordinated Universal Time";
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+/// `SYSTEM_LOGICAL_PROCESSOR_INFORMATION` on x64.
+const PROCESSOR_INFO_SIZE: usize = 32;
+const RELATION_PROCESSOR_CORE: u32 = 0;
+const RELATION_PROCESSOR_PACKAGE: u32 = 3;
+
+/// One core per guest processor and one package holding them all. No cache
+/// or NUMA entries are reported, because no cache hierarchy is simulated.
+fn processor_topology(processors: u32) -> Vec<[u8; PROCESSOR_INFO_SIZE]> {
+    let entry = |mask: u64, relationship: u32| {
+        let mut bytes = [0u8; PROCESSOR_INFO_SIZE];
+        bytes[..8].copy_from_slice(&mask.to_le_bytes());
+        bytes[8..12].copy_from_slice(&relationship.to_le_bytes());
+        bytes
+    };
+    let mut entries: Vec<_> = (0..processors)
+        .map(|index| entry(1 << index, RELATION_PROCESSOR_CORE))
+        .collect();
+    let all = if processors == 64 {
+        u64::MAX
+    } else {
+        (1 << processors) - 1
+    };
+    entries.push(entry(all, RELATION_PROCESSOR_PACKAGE));
+    entries
+}
 
 /// What the guest is told about the machine it runs on.
 #[derive(Clone, Debug)]
@@ -254,7 +284,57 @@ fn write_system_info(
     memory.write_bytes(address, &info).map_err(fault)
 }
 
+/// `IsProcessorFeaturePresent` feature numbers from the public `winnt.h`
+/// list, each with the guest CPUID bits that must all be set for it.
+///
+/// Answers come from [`crate::cpu::cpuid`], the table that also defines what
+/// guest `CPUID` returns, so the two never disagree. A feature with no CPUID
+/// test here (for example `PF_NX_ENABLED` or `PF_FASTFAIL_AVAILABLE`) and any
+/// unknown number report `FALSE`.
+/// A CPUID leaf, the result register index (EAX = 0 … EDX = 3) and a mask.
+type CpuidBit = (u32, usize, u32);
+
+const PROCESSOR_FEATURES: [(u32, &[CpuidBit]); 14] = [
+    (2, &[(1, 3, 1 << 8)]),   // PF_COMPARE_EXCHANGE_DOUBLE: CMPXCHG8B
+    (3, &[(1, 3, 1 << 23)]),  // PF_MMX_INSTRUCTIONS_AVAILABLE
+    (6, &[(1, 3, 1 << 25)]),  // PF_XMMI_INSTRUCTIONS_AVAILABLE: SSE
+    (8, &[(1, 3, 1 << 4)]),   // PF_RDTSC_INSTRUCTION_AVAILABLE
+    (10, &[(1, 3, 1 << 26)]), // PF_XMMI64_INSTRUCTIONS_AVAILABLE: SSE2
+    (13, &[(1, 2, 1)]),       // PF_SSE3_INSTRUCTIONS_AVAILABLE
+    (14, &[(1, 2, 1 << 13)]), // PF_COMPARE_EXCHANGE128: CMPXCHG16B
+    (17, &[(1, 2, 1 << 26), (1, 2, 1 << 27)]), // PF_XSAVE_ENABLED: XSAVE, OSXSAVE
+    (28, &[(1, 2, 1 << 30)]), // PF_RDRAND_INSTRUCTION_AVAILABLE
+    (36, &[(1, 2, 1 << 9)]),  // PF_SSSE3_INSTRUCTIONS_AVAILABLE
+    (37, &[(1, 2, 1 << 19)]), // PF_SSE4_1_INSTRUCTIONS_AVAILABLE
+    (38, &[(1, 2, 1 << 20)]), // PF_SSE4_2_INSTRUCTIONS_AVAILABLE
+    (39, &[(1, 2, 1 << 28)]), // PF_AVX_INSTRUCTIONS_AVAILABLE
+    (40, &[(7, 1, 1 << 5)]),  // PF_AVX2_INSTRUCTIONS_AVAILABLE
+];
+
+/// Whether guest CPUID reports every bit `feature` needs.
+pub fn processor_feature_present(feature: u32) -> bool {
+    PROCESSOR_FEATURES
+        .iter()
+        .find(|(number, _)| *number == feature)
+        .is_some_and(|(_, bits)| {
+            bits.iter()
+                .all(|&(leaf, register, mask)| crate::cpu::cpuid(leaf, 0)[register] & mask == mask)
+        })
+}
+
 pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    registry.register_with_status(
+        KERNEL32,
+        "IsProcessorFeaturePresent",
+        ServiceStatus::Partial,
+        |args, _, _| Ok(u64::from(processor_feature_present(args.rcx as u32))),
+    );
+    registry.alias(
+        "api-ms-win-core-processthreads-l1-1-0.dll",
+        KERNEL32,
+        "IsProcessorFeaturePresent",
+    );
+
     for symbol in ["GetSystemInfo", "GetNativeSystemInfo"] {
         let s = Arc::clone(state);
         registry.register(KERNEL32, symbol, move |args, _, mem| {
@@ -360,7 +440,56 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         });
     }
 
+    let zone = Arc::clone(state);
+    registry.register(KERNEL32, "GetTimeZoneInformation", move |args, cpu, mem| {
+        // TIME_ZONE_INFORMATION is 172 bytes: Bias, StandardName[32],
+        // StandardDate, StandardBias, DaylightName[32], DaylightDate,
+        // DaylightBias. UTC has no bias and no daylight transition, so every
+        // field but the two names is zero.
+        let mut info = [0u8; TIME_ZONE_INFORMATION_SIZE];
+        for offset in [4, 88] {
+            for (index, unit) in UTC_NAME.encode_utf16().enumerate() {
+                info[offset + 2 * index..offset + 2 * index + 2]
+                    .copy_from_slice(&unit.to_le_bytes());
+            }
+        }
+        if args.rcx == 0 || mem.write_bytes(args.rcx, &info).is_err() {
+            return zone.fail(cpu.gs_base, ERROR_NOACCESS, u64::from(TIME_ZONE_ID_INVALID));
+        }
+        Ok(u64::from(TIME_ZONE_ID_UNKNOWN))
+    });
+
+    let topology = Arc::clone(state);
+    registry.register(
+        KERNEL32,
+        "GetLogicalProcessorInformation",
+        move |args, cpu, mem| {
+            let (buffer, length) = (args.rcx, args.rdx);
+            if length == 0 {
+                return topology.fail(cpu.gs_base, ERROR_NOACCESS, 0);
+            }
+            let processors = topology.guest_profile.processors.clamp(1, 64);
+            let entries = processor_topology(processors);
+            let needed = (entries.len() * PROCESSOR_INFO_SIZE) as u32;
+            let available = mem.read_u32(length).map_err(ExitReason::MemoryFault)?;
+            if buffer == 0 || available < needed {
+                mem.write_u32(length, needed)
+                    .map_err(ExitReason::MemoryFault)?;
+                return topology.fail(cpu.gs_base, ERROR_INSUFFICIENT_BUFFER, 0);
+            }
+            let bytes: Vec<u8> = entries.concat();
+            if mem.write_bytes(buffer, &bytes).is_err() {
+                return topology.fail(cpu.gs_base, ERROR_NOACCESS, 0);
+            }
+            mem.write_u32(length, needed)
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(1)
+        },
+    );
+
     for (symbol, api_set) in [
+        ("GetTimeZoneInformation", TIMEZONE_API),
+        ("GetLogicalProcessorInformation", SYSINFO_API),
         ("GetSystemInfo", SYSINFO_API),
         ("GetNativeSystemInfo", SYSINFO_API_2),
         ("GlobalMemoryStatusEx", SYSINFO_API),

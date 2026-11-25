@@ -95,7 +95,7 @@ CPUID (`0F A2`) returns a fixed table that never reads the host. It describes a 
 A feature bit is set only when every instruction of that feature is implemented. That is stricter than "some of it works", and it has consequences:
 
 - SSE and SSE2 are not reported, although most of their instructions exist, because parts are still rejected: RSQRTPS and MASKMOVDQU, for example. BMI1 is not reported although TZCNT exists, because ANDN does not. The x87 FPU, MMX, FXSAVE, CMPXCHG8B, the time-stamp counter, LAHF and SYSRET are absent too.
-- The table is therefore truthful about Xenora, not plausible as hardware: every real 64-bit processor reports the FPU and SSE2. A guest that tests a bit before using a feature avoids it; a guest that assumes SSE2 because it runs in 64-bit mode still gets every form that exists and an illegal-instruction exit for one that does not.
+- The table is therefore truthful about BetterXen, not plausible as hardware: every real 64-bit processor reports the FPU and SSE2. A guest that tests a bit before using a feature avoids it; a guest that assumes SSE2 because it runs in 64-bit mode still gets every form that exists and an illegal-instruction exit for one that does not.
 - A leaf that is not listed returns zeros, whatever the subleaf. Intel processors answer a leaf above the highest basic one with that leaf's data instead; software is expected to read the highest leaf first.
 
 `xenora_loader::cpu::cpuid` is the one copy of the table. A runtime service that reports processor features should read it rather than keep its own list.

@@ -33,7 +33,7 @@ def check_large_generated_paths(tracked_paths: Iterable[str], *, suspicious_pref
     return HealthFinding("generated-paths", ok, detail)
 
 
-def check_upstream_configured(remotes: Iterable[str], *, expected: str = "ranveersoni98/Xenora") -> HealthFinding:
+def check_upstream_configured(remotes: Iterable[str], *, expected: str = "MacosPorters/betterxen") -> HealthFinding:
     names = set(remotes)
     # Accept either a remote named upstream or origin pointing at expected.
     ok = "upstream" in names or "origin" in names

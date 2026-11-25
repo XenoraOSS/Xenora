@@ -9,6 +9,7 @@ Guest imports resolve through one lookup, `ImportRegistry::resolve`. Binding, th
 | Adapters | `crates/loader/src/runtime_table.rs` | Generated Win64 argument and result adapters and static metadata. |
 | Handlers | `handlers` in `crates/loader/src/services.rs` | Rust implementations. They see guest memory and service state, never the CPU. |
 | Report | [services.md](services.md) | Generated counts. Aliases are counted apart from services. |
+| Coverage | `xenora imports coverage` | Every service the standard registry provides, by module and status, checked against the import metadata. Writes `artifacts/coverage/api-coverage.md` by default. |
 
 ## Rules
 
@@ -24,6 +25,16 @@ Guest imports resolve through one lookup, `ImportRegistry::resolve`. Binding, th
 1. Write a test in `crates/loader/tests/runtime_services.rs` that calls it from guest code and derives its expectations from the public documentation.
 2. Add the entry to `services.txt` and the handler to `services.rs`.
 3. Run `cargo run -p xenora-import-gen --bin xenora-runtime-gen generate`.
+
+## Coverage report
+
+`cargo run -p xenora -- imports coverage [--out <file>]` builds the standard registry and the built-in import metadata and writes one Markdown report. It reads no executable, network or clock, so the same tree gives the same bytes; a CLI test runs it twice and compares. The report lists three kinds of disagreement:
+
+- the metadata expects a standard service that the registry does not resolve, which the CLI tests also reject;
+- the registry provides a service the metadata classifies as something else, such as a stub, so the import generator would emit a stub for a working service;
+- the registry provides a service the metadata does not list at all.
+
+Counts are not compatibility claims, and the report is not committed: it changes whenever a service is added.
 
 ## Outside this registry
 

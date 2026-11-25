@@ -1,6 +1,6 @@
-# Contributing to Xenora
+# Contributing to BetterXen
 
-Xenora is an experimental Xbox Series X|S recompilation framework for Apple Silicon. Its graphics subsystem, XenoMetal, targets native Metal execution. Contributions should improve verified behavior rather than expand untested claims.
+BetterXen is an experimental Xbox Series X|S recompilation framework for Apple Silicon. Its graphics subsystem, XenoMetal, targets native Metal execution. Contributions should improve verified behavior rather than expand untested claims.
 
 ## Getting started
 
@@ -28,11 +28,11 @@ For a performance change, provide reproducible before-and-after results using eq
 
 ## Research and clean-room policy
 
-Use publicly accessible specifications and authorized materials only. Do not submit leaked SDKs, confidential documentation, firmware, keys, proprietary game binaries or unauthorized shader dumps. Under Xenora's clean-room policy, anyone who has accessed leaked or confidential Xbox materials must not contribute. Do not post details of restricted material in issues or PRs.
+Use publicly accessible specifications and authorized materials only. Do not submit leaked SDKs, confidential documentation, firmware, keys, proprietary game binaries or unauthorized shader dumps. Under BetterXen's clean-room policy, anyone who has accessed leaked or confidential Xbox materials must not contribute. Do not post details of restricted material in issues or PRs.
 
 Distinguish desktop RDNA behavior from Xbox-specific behavior. Cite primary sources with exact applicable architectures and record uncertainties using the project's evidence classification when available. Tests on Apple GPUs do not establish verification on Xbox hardware.
 
-Xenora implements its own Rust guest runtime, decoder, typed IR, shader
+BetterXen implements its own Rust guest runtime, decoder, typed IR, shader
 compiler and native Metal backend from public technical specifications
 and independently derived tests. Contributions must not copy, port or
 adapt code, decoder tables, internal metadata or implementation

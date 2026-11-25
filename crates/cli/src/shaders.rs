@@ -1,11 +1,11 @@
-//! `xenora shaders`: instruction inventory and stream inspection.
+//! `betterxen shaders`: instruction inventory and stream inspection.
 
 use std::process::ExitCode;
 
 use xenora_decoder::{Architecture, SEMANTIC_FORMS, decode_at};
 use xenora_isa::meta::{self, EncodingFamily, FORMS, identify};
 
-const USAGE: &str = "usage: xenora shaders <coverage [--json] | inspect <gfx1030.bin>>";
+const USAGE: &str = "usage: betterxen shaders <coverage [--json] | inspect <gfx1030.bin>>";
 
 pub fn command(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
@@ -109,7 +109,7 @@ fn inspect(path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
-/// The printed rows of `xenora shaders inspect`, the number of rows that do
+/// The printed rows of `betterxen shaders inspect`, the number of rows that do
 /// not decode into executable instructions and the identification failure
 /// that ended the stream early, if any.
 struct Listing {

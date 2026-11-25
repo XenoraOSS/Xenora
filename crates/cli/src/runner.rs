@@ -27,7 +27,7 @@ const TICKET: u64 = 17;
 const DRAW_RESULT: u64 = 0x42;
 const EXTENT: [usize; 2] = [4, 3];
 const EXPECTED_PIXEL: [u8; 4] = [255, 0, 0, 255];
-const USAGE: &str = "usage: xenora run --pe <trusted-fixture> --experimental [--trace] [--metal-hud] [--max-steps <1..=10000>]";
+const USAGE: &str = "usage: betterxen run --pe <trusted-fixture> --experimental [--trace] [--metal-hud] [--max-steps <1..=10000>]";
 
 struct Options {
     path: PathBuf,

@@ -1,6 +1,6 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Build Xenora.app (native ARM64) into build/Xenora.app and run its smoke check.
+# Build BetterXen.app (native ARM64) into build/BetterXen.app and run its smoke check.
 # Requires: macOS on Apple Silicon, Rust 1.100 (aarch64-apple-darwin), Swift 6 toolchain.
 set -eu
 cd "$(dirname "$0")/.."
@@ -19,18 +19,18 @@ MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release -p xenora-ffi --tar
 swift build --package-path app -c release --arch arm64 \
     -Xlinker -L -Xlinker "$root/target/$target/release"
 
-bundle="$root/build/Xenora.app"
+bundle="$root/build/BetterXen.app"
 rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS"
-cp "$(swift build --package-path app -c release --arch arm64 --show-bin-path)/Xenora" "$bundle/Contents/MacOS/Xenora"
+cp "$(swift build --package-path app -c release --arch arm64 --show-bin-path)/BetterXen" "$bundle/Contents/MacOS/BetterXen"
 cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <key>CFBundleExecutable</key><string>Xenora</string>
-    <key>CFBundleIdentifier</key><string>local.xenora.Xenora</string>
-    <key>CFBundleName</key><string>Xenora</string>
+    <key>CFBundleExecutable</key><string>BetterXen</string>
+    <key>CFBundleIdentifier</key><string>org.macosporters.betterxen</string>
+    <key>CFBundleName</key><string>BetterXen</string>
     <key>CFBundlePackageType</key><string>APPL</string>
     <key>CFBundleShortVersionString</key><string>0.1.0</string>
     <key>LSMinimumSystemVersion</key><string>14.0</string>
@@ -52,7 +52,7 @@ PLIST
 # this build executes no guest code, so it needs no JIT entitlement.
 codesign --force --sign - "$bundle"
 
-binary="$bundle/Contents/MacOS/Xenora"
+binary="$bundle/Contents/MacOS/BetterXen"
 [ "$(lipo -archs "$binary")" = arm64 ] || fail "executable is not arm64-only: $(lipo -archs "$binary")"
 "$binary" --smoke
 echo "build-app: built $bundle"

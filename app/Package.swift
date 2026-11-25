@@ -4,10 +4,10 @@
 import PackageDescription
 
 let package = Package(
-    name: "Xenora",
+    name: "BetterXen",
     platforms: [.macOS(.v14)],
     targets: [
         .systemLibrary(name: "CXenora", path: "Sources/CXenora"),
-        .executableTarget(name: "Xenora", dependencies: ["CXenora"]),
+        .executableTarget(name: "BetterXen", dependencies: ["CXenora"], path: "Sources/Xenora"),
     ]
 )

@@ -68,7 +68,7 @@ def render_progress(status):
     ]
     svg = [
         '<svg xmlns="http://www.w3.org/2000/svg" width="530" height="185" viewBox="0 0 530 185" role="img" aria-labelledby="title description">',
-        '<title id="title">Xenora · recorded progress</title>',
+        '<title id="title">BetterXen · recorded progress</title>',
         '<desc id="description">' + escape(". ".join(f"{label}: {count} of {total}" for label, count, total in rows)) + '</desc>',
         '<rect x="1" y="1" width="528" height="183" rx="10" fill="#18212a" stroke="#516171"/>',
         '<g font-family="system-ui,sans-serif" fill="#eaf0f5">',

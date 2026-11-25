@@ -72,8 +72,8 @@ jobs:
           LC_ALL=C PYTHONCOERCECLOCALE=0 PYTHONUTF8=0 scripts/audit/claims.sh
       - name: Inspect native CLI
         run: |
-          cargo build --locked -p xenora
-          binary=target/aarch64-apple-darwin/debug/xenora
+          cargo build --locked -p betterxen
+          binary=target/aarch64-apple-darwin/debug/betterxen
           file "$binary"
           test "$(lipo -archs "$binary")" = arm64
           otool -L "$binary"
