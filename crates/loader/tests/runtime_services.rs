@@ -6025,3 +6025,95 @@ fn the_string_comparison_services_answer_in_byte_order() {
     assert_eq!(bad, 0);
     assert_eq!(guest.last_error(), 87);
 }
+
+#[test]
+fn the_console_identity_and_standard_handles_round_trip() {
+    let mut guest = Guest::new();
+
+    // The three devices answer one fixed pseudo-handle each, distinct.
+    let input = guest.call("GetStdHandle", &[0xFFFF_FFF6]);
+    let output = guest.call("GetStdHandle", &[0xFFFF_FFF5]);
+    let error = guest.call("GetStdHandle", &[0xFFFF_FFF4]);
+    assert!(input != 0 && output != 0 && error != 0);
+    assert!(input != output && output != error && input != error);
+    // An unknown device fails.
+    assert_eq!(guest.call("GetStdHandle", &[0xFFFF_FF00]), 0);
+    assert_eq!(guest.last_error(), 87);
+
+    // The console code pages are UTF-8, coherent with the process code page.
+    assert_eq!(guest.call("GetConsoleCP", &[]), 65001);
+    assert_eq!(guest.call("GetConsoleOutputCP", &[]), 65001);
+
+    // The modes round-trip; an unknown handle fails.
+    assert_eq!(guest.call("GetConsoleMode", &[output, SCRATCH]), 1);
+    let default_mode = guest.memory.read_u32(SCRATCH).unwrap();
+    assert_ne!(default_mode, 0);
+    assert_eq!(guest.call("SetConsoleMode", &[output, 0x3]), 1);
+    assert_eq!(guest.call("GetConsoleMode", &[output, SCRATCH]), 1);
+    assert_eq!(guest.memory.read_u32(SCRATCH).unwrap(), 0x3);
+    assert_eq!(guest.call("GetConsoleMode", &[0xDEAD, SCRATCH]), 0);
+    assert_eq!(guest.last_error(), 6);
+
+    // WriteConsoleA appends bytes to the output capture printf uses, and
+    // reports the characters consumed. The fifth argument rides the stack.
+    place(&mut guest, SCRATCH, b"console-out");
+    guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
+    let wrote = guest.call("WriteConsoleA", &[output, SCRATCH, 11, SCRATCH + 0x40]);
+    assert_eq!(wrote, 1);
+    assert_eq!(guest.memory.read_u32(SCRATCH + 0x40).unwrap(), 11);
+
+    // WriteConsoleW converts to UTF-8 in the same capture, in order after it.
+    for (index, unit) in "widé".encode_utf16().enumerate() {
+        guest
+            .memory
+            .write_u16(SCRATCH + 0x10 + index as u64 * 2, unit)
+            .unwrap();
+    }
+    guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
+    let wrote = guest.call(
+        "WriteConsoleW",
+        &[output, SCRATCH + 0x10, 4, SCRATCH + 0x40],
+    );
+    assert_eq!(wrote, 1);
+    // é is two UTF-8 bytes: the capture holds the narrow then the wide text.
+    let capture = guest.state.standard_output();
+    let text = String::from_utf8_lossy(&capture);
+    assert!(text.contains("console-out"), "{text}");
+    assert!(text.contains("widé"), "{text}");
+    assert!(text.find("console-out").unwrap() < text.find("widé").unwrap());
+
+    // WriteConsole to the error handle goes to the error capture instead.
+    place(&mut guest, SCRATCH + 0x20, b"err-text");
+    guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
+    assert_eq!(
+        guest.call("WriteConsoleA", &[error, SCRATCH + 0x20, 8, 0]),
+        1
+    );
+    let capture = guest.state.standard_error();
+    assert!(String::from_utf8_lossy(&capture).contains("err-text"));
+
+    // A write through the input handle or an unknown handle fails.
+    guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
+    assert_eq!(guest.call("WriteConsoleA", &[input, SCRATCH, 1, 0]), 0);
+    assert_eq!(guest.last_error(), 6);
+
+    // ReadConsoleA hands one line back with CR LF restored, counting bytes.
+    guest.state.set_standard_input(b"first line\nsecond");
+    guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
+    let got = guest.call("ReadConsoleA", &[input, SCRATCH + 0x60, 32, SCRATCH + 0x80]);
+    assert_eq!(got, 1);
+    assert_eq!(guest.memory.read_u32(SCRATCH + 0x80).unwrap(), 12);
+    let mut line = Vec::new();
+    for at in 0..12u64 {
+        line.push(guest.memory.read_u8(SCRATCH + 0x60 + at).unwrap());
+    }
+    assert_eq!(line, b"first line\r\n");
+
+    // SetStdHandle stores a replacement and GetStdHandle answers it; a write
+    // through the replacement then fails honestly, not silently.
+    assert_eq!(guest.call("SetStdHandle", &[0xFFFF_FFF5, 0x5555]), 1);
+    assert_eq!(guest.call("GetStdHandle", &[0xFFFF_FFF5]), 0x5555);
+    guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
+    assert_eq!(guest.call("WriteConsoleA", &[0x5555, SCRATCH, 1, 0]), 0);
+    assert_eq!(guest.last_error(), 6);
+}

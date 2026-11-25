@@ -133,6 +133,11 @@ fn crt_locale(name: &str) -> PathBuf {
 fn crt_compare(name: &str) -> PathBuf {
     build("build-crt-compare.sh", "run-program-crt-compare", &OUT).join(format!("{name}.exe"))
 
+fn crt_console(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-console.sh", "run-program-crt-console", &OUT).join(format!("{name}.exe"))
+}
+
 /// The SHA-256 of a file, from the host's `shasum`.
 fn digest(path: &Path) -> String {
     let output = Command::new("shasum")
@@ -1133,4 +1138,26 @@ fn a_program_comparing_strings_runs_and_detects_a_wrong_result() {
         run.stdout,
         "check 27 failed: the control fails\r\ncrt-compare: 1/27 checks failed, first 27\r\n"
     );
+}
+
+#[test]
+fn a_program_using_the_console_runs_and_detects_a_wrong_result() {
+    for name in ["crt-console-O0", "crt-console-O2"] {
+        let run = run_program(&crt_console(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {:?}", run.stdout);
+        assert!(
+            run.stdout.contains("crt-console: 20/20 checks passed\r\n"),
+            "{name}: {:?}",
+            run.stdout
+        );
+        // printf and WriteConsole share one capture, in call order.
+        // WriteConsole writes its bytes raw: LF, not the CRT's CR LF.
+        let narrow = run.stdout.find("narrow\n").expect("narrow write");
+        let wide = run.stdout.find("wide\n").expect("wide write");
+        assert!(narrow < wide, "{name}: {:?}", run.stdout);
+        assert!(run.stderr.contains("to-error"), "{name}: {:?}", run.stderr);
+    }
+    // The control must fail its last check: the exit code is its number.
+    let run = run_program(&crt_console("crt-console-break"), &[], &[]);
+    assert_eq!(run.code, Some(21), "control: {:?}", run.stdout);
 }

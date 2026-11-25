@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 191 |
-| Generated adapters | 191 |
-| Unique handler implementations | 184 |
+| Services with a declared ABI | 200 |
+| Generated adapters | 200 |
+| Unique handler implementations | 193 |
 | Implemented | 68 |
-| Partial | 121 |
+| Partial | 130 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 191 |
-| API-set aliases (not services) | 191 |
+| Conformance-tested through guest dispatch | 200 |
+| API-set aliases (not services) | 200 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -138,6 +138,15 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `kernel32.dll!CompareStringW` | `(lcid: u32, flags: u32, left: ptr, left_count: i32, right: ptr, right_count: i32) -> i32` | partial | sets ERROR_INVALID_PARAMETER for another locale or unsupported flags |
 | `kernel32.dll!GetStringTypeW` | `(kind: u32, source: ptr, count: i32, output: ptr) -> bool32` | partial | sets ERROR_INVALID_PARAMETER for CT_CTYPE2 and CT_CTYPE3 |
 | `kernel32.dll!LCMapStringW` | `(lcid: u32, flags: u32, source: ptr, count: i32, destination: ptr, destination_count: i32) -> i32` | partial | sets ERROR_INVALID_PARAMETER for unsupported flags or another locale, ERROR_INSUFFICIENT_BUFFER for a small output |
+| `kernel32.dll!GetStdHandle` | `(kind: u32) -> u64` | partial | sets ERROR_INVALID_PARAMETER for an unknown device |
+| `kernel32.dll!SetStdHandle` | `(kind: u32, handle: u64) -> bool32` | partial | sets ERROR_INVALID_PARAMETER for an unknown device |
+| `kernel32.dll!GetConsoleCP` | `() -> u32` | partial | never |
+| `kernel32.dll!GetConsoleOutputCP` | `() -> u32` | partial | never |
+| `kernel32.dll!GetConsoleMode` | `(handle: u64, output: ptr) -> bool32` | partial | sets ERROR_INVALID_HANDLE for an unknown handle |
+| `kernel32.dll!SetConsoleMode` | `(handle: u64, mode: u32) -> bool32` | partial | sets ERROR_INVALID_HANDLE for an unknown handle |
+| `kernel32.dll!WriteConsoleA` | `(handle: u64, text: ptr, characters: u32, written: ptr, reserved: ptr) -> bool32` | partial | sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for reserved |
+| `kernel32.dll!WriteConsoleW` | `(handle: u64, text: ptr, characters: u32, written: ptr, reserved: ptr) -> bool32` | partial | sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for reserved |
+| `kernel32.dll!ReadConsoleA` | `(handle: u64, buffer: ptr, size: u32, read: ptr, control: ptr) -> bool32` | partial | sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for the control parameter |
 | `ucrtbase.dll!__p___argc` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!__p___argv` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!__p__environ` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |

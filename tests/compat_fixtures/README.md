@@ -522,5 +522,16 @@ imports of `kernel32.dll`. It is built at `-O0` and `-O2`, and once at `-O1`
 with `CRT_COMPARE_BREAK`, which expects a wrong count on purpose as a
 control. `crates/cli/tests/run_program.rs` runs all three through
 `xenora run`.
+
+## The console
+
+`tests/compat_fixtures/crt_console.c` (package 8 of #459) is a hosted C
+program that asks for the standard handles, the console code pages and the
+modes, writes narrow and wide text interleaved with `printf` to prove the
+one capture, reads an input line, and checks each documented failure.
+Built by `build-crt-console.sh` with mingw-w64, the calls are imports of
+`kernel32.dll`. It is built at `-O0` and `-O2`, and once at `-O1` with
+`CRT_CONSOLE_BREAK` as a control. `crates/cli/tests/run_program.rs` runs
+all three through `xenora run`.
 Provenance is as for Gate A2: the source and scripts are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.

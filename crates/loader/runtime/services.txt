@@ -1020,6 +1020,82 @@ service kernel32.dll LCMapStringW(lcid: u32, flags: u32, source: ptr, count: i32
     ref winnls.h LCMapStringW
     test the_string_comparison_services_answer_in_byte_order
 
+# The console identity and the standard handles, package 8 first part of
+# #459. crates/loader/src/services/console.rs documents what the modes do
+# and do not change, and why redirection is limited.
+
+service kernel32.dll GetStdHandle(kind: u32) -> u64
+    handler get_std_handle
+    status partial
+    alias api-ms-win-core-processenvironment-l1-1-0.dll
+    fails sets ERROR_INVALID_PARAMETER for an unknown device
+    ref processenv.h GetStdHandle
+    test the_console_identity_and_standard_handles_round_trip
+
+service kernel32.dll SetStdHandle(kind: u32, handle: u64) -> bool32
+    handler set_std_handle
+    status partial
+    alias api-ms-win-core-processenvironment-l1-1-0.dll
+    fails sets ERROR_INVALID_PARAMETER for an unknown device
+    ref processenv.h SetStdHandle
+    test the_console_identity_and_standard_handles_round_trip
+
+service kernel32.dll GetConsoleCP() -> u32
+    handler get_console_cp
+    status partial
+    alias api-ms-win-core-console-l1-1-0.dll
+    fails never
+    ref consoleapi.h GetConsoleCP
+    test the_console_identity_and_standard_handles_round_trip
+
+service kernel32.dll GetConsoleOutputCP() -> u32
+    handler get_console_output_cp
+    status partial
+    alias api-ms-win-core-console-l1-1-0.dll
+    fails never
+    ref consoleapi.h GetConsoleOutputCP
+    test the_console_identity_and_standard_handles_round_trip
+
+service kernel32.dll GetConsoleMode(handle: u64, output: ptr) -> bool32
+    handler get_console_mode
+    status partial
+    alias api-ms-win-core-console-l1-1-0.dll
+    fails sets ERROR_INVALID_HANDLE for an unknown handle
+    ref consoleapi.h GetConsoleMode
+    test the_console_identity_and_standard_handles_round_trip
+
+service kernel32.dll SetConsoleMode(handle: u64, mode: u32) -> bool32
+    handler set_console_mode
+    status partial
+    alias api-ms-win-core-console-l1-1-0.dll
+    fails sets ERROR_INVALID_HANDLE for an unknown handle
+    ref consoleapi.h SetConsoleMode
+    test the_console_identity_and_standard_handles_round_trip
+
+service kernel32.dll WriteConsoleA(handle: u64, text: ptr, characters: u32, written: ptr, reserved: ptr) -> bool32
+    handler write_console_a
+    status partial
+    alias api-ms-win-core-console-l1-1-0.dll
+    fails sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for reserved
+    ref consoleapi.h WriteConsoleA
+    test the_console_identity_and_standard_handles_round_trip
+
+service kernel32.dll WriteConsoleW(handle: u64, text: ptr, characters: u32, written: ptr, reserved: ptr) -> bool32
+    handler write_console_w
+    status partial
+    alias api-ms-win-core-console-l1-2-0.dll
+    fails sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for reserved
+    ref consoleapi.h WriteConsoleW
+    test the_console_identity_and_standard_handles_round_trip
+
+service kernel32.dll ReadConsoleA(handle: u64, buffer: ptr, size: u32, read: ptr, control: ptr) -> bool32
+    handler read_console_a
+    status partial
+    alias api-ms-win-core-console-l1-1-0.dll
+    fails sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for the control parameter
+    ref consoleapi.h ReadConsoleA
+    test the_console_identity_and_standard_handles_round_trip
+
 # What a hosted C program's startup code hands to `main`. The three pointer
 # functions and the two initialization functions are listed by Microsoft only
 # by name; crates/loader/src/services/crt_arguments.rs says what is documented,

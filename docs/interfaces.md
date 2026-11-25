@@ -781,6 +781,17 @@ are refused with `ERROR_INVALID_PARAMETER` rather than silently ignored.
 refuses the other types; `LCMapStringW` maps ASCII case and refuses sort
 keys. Nothing was compared with Windows.
 
+### The console and the standard handles
+
+The three standard devices answer fixed pseudo-handles. `WriteConsole` and
+`printf` append to the same capture in call order; the console code pages
+are UTF-8, coherent with the process code page. `SetStdHandle` changes what
+`GetStdHandle` answers, but console writes and reads still belong to the
+fixed console devices: a redirected handle that is no console fails with
+`ERROR_INVALID_HANDLE`. The console mode bits round-trip without altering
+the capture behavior yet. `ReadConsoleA` hands one input line back with CR
+LF restored. Nothing was compared with Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.
