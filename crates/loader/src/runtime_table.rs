@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 191] = [
+pub static SERVICES: [ServiceMetadata; 200] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -1328,6 +1328,105 @@ pub static SERVICES: [ServiceMetadata; 191] = [
         failure: "sets ERROR_INVALID_PARAMETER for unsupported flags or another locale, ERROR_INSUFFICIENT_BUFFER for a small output",
         reference: "winnls.h LCMapStringW",
         tests: &["the_string_comparison_services_answer_in_byte_order"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetStdHandle",
+        parameters: &[Parameter { name: "kind", kind: "u32" }],
+        result: "u64",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-processenvironment-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_PARAMETER for an unknown device",
+        reference: "processenv.h GetStdHandle",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "SetStdHandle",
+        parameters: &[Parameter { name: "kind", kind: "u32" }, Parameter { name: "handle", kind: "u64" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-processenvironment-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_PARAMETER for an unknown device",
+        reference: "processenv.h SetStdHandle",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetConsoleCP",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-console-l1-1-0.dll"],
+        failure: "never",
+        reference: "consoleapi.h GetConsoleCP",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetConsoleOutputCP",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-console-l1-1-0.dll"],
+        failure: "never",
+        reference: "consoleapi.h GetConsoleOutputCP",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetConsoleMode",
+        parameters: &[Parameter { name: "handle", kind: "u64" }, Parameter { name: "output", kind: "ptr" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-console-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_HANDLE for an unknown handle",
+        reference: "consoleapi.h GetConsoleMode",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "SetConsoleMode",
+        parameters: &[Parameter { name: "handle", kind: "u64" }, Parameter { name: "mode", kind: "u32" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-console-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_HANDLE for an unknown handle",
+        reference: "consoleapi.h SetConsoleMode",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "WriteConsoleA",
+        parameters: &[Parameter { name: "handle", kind: "u64" }, Parameter { name: "text", kind: "ptr" }, Parameter { name: "characters", kind: "u32" }, Parameter { name: "written", kind: "ptr" }, Parameter { name: "reserved", kind: "ptr" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-console-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for reserved",
+        reference: "consoleapi.h WriteConsoleA",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "WriteConsoleW",
+        parameters: &[Parameter { name: "handle", kind: "u64" }, Parameter { name: "text", kind: "ptr" }, Parameter { name: "characters", kind: "u32" }, Parameter { name: "written", kind: "ptr" }, Parameter { name: "reserved", kind: "ptr" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-console-l1-2-0.dll"],
+        failure: "sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for reserved",
+        reference: "consoleapi.h WriteConsoleW",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "ReadConsoleA",
+        parameters: &[Parameter { name: "handle", kind: "u64" }, Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "size", kind: "u32" }, Parameter { name: "read", kind: "ptr" }, Parameter { name: "control", kind: "ptr" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-console-l1-1-0.dll"],
+        failure: "sets ERROR_INVALID_HANDLE for an unknown handle, ERROR_INVALID_PARAMETER for the control parameter",
+        reference: "consoleapi.h ReadConsoleA",
+        tests: &["the_console_identity_and_standard_handles_round_trip"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -3195,6 +3294,91 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a5 = call.i32(5)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::lcmap_string_w(&mut context, a0, a1, a2, a3, a4, a5)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetStdHandle", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::get_std_handle(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "SetStdHandle", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::set_std_handle(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetConsoleCP", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::get_console_cp(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetConsoleOutputCP", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::get_console_output_cp(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetConsoleMode", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::get_console_mode(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "SetConsoleMode", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::set_console_mode(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "WriteConsoleA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u64(4)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::write_console_a(&mut context, a0, a1, a2, a3, a4)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "WriteConsoleW", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u64(4)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::write_console_w(&mut context, a0, a1, a2, a3, a4)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "ReadConsoleA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u64(4)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::read_console_a(&mut context, a0, a1, a2, a3, a4)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();

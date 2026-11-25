@@ -11,6 +11,7 @@
 
 mod codepages;
 mod compare;
+mod console;
 mod crt;
 mod crt_arguments;
 mod crt_callbacks;
@@ -230,6 +231,7 @@ pub struct ServicesState {
     last_errors: Mutex<BTreeMap<u64, u32>>,
     error_mode: Mutex<u32>,
     crt_arguments: Mutex<crt_arguments::CrtArguments>,
+    console: Mutex<ConsoleState>,
     startup: Mutex<startup_info::StartupState>,
     synch: Mutex<synch::Synch>,
     crt_streams: Mutex<crt_streams::StandardStreams>,
@@ -255,6 +257,43 @@ pub struct ServicesState {
     pub graphics: Arc<Mutex<crate::graphics::GraphicsContext>>,
 }
 
+/// The console state: the mode bits round-tripping per handle and the
+/// redirected standard handles, package 8 first part of #459. The defaults
+/// are the fixed pseudo-handles of `services/console.rs`.
+#[derive(Default)]
+struct ConsoleState {
+    input_handle: Option<u64>,
+    output_handle: Option<u64>,
+    error_handle: Option<u64>,
+    input_mode: u32,
+    output_mode: u32,
+    initialized: bool,
+}
+
+impl ConsoleState {
+    fn handle(&mut self, kind: u32) -> Option<u64> {
+        self.initialize();
+        match kind {
+            console::STD_INPUT => Some(self.input_handle.unwrap()),
+            console::STD_OUTPUT => Some(self.output_handle.unwrap()),
+            console::STD_ERROR => Some(self.error_handle.unwrap()),
+            _ => None,
+        }
+    }
+
+    fn initialize(&mut self) {
+        if self.initialized {
+            return;
+        }
+        self.input_handle = Some(console::INPUT_HANDLE);
+        self.output_handle = Some(console::OUTPUT_HANDLE);
+        self.error_handle = Some(console::ERROR_HANDLE);
+        self.input_mode = console::DEFAULT_INPUT_MODE;
+        self.output_mode = console::DEFAULT_OUTPUT_MODE;
+        self.initialized = true;
+    }
+}
+
 impl ServicesState {
     pub fn new(clock: Arc<dyn Clock>) -> Self {
         Self {
@@ -272,6 +311,7 @@ impl ServicesState {
             synch: Mutex::default(),
             crt_streams: Mutex::default(),
             crt_clock: Mutex::default(),
+            console: Mutex::default(),
             threads: Mutex::default(),
             hooks: Arc::default(),
             atexit: Mutex::default(),
@@ -421,6 +461,10 @@ impl ServicesState {
 
     fn crt_streams(&self) -> std::sync::MutexGuard<'_, crt_streams::StandardStreams> {
         self.crt_streams.lock().expect("standard streams")
+    }
+
+    fn console(&self) -> std::sync::MutexGuard<'_, ConsoleState> {
+        self.console.lock().expect("console state")
     }
 
     /// Read the last-error value for a guest thread's TEB.
@@ -2102,6 +2146,213 @@ pub(crate) mod handlers {
                 .map_err(crate::cpu::ExitReason::MemoryFault)?;
         }
         Ok(total as i32)
+    }
+
+    // The console identity and the standard handles, package 8 first part of
+    // #459. `services/console.rs` documents the scope.
+
+    pub fn get_std_handle(context: &mut ServiceContext<'_>, kind: u32) -> Outcome<u64> {
+        match context.state.console().handle(kind) {
+            Some(handle) => Ok(handle),
+            None => context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0),
+        }
+    }
+
+    pub fn set_std_handle(
+        context: &mut ServiceContext<'_>,
+        kind: u32,
+        handle: u64,
+    ) -> Outcome<bool> {
+        let mut console = context.state.console();
+        console.initialize();
+        match kind {
+            console::STD_INPUT => console.input_handle = Some(handle),
+            console::STD_OUTPUT => console.output_handle = Some(handle),
+            console::STD_ERROR => console.error_handle = Some(handle),
+            _ => {
+                return context
+                    .state
+                    .fail(context.teb, ERROR_INVALID_PARAMETER, false);
+            }
+        }
+        Ok(true)
+    }
+
+    pub fn get_console_cp(_context: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(65001)
+    }
+
+    pub fn get_console_output_cp(_context: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(65001)
+    }
+
+    fn console_device(_context: &ServiceContext<'_>, handle: u64) -> Option<bool> {
+        // Some(false) output, Some(true) error, None input or unknown. The
+        // match is on the fixed console devices, not on what the standard
+        // handles were redirected to: redirecting output to the error device
+        // writes to the error capture, and redirecting it to a value that is
+        // no console at all fails, as it does on Windows.
+        if handle == console::OUTPUT_HANDLE {
+            Some(false)
+        } else if handle == console::ERROR_HANDLE {
+            Some(true)
+        } else {
+            None
+        }
+    }
+
+    pub fn get_console_mode(
+        context: &mut ServiceContext<'_>,
+        handle: u64,
+        output: u64,
+    ) -> Outcome<bool> {
+        let memory = &mut *context.memory;
+        let mut console = context.state.console();
+        console.initialize();
+        // The modes belong to the console devices themselves, like the
+        // writes: redirection does not move them.
+        let known = handle == console::INPUT_HANDLE
+            || handle == console::OUTPUT_HANDLE
+            || handle == console::ERROR_HANDLE;
+        if !known {
+            return context.state.fail(context.teb, ERROR_INVALID_HANDLE, false);
+        }
+        let mode = if handle == console::INPUT_HANDLE {
+            console.input_mode
+        } else {
+            console.output_mode
+        };
+        memory
+            .write_u32(output, mode)
+            .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        Ok(true)
+    }
+
+    pub fn set_console_mode(
+        context: &mut ServiceContext<'_>,
+        handle: u64,
+        mode: u32,
+    ) -> Outcome<bool> {
+        let mut console = context.state.console();
+        console.initialize();
+        let known = handle == console::INPUT_HANDLE
+            || handle == console::OUTPUT_HANDLE
+            || handle == console::ERROR_HANDLE;
+        if !known {
+            return context.state.fail(context.teb, ERROR_INVALID_HANDLE, false);
+        }
+        if handle == console::INPUT_HANDLE {
+            console.input_mode = mode;
+        } else {
+            console.output_mode = mode;
+        }
+        Ok(true)
+    }
+
+    fn write_console(
+        context: &mut ServiceContext<'_>,
+        handle: u64,
+        bytes: &[u8],
+        characters: u32,
+        written: u64,
+    ) -> Outcome<bool> {
+        let error = match console_device(context, handle) {
+            Some(error) => error,
+            None => return context.state.fail(context.teb, ERROR_INVALID_HANDLE, false),
+        };
+        let memory = &mut *context.memory;
+        context.state.crt_streams().console_write(error, bytes);
+        if written != 0 {
+            memory
+                .write_u32(written, characters)
+                .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        }
+        Ok(true)
+    }
+
+    pub fn write_console_a(
+        context: &mut ServiceContext<'_>,
+        handle: u64,
+        text: u64,
+        characters: u32,
+        written: u64,
+        reserved: u64,
+    ) -> Outcome<bool> {
+        if reserved != 0 {
+            return context
+                .state
+                .fail(context.teb, ERROR_INVALID_PARAMETER, false);
+        }
+        let mut bytes = Vec::new();
+        for index in 0..characters as u64 {
+            bytes.push(
+                context
+                    .memory
+                    .read_u8(text + index)
+                    .map_err(crate::cpu::ExitReason::MemoryFault)?,
+            );
+        }
+        write_console(context, handle, &bytes, characters, written)
+    }
+
+    pub fn write_console_w(
+        context: &mut ServiceContext<'_>,
+        handle: u64,
+        text: u64,
+        characters: u32,
+        written: u64,
+        reserved: u64,
+    ) -> Outcome<bool> {
+        if reserved != 0 {
+            return context
+                .state
+                .fail(context.teb, ERROR_INVALID_PARAMETER, false);
+        }
+        let mut units = Vec::new();
+        for index in 0..characters as u64 {
+            units.push(
+                context
+                    .memory
+                    .read_u16(text + index * 2)
+                    .map_err(crate::cpu::ExitReason::MemoryFault)?,
+            );
+        }
+        // Wide to UTF-8: the console code page is UTF-8, so the conversion
+        // is the encoding, not a code page mapping.
+        let text = String::from_utf16_lossy(&units);
+        write_console(context, handle, text.as_bytes(), characters, written)
+    }
+
+    pub fn read_console_a(
+        context: &mut ServiceContext<'_>,
+        handle: u64,
+        buffer: u64,
+        size: u32,
+        read: u64,
+        control: u64,
+    ) -> Outcome<bool> {
+        if control != 0 {
+            return context
+                .state
+                .fail(context.teb, ERROR_INVALID_PARAMETER, false);
+        }
+        if handle != console::INPUT_HANDLE {
+            return context.state.fail(context.teb, ERROR_INVALID_HANDLE, false);
+        }
+        let memory = &mut *context.memory;
+        let line = context.state.crt_streams().console_line(size as usize);
+        let length = line.len() as u32;
+        if length != 0 {
+            memory
+                .write_bytes(buffer, &line)
+                .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        }
+        if read != 0 {
+            memory
+                .write_u32(read, length)
+                .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        }
+        Ok(true)
     }
 
     // What a hosted C program's startup code hands to `main` (#392).
