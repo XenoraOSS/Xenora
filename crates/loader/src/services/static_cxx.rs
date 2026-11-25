@@ -15,7 +15,6 @@
 //! mingw-w64 `errno.h` values. The scheduler runs one guest thread at a time,
 //! so the host keeps the lock and key state and never reads the mutex word.
 
-use super::KERNEL32;
 use crate::cpu::ExitReason;
 use crate::imports::{CallbackStart, CallbackStep, CallbackTask, ImportRegistry, ServiceStatus};
 use crate::memory::{GuestMemory, MemoryError};
@@ -235,11 +234,9 @@ pub(super) fn register(registry: &mut ImportRegistry) {
     // implement the legacy memory family since package 9 of #459.
     // `__stdio_common_vsprintf` is no longer a stub here: the typed registry
     // serves it since #466.
-    for (module, symbol) in [
-        (KERNEL32, "FormatMessageA"),
-        (UCRT, "rand_s"),
-        (UCRT, "_read"),
-    ] {
+    // `FormatMessageA` is no longer a stub here: the error services
+    // implement it since package 9 of #459.
+    for (module, symbol) in [(UCRT, "rand_s"), (UCRT, "_read")] {
         registry.register_with_status(module, symbol, ServiceStatus::Stub, |_, _, _| {
             Err(UNSUPPORTED)
         });

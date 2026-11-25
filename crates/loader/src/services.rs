@@ -18,6 +18,8 @@ mod crt_math;
 mod crt_startup;
 mod crt_streams;
 mod cxx;
+mod environment;
+mod errors;
 mod events;
 mod files;
 mod gdk_queue;
@@ -214,6 +216,7 @@ pub struct ServicesState {
     pub guest_profile: sysinfo::GuestSystemProfile,
     objects: Mutex<ObjectState>,
     last_errors: Mutex<BTreeMap<u64, u32>>,
+    error_mode: Mutex<u32>,
     crt_arguments: Mutex<crt_arguments::CrtArguments>,
     startup: Mutex<startup_info::StartupState>,
     synch: Mutex<synch::Synch>,
@@ -250,6 +253,7 @@ impl ServicesState {
             guest_profile: sysinfo::GuestSystemProfile::default(),
             objects: Mutex::new(ObjectState::default()),
             last_errors: Mutex::default(),
+            error_mode: Mutex::new(0),
             crt_arguments: Mutex::default(),
             startup: Mutex::default(),
             synch: Mutex::default(),
@@ -292,6 +296,17 @@ impl ServicesState {
 
     fn crt_arguments(&self) -> std::sync::MutexGuard<'_, crt_arguments::CrtArguments> {
         self.crt_arguments.lock().expect("program arguments")
+    }
+
+    /// Exchange the process error mode, returning the previous one. The
+    /// mode controls error dialogs that do not exist here; it is stored so
+    /// programs that propagate it - a parent passing it to children, say -
+    /// behave coherently.
+    pub(crate) fn exchange_error_mode(&self, mode: u32) -> u32 {
+        let mut guard = self.error_mode.lock().expect("error mode");
+        let previous = *guard;
+        *guard = mode;
+        previous
     }
 
     fn uptime_millis(&self) -> u64 {
@@ -571,6 +586,8 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     crt::register_errno(registry);
     crt::register_conversions(registry);
     crt_callbacks::register(registry, &state);
+    environment::register(registry, &state);
+    errors::register(registry, &state);
     heap::register(registry, &state);
     cxx::register(registry, &state);
 
