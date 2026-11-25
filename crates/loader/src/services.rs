@@ -9,6 +9,7 @@
 //! - Virtual memory: `VirtualAlloc`, `VirtualFree`
 //! - Xbox physical memory: `XMemAlloc`, `XMemFree`
 
+mod codepages;
 mod crt;
 mod crt_arguments;
 mod crt_callbacks;
@@ -1481,6 +1482,216 @@ pub(crate) mod handlers {
     pub fn set_last_error(context: &mut ServiceContext<'_>, code: u32) -> Outcome<()> {
         context.state.set_last_error(context.teb, code);
         Ok(())
+    }
+
+    // The encoding conversions: `services/codepages.rs` says which pages
+    // Xenora serves and how each converts.
+
+    fn wide_input(
+        memory: &crate::memory::GuestMemory,
+        address: u64,
+        count: i32,
+    ) -> Result<Vec<u16>, MemoryError> {
+        if count == 0 || address == 0 {
+            return Err(MemoryError::Overflow);
+        }
+        if count > 0 {
+            let mut units = Vec::with_capacity(count as usize);
+            for index in 0..count as u64 {
+                let at = address
+                    .checked_add(index * 2)
+                    .ok_or(MemoryError::Overflow)?;
+                units.push(memory.read_u16(at)?);
+            }
+            return Ok(units);
+        }
+        // -1: up to and including the terminating zero.
+        let mut units = Vec::new();
+        for index in 0..(u32::MAX as u64 + 1) {
+            let at = address
+                .checked_add(index * 2)
+                .ok_or(MemoryError::Overflow)?;
+            let unit = memory.read_u16(at)?;
+            units.push(unit);
+            if unit == 0 {
+                return Ok(units);
+            }
+        }
+        Err(MemoryError::Overflow)
+    }
+
+    pub fn multibyte_to_wide_char(
+        context: &mut ServiceContext<'_>,
+        codepage: u32,
+        flags: u32,
+        input: u64,
+        input_count: i32,
+        output: u64,
+        output_count: i32,
+    ) -> Outcome<i32> {
+        use crate::services::codepages as pages;
+        let state = context.state;
+        let teb = context.teb;
+        let memory = &mut *context.memory;
+        let Some(page) = pages::resolve(codepage) else {
+            return state.fail(teb, pages::ERROR_INVALID_PARAMETER, 0);
+        };
+        // MB_ERR_INVALID_CHARS is the only flag these pages take.
+        if flags & !0x8 != 0 {
+            return state.fail(teb, pages::ERROR_INVALID_FLAGS, 0);
+        }
+        if input_count == 0 || input_count < -1 || input == 0 {
+            return state.fail(teb, pages::ERROR_INVALID_PARAMETER, 0);
+        }
+        let bytes = if input_count > 0 {
+            let mut bytes = vec![0u8; input_count as usize];
+            memory
+                .read_bytes(input, &mut bytes)
+                .map_err(ExitReason::MemoryFault)?;
+            bytes
+        } else {
+            // -1: up to and including the terminating zero.
+            let mut bytes = Vec::new();
+            for offset in 0..(u32::MAX as u64 + 1) {
+                let at = input
+                    .checked_add(offset)
+                    .ok_or(MemoryError::Overflow)
+                    .map_err(ExitReason::MemoryFault)?;
+                let mut one = [0u8];
+                memory
+                    .read_bytes(at, &mut one)
+                    .map_err(ExitReason::MemoryFault)?;
+                bytes.push(one[0]);
+                if one[0] == 0 {
+                    break;
+                }
+            }
+            bytes
+        };
+        let (units, malformed) = pages::decode(page, &bytes);
+        if !malformed.is_empty() && flags & 0x8 != 0 {
+            return state.fail(teb, pages::ERROR_NO_UNICODE_TRANSLATION, 0);
+        }
+        if output_count == 0 {
+            return Ok(units.len() as i32);
+        }
+        if output == 0 || (output_count as usize) < units.len() {
+            return state.fail(teb, pages::ERROR_INSUFFICIENT_BUFFER, 0);
+        }
+        for (index, &unit) in units.iter().enumerate() {
+            memory
+                .write_u16(output + index as u64 * 2, unit)
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        Ok(units.len() as i32)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn wide_char_to_multibyte(
+        context: &mut ServiceContext<'_>,
+        codepage: u32,
+        flags: u32,
+        input: u64,
+        input_count: i32,
+        output: u64,
+        output_count: i32,
+        default_char: u64,
+        used_default: u64,
+    ) -> Outcome<i32> {
+        use crate::services::codepages as pages;
+        let state = context.state;
+        let teb = context.teb;
+        let memory = &mut *context.memory;
+        let Some(page) = pages::resolve(codepage) else {
+            return state.fail(teb, pages::ERROR_INVALID_PARAMETER, 0);
+        };
+        // WC_ERR_INVALID_CHARS is the only flag these pages take. For UTF-8
+        // the default-character arguments must both be null, as Microsoft's
+        // page requires.
+        if flags & !0x80 != 0 {
+            return state.fail(teb, pages::ERROR_INVALID_FLAGS, 0);
+        }
+        if page == pages::CodePage::Utf8 && (default_char != 0 || used_default != 0) {
+            return state.fail(teb, pages::ERROR_INVALID_PARAMETER, 0);
+        }
+        if input_count == 0 || input_count < -1 || input == 0 {
+            return state.fail(teb, pages::ERROR_INVALID_PARAMETER, 0);
+        }
+        let units = wide_input(memory, input, input_count).map_err(ExitReason::MemoryFault)?;
+        let default = if default_char != 0 {
+            let mut one = [0u8];
+            memory
+                .read_bytes(default_char, &mut one)
+                .map_err(ExitReason::MemoryFault)?;
+            one[0]
+        } else {
+            b'?'
+        };
+        let (bytes, unrepresentable) = pages::encode(page, &units, default);
+        if !unrepresentable.is_empty() && flags & 0x80 != 0 {
+            return state.fail(teb, pages::ERROR_NO_UNICODE_TRANSLATION, 0);
+        }
+        if output_count == 0 {
+            return Ok(bytes.len() as i32);
+        }
+        if output == 0 || (output_count as usize) < bytes.len() {
+            return state.fail(teb, pages::ERROR_INSUFFICIENT_BUFFER, 0);
+        }
+        memory
+            .write_bytes(output, &bytes)
+            .map_err(ExitReason::MemoryFault)?;
+        if used_default != 0 {
+            let used = u32::from(!unrepresentable.is_empty());
+            memory
+                .write_u32(used_default, used)
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        Ok(bytes.len() as i32)
+    }
+
+    pub fn get_ansi_codepage(_context: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(crate::services::codepages::ansi_page())
+    }
+
+    pub fn get_oem_codepage(_context: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(crate::services::codepages::oem_page())
+    }
+
+    pub fn is_valid_codepage(_context: &mut ServiceContext<'_>, codepage: u32) -> Outcome<bool> {
+        // `CP_ACP` and `CP_OEMCP` are pseudo-values, not pages: only the
+        // numbers themselves answer true.
+        Ok(matches!(
+            codepage,
+            1252 | 437 | crate::services::codepages::CP_UTF8
+        ))
+    }
+
+    pub fn get_codepage_info(
+        context: &mut ServiceContext<'_>,
+        codepage: u32,
+        info: OutPtr<18>,
+    ) -> Outcome<bool> {
+        use crate::services::codepages as pages;
+        let state = context.state;
+        let teb = context.teb;
+        let valid = matches!(codepage, 1252 | 437 | pages::CP_UTF8);
+        if !valid || info.0 == 0 {
+            return state.fail(teb, pages::ERROR_INVALID_PARAMETER, false);
+        }
+        // CPINFO: the widest character in bytes, the default character as a
+        // byte pair, and twelve zero lead-byte entries (none of these pages
+        // is a lead-byte page, UTF-8 included).
+        let widest = match codepage {
+            pages::CP_UTF8 => 4u32,
+            _ => 1,
+        };
+        let mut bytes = [0u8; 18];
+        bytes[..4].copy_from_slice(&widest.to_le_bytes());
+        bytes[4] = b'?';
+        if info.store(context.memory, bytes).is_err() {
+            return state.fail(teb, ERROR_NOACCESS, false);
+        }
+        Ok(true)
     }
 
     // What a hosted C program's startup code hands to `main` (#392).

@@ -31,6 +31,7 @@ const IDATA_RVA: u32 = 0x10000;
 const IDATA_RAW: usize = 0x2200;
 const IDATA_LEN: usize = 0x4000;
 const SCRATCH: u64 = 0x5_0000;
+const CPBUF: u64 = 0x6_0000;
 const STACK: u64 = 0x8_0000;
 const STACK_TOP: u64 = STACK + 0x800;
 
@@ -5607,4 +5608,212 @@ fn wide_buffer_formatting_counts_in_wide_units() {
     // %n is invalid here as it is there.
     let format = place_wide(&mut guest, TEXT, "%n");
     assert_eq!(wide_print(&mut guest, format, 16, &[]), u32::MAX as u64);
+}
+
+/// Call a service whose arguments past the fourth ride the guest stack
+/// above the shadow space, as compiled code passes them.
+fn call6(guest: &mut Guest, symbol: &str, args: &[u64]) -> u64 {
+    for (index, arg) in args.iter().enumerate().skip(4) {
+        guest
+            .memory
+            .write_u64(STACK_TOP + 32 + 8 * (index - 4) as u64, *arg)
+            .unwrap();
+    }
+    let registers = args.len().min(4);
+    guest.call(symbol, &args[..registers])
+}
+
+#[test]
+fn multibyte_to_wide_converts_utf8_and_the_ansi_page() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .map_region(CPBUF, 0x1000, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    // UTF-8 "h\u{e9}\u{20ac}": three characters, five bytes plus terminator.
+    let text = place(&mut guest, CPBUF, "h\u{e9}\u{20ac}".as_bytes());
+    let asked = call6(
+        &mut guest,
+        "MultiByteToWideChar",
+        &[65001, 0, text, u64::MAX, 0, 0],
+    );
+    assert_eq!(asked, 4, "the terminator counts under a -1 byte count");
+    let out = SCRATCH;
+    let wrote = call6(
+        &mut guest,
+        "MultiByteToWideChar",
+        &[65001, 0, text, u64::MAX, out, asked],
+    );
+    assert_eq!(wrote, 4);
+    assert_eq!(guest.memory.read_u16(out).unwrap(), u16::from(b'h'));
+    assert_eq!(guest.memory.read_u16(out + 2).unwrap(), 0xE9);
+    assert_eq!(guest.memory.read_u16(out + 4).unwrap(), 0x20AC);
+    assert_eq!(guest.memory.read_u16(out + 6).unwrap(), 0);
+    // A positive byte count converts exactly that many bytes.
+    let exact = call6(
+        &mut guest,
+        "MultiByteToWideChar",
+        &[65001, 0, text, 1, out, 8],
+    );
+    assert_eq!(exact, 1);
+    // The ANSI page: byte 0x80 is the euro sign, 0x81 is undefined.
+    place(&mut guest, CPBUF + 0x40, &[0x80, 0x81]);
+    let ansi = call6(
+        &mut guest,
+        "MultiByteToWideChar",
+        &[1252, 0, CPBUF + 0x40, 2, out, 8],
+    );
+    assert_eq!(ansi, 2);
+    assert_eq!(guest.memory.read_u16(out).unwrap(), 0x20AC);
+    assert_eq!(
+        guest.memory.read_u16(out + 2).unwrap(),
+        0xFFFD,
+        "a byte the page leaves undefined is replaced"
+    );
+    // CP_ACP resolves to UTF-8, the runtime's ANSI page: the ASCII byte
+    // converts as itself.
+    let pseudo = call6(&mut guest, "MultiByteToWideChar", &[0, 0, CPBUF, 1, out, 8]);
+    assert_eq!(pseudo, 1);
+    assert_eq!(guest.memory.read_u16(out).unwrap(), u16::from(b'h'));
+    // A malformed sequence fails under MB_ERR_INVALID_CHARS and is replaced
+    // without it.
+    place(&mut guest, CPBUF + 0x80, &[0xFF]);
+    let strict = call6(
+        &mut guest,
+        "MultiByteToWideChar",
+        &[65001, 8, CPBUF + 0x80, 1, out, 8],
+    );
+    assert_eq!(strict, 0);
+    assert_eq!(guest.last_error(), 1113, "ERROR_NO_UNICODE_TRANSLATION");
+    let lenient = call6(
+        &mut guest,
+        "MultiByteToWideChar",
+        &[65001, 0, CPBUF + 0x80, 1, out, 8],
+    );
+    assert_eq!(lenient, 1);
+    assert_eq!(guest.memory.read_u16(out).unwrap(), 0xFFFD);
+    // The failures: an unknown page, a zero byte count, flags past the one
+    // documented, and a small output buffer.
+    assert_eq!(
+        call6(
+            &mut guest,
+            "MultiByteToWideChar",
+            &[99999, 0, text, 1, out, 8]
+        ),
+        0
+    );
+    assert_eq!(guest.last_error(), 87, "ERROR_INVALID_PARAMETER");
+    assert_eq!(
+        call6(
+            &mut guest,
+            "MultiByteToWideChar",
+            &[65001, 0, text, 0, out, 8]
+        ),
+        0
+    );
+    assert_eq!(guest.last_error(), 87);
+    assert_eq!(
+        call6(
+            &mut guest,
+            "MultiByteToWideChar",
+            &[65001, 2, text, 1, out, 8]
+        ),
+        0
+    );
+    assert_eq!(guest.last_error(), 1004, "ERROR_INVALID_FLAGS");
+    assert_eq!(
+        call6(
+            &mut guest,
+            "MultiByteToWideChar",
+            &[65001, 0, text, 4, out, 2]
+        ),
+        0
+    );
+    assert_eq!(guest.last_error(), 122, "ERROR_INSUFFICIENT_BUFFER");
+}
+
+#[test]
+fn wide_char_to_multibyte_converts_utf8_and_marks_defaults() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .map_region(CPBUF, 0x1000, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    // Wide "h\u{e9}" as units, then a terminator.
+    for (index, unit) in [u16::from(b'h'), 0xE9, 0].iter().enumerate() {
+        guest
+            .memory
+            .write_u16(CPBUF + index as u64 * 2, *unit)
+            .unwrap();
+    }
+    let out = SCRATCH;
+    let wrote = call6(
+        &mut guest,
+        "WideCharToMultiByte",
+        &[65001, 0, CPBUF, u64::MAX, out, 16, 0, 0],
+    );
+    assert_eq!(wrote, 4, "h, two bytes for é, and the terminator");
+    assert_eq!(guest.memory.read_u8(out).unwrap(), b'h');
+    assert_eq!(guest.memory.read_u8(out + 1).unwrap(), 0xC3);
+    assert_eq!(guest.memory.read_u8(out + 2).unwrap(), 0xA9);
+    assert_eq!(guest.memory.read_u8(out + 3).unwrap(), 0);
+    // A character the ANSI page cannot represent becomes the default byte
+    // and sets the used-default flag.
+    guest.memory.write_u16(CPBUF, 0x4E2D).unwrap();
+    guest.memory.write_u16(CPBUF + 2, 0).unwrap();
+    let used = SCRATCH + 0x40;
+    let ansi = call6(
+        &mut guest,
+        "WideCharToMultiByte",
+        &[1252, 0, CPBUF, u64::MAX, out, 16, 0, used],
+    );
+    assert_eq!(ansi, 2);
+    assert_eq!(guest.memory.read_u8(out).unwrap(), b'?');
+    assert_eq!(guest.memory.read_u32(used).unwrap(), 1);
+    // The same input fails under WC_ERR_INVALID_CHARS.
+    let strict = call6(
+        &mut guest,
+        "WideCharToMultiByte",
+        &[1252, 0x80, CPBUF, u64::MAX, out, 16, 0, 0],
+    );
+    assert_eq!(strict, 0);
+    assert_eq!(guest.last_error(), 1113);
+    // UTF-8 refuses the default-character arguments, as documented.
+    guest.memory.write_u8(CPBUF + 0x60, b'!').unwrap();
+    assert_eq!(
+        call6(
+            &mut guest,
+            "WideCharToMultiByte",
+            &[65001, 0, CPBUF, u64::MAX, out, 16, CPBUF + 0x60, 0]
+        ),
+        0
+    );
+    assert_eq!(guest.last_error(), 87);
+    // A size query answers the bytes needed: three for the character in
+    // UTF-8, one for the terminator.
+    let asked = call6(
+        &mut guest,
+        "WideCharToMultiByte",
+        &[65001, 0, CPBUF, u64::MAX, 0, 0, 0, 0],
+    );
+    assert_eq!(asked, 4);
+}
+
+#[test]
+fn the_codepages_answer_their_numbers() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("GetACP", &[]), 65001);
+    assert_eq!(guest.call("GetOEMCP", &[]), 437);
+    assert_eq!(guest.call("IsValidCodePage", &[1252]), 1);
+    assert_eq!(guest.call("IsValidCodePage", &[437]), 1);
+    assert_eq!(guest.call("IsValidCodePage", &[65001]), 1);
+    assert_eq!(guest.call("IsValidCodePage", &[0]), 0);
+    assert_eq!(guest.call("IsValidCodePage", &[99999]), 0);
+    let info = SCRATCH;
+    assert_eq!(guest.call("GetCPInfo", &[1252, info]), 1);
+    assert_eq!(guest.memory.read_u32(info).unwrap(), 1);
+    assert_eq!(guest.call("GetCPInfo", &[65001, info]), 1);
+    assert_eq!(guest.memory.read_u32(info).unwrap(), 4);
+    assert_eq!(guest.call("GetCPInfo", &[99999, info]), 0);
+    assert_eq!(guest.last_error(), 87);
 }

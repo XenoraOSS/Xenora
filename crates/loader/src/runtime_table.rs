@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 169] = [
+pub static SERVICES: [ServiceMetadata; 175] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -1086,6 +1086,72 @@ pub static SERVICES: [ServiceMetadata; 169] = [
         failure: "never",
         reference: "errhandlingapi.h SetLastError",
         tests: &["last_error_is_set_by_failures_and_by_the_guest"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "MultiByteToWideChar",
+        parameters: &[Parameter { name: "codepage", kind: "u32" }, Parameter { name: "flags", kind: "u32" }, Parameter { name: "input", kind: "ptr" }, Parameter { name: "input_count", kind: "i32" }, Parameter { name: "output", kind: "ptr" }, Parameter { name: "output_count", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "0 with ERROR_INVALID_PARAMETER for an unknown page, a zero or out-of-range byte count or a null input, with ERROR_INVALID_FLAGS for flags past MB_ERR_INVALID_CHARS, with ERROR_NO_UNICODE_TRANSLATION for malformed input under MB_ERR_INVALID_CHARS, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults",
+        reference: "stringapiset.h MultiByteToWideChar",
+        tests: &["multibyte_to_wide_converts_utf8_and_the_ansi_page"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "WideCharToMultiByte",
+        parameters: &[Parameter { name: "codepage", kind: "u32" }, Parameter { name: "flags", kind: "u32" }, Parameter { name: "input", kind: "ptr" }, Parameter { name: "input_count", kind: "i32" }, Parameter { name: "output", kind: "ptr" }, Parameter { name: "output_count", kind: "i32" }, Parameter { name: "default_char", kind: "ptr" }, Parameter { name: "used_default", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-string-l1-1-0.dll"],
+        failure: "0 with ERROR_INVALID_PARAMETER for an unknown page, a zero or out-of-range count, a null input or default-character arguments under UTF-8, with ERROR_INVALID_FLAGS for flags past WC_ERR_INVALID_CHARS, with ERROR_NO_UNICODE_TRANSLATION for unrepresentable input under WC_ERR_INVALID_CHARS, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults",
+        reference: "stringapiset.h WideCharToMultiByte",
+        tests: &["wide_char_to_multibyte_converts_utf8_and_marks_defaults"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetACP",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "never",
+        reference: "winnls.h GetACP",
+        tests: &["the_codepages_answer_their_numbers"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetOEMCP",
+        parameters: &[],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "never",
+        reference: "winnls.h GetOEMCP",
+        tests: &["the_codepages_answer_their_numbers"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "IsValidCodePage",
+        parameters: &[Parameter { name: "codepage", kind: "u32" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "never; false for a page Xenora does not serve",
+        reference: "winnls.h IsValidCodePage",
+        tests: &["the_codepages_answer_their_numbers"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetCPInfo",
+        parameters: &[Parameter { name: "codepage", kind: "u32" }, Parameter { name: "info", kind: "out<18>" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-localization-l1-2-0.dll"],
+        failure: "false with ERROR_INVALID_PARAMETER for a page Xenora does not serve or a null output; stops the guest for memory that faults",
+        reference: "winnls.h GetCPInfo",
+        tests: &["the_codepages_answer_their_numbers"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -2739,6 +2805,65 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let () = handlers::set_last_error(&mut context, a0)?;
         Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "MultiByteToWideChar", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let a4 = call.u64(4)?;
+        let a5 = call.i32(5)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::multibyte_to_wide_char(&mut context, a0, a1, a2, a3, a4, a5)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "WideCharToMultiByte", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.i32(3)?;
+        let a4 = call.u64(4)?;
+        let a5 = call.i32(5)?;
+        let a6 = call.u64(6)?;
+        let a7 = call.u64(7)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::wide_char_to_multibyte(&mut context, a0, a1, a2, a3, a4, a5, a6, a7)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetACP", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::get_ansi_codepage(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetOEMCP", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::get_oem_codepage(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "IsValidCodePage", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::is_valid_codepage(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetCPInfo", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u32(0)?;
+        let a1 = call.out::<18>(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::get_codepage_info(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
     });
     let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "__p___argc", ServiceStatus::Partial, move |args, cpu, memory| {

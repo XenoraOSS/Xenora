@@ -58,6 +58,11 @@ pub fn get_api_sets_for_canonical(canonical: &str) -> &'static [&'static str] {
             "api-ms-win-core-timezone-l1-1-0.dll",
             "api-ms-win-core-realtime-l1-1-0.dll",
             "api-ms-win-core-memory-l1-1-0.dll",
+            // Both are on Microsoft's "Windows API sets" page: the string
+            // set carries the encoding conversions of stringapiset.h, the
+            // localization set the code pages of winnls.h.
+            "api-ms-win-core-string-l1-1-0.dll",
+            "api-ms-win-core-localization-l1-2-0.dll",
         ],
         "ucrtbase.dll" => &[
             "api-ms-win-crt-math-l1-1-0.dll",
