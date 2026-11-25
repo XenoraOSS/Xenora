@@ -4603,6 +4603,111 @@ fn legacy_amsg_exit_ends_the_process() {
 }
 
 #[test]
+fn environment_variables_are_never_found_in_the_empty_environment() {
+    let mut guest = Guest::new();
+    guest.memory.write_bytes(SCRATCH, b"PATH\0").unwrap();
+    for symbol in ["GetEnvironmentVariableA", "GetEnvironmentVariableW"] {
+        for args in [
+            [SCRATCH, SCRATCH + 0x40, 32],
+            [0, SCRATCH + 0x40, 32],
+            [SCRATCH, 0, 0],
+        ] {
+            assert_eq!(guest.call(symbol, &args) & 0xFFFF_FFFF, 0, "{symbol}");
+            assert_eq!(guest.last_error(), 203, "{symbol} ERROR_ENVVAR_NOT_FOUND");
+        }
+    }
+}
+
+#[test]
+fn the_hosted_console_has_no_window_and_its_title_round_trips() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("GetConsoleWindow", &[]), 0);
+
+    // Null titles and invalid outputs are refused.
+    assert_eq!(guest.call("SetConsoleTitleW", &[0]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.last_error(), 87);
+    assert_eq!(guest.call("GetConsoleTitleW", &[0, 32]) & 0xFFFF_FFFF, 0);
+    assert_eq!(
+        guest.call("GetConsoleTitleW", &[SCRATCH, 0]) & 0xFFFF_FFFF,
+        0
+    );
+
+    // The title starts empty: length zero, just the terminator written.
+    assert_eq!(
+        guest.call("GetConsoleTitleW", &[SCRATCH, 32]) & 0xFFFF_FFFF,
+        0
+    );
+    assert_eq!(guest.memory.read_u16(SCRATCH).unwrap(), 0);
+
+    // A wide round trip. "titre é" is 7 characters.
+    let wide: Vec<u16> = "titre é".encode_utf16().collect();
+    for (index, unit) in wide.iter().enumerate() {
+        guest
+            .memory
+            .write_u16(SCRATCH + 2 * index as u64, *unit)
+            .unwrap();
+    }
+    guest
+        .memory
+        .write_u16(SCRATCH + 2 * wide.len() as u64, 0)
+        .unwrap();
+    assert_eq!(guest.call("SetConsoleTitleW", &[SCRATCH]) & 0xFFFF_FFFF, 1);
+    guest.memory.write_bytes(SCRATCH, &[0xCC; 0x40]).unwrap();
+    assert_eq!(
+        guest.call("GetConsoleTitleW", &[SCRATCH, 32]) & 0xFFFF_FFFF,
+        7
+    );
+    for (index, unit) in wide.iter().enumerate() {
+        assert_eq!(
+            guest.memory.read_u16(SCRATCH + 2 * index as u64).unwrap(),
+            *unit
+        );
+    }
+    assert_eq!(
+        guest.memory.read_u16(SCRATCH + 14).unwrap(),
+        0,
+        "terminated"
+    );
+
+    // A short buffer holds less, yet the answer is the full length.
+    assert_eq!(
+        guest.call("GetConsoleTitleW", &[SCRATCH, 4]) & 0xFFFF_FFFF,
+        7
+    );
+    assert_eq!(
+        guest.memory.read_u16(SCRATCH + 6).unwrap(),
+        0,
+        "terminated at size - 1"
+    );
+
+    // The narrow form converts with the UTF-8 console code page.
+    assert_eq!(
+        guest.call("GetConsoleTitleA", &[SCRATCH, 32]) & 0xFFFF_FFFF,
+        8,
+        "é is two bytes"
+    );
+    assert_eq!(guest.memory.read_u8(SCRATCH + 6).unwrap(), 0xC3);
+    assert_eq!(guest.memory.read_u8(SCRATCH + 7).unwrap(), 0xA9);
+    // A narrow round trip too.
+    guest
+        .memory
+        .write_bytes(SCRATCH, "café".as_bytes())
+        .unwrap();
+    guest.memory.write_u8(SCRATCH + 5, 0).unwrap();
+    assert_eq!(guest.call("SetConsoleTitleA", &[SCRATCH]) & 0xFFFF_FFFF, 1);
+    assert_eq!(
+        guest.call("GetConsoleTitleW", &[SCRATCH, 32]) & 0xFFFF_FFFF,
+        4,
+        "café is 4 wide characters"
+    );
+    assert_eq!(
+        guest.last_error(),
+        87,
+        "successes leave the last error alone"
+    );
+}
+
+#[test]
 fn legacy_data_imports_bind_the_crt_variable_cells() {
     let mut guest = Guest::new();
     let supplied = ["prog.exe", "alpha", "beta"];

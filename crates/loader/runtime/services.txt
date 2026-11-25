@@ -1787,3 +1787,59 @@ service msvcrt.dll _amsg_exit(code: i32) -> void
     fails never returns; the runtime-error message of the CRT is not written
     ref msvcrt.dll export of the legacy CRT runtime error exit
     test legacy_amsg_exit_ends_the_process
+
+# Queries about the hosted process environment and the console identity.
+# The process environment is empty: no host variable passes through, so a
+# query never finds its variable, which is the exact behavior of an empty
+# environment rather than a stub.
+
+service kernel32.dll GetEnvironmentVariableA(name: ptr, buffer: ptr, size: u32) -> u32
+    handler environment_variable
+    status implemented
+    alias api-ms-win-core-processenvironment-l1-1-0.dll
+    fails 0 with ERROR_ENVVAR_NOT_FOUND for every name: the environment is empty
+    ref Microsoft Learn, GetEnvironmentVariable
+    test environment_variables_are_never_found_in_the_empty_environment
+
+service kernel32.dll GetEnvironmentVariableW(name: ptr, buffer: ptr, size: u32) -> u32
+    handler environment_variable
+    status implemented
+    alias api-ms-win-core-processenvironment-l1-1-0.dll
+    fails 0 with ERROR_ENVVAR_NOT_FOUND for every name: the environment is empty
+    ref Microsoft Learn, GetEnvironmentVariable
+    test environment_variables_are_never_found_in_the_empty_environment
+
+service kernel32.dll GetConsoleWindow() -> handle
+    handler console_window
+    status implemented
+    fails never; the answer is null, the hosted runtime has no console window
+    ref Microsoft Learn, GetConsoleWindow
+    test the_hosted_console_has_no_window_and_its_title_round_trips
+
+service kernel32.dll SetConsoleTitleW(title: ptr) -> bool32
+    handler set_console_title_wide
+    status partial
+    fails FALSE with ERROR_INVALID_PARAMETER for a null title
+    ref Microsoft Learn, SetConsoleTitleW
+    test the_hosted_console_has_no_window_and_its_title_round_trips
+
+service kernel32.dll GetConsoleTitleW(buffer: ptr, size: u32) -> u32
+    handler console_title_wide
+    status partial
+    fails 0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size; the answer is the title length even when the buffer holds less, Xenora's documented choice
+    ref Microsoft Learn, GetConsoleTitleW
+    test the_hosted_console_has_no_window_and_its_title_round_trips
+
+service kernel32.dll SetConsoleTitleA(title: ptr) -> bool32
+    handler set_console_title_narrow
+    status partial
+    fails FALSE with ERROR_INVALID_PARAMETER for a null title
+    ref Microsoft Learn, SetConsoleTitleA
+    test the_hosted_console_has_no_window_and_its_title_round_trips
+
+service kernel32.dll GetConsoleTitleA(buffer: ptr, size: u32) -> u32
+    handler console_title_narrow
+    status partial
+    fails 0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size, the same documented length answer as the wide form
+    ref Microsoft Learn, GetConsoleTitleA
+    test the_hosted_console_has_no_window_and_its_title_round_trips

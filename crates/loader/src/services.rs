@@ -65,6 +65,8 @@ const ERROR_INVALID_HANDLE: u32 = 6;
 const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
 const ERROR_NOT_SUPPORTED: u32 = 50;
 const ERROR_INVALID_PARAMETER: u32 = 87;
+/// ERROR_ENVVAR_NOT_FOUND (winerror.h).
+const ERROR_ENVVAR_NOT_FOUND: u32 = 203;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 const ERROR_INVALID_ADDRESS: u32 = 487;
 const THREAD_QUERY_RIGHTS: u32 = 0x0040 | 0x0800;
@@ -268,6 +270,9 @@ struct ConsoleState {
     input_mode: u32,
     output_mode: u32,
     initialized: bool,
+    /// The console title as wide characters, empty until set. The narrow
+    /// forms convert with the console code page, which is UTF-8.
+    title: Vec<u16>,
 }
 
 impl ConsoleState {
@@ -2403,6 +2408,100 @@ pub(crate) mod handlers {
                 .map_err(crate::cpu::ExitReason::MemoryFault)?;
         }
         Ok(true)
+    }
+
+    // Queries about the hosted process environment and the console identity.
+    // The process environment is empty: no host variable passes through, so
+    // every query misses, which is what an empty environment answers on
+    // Windows rather than a stub.
+
+    pub fn environment_variable(
+        context: &mut ServiceContext<'_>,
+        _name: u64,
+        _buffer: u64,
+        _size: u32,
+    ) -> Outcome<u32> {
+        context.state.fail(context.teb, ERROR_ENVVAR_NOT_FOUND, 0)
+    }
+
+    /// The hosted runtime has no console window: the answer is a null handle.
+    pub fn console_window(_context: &mut ServiceContext<'_>) -> Outcome<u64> {
+        Ok(0)
+    }
+
+    pub fn set_console_title_wide(context: &mut ServiceContext<'_>, title: u64) -> Outcome<bool> {
+        if title == 0 {
+            return context
+                .state
+                .fail(context.teb, ERROR_INVALID_PARAMETER, false);
+        }
+        let units = read_wide_units(context.memory, title, -1)?;
+        context.state.console().title = units;
+        Ok(true)
+    }
+
+    pub fn console_title_wide(
+        context: &mut ServiceContext<'_>,
+        buffer: u64,
+        size: u32,
+    ) -> Outcome<u32> {
+        if buffer == 0 || size == 0 {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        let title = context.state.console().title.clone();
+        let length = title.len() as u32;
+        // What fits with its terminator; the answer is the full length even
+        // then, so a caller can size its buffer and ask again.
+        let room = size.saturating_sub(1) as usize;
+        let copied = room.min(title.len());
+        for (index, unit) in title[..copied].iter().enumerate() {
+            context
+                .memory
+                .write_u16(buffer + 2 * index as u64, *unit)
+                .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        }
+        context
+            .memory
+            .write_u16(buffer + 2 * copied as u64, 0)
+            .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        Ok(length)
+    }
+
+    pub fn set_console_title_narrow(context: &mut ServiceContext<'_>, title: u64) -> Outcome<bool> {
+        if title == 0 {
+            return context
+                .state
+                .fail(context.teb, ERROR_INVALID_PARAMETER, false);
+        }
+        let bytes = read_narrow_string(context.memory, title)?;
+        // The console code page is UTF-8, so the narrow text is UTF-8.
+        let text = String::from_utf8_lossy(&bytes);
+        context.state.console().title = text.encode_utf16().collect();
+        Ok(true)
+    }
+
+    pub fn console_title_narrow(
+        context: &mut ServiceContext<'_>,
+        buffer: u64,
+        size: u32,
+    ) -> Outcome<u32> {
+        if buffer == 0 || size == 0 {
+            return context.state.fail(context.teb, ERROR_INVALID_PARAMETER, 0);
+        }
+        let title = context.state.console().title.clone();
+        let bytes: Vec<u8> = String::from_utf16_lossy(&title).into_bytes();
+        let length = bytes.len() as u32;
+        let room = size.saturating_sub(1) as usize;
+        let copied = room.min(bytes.len());
+        context
+            .memory
+            .write_bytes(buffer, &bytes[..copied])
+            .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        context
+            .memory
+            .write_u8(buffer + copied as u64, 0)
+            .map_err(crate::cpu::ExitReason::MemoryFault)?;
+        Ok(length)
     }
 
     // What a hosted C program's startup code hands to `main` (#392).

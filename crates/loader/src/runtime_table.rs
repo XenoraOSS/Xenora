@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 204] = [
+pub static SERVICES: [ServiceMetadata; 211] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -2253,6 +2253,83 @@ pub static SERVICES: [ServiceMetadata; 204] = [
         reference: "msvcrt.dll export of the legacy CRT runtime error exit",
         tests: &["legacy_amsg_exit_ends_the_process"],
     },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetEnvironmentVariableA",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "size", kind: "u32" }],
+        result: "u32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-core-processenvironment-l1-1-0.dll"],
+        failure: "0 with ERROR_ENVVAR_NOT_FOUND for every name: the environment is empty",
+        reference: "Microsoft Learn, GetEnvironmentVariable",
+        tests: &["environment_variables_are_never_found_in_the_empty_environment"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetEnvironmentVariableW",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "size", kind: "u32" }],
+        result: "u32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-core-processenvironment-l1-1-0.dll"],
+        failure: "0 with ERROR_ENVVAR_NOT_FOUND for every name: the environment is empty",
+        reference: "Microsoft Learn, GetEnvironmentVariable",
+        tests: &["environment_variables_are_never_found_in_the_empty_environment"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetConsoleWindow",
+        parameters: &[],
+        result: "handle",
+        status: ServiceStatus::Implemented,
+        aliases: &[],
+        failure: "never; the answer is null, the hosted runtime has no console window",
+        reference: "Microsoft Learn, GetConsoleWindow",
+        tests: &["the_hosted_console_has_no_window_and_its_title_round_trips"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "SetConsoleTitleW",
+        parameters: &[Parameter { name: "title", kind: "ptr" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "FALSE with ERROR_INVALID_PARAMETER for a null title",
+        reference: "Microsoft Learn, SetConsoleTitleW",
+        tests: &["the_hosted_console_has_no_window_and_its_title_round_trips"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetConsoleTitleW",
+        parameters: &[Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "size", kind: "u32" }],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size; the answer is the title length even when the buffer holds less, Xenora's documented choice",
+        reference: "Microsoft Learn, GetConsoleTitleW",
+        tests: &["the_hosted_console_has_no_window_and_its_title_round_trips"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "SetConsoleTitleA",
+        parameters: &[Parameter { name: "title", kind: "ptr" }],
+        result: "bool32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "FALSE with ERROR_INVALID_PARAMETER for a null title",
+        reference: "Microsoft Learn, SetConsoleTitleA",
+        tests: &["the_hosted_console_has_no_window_and_its_title_round_trips"],
+    },
+    ServiceMetadata {
+        library: "kernel32.dll",
+        symbol: "GetConsoleTitleA",
+        parameters: &[Parameter { name: "buffer", kind: "ptr" }, Parameter { name: "size", kind: "u32" }],
+        result: "u32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size, the same documented length answer as the wide form",
+        reference: "Microsoft Learn, GetConsoleTitleA",
+        tests: &["the_hosted_console_has_no_window_and_its_title_round_trips"],
+    },
 ];
 
 /// Register every generated service and its API-set aliases.
@@ -4046,6 +4123,67 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let () = handlers::amsg_exit(&mut context, a0)?;
         Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetEnvironmentVariableA", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::environment_variable(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetEnvironmentVariableW", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::environment_variable(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetConsoleWindow", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::console_window(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "SetConsoleTitleW", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::set_console_title_wide(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetConsoleTitleW", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::console_title_wide(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "SetConsoleTitleA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: bool = handlers::set_console_title_narrow(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("kernel32.dll", "GetConsoleTitleA", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u32 = handlers::console_title_narrow(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
     });
     for service in &SERVICES {
         for alias in service.aliases {
