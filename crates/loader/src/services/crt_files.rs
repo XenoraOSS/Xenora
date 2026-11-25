@@ -356,6 +356,7 @@ impl FileStreams {
         }
         let data = drive.drive_file(&stream.path).ok_or(EBADF)?;
         let mut at = usize::try_from(stream.position).map_or(data.len(), |at| at.min(data.len()));
+        let start = at;
         let mut bytes = Vec::new();
         while bytes.len() < limit && at < data.len() {
             let mut byte = data[at];
@@ -371,7 +372,9 @@ impl FileStreams {
             at += 1;
             bytes.push(byte);
         }
-        stream.position = at as u64;
+        // The position advances by the bytes read, from where it was: a read
+        // past the end reads nothing and leaves it there, as POSIX leaves it.
+        stream.position += (at - start) as u64;
         Ok(bytes)
     }
 
@@ -399,6 +402,19 @@ impl FileStreams {
 
     /// The lowest free descriptor from 3, or `EMFILE` when the table is as
     /// full as the CRT's default allows.
+    /// Whether one more descriptor fits, so a failing open can refuse
+    /// before it creates or truncates anything.
+    fn has_descriptor_room(&self) -> bool {
+        let mut fd = 3;
+        while self.descriptors.contains_key(&fd) {
+            fd += 1;
+            if fd >= MAX_DESCRIPTORS {
+                return false;
+            }
+        }
+        true
+    }
+
     fn insert_descriptor(&mut self, entry: Descriptor) -> Result<u32, u32> {
         let mut fd = 3;
         while self.descriptors.contains_key(&fd) {
@@ -465,6 +481,11 @@ impl FileStreams {
             DriveEntry::Missing { parent: false } => return Err(ENOENT),
             DriveEntry::Missing { parent: true } => true,
         };
+        // A full table fails before anything is created or truncated: the
+        // EMFILE of the CRT leaves the file as it was.
+        if !self.has_descriptor_room() {
+            return Err(EMFILE);
+        }
         if create && !drive.drive_create(&path) {
             return Err(ENOSPC);
         }
@@ -506,6 +527,7 @@ impl FileStreams {
         let position_path = stream.path.clone();
         let data = drive.drive_file(&position_path).ok_or(EBADF)?;
         let mut at = usize::try_from(stream.position).map_or(data.len(), |at| at.min(data.len()));
+        let start = at;
         let mut bytes = Vec::new();
         while bytes.len() < limit && at < data.len() {
             let mut byte = data[at];
@@ -521,7 +543,9 @@ impl FileStreams {
             at += 1;
             bytes.push(byte);
         }
-        stream.position = at as u64;
+        // The position advances by the bytes read, from where it was: a read
+        // past the end reads nothing and leaves it there, as POSIX leaves it.
+        stream.position += (at - start) as u64;
         Ok(bytes)
     }
 
@@ -560,9 +584,13 @@ impl FileStreams {
         let Some(position) = position else {
             return Err(EBADF);
         };
-        let written = drive.drive_write(&path, position, &stored).ok_or(EBADF)?;
-        if !written {
-            return Err(ENOSPC);
+        // A zero-byte write touches nothing: it must not extend the file to
+        // the cursor, as a write of zero bytes has no effect.
+        if !stored.is_empty() {
+            let written = drive.drive_write(&path, position, &stored).ok_or(EBADF)?;
+            if !written {
+                return Err(ENOSPC);
+            }
         }
         stream.position = position + stored.len() as u64;
         Ok(())
@@ -647,6 +675,7 @@ impl FileStreams {
         }
         let data = drive.drive_file(&stream.path).ok_or(EBADF)?;
         let mut at = usize::try_from(stream.position).map_or(data.len(), |at| at.min(data.len()));
+        let start = at;
         let ended = at == data.len() || (stream.text && data[at] == CTRL_Z);
         if limit == 0 {
             // No room to read a character: an empty line unless the stream
@@ -671,7 +700,9 @@ impl FileStreams {
                 break;
             }
         }
-        stream.position = at as u64;
+        // The position advances by the bytes read, from where it was: a read
+        // past the end reads nothing and leaves it there, as POSIX leaves it.
+        stream.position += (at - start) as u64;
         Ok((!line.is_empty()).then_some(line))
     }
 }
