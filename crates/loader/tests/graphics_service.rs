@@ -90,7 +90,7 @@ fn cpu_invalid_envelopes_and_reserved_words_preserve_result() {
         (0, 0),
         (0, 2),
         (1, 0),
-        (1, 49), // First unassigned opcode after SampledViewHandles.
+        (1, 50), // First unassigned opcode after CreateGuestBackedBuffer.
         (1, u64::MAX),
         (2, 1),
         (15, 1),
@@ -1782,4 +1782,105 @@ fn cpu_guest_sampler_handle_bindings_preserve_independent_null_slots() {
     h.ok(11, &[list, allocator]);
     h.ok(38, &[view]);
     h.ok(26, &[root]);
+}
+
+#[test]
+fn cpu_guest_backed_buffer_creation_checks_envelope_address_and_output_before_handle() {
+    let mut h = Harness::new();
+    let device = h.ok(1, &[]);
+    for args in [
+        [device, 0, 0, DATA],
+        [device, 5, 1u64 << 32, DATA],
+        [device, 5, 0, u64::MAX - 3],
+        [0, 5, 0, DATA],
+    ] {
+        assert_eq!(h.call(49, &args), Ok(2));
+        assert_eq!(h.output(), SENTINEL);
+    }
+    let mut words = record(
+        49,
+        &[device, 5, ResourceStates::COPY_SOURCE.0 as u64, 0x9000],
+    );
+    words[6] = 1;
+    h.prepare(words);
+    assert_eq!(
+        graphics_call_v1(&mut h.ctx, &mut h.memory, DESC, 128, OUT),
+        Ok(1)
+    );
+    assert_eq!(h.output(), SENTINEL);
+    h.prepare(record(
+        49,
+        &[device, 5, ResourceStates::COPY_SOURCE.0 as u64, 0x9000],
+    ));
+    assert!(matches!(
+        graphics_call_v1(&mut h.ctx, &mut h.memory, DESC, 128, OUT + 1),
+        Err(ExitReason::MemoryFault(_))
+    ));
+    let resource = h.ok(
+        49,
+        &[device, 5, ResourceStates::COPY_SOURCE.0 as u64, 0x9000],
+    );
+    assert_eq!(
+        resource,
+        device + 1,
+        "creation validates address span but does not read unmapped memory"
+    );
+    h.ok(26, &[resource]);
+}
+
+#[test]
+fn cpu_guest_backed_source_records_without_reading_and_submission_reports_memory_fault() {
+    let mut h = Harness::new();
+    let (device, queue, _, list) = h.setup_list();
+    let source = h.ok(
+        49,
+        &[device, 5, ResourceStates::COPY_SOURCE.0 as u64, 0x9000],
+    );
+    let destination = h.ok(5, &[device, 5, ResourceStates::COPY_DEST.0 as u64]);
+    h.ok(42, &[list, destination, source]);
+    h.ok(12, &[list]);
+    h.ctx
+        .set_metal_copy_queued_backend(Default::default(), |_| {
+            panic!("memory fault must precede backend")
+        });
+    assert!(matches!(
+        h.call(30, &[queue, list]),
+        Err(ExitReason::MemoryFault(_))
+    ));
+    assert_eq!(h.output(), SENTINEL);
+}
+
+#[test]
+fn cpu_guest_backed_creation_result_can_alias_future_source_bytes() {
+    let mut h = Harness::new();
+    let device = h.ok(1, &[]);
+    h.memory.write_bytes(DATA, &[0; 8]).unwrap();
+    h.prepare(record(
+        49,
+        &[device, 8, ResourceStates::COPY_SOURCE.0 as u64, DATA],
+    ));
+    assert_eq!(
+        graphics_call_v1(&mut h.ctx, &mut h.memory, DESC, 128, DATA),
+        Ok(0)
+    );
+    let source = h.memory.read_u64(DATA).unwrap();
+    let queue = h.ok(2, &[device]);
+    let allocator = h.ok(3, &[device]);
+    let list = h.ok(4, &[device, allocator]);
+    let destination = h.ok(5, &[device, 8, ResourceStates::COPY_DEST.0 as u64]);
+    h.ctx
+        .set_metal_copy_queued_backend(Default::default(), move |request| {
+            let xenora_loader::graphics::GraphicsQueuedWorkRequest::Copy(copy) = request else {
+                panic!("copy")
+            };
+            let xenora_loader::graphics::GraphicsCopyInput::Host(bytes) = copy.source else {
+                panic!("host")
+            };
+            assert_eq!(&*bytes, &source.to_le_bytes());
+            Err(xenora_loader::graphics::GraphicsError::InvalidDescriptor) // Inspect admission only; no pending native work.
+        });
+    h.ok(42, &[list, destination, source]);
+    h.ok(12, &[list]);
+    assert_eq!(h.call(30, &[queue, list]), Ok(2));
+    assert_eq!(h.output(), SENTINEL);
 }

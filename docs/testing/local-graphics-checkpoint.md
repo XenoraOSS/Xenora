@@ -1,7 +1,7 @@
 # Local graphics checkpoint
 
 This summary records the accumulated graphics checkpoint and the subsequent
-nested-view, compute-cache and sampler-handle increments, reviewed on 25 November 2026. It is not release certification or a
+nested-view, compute-cache, sampler-handle and guest-copy increments on 25 November 2026. It is not release certification or a
 claim of Xbox hardware equivalence. Supporting raw logs, mutation records and
 source manifests remain local and are not distributed with the repository.
 
@@ -14,6 +14,43 @@ failure, and saves each step's output under `artifacts/validation-*`. A successf
 run ends with `PASS`. Quick mode also rejects filters that select no passing tests.
 Use `--help` for prerequisites. These tests render offscreen and compare pixels;
 they do not open an application window. Avoid other GPU test runs at the same time.
+
+## Guest-backed whole-buffer copy snapshots
+
+Queued whole-buffer copies can capture a guest-backed buffer into an owned
+destination. The snapshot occurs at submission: earlier guest writes are observed,
+and later writes cannot alter pending work. Guest-backed destinations and region/image
+copies remain rejected. This does not provide general coherent guest/GPU memory.
+
+Quick validation now runs 14 steps and passed **50 tests, zero failed or ignored**.
+The new focused checks account for ten CPU tests and two original guest tests:
+
+```sh
+cargo test --locked -p xenora-loader --lib guest_copy_budget_rejection -- --nocapture
+cargo test --locked -p xenora-loader --test queued_copies cpu_guest_copy -- --nocapture
+cargo test --locked -p xenora-loader --test graphics_service cpu_guest_backed -- --nocapture
+cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_backed_copy_ -- --nocapture --test-threads=1
+```
+
+Use the Metal validation environment below for the guest command, or run the script
+to set it automatically. CPU checks cover permission and unreadable-tail faults,
+odd logical lengths without padding reads, budget ordering, retry snapshots,
+completion rejection and the opcode envelope. Guest tests run the queued adapter,
+compare literal bytes after guest writes before/after submission, and exercise
+both collection orders, pending handle destruction and rejected-copy preservation.
+Their failure case is preparation validation, not an injected GPU/device fault.
+
+A deliberate wrong-source mutation returned zero-filled resource storage instead
+of the submitted guest bytes and failed the actual guest readback comparison.
+The production source hash matched after restoration. The initial quick run found
+a test assertion placed after a separate successful operation; moving it to the
+failed-copy observation boundary preserved the intended check and passed on rerun.
+
+All nine repository gates passed after restoration: **858 workspace tests passed,
+zero failed, 84 ignored**; the GPU script reported **332 passed, zero failed, one
+manual test ignored**. The GPU total includes CPU checks and overlaps workspace
+coverage. Native evidence is ARM64 with system Metal and API/shader validation.
+Full Stage2/3 and game compatibility remain outside this checkpoint.
 
 ## Reusable sampler handles
 

@@ -1283,7 +1283,14 @@ impl GraphicsContext {
                 )
             })
         }) {
-            return self.submit_queued_copy(queue, list, generation, dependencies, preparation);
+            return self.submit_queued_copy(
+                queue,
+                list,
+                generation,
+                dependencies,
+                preparation,
+                memory,
+            );
         }
         let mut prepared = self.prepare_submission(
             queue,
@@ -1612,12 +1619,22 @@ impl GraphicsContext {
     }
 
     fn copy_layout(&self, handle: GraphicsHandle) -> Result<GraphicsCopyLayout, GraphicsError> {
+        self.copy_layout_with_guest_source(handle, false)
+    }
+
+    /// Only whole-buffer source snapshots may resolve guest-backed storage.
+    fn copy_layout_with_guest_source(
+        &self,
+        handle: GraphicsHandle,
+        allow_guest_source: bool,
+    ) -> Result<GraphicsCopyLayout, GraphicsError> {
         let resource = self
             .resources
             .get(&handle)
             .ok_or(GraphicsError::InvalidResourceHandle)?;
         let desc = &resource.desc;
-        if resource.guest_backing_addr.is_some()
+        if (resource.guest_backing_addr.is_some()
+            && (!allow_guest_source || desc.dimension != ResourceDimension::Buffer))
             || desc.depth_or_array_size != 1
             || desc.mip_levels != 1
         {
@@ -1670,6 +1687,7 @@ impl GraphicsContext {
         generation: u64,
         dependencies: Vec<GraphicsHandle>,
         preparation: QueuedPreparation,
+        memory: &GuestMemory,
     ) -> Result<GraphicsHandle, GraphicsError> {
         let closure = self.queued_dependency_closure(&dependencies)?;
         if !self.copy_backend {
@@ -1752,7 +1770,10 @@ impl GraphicsContext {
                     if copy.is_some() || destination == source {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
-                    let source_layout = self.copy_layout(source)?;
+                    let source_layout = self.copy_layout_with_guest_source(
+                        source,
+                        region.is_none() && image.is_none(),
+                    )?;
                     let layout = self.copy_layout(destination)?;
                     if let Some((source_location, destination_location, extent)) = image {
                         if matches!(
@@ -1832,8 +1853,12 @@ impl GraphicsContext {
                 return Err(GraphicsError::ResourceLifetimeViolation);
             }
         }
-        let source_layout = self.copy_layout(source)?;
+        let source_layout =
+            self.copy_layout_with_guest_source(source, region.is_none() && image.is_none())?;
         let produced = preparation.produced.get(&source).copied();
+        if produced.is_some() && self.resources[&source].guest_backing_addr.is_some() {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
         let prior = if region.is_some() || image.is_some() {
             preparation.produced.get(&destination).copied()
         } else {
@@ -1953,9 +1978,25 @@ impl GraphicsContext {
             point,
             output: GraphicsProducedOutput::Copy(0),
         };
-        let input = |handle, version| match version {
-            Some(version) => GraphicsCopyInput::Produced(version),
-            None => GraphicsCopyInput::Host(Arc::from(self.resources[&handle].data.as_slice())),
+        let input = |handle, version| -> Result<GraphicsCopyInput, GraphicsError> {
+            if let Some(version) = version {
+                return Ok(GraphicsCopyInput::Produced(version));
+            }
+            let resource = &self.resources[&handle];
+            let bytes = if resource.guest_backing_addr.is_some() {
+                // Payload budget is validated above, before allocating the snapshot.
+                // Recording never reads memory; only this admission-time read does.
+                let mut bytes = Vec::new();
+                bytes
+                    .try_reserve_exact(resource.data.len())
+                    .map_err(|_| MemoryError::AllocationFailed)?;
+                bytes.resize(resource.data.len(), 0);
+                Self::read_resource(resource, memory, 0, &mut bytes)?;
+                Arc::from(bytes)
+            } else {
+                Arc::from(resource.data.as_slice())
+            };
+            Ok(GraphicsCopyInput::Host(bytes))
         };
         let waits = closure
             .iter()
@@ -1968,8 +2009,8 @@ impl GraphicsContext {
                 waits,
                 source_layout,
                 destination_layout: layout,
-                source: input(source, produced),
-                destination: input(destination, prior),
+                source: input(source, produced)?,
+                destination: input(destination, prior)?,
                 source_location,
                 destination_location,
                 extent,
@@ -1982,8 +2023,8 @@ impl GraphicsContext {
                 waits,
                 source_byte_len: source_layout.byte_len()?,
                 destination_byte_len: layout.byte_len()?,
-                source: input(source, produced),
-                destination: input(destination, prior),
+                source: input(source, produced)?,
+                destination: input(destination, prior)?,
                 source_offset,
                 destination_offset,
                 byte_len,
@@ -1995,7 +2036,7 @@ impl GraphicsContext {
                 point,
                 waits,
                 layout,
-                source: input(source, produced),
+                source: input(source, produced)?,
                 output,
             })
         };
@@ -4105,9 +4146,11 @@ impl GraphicsContext {
             .resources
             .get(&source)
             .ok_or(GraphicsError::InvalidResourceHandle)?;
-        // Owned storage only until atomic guest-backed copy publication exists.
+        // Guest memory may supply an immutable whole-buffer source snapshot.
+        // Destination publication remains owned-storage-only.
         if destination_resource.guest_backing_addr.is_some()
-            || source_resource.guest_backing_addr.is_some()
+            || (source_resource.guest_backing_addr.is_some()
+                && source_resource.desc.dimension != ResourceDimension::Buffer)
         {
             return Err(GraphicsError::InvalidDescriptor);
         }
@@ -6058,6 +6101,100 @@ impl GraphicsContext {
 #[cfg(test)]
 mod submission_history_tests {
     use super::*;
+
+    #[test]
+    fn guest_copy_budget_rejection_precedes_guest_memory_read() {
+        struct Pending;
+        impl GraphicsQueuedPendingWork for Pending {
+            fn poll(&mut self) -> Option<Result<GraphicsQueuedWorkOutput, GraphicsError>> {
+                None
+            }
+            fn wait(&mut self) -> Result<GraphicsQueuedWorkOutput, GraphicsError> {
+                Err(GraphicsError::InvalidDescriptor)
+            }
+            fn reject_dependency(&mut self, _: GraphicsQueuePoint) {}
+        }
+        let mut ctx = GraphicsContext::new();
+        let device = ctx.create_device().unwrap();
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let captured = calls.clone();
+        ctx.set_metal_copy_queued_backend(Default::default(), move |_| {
+            captured.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(Box::new(Pending))
+        });
+        let queues: [GraphicsHandle; 2] = std::array::from_fn(|_| {
+            ctx.create_command_queue(device, CommandListType::Direct)
+                .unwrap()
+        });
+        let lists: [GraphicsHandle; 2] = std::array::from_fn(|_| {
+            let allocator = ctx
+                .create_command_allocator(device, CommandListType::Direct)
+                .unwrap();
+            ctx.create_command_list(device, allocator, CommandListType::Direct)
+                .unwrap()
+        });
+        let desc = ResourceDesc {
+            dimension: ResourceDimension::Buffer,
+            width: 5,
+            height: 1,
+            depth_or_array_size: 1,
+            mip_levels: 1,
+            format_rgba8: false,
+        };
+        for (slot, address) in [None, Some(0xdead0000)].into_iter().enumerate() {
+            let source = ctx
+                .create_committed_resource(
+                    device,
+                    desc.clone(),
+                    ResourceStates::COPY_SOURCE,
+                    address,
+                )
+                .unwrap();
+            let destination = ctx
+                .create_committed_resource(device, desc.clone(), ResourceStates::COPY_DEST, None)
+                .unwrap();
+            ctx.cmd_copy_resource(lists[slot], destination, source)
+                .unwrap();
+            ctx.close_command_list(lists[slot]).unwrap();
+        }
+        let memory = GuestMemory::new();
+        let receipt = ctx
+            .submit_command_list(queues[0], lists[0], &memory)
+            .unwrap();
+        let charge = ctx.queued[&receipt].copy_allocation_bytes;
+        // Inject ledger saturation to test ordering without allocating 256MiB.
+        ctx.queued.get_mut(&receipt).unwrap().copy_allocation_bytes = MAX_CONTEXT_RESOURCE_BYTES;
+        let next_id = ctx.next_id;
+        let states: HashMap<_, _> = ctx.resources.iter().map(|(h, r)| (*h, r.state)).collect();
+        assert_eq!(
+            ctx.submit_command_list(queues[1], lists[1], &memory),
+            Err(GraphicsError::ResourceLifetimeViolation)
+        );
+        assert_eq!(ctx.next_id, next_id);
+        assert!(!ctx.queue_values.contains_key(&queues[1]));
+        assert_eq!(ctx.queued.len(), 1);
+        assert_eq!(
+            ctx.queued_copy_allocation_bytes(),
+            MAX_CONTEXT_RESOURCE_BYTES
+        );
+        ctx.queued.get_mut(&receipt).unwrap().copy_allocation_bytes = charge;
+        assert!(matches!(
+            ctx.submit_command_list(queues[1], lists[1], &memory),
+            Err(GraphicsError::Memory(_))
+        ));
+        assert_eq!(ctx.next_id, next_id);
+        assert_eq!(ctx.queued_copy_allocation_bytes(), charge);
+        assert_eq!(
+            ctx.resources
+                .iter()
+                .map(|(h, r)| (*h, r.state))
+                .collect::<HashMap<_, _>>(),
+            states
+        );
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+        ctx.wait_submission(receipt).unwrap();
+        ctx.release_submission(receipt).unwrap();
+    }
 
     #[test]
     fn geometry_snapshot_budget_is_cumulative_before_next_host_allocation() {

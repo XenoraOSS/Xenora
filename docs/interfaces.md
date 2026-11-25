@@ -1410,3 +1410,16 @@ cross-pair and view-relative LOD checks. Guest opcodes46–48 expose this interf
 see the [guest ABI](graphics-call-v1.md#reusable-immutable-sampler-handles).
 The native backend and shader ABI are unchanged. General descriptor heaps and
 additional filtering/addressing modes remain outside this increment.
+
+
+### Guest-backed whole-buffer copy snapshots
+
+Guest opcode49 creates a buffer referring to caller-owned guest memory without
+reading it. Queued whole-buffer copies accept it only as a source. Submission
+validates the complete payload budget before copying the checked logical range
+into an immutable `GraphicsCopyInput::Host`. Recording does not capture bytes;
+post-submission changes and handle destruction cannot alter the pending snapshot.
+Failed admission leaves queue points and destination contents unchanged, and a
+retry captures fresh bytes. Guest-backed destinations and region/image copies
+remain rejected. This is bounded submission-time copying, not coherent guest/GPU
+memory; see the [guest ABI](graphics-call-v1.md#guest-backed-whole-buffer-copy-sources).

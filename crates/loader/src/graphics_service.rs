@@ -91,7 +91,7 @@ pub fn graphics_call_v1(
         2 | 3 | 12 | 26 | 27 | 31 | 32 | 33 | 36 | 38 | 47 => 1,
         4 | 11 | 14 | 25 | 28 | 30 | 34 | 39 | 48 => 2,
         5 | 7 | 15 | 17 | 29 | 41 | 42 => 3,
-        9 | 10 | 13 | 16 | 18 | 19 | 20 | 35 | 46 => 4,
+        9 | 10 | 13 | 16 | 18 | 19 | 20 | 35 | 46 | 49 => 4,
         6 | 8 | 21 | 23 | 37 | 45 => 5,
         24 | 40 | 43 => 6,
         44 => 11,
@@ -104,7 +104,12 @@ pub fn graphics_call_v1(
     memory
         .validate_write_range(result, 8)
         .map_err(ExitReason::MemoryFault)?;
-    if ((1..=8).contains(&opcode) || opcode == 37 || opcode == 40 || opcode == 45 || opcode == 46)
+    if ((1..=8).contains(&opcode)
+        || opcode == 37
+        || opcode == 40
+        || opcode == 45
+        || opcode == 46
+        || opcode == 49)
         && graphics.guest_object_count() >= MAX_GUEST_OBJECTS
     {
         return Ok(STATUS_GRAPHICS_ERROR);
@@ -145,7 +150,7 @@ pub fn graphics_call_v1(
                     .create_command_list(args.handle(0), args.handle(1), CommandListType::Direct)?
                     .to_u64()
             }
-            5 => {
+            5 | 49 => {
                 value = graphics
                     .create_committed_resource(
                         args.handle(0),
@@ -158,7 +163,7 @@ pub fn graphics_call_v1(
                             format_rgba8: false,
                         },
                         ResourceStates(args.u32(2)?),
-                        None,
+                        (opcode == 49).then_some(args.0[3]),
                     )?
                     .to_u64()
             }

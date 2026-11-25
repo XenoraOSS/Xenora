@@ -96,6 +96,7 @@ loader ResourceStates bits. Unsupported formats and layouts fail.
 | 46 | CreateSampler | device, explicit mip u32, min LOD bits u32, max LOD bits u32 | sampler handle |
 | 47 | DestroySampler | sampler handle | 0 |
 | 48 | SampledViewHandles | list, address of 32-byte view/sampler-handle payload | 0 |
+| 49 | CreateGuestBackedBuffer | device, byte length, initial state u32, guest address | resource handle |
 
 CreatePipeline reads nonempty, four-byte-aligned shader blobs of at most 1024 bytes
 each. Decoding and translation must succeed before a pipeline handle is allocated.
@@ -576,3 +577,28 @@ work; subsequent binds or destruction using that stale handle fail. Commands own
 bounded descriptor values, not references to retired sampler objects. View lifetime
 rules remain unchanged. Existing value-based binding opcodes remain supported.
 This adds reusable descriptors, not general descriptor heaps or new filter modes.
+
+
+## Guest-backed whole-buffer copy sources
+
+CreateGuestBackedBuffer (opcode49) creates a buffer whose bytes are read from a
+caller-owned guest address. Its first three arguments match CreateBuffer (opcode5),
+which continues to create owned storage. Creation validates the size, address-range
+overflow, state-word encoding and object limits, but does not read the range or require it to be
+mapped. The result span is preflighted before creation. If the result aliases the
+backing, its handle write is a memory change visible to later submission.
+
+A queued whole-resource copy may use this buffer as its COPY_SOURCE and an owned
+buffer as COPY_DEST. Recording retains metadata only. Submission preflights the
+copy payload budget and reads the entire logical source through checked guest
+memory access into an immutable Host input. Writes between recording and submission
+are observed; writes after successful submission cannot change the queued copy.
+Read-only guest memory is sufficient. Unreadable source memory fails submission
+without consuming a queue point or publishing destination bytes. Retrying captures
+fresh bytes. Guest-memory faults retain the existing guest fault behavior.
+
+Pending work owns the snapshot independently of guest mappings and source handles.
+The synchronous submission call defines the capture boundary; it does not promise
+an atomic snapshot against concurrent external writers. Guest-backed destinations,
+region/image copies from guest-backed resources and general coherent shared memory
+remain unsupported. The native backend and shader ABI are unchanged.

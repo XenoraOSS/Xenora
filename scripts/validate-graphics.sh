@@ -7,7 +7,7 @@ usage() {
 Usage: scripts/validate-graphics.sh [quick|full]
 
 quick (default): focused CPU and native Metal checks for produced geometry,
-                 nested views, sampler handles and compute pipeline caching.
+                 nested views, samplers, guest-backed copies and compute caching.
 full:            all nine repository validation gates, including the GPU suite.
 
 Run on native Apple Silicon with the repository build dependencies installed.
@@ -95,10 +95,14 @@ if [[ "$mode" == quick ]]; then
     run_tests nested-abi cargo test --locked -p xenora-loader --test graphics_service cpu_guest_child_view -- --nocapture
     run_tests samplers-cpu cargo test --locked -p xenora-loader --test pipeline cpu_sampler -- --nocapture
     run_tests samplers-abi cargo test --locked -p xenora-loader --test graphics_service cpu_guest_sampler -- --nocapture
+    run_tests guest-copy-budget cargo test --locked -p xenora-loader --lib guest_copy_budget_rejection -- --nocapture
+    run_tests guest-copy-cpu cargo test --locked -p xenora-loader --test queued_copies cpu_guest_copy -- --nocapture
+    run_tests guest-copy-abi cargo test --locked -p xenora-loader --test graphics_service cpu_guest_backed -- --nocapture
     run_tests geometry-gpu cargo test --locked -p xenora-metal --features gpu-tests --test native_compute produced_geometry:: -- --nocapture --test-threads=1
     run_tests geometry-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_produced_geometry_ -- --nocapture --test-threads=1
     run_tests nested-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_nested_views -- --nocapture --test-threads=1
     run_tests samplers-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_sampler_handles -- --nocapture --test-threads=1
+    run_tests guest-copy-guest cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics original_guest_backed_copy_ -- --nocapture --test-threads=1
     run_tests pipeline-cache cargo test --locked -p xenora-metal --features gpu-tests --test native_compute pipeline_cache:: -- --nocapture --test-threads=1
 else
     run format cargo fmt --all -- --check
