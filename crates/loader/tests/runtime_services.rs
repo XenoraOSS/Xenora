@@ -5817,3 +5817,69 @@ fn the_codepages_answer_their_numbers() {
     assert_eq!(guest.call("GetCPInfo", &[99999, info]), 0);
     assert_eq!(guest.last_error(), 87);
 }
+
+#[test]
+fn the_locale_is_en_us_and_answers_its_strings() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .map_region(CPBUF, 0x1000, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    assert_eq!(guest.call("GetSystemDefaultLCID", &[]), 0x0409);
+    assert_eq!(guest.call("GetUserDefaultLCID", &[]), 0x0409);
+    assert_eq!(guest.call("GetUserDefaultLangID", &[]), 0x0409);
+    // The locale name comes as wide units, its count including the
+    // terminator, and the size query agrees.
+    let asked = guest.call("GetUserDefaultLocaleName", &[0, 0]);
+    assert_eq!(asked, 6);
+    let wrote = guest.call("GetUserDefaultLocaleName", &[CPBUF, 16]);
+    assert_eq!(wrote, 6);
+    assert_eq!(guest.memory.read_u16(CPBUF).unwrap(), u16::from(b'e'));
+    assert_eq!(guest.memory.read_u16(CPBUF + 6).unwrap(), u16::from(b'U'));
+    assert_eq!(guest.memory.read_u16(CPBUF + 10).unwrap(), 0);
+    assert_eq!(guest.call("GetUserDefaultLocaleName", &[CPBUF, 4]), 0);
+    assert_eq!(guest.last_error(), 122, "ERROR_INSUFFICIENT_BUFFER");
+    // LOCALE_SENGLANGUAGE (0x1001) is "English" in every form.
+    let wide = guest.call("GetLocaleInfoW", &[0x0409, 0x1001, CPBUF, 32]);
+    assert_eq!(wide, 8, "seven letters and the terminator");
+    assert_eq!(guest.memory.read_u16(CPBUF).unwrap(), u16::from(b'E'));
+    let narrow = guest.call("GetLocaleInfoA", &[0x0409, 0x1001, CPBUF, 32]);
+    assert_eq!(narrow, 8);
+    assert_eq!(guest.memory.read_u8(CPBUF).unwrap(), b'E');
+    assert_eq!(guest.memory.read_u8(CPBUF + 7).unwrap(), 0);
+    // The ex form: a null name is the user default, "en-US" any case names
+    // the one locale, anything else fails.
+    place(&mut guest, CPBUF + 0x40, b"E\0N\0-\0u\0s\0\0\0");
+    // The units above were placed as bytes; write them properly as units.
+    for (index, unit) in [b'E', b'N', b'-', b'u', b's', 0u8].iter().enumerate() {
+        guest
+            .memory
+            .write_u16(CPBUF + 0x40 + index as u64 * 2, u16::from(*unit))
+            .unwrap();
+    }
+    let ex = guest.call("GetLocaleInfoEx", &[CPBUF + 0x40, 0x005C, CPBUF, 32]);
+    assert_eq!(ex, 6, "en-US and its terminator");
+    let null_name = guest.call("GetLocaleInfoEx", &[0, 0x000E, CPBUF, 32]);
+    assert_eq!(null_name, 2, "the decimal point and its terminator");
+    assert_eq!(guest.memory.read_u16(CPBUF).unwrap(), u16::from(b'.'));
+    // The failures: another locale, an unknown type, the number form.
+    assert_eq!(
+        guest.call("GetLocaleInfoW", &[0x040C, 0x1001, CPBUF, 32]),
+        0
+    );
+    assert_eq!(guest.last_error(), 87, "ERROR_INVALID_PARAMETER");
+    assert_eq!(
+        guest.call("GetLocaleInfoW", &[0x0409, 0x7777, CPBUF, 32]),
+        0
+    );
+    assert_eq!(guest.last_error(), 87);
+    assert_eq!(
+        guest.call("GetLocaleInfoW", &[0x0409, 0x2000_000E, CPBUF, 32]),
+        0
+    );
+    assert_eq!(guest.last_error(), 87);
+    // The size query and the small buffer.
+    assert_eq!(guest.call("GetLocaleInfoW", &[0x0409, 0x1001, 0, 0]), 8);
+    assert_eq!(guest.call("GetLocaleInfoW", &[0x0409, 0x1001, CPBUF, 4]), 0);
+    assert_eq!(guest.last_error(), 122);
+}
