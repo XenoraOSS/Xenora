@@ -166,6 +166,7 @@ fn run(name: &str, budget: usize) -> Result<Outcome, String> {
         Arc::clone(&state),
         budget,
         DEFAULT_QUANTUM,
+        |_| {},
     ) {
         Ok(result) => Ok(Outcome { result, state }),
         Err(error) => Err(error.to_string()),

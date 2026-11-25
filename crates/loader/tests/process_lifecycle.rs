@@ -58,6 +58,7 @@ fn run(name: &str) -> (ExitReason, Arc<ServicesState>) {
         Arc::clone(&state),
         5_000_000,
         DEFAULT_QUANTUM,
+        |_| {},
     )
     .unwrap();
     (result.execution.exit_reason, state)

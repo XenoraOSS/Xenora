@@ -473,7 +473,7 @@ fn a_step_limit_that_is_too_small_is_a_failure_not_an_exit() {
     assert_eq!(run.code, Some(125), "{}", run.stderr);
     assert_eq!(
         run.stderr,
-        "run failed: the program stopped without exiting after 5000 entry steps: \
+        "run failed: the program stopped without exiting after 5002 entry steps: \
          StepLimitExceeded\n"
     );
     // What it had written by then is shown, and is the start of the whole.
@@ -551,14 +551,18 @@ fn a_program_has_no_step_limit_unless_one_is_given() {
     // inside its loop. One more than the count runs (the loader reports the
     // limit when the count is used up exactly at the exit), and so does the
     // largest number there is.
+    // The scheduler counts the two dispatch trampolines of the main thread
+    // as instructions, which direct execution never had: the report is the
+    // budget plus those two.
     let short = (needed / 2).to_string();
     let run = run_program(&path, &["--max-steps", &short], &arguments);
     assert_eq!(run.code, Some(125), "{}", run.stderr);
+    let reported = needed / 2 + 2;
     assert_eq!(
         run.stderr,
         format!(
             "gate a2: counting to 500000\r\nrun failed: the program stopped without exiting \
-             after {short} entry steps: StepLimitExceeded\n"
+             after {reported} entry steps: StepLimitExceeded\n"
         )
     );
     assert_eq!(run.stdout, echoed("gate-a2-spin", &arguments));

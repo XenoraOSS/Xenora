@@ -10,7 +10,11 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
-use xenora_loader::startup::{StartupEvent, StartupLayout, run_synthetic_startup_with_observer};
+use xenora_loader::scheduler::DEFAULT_QUANTUM;
+use xenora_loader::startup::{
+    StartupEvent, StartupLayout, run_synthetic_startup_scheduled,
+    run_synthetic_startup_with_observer,
+};
 use xenora_loader::{
     ExitReason, ImportRegistry, Register, ServicesState, SystemClock, register_standard_services,
 };
@@ -519,7 +523,11 @@ fn run_program(
     let mut imports = ImportRegistry::new();
     register_standard_services(&mut imports, Arc::clone(&state));
     let mut entered = false;
-    let startup = run_synthetic_startup_with_observer(
+    // The entry point runs under the deterministic cooperative scheduler,
+    // so a program that creates threads with CreateThread runs them all,
+    // one guest thread at a time. A program that creates none behaves as
+    // before: its main thread takes every turn.
+    let startup = run_synthetic_startup_scheduled(
         &bytes,
         StartupLayout {
             image_base: IMAGE_BASE,
@@ -527,7 +535,9 @@ fn run_program(
             tls_base: 0x300000000,
         },
         imports,
+        Arc::clone(&state),
         steps,
+        DEFAULT_QUANTUM,
         |event| {
             entered |= matches!(event, StartupEvent::Entering { .. });
             reporter.observed(&event);
