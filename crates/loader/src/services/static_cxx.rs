@@ -240,13 +240,23 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         Err(UNSUPPORTED)
     });
     for (api_set, symbol) in [
+    for (module, symbol) in [(UCRT, "rand_s")] {
+        registry.register_with_status(module, symbol, ServiceStatus::Stub, |_, _, _| {
+            Err(UNSUPPORTED)
+        });
+    }
+    for (module, symbol) in [
         ("api-ms-win-crt-private-l1-1-0.dll", "memchr"),
         ("api-ms-win-crt-private-l1-1-0.dll", "strchr"),
         ("api-ms-win-crt-string-l1-1-0.dll", "memchr"),
         ("api-ms-win-crt-string-l1-1-0.dll", "strchr"),
         ("api-ms-win-crt-environment-l1-1-0.dll", "getenv"),
         ("api-ms-win-crt-utility-l1-1-0.dll", "rand_s"),
+        // The legacy CRT exports these forms under the same names.
+        ("msvcrt.dll", "memchr"),
+        ("msvcrt.dll", "strchr"),
+        ("msvcrt.dll", "getenv"),
     ] {
-        registry.alias(api_set, UCRT, symbol);
+        registry.alias(module, UCRT, symbol);
     }
 }

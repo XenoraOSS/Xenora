@@ -112,4 +112,5 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     }
     // The legacy CRT, as the compatibility mapping in crt_callbacks.rs.
     registry.alias("msvcrt.dll", UCRT, "_exit");
+    registry.alias("msvcrt.dll", UCRT, "abort");
 }
