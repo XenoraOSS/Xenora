@@ -300,6 +300,128 @@ fn formatted(
 /// writes never leave `[buffer, buffer + count)`. A fault inside the buffer
 /// stops the guest.
 #[allow(clippy::too_many_arguments)]
+/// The wide va_list: argument slots as the narrow one reads them, wide
+/// strings as units and narrow strings as bytes.
+struct WideVaList<'a> {
+    memory: &'a GuestMemory,
+    next: u64,
+}
+
+impl super::crt_wformat::WideSource for WideVaList<'_> {
+    fn argument(&mut self) -> Result<u64, MemoryError> {
+        let value = self.memory.read_u64(self.next)?;
+        self.next += 8;
+        Ok(value)
+    }
+
+    fn wide_string(&mut self, address: u64, limit: usize) -> Result<Vec<u16>, MemoryError> {
+        let mut units = Vec::new();
+        for at in 0..limit as u64 {
+            let unit = self.memory.read_u16(address + at * 2)?;
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        Ok(units)
+    }
+
+    fn narrow_string(&mut self, address: u64, limit: usize) -> Result<Vec<u8>, MemoryError> {
+        let mut bytes = Vec::new();
+        for at in 0..limit as u64 {
+            let byte = self.memory.read_u8(address + at)?;
+            if byte == 0 {
+                break;
+            }
+            bytes.push(byte);
+        }
+        Ok(bytes)
+    }
+}
+
+/// The wide format string read from memory, bounded as the narrow one is.
+fn wide_format_string(memory: &GuestMemory, format: u64) -> Result<Vec<u16>, ExitReason> {
+    let mut units = Vec::new();
+    for at in 0..MAX_TRANSFER + 1 {
+        let unit = memory.read_u16(format + at * 2).map_err(fault)?;
+        if unit == 0 {
+            return Ok(units);
+        }
+        units.push(unit);
+    }
+    Err(RUNTIME_LIMIT)
+}
+
+/// `__stdio_common_vswprintf` (#459). The result and termination rules are
+/// the narrow buffer forms', counted in wide characters: standard behavior
+/// always answers the length the text would have and terminates whenever
+/// `count` is not zero; legacy truncates without a terminator and answers
+/// -1. A null buffer with a zero count is the size query.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn print_to_wide_buffer(
+    memory: &mut GuestMemory,
+    options: u64,
+    buffer: u64,
+    count: u64,
+    format: u64,
+    locale: u64,
+    arguments: u64,
+) -> Outcome<i32> {
+    let standard = options & STANDARD_SNPRINTF_BEHAVIOR != 0;
+    let legacy = options & LEGACY_VSPRINTF_NULL_TERMINATION != 0;
+    if standard && legacy {
+        return Err(RUNTIME_LIMIT);
+    }
+    // The size query is the standard behavior's: without the bit a null
+    // buffer is an invalid parameter however small the count, which is what
+    // a mingw-w64 `swprintf` answers -1 for.
+    let invalid = format == 0 || buffer == 0 && (count != 0 || !standard);
+    if invalid {
+        return Ok(Err(Failed(-1, EINVAL)));
+    }
+    if options & !KNOWN_OPTIONS != 0 || locale != 0 {
+        return Err(RUNTIME_LIMIT);
+    }
+    let template = wide_format_string(memory, format)?;
+    let mut source = WideVaList {
+        memory,
+        next: arguments,
+    };
+    let floats = crt_format::Floats {
+        three_digit_exponents: options & LEGACY_THREE_DIGIT_EXPONENTS != 0,
+        standard_rounding: options & STANDARD_ROUNDING != 0,
+    };
+    let mut units = match super::crt_wformat::wformat(&template, &mut source, floats) {
+        Ok(units) => units,
+        Err(crt_format::FormatError::Invalid) => return Ok(Err(Failed(-1, EINVAL))),
+        Err(crt_format::FormatError::Unsupported | crt_format::FormatError::TooLong) => {
+            return Err(RUNTIME_LIMIT);
+        }
+        Err(crt_format::FormatError::Fault(error)) => return Err(fault(error)),
+    };
+    let len = units.len() as u64;
+    if buffer == 0 {
+        return Ok(Ok(len as i32));
+    }
+    if count != 0 {
+        let capacity = count - u64::from(standard);
+        units.truncate(len.min(capacity) as usize);
+        if standard || len < count {
+            units.push(0);
+        }
+        let mut stored = Vec::with_capacity(units.len() * 2);
+        for unit in &units {
+            stored.extend(unit.to_le_bytes());
+        }
+        memory.write_bytes(buffer, &stored).map_err(fault)?;
+    }
+    Ok(Ok(if standard || len <= count {
+        len as i32
+    } else {
+        -1
+    }))
+}
+
 pub(super) fn print_to_buffer(
     memory: &mut GuestMemory,
     options: u64,

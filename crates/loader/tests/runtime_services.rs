@@ -5504,3 +5504,107 @@ fn wide_stream_io_writes_and_reads_in_the_c_locale() {
     // stdin is wide-oriented now: getchar answers EOF for the conflict.
     assert_eq!(guest.call("getchar", &[]) & 0xFFFF_FFFF, 0xFFFF_FFFF);
 }
+
+/// Write the wide units of a string and return their address.
+fn place_wide(guest: &mut Guest, at: u64, text: &str) -> u64 {
+    let mut bytes = Vec::new();
+    for unit in text.encode_utf16().chain([0]) {
+        bytes.extend(unit.to_le_bytes());
+    }
+    guest.memory.write_bytes(at, &bytes).unwrap();
+    at
+}
+
+/// `__stdio_common_vswprintf` in the C locale: the syntax is printf's, the
+/// counting is in wide units, `%s` is the wide string and `%S` the narrow
+/// one, and truncation follows the same option bits as the narrow forms.
+#[test]
+fn wide_buffer_formatting_counts_in_wide_units() {
+    let (mut guest, _streams) = stdio_guest();
+    let wide_print = |guest: &mut Guest, format_addr: u64, count: u64, slots: &[u64]| -> u64 {
+        for (index, slot) in slots.iter().enumerate() {
+            guest
+                .memory
+                .write_u64(VA_LIST + 8 * index as u64, *slot)
+                .unwrap();
+        }
+        guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
+        guest.memory.write_u64(STACK_TOP + 40, VA_LIST).unwrap();
+        let (cpu, exit) = guest.run(
+            "__stdio_common_vswprintf",
+            &[STANDARD, SCRATCH, count, format_addr],
+        );
+        assert_eq!(exit, ExitReason::Halt);
+        cpu.get(Register::Rax) & 0xFFFF_FFFF
+    };
+    let read_wide = |guest: &Guest, at: u64, len: usize| -> String {
+        let mut units = Vec::new();
+        for index in 0..len as u64 {
+            let unit = guest.memory.read_u16(at + index * 2).unwrap();
+            if unit == 0 {
+                break;
+            }
+            units.push(unit);
+        }
+        String::from_utf16(&units).unwrap()
+    };
+
+    // Integers, a wide string, a narrow one, both characters, padding.
+    let wide_arg = place_wide(&mut guest, STRINGS, "wide");
+    let narrow_arg = place(&mut guest, STRINGS + 0x40, b"narrow");
+    let format = place_wide(&mut guest, TEXT, "n=%d w=%s s=%S c=%c%C pad=%5u!");
+    let result = wide_print(
+        &mut guest,
+        format,
+        64,
+        &[
+            42,
+            wide_arg,
+            narrow_arg,
+            u64::from(b'W'),
+            u64::from(b'n'),
+            7,
+        ],
+    );
+    assert_eq!(
+        read_wide(&guest, SCRATCH, 64),
+        "n=42 w=wide s=narrow c=Wn pad=    7!"
+    );
+    assert_eq!(
+        result as usize,
+        "n=42 w=wide s=narrow c=Wn pad=    7!".len()
+    );
+
+    // The terminator is one wide zero, and truncation counts in units.
+    let format = place_wide(&mut guest, TEXT, "abcdef");
+    guest.memory.write_bytes(SCRATCH, &[0xEE; 32]).unwrap();
+    assert_eq!(wide_print(&mut guest, format, 4, &[]), 6);
+    // "abc" and the wide terminator, then the untouched sentinel bytes.
+    assert_eq!(read_wide(&guest, SCRATCH, 4), "abc");
+    assert_eq!(guest.memory.read_u16(SCRATCH + 6).unwrap(), 0);
+    assert_eq!(guest.memory.read_u8(SCRATCH + 8).unwrap(), 0xEE);
+
+    // The size query: null buffer, zero count, the would-be length.
+    let format = place_wide(&mut guest, TEXT, "%d%d%d");
+    guest.memory.write_u64(STACK_TOP + 32, 0).unwrap();
+    guest.memory.write_u64(STACK_TOP + 40, VA_LIST).unwrap();
+    for (index, slot) in [1u64, 22, 333].iter().enumerate() {
+        guest
+            .memory
+            .write_u64(VA_LIST + 8 * index as u64, *slot)
+            .unwrap();
+    }
+    let (cpu, exit) = guest.run("__stdio_common_vswprintf", &[STANDARD, 0, 0, format]);
+    assert_eq!(exit, ExitReason::Halt);
+    assert_eq!(cpu.get(Register::Rax) & 0xFFFF_FFFF, 6);
+
+    // A width or precision from the arguments, as the narrow forms read it.
+    let wide_arg2 = place_wide(&mut guest, STRINGS + 0x60, "xy");
+    let format = place_wide(&mut guest, TEXT, "%*s");
+    assert_eq!(wide_print(&mut guest, format, 16, &[6, wide_arg2]), 6);
+    assert_eq!(read_wide(&guest, SCRATCH, 8), "    xy");
+
+    // %n is invalid here as it is there.
+    let format = place_wide(&mut guest, TEXT, "%n");
+    assert_eq!(wide_print(&mut guest, format, 16, &[]), u32::MAX as u64);
+}
