@@ -390,8 +390,6 @@ CRT's string forms and `strftime`, and verifies `mktime`'s normalization.
 fail. `crates/cli/tests/run_program.rs` runs all three through
 `xenora run`. Provenance is as for Gate A2.
 
-||||||| parent of 981871e (runtime: the wide conversions and classification of package 6 of #459)
-=======
 ## Wide characters
 
 `tests/compat_fixtures/crt_wide.c` (#459, package 6, first part) is a
@@ -403,7 +401,24 @@ of the restartable forms, and the ASCII classification.
 fail. `crates/cli/tests/run_program.rs` runs all three through
 `xenora run`. Provenance is as for Gate A2.
 
->>>>>>> 981871e (runtime: the wide conversions and classification of package 6 of #459)
+||||||| parent of 5e8bb0d (Serve wide stream io in the C locale, with the C stream orientation)
+=======
+## C runtime wide stream io
+
+`tests/compat_fixtures/crt_wstream.c` (#459) is a hosted C program that writes
+and reads wide strings on file streams with `fputws` and `fgetws` in the C
+locale, checks the C orientation both ways — byte io refused on a
+wide-oriented stream, wide io refused on a byte-oriented one — and writes one
+wide character to stdout with `putwchar`. Diagnostics go to stderr so stdout
+stays unoriented until `putwchar` fixes it wide. Every expected value follows
+from the bytes it writes; it exits with the number of the first failed check,
+or 0. `build-crt-wstream.sh` builds it with mingw-w64 (UCRT flavour) at `-O0`
+and `-O2`, and once at `-O1` with `CRT_WSTREAM_BREAK`, which expects `fputws`
+to fail where it succeeds, so check 2 fails, as a control.
+`crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+Provenance is as for Gate A2.
+
+>>>>>>> 5e8bb0d (Serve wide stream io in the C locale, with the C stream orientation)
 ## C runtime mathematics
 
 `tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the

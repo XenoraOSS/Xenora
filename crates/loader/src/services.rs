@@ -1224,6 +1224,53 @@ pub(crate) mod handlers {
         or_errno(context, outcome)
     }
 
+    pub fn fputws(context: &mut ServiceContext<'_>, text: u64, stream: u64) -> Outcome<u32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.write_wide_string(context.memory, &mut drive, text, stream)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn fgetws(
+        context: &mut ServiceContext<'_>,
+        buffer: u64,
+        count: i32,
+        stream: u64,
+    ) -> Outcome<u64> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.read_wide_line(
+                context.memory,
+                &mut drive,
+                buffer,
+                count as u32 as u64,
+                stream,
+            )
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn putwchar(context: &mut ServiceContext<'_>, unit: u32) -> Outcome<u32> {
+        let outcome = context.state.crt_streams().wide_character_stdout(unit);
+        or_errno(context, outcome)
+    }
+
+    pub fn fputwc(context: &mut ServiceContext<'_>, unit: u32, stream: u64) -> Outcome<u32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.write_wide_unit(&mut drive, unit, stream)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn getwchar(context: &mut ServiceContext<'_>) -> Outcome<u32> {
+        Ok(context.state.crt_streams().wide_character_stdin())
+    }
+
     pub fn _ftelli64(context: &mut ServiceContext<'_>, stream: u64) -> Outcome<u64> {
         let outcome = context.state.crt_streams().tell(stream);
         or_errno(context, outcome).map(|position| position as u64)
