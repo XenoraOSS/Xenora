@@ -7,6 +7,9 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- Wide stream io in the guest C runtime (#459): `fputws`, `fgetws`, `fputwc`, `putwchar` and `getwchar` convert in the C locale (every byte is its wide character, nothing above 255), and streams carry the C orientation — the first io operation fixes byte or wide, and the other kind then fails, on the files and on the three standard streams.
+
+### Added
 
 - A bounded standard input for hosted C programs (#467, package 1c of #459): `xenora run` reads its own standard input before the run starts, up to 1 MiB, and the guest's `stdin` serves it through `fgets`, `getchar` and `feof` with text-mode replacement of CR LF by one line feed. Input beyond the limit is refused with a command-line error before anything executes, never truncated silently; no input at all - a terminal, or the diagnostic channel holding fd 0 - means end of file at once, so a run stays deterministic. The end-of-file indicator follows ISO C: it is set when a read meets the end, so a last line without a newline sets it while a line feed does not. A line longer than the buffer comes in pieces of count - 1 characters without loss, and a CR alone is not translated. `scanf`, wide input and interactive input remain out of scope, as the ticket says. One test in `runtime_services.rs` covers the edges; a hosted mingw-w64 program, `crt_stdin.c`, passes all its checks through `xenora run` at `-O0` and `-O2` with the fixed input piped in and with none, its control variant exits non-zero, and a run fed 1 MiB + 1 byte is refused before the program starts. Locally tested on Apple Silicon only; not compared with Windows and not independently reviewed.
 
