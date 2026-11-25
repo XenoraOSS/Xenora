@@ -34,6 +34,8 @@ pub(super) struct CrtStartup {
     signals: BTreeMap<i32, u64>,
     /// Guest address of `_fmode`. `_commode` is the `int` after it.
     file_modes: Option<u64>,
+    /// Guest address of the legacy `_timezone` cell.
+    timezone: Option<u64>,
 }
 
 impl CrtStartup {
@@ -112,5 +114,24 @@ impl CrtStartup {
             }
         };
         Ok(base + 4 * index)
+    }
+
+    /// Guest address of `_timezone`, allocated from the process heap on first
+    /// use. The legacy variable is the seconds west of UTC of the host time
+    /// zone; the runtime clock is documented UTC, so the cell stays zero.
+    pub(super) fn timezone_address(
+        &mut self,
+        memory: &mut GuestMemory,
+    ) -> Result<u64, ExitReason> {
+        match self.timezone {
+            Some(base) => Ok(base),
+            None => {
+                let base = memory
+                    .map_heap_allocation(PROCESS_HEAP, 8)
+                    .map_err(ExitReason::MemoryFault)?;
+                self.timezone = Some(base);
+                Ok(base)
+            }
+        }
     }
 }

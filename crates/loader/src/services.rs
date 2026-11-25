@@ -532,6 +532,17 @@ impl ServicesState {
     }
 }
 
+/// Extract the memory error of a variable-cell operation. The cell providers
+/// only fail through memory faults, so any other exit reason is unreachable;
+/// it maps to `Overflow` rather than panic because a loader must not crash on
+/// guest state corruption.
+fn cell_memory(result: Result<u64, ExitReason>) -> Result<u64, MemoryError> {
+    result.map_err(|error| match error {
+        ExitReason::MemoryFault(memory) => memory,
+        _ => MemoryError::Overflow,
+    })
+}
+
 /// Register the services generated from `runtime/services.txt` and the
 /// hand-written fixture services.
 pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<ServicesState>) {
@@ -540,6 +551,36 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     threads::register(registry, &state);
     static_cxx::register(registry);
     crate::exceptions::register(registry);
+
+    // The legacy CRT variables a msvcrt.dll-linked image imports as data
+    // (#643). Each cell is the one the modern accessors maintain, so the
+    // legacy data view and the function view cannot disagree. `__initenv`
+    // shares the `_environ` cell: the environment never changes here, which
+    // keeps the two identical, as they start on Windows. `_timezone` stays
+    // zero with the documented UTC clock.
+    for (symbol, variable) in [
+        ("__argc", crt_arguments::Variable::Argc),
+        ("__argv", crt_arguments::Variable::Argv),
+        ("_environ", crt_arguments::Variable::Environ),
+        ("__initenv", crt_arguments::Variable::Environ),
+    ] {
+        let s = state.clone();
+        registry.register_data("msvcrt.dll", symbol, ServiceStatus::Partial, move |memory| {
+            cell_memory(s.crt_arguments().address(memory, variable))
+        });
+    }
+    for (symbol, index) in [("_fmode", 0_u64), ("_commode", 1_u64)] {
+        let s = state.clone();
+        registry.register_data("msvcrt.dll", symbol, ServiceStatus::Partial, move |memory| {
+            cell_memory(s.crt_startup().file_mode_address(memory, index))
+        });
+    }
+    {
+        let s = state.clone();
+        registry.register_data("msvcrt.dll", "_timezone", ServiceStatus::Partial, move |memory| {
+            cell_memory(s.crt_startup().timezone_address(memory))
+        });
+    }
 
     let s = state.clone();
     registry.register(KERNEL32, "GetThreadId", move |args, cpu, mem| {
