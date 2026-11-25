@@ -120,6 +120,12 @@ struct FileStream {
     /// `tmpfile` opened it or `_O_TEMPORARY` was passed: the file is
     /// deleted when the stream or its descriptor closes.
     temporary: bool,
+    /// The end-of-file indicator, set when a read meets the end (or the
+    /// CTRL+Z of a text stream) and cleared by `clearerr` or a seek.
+    eof: bool,
+    /// The error indicator. Nothing sets it yet, as a write that fails
+    /// reports its `errno` at once; `clearerr` clears it all the same.
+    error: bool,
 }
 
 /// A file descriptor, as `_open` and `_fileno` hand out. 0, 1 and 2 are
@@ -194,6 +200,8 @@ impl FileStreams {
                 append: mode.append,
                 text: mode.text,
                 temporary: false,
+                eof: false,
+                error: false,
             },
         );
         Ok(file)
@@ -259,6 +267,8 @@ impl FileStreams {
                 append: false,
                 text: false,
                 temporary: true,
+                eof: false,
+                error: false,
             },
         );
         Ok(file)
@@ -338,6 +348,9 @@ impl FileStreams {
         }
         drive.drive_file(&stream.path).ok_or(EBADF)?;
         stream.position = target as u64;
+        // A successful seek or fsetpos clears the end-of-file indicator
+        // (ISO C 7.21.9.2 and 7.21.9.3).
+        stream.eof = false;
         Ok(())
     }
 
@@ -500,6 +513,8 @@ impl FileStreams {
             append,
             text,
             temporary: flags & 0x40 != 0,
+            eof: false,
+            error: false,
         };
         if append && let Some(data) = drive.drive_file(&stream.path) {
             stream.position = data.len() as u64;
@@ -663,6 +678,21 @@ impl FileStreams {
             .retain(|_, entry| !matches!(entry, Descriptor::Shared(shared) if *shared == file));
     }
 
+    /// The end-of-file indicator of a stream.
+    pub(super) fn end_of_file(&self, file: u64) -> bool {
+        self.open.get(&file).is_some_and(|stream| stream.eof)
+    }
+
+    /// `clearerr`: both indicators off. False when `file` is not open.
+    pub(super) fn clear_errors(&mut self, file: u64) -> bool {
+        let Some(stream) = self.open.get_mut(&file) else {
+            return false;
+        };
+        stream.eof = false;
+        stream.error = false;
+        true
+    }
+
     pub(super) fn read_line(
         &mut self,
         drive: &ObjectState,
@@ -675,7 +705,6 @@ impl FileStreams {
         }
         let data = drive.drive_file(&stream.path).ok_or(EBADF)?;
         let mut at = usize::try_from(stream.position).map_or(data.len(), |at| at.min(data.len()));
-        let start = at;
         let ended = at == data.len() || (stream.text && data[at] == CTRL_Z);
         if limit == 0 {
             // No room to read a character: an empty line unless the stream
@@ -702,8 +731,14 @@ impl FileStreams {
         }
         // The position advances by the bytes read, from where it was: a read
         // past the end reads nothing and leaves it there, as POSIX leaves it.
-        stream.position += (at - start) as u64;
-        Ok((!line.is_empty()).then_some(line))
+        stream.position = at as u64;
+        if line.is_empty() {
+            // End of file: the indicator is set, as ISO C says of the read
+            // functions.
+            stream.eof = true;
+            return Ok(None);
+        }
+        Ok(Some(line))
     }
 }
 

@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 126] = [
+pub static SERVICES: [ServiceMetadata; 128] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -313,9 +313,31 @@ pub static SERVICES: [ServiceMetadata; 126] = [
         result: "i32",
         status: ServiceStatus::Partial,
         aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
-        failure: "the indicator of the standard input only; other streams report 0; -1 with errno EINVAL for a null stream",
+        failure: "the indicator of the standard input and of file streams; the output streams report 0; -1 with errno EINVAL for a null stream",
         reference: "stdio.h feof",
-        tests: &["stdin_lines_follow_iso_c_at_the_edges"],
+        tests: &["stdin_lines_follow_iso_c_at_the_edges", "secure_fopen_and_stream_indicators_follow_iso_c"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "fopen_s",
+        parameters: &[Parameter { name: "file", kind: "ptr" }, Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "the error number as its result and in errno, with the output pointer null; EINVAL for a null or empty argument, or a name or mode it cannot read; stops the guest for an output pointer it cannot write; the invalid parameter handler is not modelled",
+        reference: "stdio.h fopen_s",
+        tests: &["secure_fopen_and_stream_indicators_follow_iso_c"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "clearerr",
+        parameters: &[Parameter { name: "stream", kind: "ptr" }],
+        result: "void",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll"],
+        failure: "never; errno EINVAL for a null stream; stops the guest for a pointer that is no stream",
+        reference: "stdio.h clearerr",
+        tests: &["secure_fopen_and_stream_indicators_follow_iso_c"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -1650,6 +1672,24 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::feof(&mut context, a0)?;
         Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "fopen_s", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u64(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::fopen_s(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "clearerr", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::clearerr(&mut context, a0)?;
+        Ok(0)
     });
     let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "_ftelli64", ServiceStatus::Partial, move |args, cpu, memory| {

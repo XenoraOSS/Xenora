@@ -1364,6 +1364,29 @@ pub(crate) mod handlers {
         remove(context, name)
     }
 
+    pub fn fopen_s(
+        context: &mut ServiceContext<'_>,
+        file: u64,
+        name: u64,
+        mode: u64,
+    ) -> Outcome<i32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.open_secure(context.memory, &mut drive, file, name, mode)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn clearerr(context: &mut ServiceContext<'_>, stream: u64) -> Outcome<()> {
+        if stream == 0 {
+            // The invalid parameter handler is not modelled; `errno` is
+            // EINVAL, as the Microsoft page for `clearerr` says.
+            crt::set_errno(context.memory, context.teb, crt::EINVAL)?;
+        }
+        context.state.crt_streams().clear_errors(stream)
+    }
+
     pub fn perror(context: &mut ServiceContext<'_>, message: u64) -> Outcome<()> {
         let address = context
             .memory

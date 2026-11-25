@@ -344,6 +344,7 @@ with `CRT_FILES_BREAK`, which expects a text position without the carriage
 returns, so check 17 fails, as a control. `crates/cli/tests/run_program.rs`
 runs all three through `xenora run`. Provenance is as for Gate A2.
 
+<<<<<<< HEAD
 ## Temporary files
 
 `tests/compat_fixtures/crt_tmp.c` (#493, last part) is a hosted C program
@@ -367,6 +368,21 @@ at `-O0` and `-O2`, and once at `-O1` with `CRT_FDS_BREAK`, whose control
 check must fail. `crates/cli/tests/run_program.rs` runs all three through
 `xenora run`. Provenance is as for Gate A2.
 
+||||||| parent of e03e466 (runtime: fopen_s, clearerr and the end-of-file indicator (#493))
+=======
+## The secure open and stream indicators
+
+`tests/compat_fixtures/crt_secure.c` (#493, second part) is a hosted C
+program that opens with `fopen_s`, reads a file to its end so the end-of-file
+indicator is set, and clears it with `clearerr`. Every expected value follows
+from the bytes it writes and the Microsoft pages for `fopen_s`, `feof` and
+`clearerr`; it exits with the number of the first failed check, or 0.
+`build-crt-secure.sh` builds it with mingw-w64 (UCRT flavour) at `-O0` and
+`-O2`, and once at `-O1` with `CRT_SECURE_BREAK`, whose control check must
+fail. `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+Provenance is as for Gate A2.
+
+>>>>>>> e03e466 (runtime: fopen_s, clearerr and the end-of-file indicator (#493))
 ## C runtime mathematics
 
 `tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the
