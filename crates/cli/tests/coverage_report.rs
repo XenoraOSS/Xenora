@@ -7,7 +7,7 @@ use std::process::Command;
 fn report(name: &str) -> String {
     let path =
         std::env::temp_dir().join(format!("xenora-coverage-{}-{name}.md", std::process::id()));
-    let status = Command::new(env!("CARGO_BIN_EXE_betterxen"))
+    let status = Command::new(env!("CARGO_BIN_EXE_xenora"))
         .args(["imports", "coverage", "--out"])
         .arg(&path)
         .status()
@@ -54,7 +54,7 @@ fn coverage_is_deterministic_and_consistent() {
 
 #[test]
 fn coverage_rejects_unknown_arguments() {
-    let status = Command::new(env!("CARGO_BIN_EXE_betterxen"))
+    let status = Command::new(env!("CARGO_BIN_EXE_xenora"))
         .args(["imports", "coverage", "--bogus"])
         .status()
         .unwrap();

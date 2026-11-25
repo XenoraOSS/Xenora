@@ -163,9 +163,7 @@ fn imports_command(args: Vec<String>) -> ExitCode {
         "coverage" => coverage::command(&args[1..]),
         other => {
             eprintln!("unknown imports subcommand: {other}");
-            eprintln!(
-                "usage: betterxen imports <sync|generate|metadata|verify|coverage> [options]"
-            );
+            eprintln!("usage: betterxen imports <sync|generate|metadata|verify|coverage> [options]");
             ExitCode::from(2)
         }
     }
