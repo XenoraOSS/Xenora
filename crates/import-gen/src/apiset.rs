@@ -50,6 +50,8 @@ pub fn get_api_sets_for_canonical(canonical: &str) -> &'static [&'static str] {
             "api-ms-win-core-file-l1-1-0.dll",
             "api-ms-win-core-file-l2-1-0.dll",
             "api-ms-win-core-errorhandling-l1-1-0.dll",
+            "api-ms-win-core-string-l1-1-0.dll",
+            "api-ms-win-core-localization-l1-2-0.dll",
             "api-ms-win-core-debug-l1-1-0.dll",
             "api-ms-win-core-handle-l1-1-0.dll",
             "api-ms-win-core-interlocked-l1-1-0.dll",
