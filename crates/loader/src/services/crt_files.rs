@@ -113,6 +113,12 @@ struct FileStream {
     writable: bool,
     append: bool,
     text: bool,
+    /// The end-of-file indicator, set when a read meets the end (or the
+    /// CTRL+Z of a text stream) and cleared by `clearerr` or a seek.
+    eof: bool,
+    /// The error indicator. Nothing sets it yet, as a write that fails
+    /// reports its `errno` at once; `clearerr` clears it all the same.
+    error: bool,
 }
 
 #[derive(Default)]
@@ -172,6 +178,8 @@ impl FileStreams {
                 writable: mode.writable,
                 append: mode.append,
                 text: mode.text,
+                eof: false,
+                error: false,
             },
         );
         Ok(file)
@@ -260,7 +268,25 @@ impl FileStreams {
         }
         drive.drive_file(&stream.path).ok_or(EBADF)?;
         stream.position = target as u64;
+        // A successful seek or fsetpos clears the end-of-file indicator
+        // (ISO C 7.21.9.2 and 7.21.9.3).
+        stream.eof = false;
         Ok(())
+    }
+
+    /// The end-of-file indicator of a stream.
+    pub(super) fn end_of_file(&self, file: u64) -> bool {
+        self.open.get(&file).is_some_and(|stream| stream.eof)
+    }
+
+    /// `clearerr`: both indicators off. False when `file` is not open.
+    pub(super) fn clear_errors(&mut self, file: u64) -> bool {
+        let Some(stream) = self.open.get_mut(&file) else {
+            return false;
+        };
+        stream.eof = false;
+        stream.error = false;
+        true
     }
 
     pub(super) fn read_line(
@@ -300,7 +326,13 @@ impl FileStreams {
             }
         }
         stream.position = at as u64;
-        Ok((!line.is_empty()).then_some(line))
+        if line.is_empty() {
+            // End of file: the indicator is set, as ISO C says of the read
+            // functions.
+            stream.eof = true;
+            return Ok(None);
+        }
+        Ok(Some(line))
     }
 }
 

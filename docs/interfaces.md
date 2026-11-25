@@ -520,8 +520,8 @@ What is not provided, and what is Xenora's choice:
 
 - **Not provided:** the mode characters `x`, `c`, `n`, `N`, `S`, `R`, `T`,
   `D` and `ccs=`, which are refused; `fread`, `fseek`, `ftell`, `rewind`,
-  `ferror`, `fscanf`, `feof` of a file stream, and closing a standard
-  stream, which stop the guest.
+  `ferror`, `fscanf`, and closing a standard stream, which stop the
+  guest.
 - **No buffering.** A write reaches the drive at once, so the rule that a
   `+` stream needs `fflush` or a seek between writing and reading does not
   apply.
@@ -554,6 +554,18 @@ modelled and stops the guest. Neither is stopped by an open stream, whose
 later operations fail with `EBADF`. `fseek`, `ftell` and `rewind` remain
 unprovided here; #312 holds them. `remove` is `implemented`, the other five
 `partial`.
+
+**The secure open and the stream indicators (#493, second part).**
+`fopen_s` is `fopen` through a pointer: the error number is the result and
+`errno` at once, and the pointer holds null whenever the call does not
+succeed, as Microsoft's page says. A null or empty argument is `EINVAL`,
+and the invalid parameter handler is not modelled. A file stream keeps the
+end-of-file indicator ISO C defines: a read that meets the end (or the
+CTRL+Z of a text stream) sets it, and `feof` reports it for file streams as
+it already did for the standard input. `clearerr` clears the end-of-file
+and error indicators. Nothing raises the error indicator yet, as a failed
+read or write reports its `errno` at the call. `clearerr` is `implemented`;
+`fopen_s` is `partial` for the unmodelled handler.
 
 ### CRT integer conversion
 
