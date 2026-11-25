@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 169 |
-| Generated adapters | 169 |
-| Unique handler implementations | 162 |
+| Services with a declared ABI | 175 |
+| Generated adapters | 175 |
+| Unique handler implementations | 168 |
 | Implemented | 68 |
-| Partial | 99 |
+| Partial | 105 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 169 |
-| API-set aliases (not services) | 169 |
+| Conformance-tested through guest dispatch | 175 |
+| API-set aliases (not services) | 175 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -116,6 +116,12 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!_unlock_file` | `(stream: ptr) -> i32` | partial | -1 with errno EBADF for a null stream; stops the guest for a pointer that is no stream |
 | `kernel32.dll!GetLastError` | `() -> u32` | partial | never |
 | `kernel32.dll!SetLastError` | `(code: u32) -> void` | partial | never |
+| `kernel32.dll!MultiByteToWideChar` | `(codepage: u32, flags: u32, input: ptr, input_count: i32, output: ptr, output_count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for an unknown page, a zero or out-of-range byte count or a null input, with ERROR_INVALID_FLAGS for flags past MB_ERR_INVALID_CHARS, with ERROR_NO_UNICODE_TRANSLATION for malformed input under MB_ERR_INVALID_CHARS, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!WideCharToMultiByte` | `(codepage: u32, flags: u32, input: ptr, input_count: i32, output: ptr, output_count: i32, default_char: ptr, used_default: ptr) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for an unknown page, a zero or out-of-range count, a null input or default-character arguments under UTF-8, with ERROR_INVALID_FLAGS for flags past WC_ERR_INVALID_CHARS, with ERROR_NO_UNICODE_TRANSLATION for unrepresentable input under WC_ERR_INVALID_CHARS, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!GetACP` | `() -> u32` | partial | never |
+| `kernel32.dll!GetOEMCP` | `() -> u32` | partial | never |
+| `kernel32.dll!IsValidCodePage` | `(codepage: u32) -> bool32` | partial | never; false for a page Xenora does not serve |
+| `kernel32.dll!GetCPInfo` | `(codepage: u32, info: out<18>) -> bool32` | partial | false with ERROR_INVALID_PARAMETER for a page Xenora does not serve or a null output; stops the guest for memory that faults |
 | `ucrtbase.dll!__p___argc` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!__p___argv` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!__p__environ` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |

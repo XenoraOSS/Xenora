@@ -834,6 +834,57 @@ service kernel32.dll SetLastError(code: u32) -> void
     ref errhandlingapi.h SetLastError
     test last_error_is_set_by_failures_and_by_the_guest
 
+# The encoding conversions and their code pages: crates/loader/src/services/codepages.rs
+# says which pages Xenora serves and how each converts.
+
+service kernel32.dll MultiByteToWideChar(codepage: u32, flags: u32, input: ptr, input_count: i32, output: ptr, output_count: i32) -> i32
+    handler multibyte_to_wide_char
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails 0 with ERROR_INVALID_PARAMETER for an unknown page, a zero or out-of-range byte count or a null input, with ERROR_INVALID_FLAGS for flags past MB_ERR_INVALID_CHARS, with ERROR_NO_UNICODE_TRANSLATION for malformed input under MB_ERR_INVALID_CHARS, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults
+    ref stringapiset.h MultiByteToWideChar
+    test multibyte_to_wide_converts_utf8_and_the_ansi_page
+
+service kernel32.dll WideCharToMultiByte(codepage: u32, flags: u32, input: ptr, input_count: i32, output: ptr, output_count: i32, default_char: ptr, used_default: ptr) -> i32
+    handler wide_char_to_multibyte
+    status partial
+    alias api-ms-win-core-string-l1-1-0.dll
+    fails 0 with ERROR_INVALID_PARAMETER for an unknown page, a zero or out-of-range count, a null input or default-character arguments under UTF-8, with ERROR_INVALID_FLAGS for flags past WC_ERR_INVALID_CHARS, with ERROR_NO_UNICODE_TRANSLATION for unrepresentable input under WC_ERR_INVALID_CHARS, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults
+    ref stringapiset.h WideCharToMultiByte
+    test wide_char_to_multibyte_converts_utf8_and_marks_defaults
+
+service kernel32.dll GetACP() -> u32
+    handler get_ansi_codepage
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails never
+    ref winnls.h GetACP
+    test the_codepages_answer_their_numbers
+
+service kernel32.dll GetOEMCP() -> u32
+    handler get_oem_codepage
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails never
+    ref winnls.h GetOEMCP
+    test the_codepages_answer_their_numbers
+
+service kernel32.dll IsValidCodePage(codepage: u32) -> bool32
+    handler is_valid_codepage
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails never; false for a page Xenora does not serve
+    ref winnls.h IsValidCodePage
+    test the_codepages_answer_their_numbers
+
+service kernel32.dll GetCPInfo(codepage: u32, info: out<18>) -> bool32
+    handler get_codepage_info
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails false with ERROR_INVALID_PARAMETER for a page Xenora does not serve or a null output; stops the guest for memory that faults
+    ref winnls.h GetCPInfo
+    test the_codepages_answer_their_numbers
+
 # What a hosted C program's startup code hands to `main`. The three pointer
 # functions and the two initialization functions are listed by Microsoft only
 # by name; crates/loader/src/services/crt_arguments.rs says what is documented,
