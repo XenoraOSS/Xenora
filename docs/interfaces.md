@@ -333,6 +333,28 @@ up to 1 MiB. Each nonempty span must be fully mapped with the required permissio
 A span may cross adjacent guest regions. Writes validate the full destination before changing
 bytes, and moves preserve the original source bytes when ranges overlap.
 
+
+The registry also provides the small CRT utilities of the survey under UCRT,
+the CRT string, convert and environment API sets and - for the copying forms
+and `strrchr` - the private API set mingw imports them through: `strcpy`,
+`strncpy`, `strcat` and `strncat` copy and concatenate with the documented
+zero padding and termination of the bounded forms. `strrchr` scans to the
+terminator included. `_strdup` copies into process-heap memory the caller
+owns. `_strlwr`, `_strupr` and `_strrev` convert or reverse in place with
+the ASCII semantics of the C locale, as do the collation forms `strcoll`
+(byte-wise) and `strxfrm` (the identity copy with the documented length
+answer). `memcpy_s` and `memmove_s` enforce the Annex K constraints: a null
+pointer is invalid, a count over the destination size zeroes the destination
+and answers ERANGE, and `memcpy_s` also rejects overlapping ranges. The
+integer formatting family `_itoa`, `_ltoa`, `_i64toa`, `_ultoa`, `_ui64toa`
+and `_itoa_s` formats radix 2 through 36 with lowercase digits; negative
+numbers in radix ten carry a minus sign, in every other radix the value is
+its unsigned width. The `_s` form answers EINVAL when the buffer cannot hold
+the digits. `getenv_s` answers the documented empty over the empty
+environment: length zero, no error. All of this is implemented behaviour
+verified through the unit tests and the hosted `crt_crtutils` fixture.
+Nothing here was compared with Windows or with an Xbox console.
+
 ### Program arguments and environment
 
 A hosted C program's startup code gets `argc`, `argv` and `envp` for `main`

@@ -7,6 +7,7 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- The small CRT utilities of the survey: narrow string copying and concatenation (`strcpy`, `strncpy`, `strcat`, `strncat`), `strrchr`, `_strdup`, the in-place case conversions `_strlwr`/`_strupr` and reversal `_strrev`, the C-locale collation forms `strcoll`/`strxfrm`, the Annex K copies `memcpy_s`/`memmove_s` with their documented constraint answers, the character classes `isblank`/`isgraph`, the integer formatting family `_itoa`/`_ltoa`/`_i64toa`/`_ultoa`/`_ui64toa`/`_itoa_s` and `getenv_s` answering the documented empty over the empty environment. Verified through the unit tests and the hosted `crt_crtutils` fixture (23/23 checks at -O0 and -O2 through `xenora run`).
 
 ### Added
 
