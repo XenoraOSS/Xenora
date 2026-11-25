@@ -250,3 +250,99 @@ fn sleeping_advances_the_injected_clock() {
     assert_eq!(guest.fails("SleepEx", &[60_000, 0]), RUNTIME_LIMIT);
     assert_eq!(guest.call("GetTickCount64", &[]), 255);
 }
+
+// Package 9d: version, directories, name, processors and topology.
+#[test]
+fn version_directories_name_and_processors_describe_the_simulated_machine() {
+    const IMPORTS_9D: &[(&str, &str)] = &[
+        (KERNEL32, "GetLastError"),
+        (KERNEL32, "GetVersionExA"),
+        (KERNEL32, "GetVersionExW"),
+        (KERNEL32, "GetWindowsDirectoryA"),
+        (KERNEL32, "GetSystemDirectoryA"),
+        (KERNEL32, "GetComputerNameA"),
+        (KERNEL32, "GetActiveProcessorCount"),
+        (KERNEL32, "GetProcessAffinityMask"),
+        (KERNEL32, "SetThreadAffinityMask"),
+        (KERNEL32, "GetLogicalProcessorInformationEx"),
+    ];
+    let mut guest = Guest::new(IMPORTS_9D, &[]);
+
+    // GetVersionExA with the narrow core structure: 148 bytes, Windows 10.
+    guest.memory.write_u32(SCRATCH, 148).unwrap();
+    assert_eq!(guest.call("GetVersionExA", &[SCRATCH]), 1);
+    assert_eq!(guest.u32_at(SCRATCH + 4), 10);
+    assert_eq!(guest.u32_at(SCRATCH + 12), 19041);
+    assert_eq!(guest.u32_at(SCRATCH + 16), 2);
+    // A wrong declared size fails with the invalid-parameter error.
+    guest.memory.write_u32(SCRATCH, 10).unwrap();
+    assert_eq!(guest.call("GetVersionExA", &[SCRATCH]), 0);
+    assert_eq!(guest.call("GetLastError", &[]), 87);
+
+    // The directories, with the documented size answers.
+    let len = guest.call("GetWindowsDirectoryA", &[SCRATCH + 0x100, 64]);
+    assert_eq!(len, 10);
+    let mut four = [0u8; 4];
+    guest.memory.read_bytes(SCRATCH + 0x100, &mut four).unwrap();
+    assert_eq!(&four, b"c:\\w");
+    let len = guest.call("GetSystemDirectoryA", &[SCRATCH + 0x100, 64]);
+    assert_eq!(len, 19);
+    // A small buffer answers the required size, terminator included.
+    assert_eq!(
+        guest.call("GetWindowsDirectoryA", &[SCRATCH + 0x100, 4]),
+        11
+    );
+
+    // The computer name counts its terminator in the in-out capacity.
+    guest.memory.write_u32(SCRATCH, 16).unwrap();
+    assert_eq!(
+        guest.call("GetComputerNameA", &[SCRATCH + 0x100, SCRATCH]),
+        1
+    );
+    assert_eq!(guest.u32_at(SCRATCH), 6);
+    assert_eq!(guest.u32_at(SCRATCH + 0x100), u32::from_le_bytes(*b"XENO"));
+    // Too small: failure, the overflow error, the required count updated.
+    guest.memory.write_u32(SCRATCH, 3).unwrap();
+    assert_eq!(
+        guest.call("GetComputerNameA", &[SCRATCH + 0x100, SCRATCH]),
+        0
+    );
+    assert_eq!(guest.call("GetLastError", &[]), 111);
+    assert_eq!(guest.u32_at(SCRATCH), 7);
+
+    // Processors: one, in one group.
+    assert_eq!(guest.call("GetActiveProcessorCount", &[0]), 1);
+    assert_eq!(guest.call("GetActiveProcessorCount", &[0xffff]), 1);
+    assert_eq!(guest.call("GetActiveProcessorCount", &[7]), 0);
+    assert_eq!(
+        guest.call("GetProcessAffinityMask", &[u64::MAX, SCRATCH, SCRATCH + 8]),
+        1
+    );
+    assert_eq!(guest.u64_at(SCRATCH), 1);
+    assert_eq!(guest.u64_at(SCRATCH + 8), 1);
+    assert_eq!(guest.call("SetThreadAffinityMask", &[0, 1]), 1);
+    assert_eq!(guest.call("SetThreadAffinityMask", &[0, 0]), 0);
+    assert_eq!(guest.call("GetLastError", &[]), 87);
+    assert_eq!(guest.call("SetThreadAffinityMask", &[0, 2]), 0);
+
+    // The topology: core then package entries of 48 bytes each.
+    guest.memory.write_u32(SCRATCH, 0).unwrap();
+    assert_eq!(
+        guest.call("GetLogicalProcessorInformationEx", &[0xffff, 0, SCRATCH]),
+        0
+    );
+    assert_eq!(guest.call("GetLastError", &[]), 122);
+    assert_eq!(guest.u32_at(SCRATCH), 96);
+    guest.memory.write_u32(SCRATCH, 128).unwrap();
+    assert_eq!(
+        guest.call(
+            "GetLogicalProcessorInformationEx",
+            &[0xffff, SCRATCH + 0x100, SCRATCH]
+        ),
+        1
+    );
+    assert_eq!(guest.u32_at(SCRATCH + 0x100), 0); // core first
+    assert_eq!(guest.u32_at(SCRATCH + 0x104), 48);
+    assert_eq!(guest.u64_at(SCRATCH + 0x100 + 32), 1);
+    assert_eq!(guest.u32_at(SCRATCH + 0x100 + 48), 3); // package second
+}

@@ -254,6 +254,39 @@ fn write_system_info(
     memory.write_bytes(address, &info).map_err(fault)
 }
 
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+const ERROR_BUFFER_OVERFLOW: u32 = 111;
+const ERROR_INVALID_HANDLE: u32 = 6;
+const ALL_PROCESSOR_GROUPS: u32 = 0xffff;
+const RELATION_PROCESSOR_CORE: u32 = 0;
+const RELATION_PROCESSOR_PACKAGE: u32 = 3;
+const RELATION_ALL: u32 = 0xffff;
+const VERSION_API: &str = "api-ms-win-core-version-l1-1-0.dll";
+const WIN32_NT_PLATFORM: u32 = 2;
+// SYSTEM_LOGICAL_PROCESSOR_INFORMATION_EX with a PROCESSOR_RELATIONSHIP
+// body of one group affinity: 8 bytes of head, then flags, efficiency
+// class, 20 reserved bytes, the group count and one 16-byte affinity.
+const PROCESSOR_ENTRY_SIZE: u64 = 48;
+
+fn write_directory(
+    mem: &mut GuestMemory,
+    buffer: u64,
+    capacity: u64,
+    text: &str,
+) -> Result<u64, crate::memory::MemoryError> {
+    // GetWindowsDirectory and GetSystemDirectory count no terminator in
+    // their success return, but count it in the size they answer for a
+    // small buffer.
+    let bytes = text.as_bytes();
+    let needed = bytes.len() as u64 + 1;
+    if capacity < needed {
+        return Ok(needed);
+    }
+    mem.write_bytes(buffer, bytes)?;
+    mem.write_u8(buffer + bytes.len() as u64, 0)?;
+    Ok(bytes.len() as u64)
+}
+
 pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
     for symbol in ["GetSystemInfo", "GetNativeSystemInfo"] {
         let s = Arc::clone(state);
@@ -364,6 +397,180 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         });
     }
 
+    // The directories of the simulated installation, coherent with the
+    // synthetic drive's one-root layout, documented in docs/interfaces.md.
+    for (symbol, path) in [
+        ("GetWindowsDirectoryA", "c:\\windows"),
+        ("GetSystemDirectoryA", "c:\\windows\\system32"),
+    ] {
+        registry.register(KERNEL32, symbol, move |args, _, mem| {
+            let fault = ExitReason::MemoryFault;
+            let buffer = args.get(0, mem).map_err(fault)?;
+            let capacity = args.get(1, mem).map_err(fault)?;
+            if buffer == 0 {
+                return Ok(0);
+            }
+            write_directory(mem, buffer, capacity, path).map_err(fault)
+        });
+    }
+
+    // GetVersionEx describes the machine the guest is told it runs on: a
+    // Windows 10 era NT system, coherent with the GDK-era programs the
+    // runtime hosts. It is simulated, not measured, and documented.
+    for (symbol, wide) in [("GetVersionExW", true), ("GetVersionExA", false)] {
+        let s = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, mem| {
+            let fault = ExitReason::MemoryFault;
+            let address = args.rcx;
+            let declared = mem.read_u32(address).map_err(fault)?;
+            let unit = if wide { 2u32 } else { 1 };
+            let core_size = 20 + 128 * unit;
+            let ex_size = core_size + 8;
+            if declared != core_size && declared != ex_size {
+                return s.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            mem.write_u32(address + 4, 10).map_err(fault)?;
+            mem.write_u32(address + 8, 0).map_err(fault)?;
+            mem.write_u32(address + 12, 19041).map_err(fault)?;
+            mem.write_u32(address + 16, WIN32_NT_PLATFORM)
+                .map_err(fault)?;
+            // No service pack: the string is empty throughout.
+            let pack = address + 20;
+            for index in 0..128u64 {
+                if wide {
+                    mem.write_u16(pack + 2 * index, 0).map_err(fault)?;
+                } else {
+                    mem.write_u8(pack + index, 0).map_err(fault)?;
+                }
+            }
+            if declared == ex_size {
+                let ex = address + u64::from(core_size);
+                mem.write_u16(ex, 0).map_err(fault)?;
+                mem.write_u16(ex + 2, 0).map_err(fault)?;
+                mem.write_u16(ex + 4, 0).map_err(fault)?;
+                // VER_NT_WORKSTATION: a client system.
+                mem.write_u8(ex + 6, 1).map_err(fault)?;
+                mem.write_u8(ex + 7, 0).map_err(fault)?;
+            }
+            Ok(1)
+        });
+    }
+
+    // The computer name of the simulated machine.
+    for (symbol, wide) in [("GetComputerNameW", true), ("GetComputerNameA", false)] {
+        let s = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, mem| {
+            let fault = ExitReason::MemoryFault;
+            let buffer = args.rcx;
+            let size_at = args.rdx;
+            if buffer == 0 || size_at == 0 {
+                return s.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let name = "XENORA";
+            let units = name.len() as u32 + 1;
+            let capacity = mem.read_u32(size_at).map_err(fault)?;
+            if capacity < units {
+                mem.write_u32(size_at, units).map_err(fault)?;
+                return s.fail(cpu.gs_base, ERROR_BUFFER_OVERFLOW, 0);
+            }
+            if wide {
+                for (index, unit) in name.encode_utf16().chain([0]).enumerate() {
+                    mem.write_u16(buffer + 2 * index as u64, unit)
+                        .map_err(fault)?;
+                }
+            } else {
+                mem.write_bytes(buffer, name.as_bytes()).map_err(fault)?;
+                mem.write_u8(buffer + name.len() as u64, 0).map_err(fault)?;
+            }
+            // The out count excludes the terminator.
+            mem.write_u32(size_at, name.len() as u32).map_err(fault)?;
+            Ok(1)
+        });
+    }
+
+    // Processors and affinity: one processor in one group, coherent with
+    // the count GetSystemInfo reports for the simulated machine.
+    registry.register(KERNEL32, "GetActiveProcessorCount", |args, _, mem| {
+        let group = args.get(0, mem).map_err(ExitReason::MemoryFault)? as u32;
+        if group == 0 || group == ALL_PROCESSOR_GROUPS {
+            Ok(1)
+        } else {
+            Ok(0)
+        }
+    });
+
+    let s = Arc::clone(state);
+    registry.register(KERNEL32, "GetProcessAffinityMask", move |args, cpu, mem| {
+        let fault = ExitReason::MemoryFault;
+        if args.rcx != u64::MAX {
+            // Only the current process exists.
+            return s.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+        }
+        mem.write_u64(args.rdx, 1).map_err(fault)?;
+        mem.write_u64(args.r8, 1).map_err(fault)?;
+        Ok(1)
+    });
+
+    let s = Arc::clone(state);
+    registry.register(KERNEL32, "SetThreadAffinityMask", move |args, cpu, _mem| {
+        let mask = args.rdx;
+        if mask == 0 || mask & !1 != 0 {
+            // Zero is invalid, and bits outside the one processor never
+            // overlap the process affinity mask.
+            return s.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+        }
+        // The previous mask is one: the only processor there is.
+        Ok(1)
+    });
+
+    // The processor topology: one core in one package. Numa nodes, cache
+    // and group relationships are not modeled yet; asking for them alone
+    // answers zero entries, documented in docs/interfaces.md.
+    let s = Arc::clone(state);
+    registry.register(
+        KERNEL32,
+        "GetLogicalProcessorInformationEx",
+        move |args, cpu, mem| {
+            let fault = ExitReason::MemoryFault;
+            let relation = args.rcx as u32;
+            let buffer = args.rdx;
+            let size_at = args.r8;
+            if size_at == 0 {
+                return s.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let want_core = relation == RELATION_PROCESSOR_CORE || relation == RELATION_ALL;
+            let want_package = relation == RELATION_PROCESSOR_PACKAGE || relation == RELATION_ALL;
+            let count = u64::from(want_core) + u64::from(want_package);
+            let needed = count * PROCESSOR_ENTRY_SIZE;
+            let capacity = u64::from(mem.read_u32(size_at).map_err(fault)?);
+            mem.write_u32(size_at, needed as u32).map_err(fault)?;
+            if capacity < needed {
+                if needed == 0 {
+                    return Ok(1);
+                }
+                return s.fail(cpu.gs_base, ERROR_INSUFFICIENT_BUFFER, 0);
+            }
+            let mut at = buffer;
+            for relationship in [
+                want_core.then_some(RELATION_PROCESSOR_CORE),
+                want_package.then_some(RELATION_PROCESSOR_PACKAGE),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                mem.write_u32(at, relationship).map_err(fault)?;
+                mem.write_u32(at + 4, PROCESSOR_ENTRY_SIZE as u32)
+                    .map_err(fault)?;
+                // flags and efficiency class zero, twenty reserved bytes zero.
+                mem.write_u16(at + 30, 1).map_err(fault)?; // one group affinity
+                mem.write_u64(at + 32, 1).map_err(fault)?; // mask: processor 0
+                mem.write_u16(at + 40, 0).map_err(fault)?; // group zero
+                at += PROCESSOR_ENTRY_SIZE;
+            }
+            Ok(1)
+        },
+    );
+
     for (symbol, api_set) in [
         ("GetSystemInfo", SYSINFO_API),
         ("GetNativeSystemInfo", SYSINFO_API_2),
@@ -376,6 +583,16 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         ("QueryUnbiasedInterruptTime", REALTIME_API),
         ("Sleep", SYNCH_API_2),
         ("SleepEx", SYNCH_API),
+        ("GetWindowsDirectoryA", SYSINFO_API),
+        ("GetSystemDirectoryA", SYSINFO_API),
+        ("GetVersionExW", VERSION_API),
+        ("GetVersionExA", VERSION_API),
+        ("GetComputerNameW", SYSINFO_API),
+        ("GetComputerNameA", SYSINFO_API),
+        ("GetActiveProcessorCount", SYSINFO_API),
+        ("GetProcessAffinityMask", SYSINFO_API),
+        ("SetThreadAffinityMask", SYSINFO_API),
+        ("GetLogicalProcessorInformationEx", SYSINFO_API),
     ] {
         registry.alias(api_set, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
