@@ -885,6 +885,65 @@ service kernel32.dll GetCPInfo(codepage: u32, info: out<18>) -> bool32
     ref winnls.h GetCPInfo
     test the_codepages_answer_their_numbers
 
+# The locale identity: crates/loader/src/services/locale.rs says why one
+# locale and what it answers.
+
+service kernel32.dll GetSystemDefaultLCID() -> u32
+    handler get_system_default_lcid
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails never
+    ref winnls.h GetSystemDefaultLCID
+    test the_locale_is_en_us_and_answers_its_strings
+
+service kernel32.dll GetUserDefaultLCID() -> u32
+    handler get_user_default_lcid
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails never
+    ref winnls.h GetUserDefaultLCID
+    test the_locale_is_en_us_and_answers_its_strings
+
+service kernel32.dll GetUserDefaultLangID() -> u32
+    handler get_user_default_langid
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails never
+    ref winnls.h GetUserDefaultLangID
+    test the_locale_is_en_us_and_answers_its_strings
+
+service kernel32.dll GetUserDefaultLocaleName(output: ptr, count: i32) -> i32
+    handler get_user_default_locale_name
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails 0 with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults
+    ref winnls.h GetUserDefaultLocaleName
+    test the_locale_is_en_us_and_answers_its_strings
+
+service kernel32.dll GetLocaleInfoW(lcid: u32, kind: u32, output: ptr, count: i32) -> i32
+    handler get_locale_info_w
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults
+    ref winnls.h GetLocaleInfoW
+    test the_locale_is_en_us_and_answers_its_strings
+
+service kernel32.dll GetLocaleInfoA(lcid: u32, kind: u32, output: ptr, count: i32) -> i32
+    handler get_locale_info_a
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults
+    ref winnls.h GetLocaleInfoA
+    test the_locale_is_en_us_and_answers_its_strings
+
+service kernel32.dll GetLocaleInfoEx(name: ptr, kind: u32, output: ptr, count: i32) -> i32
+    handler get_locale_info_ex
+    status partial
+    alias api-ms-win-core-localization-l1-2-0.dll
+    fails 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults
+    ref winnls.h GetLocaleInfoEx
+    test the_locale_is_en_us_and_answers_its_strings
+
 # What a hosted C program's startup code hands to `main`. The three pointer
 # functions and the two initialization functions are listed by Microsoft only
 # by name; crates/loader/src/services/crt_arguments.rs says what is documented,
