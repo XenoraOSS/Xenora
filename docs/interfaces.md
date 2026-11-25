@@ -565,6 +565,16 @@ clamps the result and sets ERANGE. Scans have a 1 MiB input budget. The long-lon
 Microsoft's _strtoi64, _strtoui64, _wcstoi64, and _wcstoui64 apply the
 same rules with 64-bit results.
 
+### Locale identity
+
+One locale exists: English (United States), which is Xenora's choice. The
+LCID and LANGID getters answer its `0x0409`, `GetUserDefaultLocaleName`
+answers `en-US`, and the `GetLocaleInfo` forms serve its documented public
+strings — the decimal point, the date and time formats, the currency — in
+wide and narrow output. Another locale, an unknown type or the number form
+fails with `ERROR_INVALID_PARAMETER` rather than answering wrong. Nothing
+was compared with Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.

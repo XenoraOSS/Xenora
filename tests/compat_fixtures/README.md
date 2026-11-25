@@ -313,6 +313,18 @@ the standard, legacy and secure forms, the guards before and after the
 buffer included. It is built at `-O0` and `-O2`, and once at `-O1` with
 `CRT_SPRINTF_BREAK`, which expects a wrong length on purpose as a control.
 `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+
+## The locale identity
+
+`tests/compat_fixtures/crt_locale.c` (package 7 of #459) is a hosted C
+program that asks the runtime for its one locale with the LCID, LANGID and
+locale-name getters and for the en-US strings of `GetLocaleInfo` in its
+three forms, checking the documented failures for other locales, unknown
+types and small buffers. Built by `build-crt-locale.sh` with mingw-w64,
+the calls are imports of `kernel32.dll`. It is built at `-O0` and `-O2`,
+and once at `-O1` with `CRT_LOCALE_BREAK`, which expects a wrong count on
+purpose as a control. `crates/cli/tests/run_program.rs` runs all three
+through `xenora run`.
 Provenance is as for Gate A2: the source and script are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.
 
