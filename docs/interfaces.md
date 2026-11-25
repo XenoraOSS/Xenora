@@ -1132,3 +1132,16 @@ for the keys a program would probe. Programs that need registry values to
 exist are not supported. This is implemented behaviour verified through
 the unit tests. Nothing here was compared with Windows or with an Xbox
 console.
+
+### Memory mappings and process creation
+
+`CreateFileMappingA/W` support paging-file-backed shared memory only:
+`INVALID_HANDLE_VALUE` creates an object tracked in the central handle
+table, a real file fails honestly with ERROR_NOT_SUPPORTED rather than
+serving content writes could not reach. `MapViewOfFile` allocates the
+zero-filled view fresh pages document; views from offsets or at chosen
+addresses are not modelled. `UnmapViewOfFile` releases the view.
+`CreateProcessA/W` fail honestly with ERROR_NOT_SUPPORTED and zero the
+process information structure, because the guest is the only process.
+This is implemented behaviour verified through the unit tests. Nothing
+here was compared with Windows or with an Xbox console.

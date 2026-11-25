@@ -162,7 +162,7 @@ impl Clock for SystemClock {
     }
 }
 
-pub(crate) enum GuestObject {
+enum GuestObject {
     Thread(u32),
     File(files::OpenFile),
     Search(files::Search),
@@ -176,23 +176,23 @@ pub(crate) enum GuestObject {
 }
 
 #[derive(Default)]
-pub(crate) struct ObjectState {
+struct ObjectState {
     priority: i32,
     last_handle: u64,
-    pub(crate) handles: BTreeMap<u64, GuestObject>,
+    handles: BTreeMap<u64, GuestObject>,
     files: BTreeMap<String, Vec<u8>>,
     directories: BTreeSet<String>,
     next_temp: u32,
 }
 
 impl ObjectState {
-    pub(crate) fn next_handle(&self) -> Option<u64> {
+    fn next_handle(&self) -> Option<u64> {
         self.last_handle
             .checked_add(4)
             .filter(|_| self.handles.len() < MAX_OBJECT_HANDLES)
     }
 
-    pub(crate) fn insert_handle(&mut self, handle: u64, object: GuestObject) {
+    fn insert_handle(&mut self, handle: u64, object: GuestObject) {
         self.handles.insert(handle, object);
         self.last_handle = handle;
     }
@@ -552,7 +552,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
                 ),
                 Some(GuestObject::File(file)) => (file.access, GuestObject::File(file.clone())),
                 Some(GuestObject::Search(_) | GuestObject::FileMapping { .. }) => {
-                    return s.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0)
+                    return s.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
                 }
                 None => return s.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0),
             }

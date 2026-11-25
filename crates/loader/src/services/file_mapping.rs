@@ -85,11 +85,17 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 }
             };
             let offset = (u64::from(offset_high) << 32) | u64::from(offset_low);
-            if offset != 0 || (all_access && args.get(5, memory).map_err(ExitReason::MemoryFault)? != 0) {
+            if offset != 0
+                || (all_access && args.get(5, memory).map_err(ExitReason::MemoryFault)? != 0)
+            {
                 // Offset views and placed views are not modelled.
                 return state.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
             }
-            let length = if requested == 0 { size } else { requested.min(size) };
+            let length = if requested == 0 {
+                size
+            } else {
+                requested.min(size)
+            };
             let address = memory.map_heap_allocation(PROCESS_HEAP, length as usize);
             let Ok(address) = address else {
                 return state.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, 0);
