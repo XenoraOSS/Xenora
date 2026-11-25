@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 182 |
-| Generated adapters | 182 |
-| Unique handler implementations | 175 |
+| Services with a declared ABI | 191 |
+| Generated adapters | 191 |
+| Unique handler implementations | 184 |
 | Implemented | 68 |
-| Partial | 112 |
+| Partial | 121 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 182 |
-| API-set aliases (not services) | 182 |
+| Conformance-tested through guest dispatch | 191 |
+| API-set aliases (not services) | 191 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -129,6 +129,15 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `kernel32.dll!GetLocaleInfoW` | `(lcid: u32, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
 | `kernel32.dll!GetLocaleInfoA` | `(lcid: u32, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
 | `kernel32.dll!GetLocaleInfoEx` | `(name: ptr, kind: u32, output: ptr, count: i32) -> i32` | partial | 0 with ERROR_INVALID_PARAMETER for another locale, an unknown type or the number form, with ERROR_INSUFFICIENT_BUFFER for a small or null output; stops the guest for memory that faults |
+| `kernel32.dll!lstrlenA` | `(text: ptr) -> i32` | partial | never |
+| `kernel32.dll!lstrlenW` | `(text: ptr) -> i32` | partial | never |
+| `kernel32.dll!lstrcpyA` | `(destination: ptr, source: ptr) -> ptr` | partial | never |
+| `kernel32.dll!lstrcmpA` | `(left: ptr, right: ptr) -> i32` | partial | never |
+| `kernel32.dll!lstrcmpiA` | `(left: ptr, right: ptr) -> i32` | partial | never |
+| `kernel32.dll!CompareStringA` | `(lcid: u32, flags: u32, left: ptr, left_count: i32, right: ptr, right_count: i32) -> i32` | partial | sets ERROR_INVALID_PARAMETER for another locale or unsupported flags |
+| `kernel32.dll!CompareStringW` | `(lcid: u32, flags: u32, left: ptr, left_count: i32, right: ptr, right_count: i32) -> i32` | partial | sets ERROR_INVALID_PARAMETER for another locale or unsupported flags |
+| `kernel32.dll!GetStringTypeW` | `(kind: u32, source: ptr, count: i32, output: ptr) -> bool32` | partial | sets ERROR_INVALID_PARAMETER for CT_CTYPE2 and CT_CTYPE3 |
+| `kernel32.dll!LCMapStringW` | `(lcid: u32, flags: u32, source: ptr, count: i32, destination: ptr, destination_count: i32) -> i32` | partial | sets ERROR_INVALID_PARAMETER for unsupported flags or another locale, ERROR_INSUFFICIENT_BUFFER for a small output |
 | `ucrtbase.dll!__p___argc` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!__p___argv` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |
 | `ucrtbase.dll!__p__environ` | `() -> ptr` | partial | stops the guest when the variable cannot be allocated |

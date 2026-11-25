@@ -510,5 +510,17 @@ constraints, the character classes, the integer formatting family and
 with mingw-w64, the calls are imports of `ucrtbase.dll`. It is built at
 `-O0` and `-O2`, and once at `-O1` with `CRT_CRTUTILS_BREAK` as a control.
 `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+
+## String comparison and case mapping
+
+`tests/compat_fixtures/crt_compare.c` (package 7 of #459) is a hosted C
+program that compares, classifies and case-maps strings with the `lstrcmp`
+family, `CompareString`, `GetStringTypeW` and `LCMapStringW`, checking the
+byte order, the ASCII fold, the terminator counting and each documented
+failure. Built by `build-crt-compare.sh` with mingw-w64, the calls are
+imports of `kernel32.dll`. It is built at `-O0` and `-O2`, and once at `-O1`
+with `CRT_COMPARE_BREAK`, which expects a wrong count on purpose as a
+control. `crates/cli/tests/run_program.rs` runs all three through
+`xenora run`.
 Provenance is as for Gate A2: the source and scripts are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.
