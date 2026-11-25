@@ -28,6 +28,7 @@
 .codex/
 .cursor/
 .gemini/
+session-*.md
 
 # Local gate evidence and intermediate fixture objects
 /artifacts/
