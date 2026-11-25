@@ -1708,6 +1708,84 @@ fn descriptors_share_files_with_streams() {
     assert_eq!(guest.errno(), ENOENT);
 }
 
+/// `fopen_s` gives the error number as its result and stores the stream
+/// through the pointer, `feof` observes a file stream's indicator, and
+/// `clearerr` clears it (#493, second part). The expectations are the
+/// Microsoft pages for `fopen_s` and `clearerr`, and ISO C 7.21.7 for the
+/// indicator.
+#[test]
+fn secure_fopen_and_stream_indicators_follow_iso_c() {
+    const SLOT: u64 = TEXT + 0x3000;
+    let (mut guest, [_, out, _]) = stdio_guest();
+    store(&mut guest, "secure.bin", b"xy");
+    guest.memory.write_bytes(NAME, b"secure.bin\0").unwrap();
+    guest.memory.write_bytes(MODE, b"rb\0").unwrap();
+    // A good open: 0, the slot holds the stream, and it reads.
+    assert_eq!(guest.call("fopen_s", &[SLOT, NAME, MODE]) & 0xFFFF_FFFF, 0);
+    let file = guest.memory.read_u64(SLOT).unwrap();
+    assert_ne!(file, 0);
+    assert_eq!(line(&mut guest, file, 8).unwrap(), b"xy");
+    // Reading past the end sets the indicator; `feof` observes it and
+    // `clearerr` clears it.
+    assert_eq!(guest.call("feof", &[file]) & 0xFFFF_FFFF, 0);
+    assert_eq!(line(&mut guest, file, 8), None, "at the end");
+    assert_ne!(guest.call("feof", &[file]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.call("clearerr", &[file]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.call("feof", &[file]) & 0xFFFF_FFFF, 0);
+    close(&mut guest, file);
+    // `clearerr` of a null stream is a no-op with errno EINVAL; of the
+    // output streams it has nothing to clear; of a pointer that is no
+    // stream it stops the guest.
+    guest.set_errno(0);
+    assert_eq!(guest.call("clearerr", &[0]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.errno(), STDIO_EINVAL);
+    assert_eq!(guest.call("clearerr", &[out]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.run("clearerr", &[TEXT]).1, LIMIT);
+    // A missing file: the result is ENOENT, errno matches, the slot is null.
+    for (name, mode, errno) in [
+        ("missing.bin\0", "rb\0", ENOENT),
+        ("secure.bin\0", "zz\0", STDIO_EINVAL),
+        ("\0", "rb\0", STDIO_EINVAL),
+    ] {
+        guest.memory.write_bytes(NAME, name.as_bytes()).unwrap();
+        guest.memory.write_bytes(MODE, mode.as_bytes()).unwrap();
+        guest.memory.write_u64(SLOT, 0xAA).unwrap();
+        guest.set_errno(0);
+        assert_eq!(
+            guest.call("fopen_s", &[SLOT, NAME, MODE]) & 0xFFFF_FFFF,
+            u64::from(errno) & 0xFFFF_FFFF,
+            "{name:?} {mode:?}"
+        );
+        assert_eq!(guest.errno(), errno, "{name:?} {mode:?}");
+        assert_eq!(guest.memory.read_u64(SLOT).unwrap(), 0, "{name:?} {mode:?}");
+    }
+    // Null arguments are EINVAL, with the slot nulled when there is one.
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("fopen_s", &[SLOT, 0, MODE]) & 0xFFFF_FFFF,
+        u64::from(STDIO_EINVAL) & 0xFFFF_FFFF
+    );
+    assert_eq!(guest.errno(), STDIO_EINVAL);
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("fopen_s", &[SLOT, NAME, 0]) & 0xFFFF_FFFF,
+        u64::from(STDIO_EINVAL) & 0xFFFF_FFFF
+    );
+    assert_eq!(guest.errno(), STDIO_EINVAL);
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("fopen_s", &[0, NAME, MODE]) & 0xFFFF_FFFF,
+        u64::from(STDIO_EINVAL) & 0xFFFF_FFFF
+    );
+    assert_eq!(guest.errno(), STDIO_EINVAL);
+    // A directory is EACCES through the same passthrough; the runtime
+    // registry has no way to make one here, so the fixture does not cover
+    // it either — it is the same `errno` forwarding ENOENT exercises.
+    // An unwritable output pointer stops the guest with a fault.
+    let exit = guest.run("fopen_s", &[0x9_0000_0000, NAME, MODE]).1;
+    assert!(matches!(exit, ExitReason::MemoryFault(_)), "{exit:?}");
+}
+
 #[test]
 fn formatted_output_refuses_what_it_cannot_print_correctly() {
     let (mut guest, [input, out, _]) = stdio_guest();

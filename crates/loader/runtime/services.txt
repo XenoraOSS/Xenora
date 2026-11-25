@@ -254,9 +254,28 @@ service ucrtbase.dll feof(stream: ptr) -> i32
     handler feof
     status partial
     alias api-ms-win-crt-stdio-l1-1-0.dll
-    fails the indicator of the standard input only; other streams report 0; -1 with errno EINVAL for a null stream
+    fails the indicator of the standard input and of file streams; the output streams report 0; -1 with errno EINVAL for a null stream
     ref stdio.h feof
     test stdin_lines_follow_iso_c_at_the_edges
+    test secure_fopen_and_stream_indicators_follow_iso_c
+
+
+# The secure open and the stream indicators (#493, second part of package 4 of #459).
+service ucrtbase.dll fopen_s(file: ptr, name: ptr, mode: ptr) -> i32
+    handler fopen_s
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails the error number as its result and in errno, with the output pointer null; EINVAL for a null or empty argument, or a name or mode it cannot read; stops the guest for an output pointer it cannot write; the invalid parameter handler is not modelled
+    ref stdio.h fopen_s
+    test secure_fopen_and_stream_indicators_follow_iso_c
+
+service ucrtbase.dll clearerr(stream: ptr) -> void
+    handler clearerr
+    status implemented
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails never; errno EINVAL for a null stream; stops the guest for a pointer that is no stream
+    ref stdio.h clearerr
+    test secure_fopen_and_stream_indicators_follow_iso_c
 
 # File positioning and file operations (#493, package 4 of #459).
 service ucrtbase.dll _ftelli64(stream: ptr) -> u64
