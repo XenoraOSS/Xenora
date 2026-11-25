@@ -1920,7 +1920,12 @@ fn c_time_formats_and_measures_as_the_crt_does() {
     assert_eq!(guest.call("clock", &[]), 0);
     // `difftime` subtracts. A double returns in XMM0, not the integer
     // register, so the call goes through the floating-point path.
-    let diff = math_call(&mut guest, "_difftime64", &[], &[2_000_000_000, 1_500_000_000]);
+    let diff = math_call(
+        &mut guest,
+        "_difftime64",
+        &[],
+        &[2_000_000_000, 1_500_000_000],
+    );
     assert_eq!(
         f64::from_bits(diff as u64),
         500_000_000.0,
