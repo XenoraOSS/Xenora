@@ -654,3 +654,430 @@ fn errno_isolated_by_guest_teb_on_one_host_thread() {
     assert_eq!(call("_errno", &mut first, &mut memory), first_slot);
     assert_eq!(memory.read_u32(first_slot).unwrap(), 23);
 }
+
+/// Copies a narrow string with its terminator; bounded, the copy is zero
+/// padded like strncpy when the source is shorter than the count.
+fn copy_string(
+    memory: &mut GuestMemory,
+    dest: u64,
+    source: u64,
+    count: u64,
+) -> Result<(), ExitReason> {
+    let length = string_length(memory, source, count, StringUnit::Byte)?;
+    let copied = if count == u64::MAX {
+        length + 1
+    } else {
+        length.min(count)
+    };
+    if copied != 0 {
+        let mut bytes = transfer_buffer(copied, 0)?;
+        memory
+            .read_bytes(source, &mut bytes)
+            .map_err(ExitReason::MemoryFault)?;
+        memory
+            .write_bytes(dest, &bytes)
+            .map_err(ExitReason::MemoryFault)?;
+    }
+    if count != u64::MAX && copied < count {
+        let zeroes = transfer_buffer(count - copied, 0)?;
+        memory
+            .write_bytes(
+                dest.checked_add(copied)
+                    .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?,
+                &zeroes,
+            )
+            .map_err(ExitReason::MemoryFault)?;
+    } else if count == u64::MAX || length >= count {
+        // The unbounded form always terminates; the bounded one does not
+        // when the source fills the count exactly.
+        if count == u64::MAX {
+            memory
+                .write_u8(
+                    dest.checked_add(length)
+                        .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?,
+                    0,
+                )
+                .map_err(ExitReason::MemoryFault)?;
+        }
+    }
+    Ok(())
+}
+
+/// The remaining small CRT utilities of the survey: string reversal and
+/// case conversion in place, duplication, the C-locale collation forms,
+/// the Annex K copy forms, the missing character classes, the integer
+/// formatting family and `getenv_s` over the empty environment.
+pub(super) fn register_utilities(registry: &mut ImportRegistry) {
+    // strrchr: the last occurrence, the terminator included in the scan.
+    registry.register(UCRT, "strrchr", |args, _, memory| {
+        let wanted = args.rdx as u8;
+        let mut address = args.rcx;
+        let mut last = 0u64;
+        loop {
+            let byte = memory.read_u8(address).map_err(ExitReason::MemoryFault)?;
+            if byte == wanted {
+                last = address;
+            }
+            if byte == 0 {
+                return Ok(last);
+            }
+            address = address
+                .checked_add(1)
+                .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?;
+        }
+    });
+
+    // _strdup: a heap copy the caller frees.
+    registry.register(UCRT, "_strdup", |args, cpu, memory| {
+        let length = string_length(memory, args.rcx, u64::MAX, StringUnit::Byte)?;
+        let result =
+            memory.map_heap_allocation(crate::memory::PROCESS_HEAP, (length + 1).max(1) as usize);
+        let address = allocation_result(memory, cpu.gs_base, result)?;
+        if address == 0 {
+            return Ok(0);
+        }
+        let mut bytes = transfer_buffer(length + 1, 0)?;
+        memory
+            .read_bytes(args.rcx, &mut bytes)
+            .map_err(ExitReason::MemoryFault)?;
+        memory
+            .write_bytes(address, &bytes)
+            .map_err(ExitReason::MemoryFault)?;
+        Ok(address)
+    });
+
+    // Case conversion and reversal in place, ASCII like the C locale.
+    for (symbol, upper) in [("_strlwr", false), ("_strupr", true)] {
+        registry.register(UCRT, symbol, move |args, _, memory| {
+            let mut address = args.rcx;
+            loop {
+                let byte = memory.read_u8(address).map_err(ExitReason::MemoryFault)?;
+                if byte == 0 {
+                    return Ok(args.rcx);
+                }
+                let converted = if upper {
+                    byte.to_ascii_uppercase()
+                } else {
+                    byte.to_ascii_lowercase()
+                };
+                if converted != byte {
+                    memory
+                        .write_u8(address, converted)
+                        .map_err(ExitReason::MemoryFault)?;
+                }
+                address = address
+                    .checked_add(1)
+                    .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?;
+            }
+        });
+    }
+
+    registry.register(UCRT, "_strrev", |args, _, memory| {
+        let length = string_length(memory, args.rcx, u64::MAX, StringUnit::Byte)?;
+        if length > 1 {
+            let mut bytes = transfer_buffer(length, 0)?;
+            memory
+                .read_bytes(args.rcx, &mut bytes)
+                .map_err(ExitReason::MemoryFault)?;
+            bytes.reverse();
+            memory
+                .write_bytes(args.rcx, &bytes)
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        Ok(args.rcx)
+    });
+
+    // The C locale collates byte-wise: strcoll is strcmp and strxfrm the
+    // identity copy with the documented length semantics.
+    registry.register(UCRT, "strcoll", |args, _, memory| {
+        compare_strings(memory, args.rcx, args.rdx, u64::MAX, StringUnit::Byte)
+    });
+
+    registry.register(UCRT, "strxfrm", |args, _, memory| {
+        let length = string_length(memory, args.rdx, u64::MAX, StringUnit::Byte)?;
+        if args.r8 > length {
+            // Only when the whole string fits is the output defined.
+            let mut bytes = transfer_buffer(length + 1, 0)?;
+            memory
+                .read_bytes(args.rdx, &mut bytes)
+                .map_err(ExitReason::MemoryFault)?;
+            memory
+                .write_bytes(args.rcx, &bytes)
+                .map_err(ExitReason::MemoryFault)?;
+        } else if args.r8 != 0 {
+            // A small buffer copies what fits and the output is undefined
+            // content-wise, but the copy itself is what programs observe.
+            let mut bytes = transfer_buffer(args.r8, 0)?;
+            memory
+                .read_bytes(args.rdx, &mut bytes)
+                .map_err(ExitReason::MemoryFault)?;
+            memory
+                .write_bytes(args.rcx, &bytes)
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        Ok(length)
+    });
+
+    // The Annex K copy forms: null pointers are invalid, a count over the
+    // destination size zeroes the destination and answers ERANGE.
+    for (symbol, overlapping) in [("memcpy_s", false), ("memmove_s", true)] {
+        registry.register(UCRT, symbol, move |args, cpu, memory| {
+            let (dest, dest_size, source, count) = (args.rcx, args.rdx, args.r8, args.r9);
+            if dest == 0 || source == 0 {
+                set_errno(memory, cpu.gs_base, EINVAL)?;
+                return Ok(u64::from(EINVAL));
+            }
+            if count > dest_size {
+                // The constraint violation zeroes the destination, as
+                // documented, before answering the range error.
+                if dest_size != 0 {
+                    let zeroes = transfer_buffer(dest_size, 0)?;
+                    memory
+                        .write_bytes(dest, &zeroes)
+                        .map_err(ExitReason::MemoryFault)?;
+                }
+                set_errno(memory, cpu.gs_base, ERANGE)?;
+                return Ok(u64::from(ERANGE));
+            }
+            if count != 0 {
+                if !overlapping {
+                    // memcpy_s also rejects actual overlap; the ranges are
+                    // half-open, the documented test.
+                    let dest_end = dest.wrapping_add(count);
+                    let source_end = source.wrapping_add(count);
+                    if dest < source_end && source < dest_end {
+                        let zeroes = transfer_buffer(dest_size.max(1), 0)?;
+                        memory
+                            .write_bytes(dest, &zeroes[..dest_size as usize])
+                            .map_err(ExitReason::MemoryFault)?;
+                        set_errno(memory, cpu.gs_base, EINVAL)?;
+                        return Ok(u64::from(EINVAL));
+                    }
+                }
+                let mut bytes = transfer_buffer(count, 0)?;
+                memory
+                    .read_bytes(source, &mut bytes)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_bytes(dest, &bytes)
+                    .map_err(ExitReason::MemoryFault)?;
+            }
+            Ok(0)
+        });
+    }
+
+    // The missing character classes, ASCII like the rest of the C locale.
+    registry.register(UCRT, "isblank", |args, _, _| {
+        Ok(u64::from(
+            matches!(args.rcx as u8, b' ' | b'\t') && args.rcx < 0x80,
+        ))
+    });
+    registry.register(UCRT, "isgraph", |args, _, _| {
+        Ok(u64::from((0x21..=0x7e).contains(&(args.rcx as u32))))
+    });
+
+    // The integer formatting family: radix 2 through 36, lowercase digits,
+    // a minus sign for signed negative input in radix ten only, as
+    // documented. The _s forms check the buffer size.
+    for (symbol, bits, signed) in [
+        ("_itoa", 32u32, true),
+        ("_ltoa", 32, true),
+        ("_i64toa", 64, true),
+        ("_ultoa", 32, false),
+        ("_ui64toa", 64, false),
+    ] {
+        registry.register(UCRT, symbol, move |args, cpu, memory| {
+            format_integer(
+                memory,
+                cpu.gs_base,
+                args.rcx,
+                args.rdx,
+                args.r8 as u32,
+                0,
+                bits,
+                signed,
+            )
+        });
+    }
+    registry.register(UCRT, "_itoa_s", |args, cpu, memory| {
+        format_integer(
+            memory,
+            cpu.gs_base,
+            args.rcx,
+            args.rdx,
+            args.r9 as u32,
+            args.r8,
+            32,
+            true,
+        )
+    });
+
+    // getenv_s over the empty environment: every variable is undefined,
+    // which is the documented empty answer, not an error.
+    registry.register(UCRT, "getenv_s", |args, cpu, memory| {
+        let (size_at, buffer, buffer_size, name) = (args.rcx, args.rdx, args.r8, args.r9);
+        if size_at == 0 || name == 0 {
+            set_errno(memory, cpu.gs_base, EINVAL)?;
+            return Ok(u64::from(EINVAL));
+        }
+        memory
+            .write_u64(size_at, 0)
+            .map_err(ExitReason::MemoryFault)?;
+        // Undefined variable: length zero, the buffer untouched when it
+        // cannot hold even the terminator - documented as no error.
+        if buffer != 0 && buffer_size != 0 {
+            memory
+                .write_u8(buffer, 0)
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        Ok(0)
+    });
+
+    // The copying and concatenation forms mingw inlines least often.
+    registry.register(UCRT, "strcpy", |args, _, memory| {
+        copy_string(memory, args.rcx, args.rdx, u64::MAX)?;
+        Ok(args.rcx)
+    });
+    registry.register(UCRT, "strncpy", |args, _, memory| {
+        copy_string(memory, args.rcx, args.rdx, args.r8)?;
+        Ok(args.rcx)
+    });
+    registry.register(UCRT, "strcat", |args, _, memory| {
+        let length = string_length(memory, args.rcx, u64::MAX, StringUnit::Byte)?;
+        let end = args
+            .rcx
+            .checked_add(length)
+            .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?;
+        copy_string(memory, end, args.rdx, u64::MAX)?;
+        Ok(args.rcx)
+    });
+    registry.register(UCRT, "strncat", |args, _, memory| {
+        let length = string_length(memory, args.rcx, u64::MAX, StringUnit::Byte)?;
+        let end = args
+            .rcx
+            .checked_add(length)
+            .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?;
+        copy_string(memory, end, args.rdx, args.r8)?;
+        memory
+            .write_u8(
+                end.checked_add(string_length(memory, args.rdx, args.r8, StringUnit::Byte)?)
+                    .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?,
+                0,
+            )
+            .map_err(ExitReason::MemoryFault)?;
+        Ok(args.rcx)
+    });
+
+    registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strrchr");
+    registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strcpy");
+    registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strncpy");
+    registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strcat");
+    registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strncat");
+
+    for (symbol, api) in [
+        ("strcpy", CRT_STRING_API),
+        ("strncpy", CRT_STRING_API),
+        ("strcat", CRT_STRING_API),
+        ("strncat", CRT_STRING_API),
+        ("strrchr", CRT_STRING_API),
+        ("_strdup", CRT_STRING_API),
+        ("_strlwr", CRT_STRING_API),
+        ("_strupr", CRT_STRING_API),
+        ("_strrev", CRT_STRING_API),
+        ("strcoll", CRT_STRING_API),
+        ("strxfrm", CRT_STRING_API),
+        ("memcpy_s", CRT_STRING_API),
+        ("memmove_s", CRT_STRING_API),
+        ("isblank", "api-ms-win-crt-string-l1-1-0.dll"),
+        ("isgraph", "api-ms-win-crt-string-l1-1-0.dll"),
+        ("_itoa", "api-ms-win-crt-convert-l1-1-0.dll"),
+        ("_ltoa", "api-ms-win-crt-convert-l1-1-0.dll"),
+        ("_i64toa", "api-ms-win-crt-convert-l1-1-0.dll"),
+        ("_ultoa", "api-ms-win-crt-convert-l1-1-0.dll"),
+        ("_ui64toa", "api-ms-win-crt-convert-l1-1-0.dll"),
+        ("_itoa_s", "api-ms-win-crt-convert-l1-1-0.dll"),
+        ("getenv_s", "api-ms-win-crt-environment-l1-1-0.dll"),
+    ] {
+        registry.alias(api, UCRT, symbol);
+        registry.set_status(UCRT, symbol, ServiceStatus::Partial);
+    }
+}
+
+/// The shared integer formatting core: radix 2 through 36, lowercase
+/// digits, the sign only for negative signed input in radix ten.
+#[allow(clippy::too_many_arguments)]
+fn format_integer(
+    memory: &mut GuestMemory,
+    teb: u64,
+    value: u64,
+    buffer: u64,
+    radix: u32,
+    size: u64,
+    bits: u32,
+    signed: bool,
+) -> Result<u64, ExitReason> {
+    if buffer == 0 || !(2..=36).contains(&radix) {
+        if signed || bits == 32 {
+            set_errno(memory, teb, EINVAL)?;
+        }
+        return Ok(if size == 0 { 0 } else { u64::from(EINVAL) });
+    }
+    // Normalize to the width the function formats.
+    let normalized = if bits == 32 {
+        u64::from(value as u32)
+    } else {
+        value
+    };
+    let negative = signed && radix == 10 && {
+        let sign_bit = 1u64 << (bits - 1);
+        normalized & sign_bit != 0
+    };
+    let magnitude = if negative {
+        // The two's complement magnitude, correct for the minimum value.
+        if bits == 32 {
+            u64::from((normalized as u32).wrapping_neg())
+        } else {
+            normalized.wrapping_neg()
+        }
+    } else {
+        normalized
+    };
+    let mut digits = Vec::new();
+    let mut remaining = magnitude;
+    loop {
+        let digit = (remaining % u64::from(radix)) as u8;
+        digits.push(if digit < 10 {
+            b'0' + digit
+        } else {
+            b'a' + digit - 10
+        });
+        remaining /= u64::from(radix);
+        if remaining == 0 {
+            break;
+        }
+    }
+    if negative {
+        digits.push(b'-');
+    }
+    digits.reverse();
+    digits.push(0);
+    let needed = digits.len() as u64;
+    if size != 0 {
+        // The _s form: too small is an invalid parameter with zeroed start.
+        if needed > size {
+            memory
+                .write_u8(buffer, 0)
+                .map_err(ExitReason::MemoryFault)?;
+            set_errno(memory, teb, EINVAL)?;
+            return Ok(u64::from(EINVAL));
+        }
+        memory
+            .write_bytes(buffer, &digits)
+            .map_err(ExitReason::MemoryFault)?;
+        return Ok(0);
+    }
+    memory
+        .write_bytes(buffer, &digits)
+        .map_err(ExitReason::MemoryFault)?;
+    Ok(buffer)
+}
