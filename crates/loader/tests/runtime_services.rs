@@ -29,7 +29,7 @@ const BASE: u64 = 0x1_4000_0000;
 const CODE_RVA: u32 = 0x1000;
 const IDATA_RVA: u32 = 0x10000;
 const IDATA_RAW: usize = 0x2200;
-const IDATA_LEN: usize = 0x4000;
+const IDATA_LEN: usize = 0x10000;
 const SCRATCH: u64 = 0x5_0000;
 const CPBUF: u64 = 0x6_0000;
 const STACK: u64 = 0x8_0000;
@@ -5886,11 +5886,6 @@ fn the_locale_is_en_us_and_answers_its_strings() {
 
 /// Writes args 5 and 6 to the guest stack above the shadow space, then calls
 /// with the first four in registers: the Microsoft x64 calling convention.
-fn call6(guest: &mut Guest, symbol: &str, args: &[u64; 6]) -> u64 {
-    guest.memory.write_u64(STACK_TOP + 32, args[4]).unwrap();
-    guest.memory.write_u64(STACK_TOP + 40, args[5]).unwrap();
-    guest.call(symbol, &args[..4])
-}
 
 #[test]
 fn the_string_comparison_services_answer_in_byte_order() {
