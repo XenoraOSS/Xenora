@@ -144,7 +144,11 @@ pub(super) fn multibyte_string_to_wide(
     text: u64,
     count: u64,
 ) -> Result<u64, ExitReason> {
-    let limit = if wide == 0 { 65_536 } else { count.saturating_add(1) };
+    let limit = if wide == 0 {
+        65_536
+    } else {
+        count.saturating_add(1)
+    };
     let bytes = c_string(memory, text, limit).map_err(fault)?;
     if wide == 0 {
         return Ok(bytes.len() as u64);
@@ -174,7 +178,11 @@ pub(super) fn wide_string_to_multibyte(
     wide: u64,
     count: u64,
 ) -> Result<u64, ExitReason> {
-    let limit = if text == 0 { 65_536 } else { count.saturating_add(1) };
+    let limit = if text == 0 {
+        65_536
+    } else {
+        count.saturating_add(1)
+    };
     let units = wide_string(memory, wide, limit).map_err(fault)?;
     if units.iter().any(|unit| *unit > 0xFF) {
         let _ = set_errno(memory, teb, EILSEQ);
