@@ -357,5 +357,16 @@ one unit in the last place from a reference computed with mpmath at 200 bits by
 `crt_math_reference.py`. It is built at `-O0` and `-O2`, and once at `-O1` with
 `CRT_MATH_BREAK`, which expects a wrong value for check 67, as a control.
 `crates/cli/tests/run_program.rs` runs all three through `xenora run`.
+
+## The Windows file services
+
+`tests/compat_fixtures/crt_winfiles.c` (package 8 of #459) is a hosted C
+program that creates, copies, moves, enumerates and describes files on the
+synthetic drive through the narrow and wide services, checking the sharing
+between widths, the failures and the unique temporary names. Built by
+`build-crt-winfiles.sh` with mingw-w64, the calls are imports of
+`kernel32.dll`. It is built at `-O0` and `-O2`, and once at `-O1` with
+`CRT_WINFILES_BREAK` as a control. `crates/cli/tests/run_program.rs` runs
+all three through `xenora run`.
 Provenance is as for Gate A2: the source and scripts are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.

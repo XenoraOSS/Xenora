@@ -565,6 +565,18 @@ clamps the result and sets ERANGE. Scans have a 1 MiB input budget. The long-lon
 Microsoft's _strtoi64, _strtoui64, _wcstoi64, and _wcstoui64 apply the
 same rules with 64-bit results.
 
+### The narrow file services
+
+The narrow forms of the directory, move, copy and find services read UTF-8
+paths, coherent with the process code page, and share one implementation
+and one drive with the wide forms: a file written through one width is the
+file read through the other. `CopyFile` onto itself is a sharing violation,
+`GetFullPathName` resolves relative names against the synthetic root -
+there is no current directory yet - `SetFileAttributes` accepts only the
+normal and archive bits because the drive keeps no attribute state, and
+`GetTempFileName` answers unique names within a run. Nothing was compared
+with Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.

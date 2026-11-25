@@ -23,7 +23,21 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "WriteFile"),
     (KERNEL32, "CloseHandle"),
     (KERNEL32, "CreateDirectoryW"),
+    (KERNEL32, "CreateDirectoryA"),
+    (KERNEL32, "RemoveDirectoryA"),
     (KERNEL32, "DeleteFileW"),
+    (KERNEL32, "MoveFileA"),
+    (KERNEL32, "CopyFileW"),
+    (KERNEL32, "CopyFileA"),
+    (KERNEL32, "FindFirstFileA"),
+    (KERNEL32, "FindNextFileA"),
+    (KERNEL32, "FindClose"),
+    (KERNEL32, "GetFullPathNameA"),
+    (KERNEL32, "GetFileInformationByHandle"),
+    (KERNEL32, "SetFileAttributesW"),
+    (KERNEL32, "SetFilePointer"),
+    (KERNEL32, "GetTempFileNameA"),
+    (KERNEL32, "GetLastError"),
     (UCRT, "fopen"),
     (UCRT, "fclose"),
     (UCRT, "fgets"),
@@ -260,4 +274,98 @@ fn an_fopen_that_cannot_allocate_leaves_the_drive_alone() {
     assert_eq!(fopen(&mut guest, "new.txt", "r"), 0);
     assert_eq!(errno(&mut guest), ENOENT);
     assert_eq!(read_through_win32(&mut guest, "kept.txt"), b"keep me");
+}
+
+#[test]
+fn the_narrow_file_services_share_the_drive_with_the_wide_ones() {
+    let mut guest = guest();
+    let dir = wide(&mut guest, "c:\\dir");
+    assert_eq!(guest.call("CreateDirectoryW", &[dir, 0]), 1);
+    let handle = create_file(&mut guest, "c:\\dir\\a.txt", GENERIC_WRITE, CREATE_ALWAYS);
+    assert_ne!(handle, INVALID_HANDLE);
+    guest.memory.write_bytes(BUFFER, b"drive-bytes").unwrap();
+    assert_eq!(guest.call("WriteFile", &[handle, BUFFER, 11, COUNT, 0]), 1);
+
+    // GetFileInformationByHandle answers the size in the fixed layout.
+    assert_eq!(
+        guest.call("GetFileInformationByHandle", &[handle, BUFFER]),
+        1
+    );
+    assert_eq!(guest.u32_at(BUFFER), 0x80);
+    assert_eq!(guest.u32_at(BUFFER + 36), 11);
+
+    // SetFilePointer moves and reports the low word; failure is u32::MAX.
+    assert_eq!(guest.call("SetFilePointer", &[handle, 5, 0, 0]), 5);
+
+    // CopyFileA copies inside the drive; fail_if_exists is honored.
+    let source = narrow(&mut guest, NARROW, "c:\\dir\\a.txt");
+    // The target keeps its own slot: MODE is reused below.
+    let target = narrow(&mut guest, NARROW + 0x40, "c:\\dir\\b.txt");
+    let copied = guest.call("CopyFileA", &[source, target, 1]);
+    let copy_err = guest.call("GetLastError", &[]);
+    assert_eq!(copied, 1, "CopyFileA error {copy_err}");
+    assert_eq!(
+        read_through_win32(&mut guest, "c:\\dir\\b.txt"),
+        b"drive-bytes"
+    );
+    assert_eq!(guest.call("CopyFileA", &[source, target, 1]), 0);
+    assert_eq!(guest.call("GetLastError", &[]), 80);
+    // A copy onto itself is a sharing violation, either width.
+    assert_eq!(guest.call("CopyFileA", &[source, source, 0]), 0);
+    assert_eq!(guest.call("GetLastError", &[]), 32);
+
+    // MoveFileA moves the copy into a subdirectory made with the narrow form.
+    let subdir = narrow(&mut guest, MODE, "c:\\dir\\narrow");
+    assert_eq!(guest.call("CreateDirectoryA", &[subdir, 0]), 1);
+    let moved = narrow(&mut guest, MODE + 0x40, "c:\\dir\\narrow\\moved.txt");
+    assert_eq!(guest.call("MoveFileA", &[target, moved]), 1);
+    assert_eq!(
+        read_through_win32(&mut guest, "c:\\dir\\narrow\\moved.txt"),
+        b"drive-bytes"
+    );
+
+    // FindFirstFileA lists a.txt in dir; moved.txt is gone from it.
+    let pattern = narrow(&mut guest, NARROW, "c:\\dir\\*.txt");
+    let search = guest.call("FindFirstFileA", &[pattern, BUFFER]);
+    assert_ne!(search, INVALID_HANDLE);
+    assert_eq!(guest.u32_at(BUFFER), 0x80);
+    let mut name = Vec::new();
+    for at in 0..8u64 {
+        match guest.memory.read_u8(BUFFER + 44 + at).unwrap() {
+            0 => break,
+            byte => name.push(byte),
+        }
+    }
+    assert_eq!(name, b"a.txt");
+    assert_eq!(guest.call("FindNextFileA", &[search, BUFFER]), 0);
+    assert_eq!(guest.call("GetLastError", &[]), 18);
+    assert_eq!(guest.call("FindClose", &[search]), 1);
+
+    // GetFullPathNameA resolves a relative name against the root.
+    let relative = narrow(&mut guest, NARROW, "dir\\a.txt");
+    let wrote = guest.call("GetFullPathNameA", &[relative, 32, BUFFER, 0]);
+    assert_eq!(wrote, 12);
+    let mut full = Vec::new();
+    for at in 0..12u64 {
+        full.push(guest.memory.read_u8(BUFFER + at).unwrap());
+    }
+    assert_eq!(full, b"c:\\dir\\a.txt");
+    assert_eq!(
+        guest.call("GetFullPathNameA", &[relative, 4, BUFFER, 0]),
+        13
+    );
+
+    // GetTempFileNameA answers a unique name each time.
+    let dir = narrow(&mut guest, NARROW, "c:\\dir");
+    let prefix = narrow(&mut guest, MODE, "ab");
+    let one = guest.call("GetTempFileNameA", &[dir, prefix, 0, BUFFER]);
+    assert!(one > 0, "temp number {one}");
+    let two = guest.call("GetTempFileNameA", &[dir, prefix, 0, BUFFER + 0x40]);
+    assert_ne!(one, two);
+
+    // SetFileAttributesW accepts normal on a file and fails a missing one.
+    let existing = wide(&mut guest, "c:\\dir\\a.txt");
+    assert_eq!(guest.call("SetFileAttributesW", &[existing, 0x80]), 1);
+    let missing = wide(&mut guest, "c:\\dir\\missing.txt");
+    assert_eq!(guest.call("SetFileAttributesW", &[missing, 0x80]), 0);
 }

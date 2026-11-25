@@ -175,6 +175,7 @@ struct ObjectState {
     handles: BTreeMap<u64, GuestObject>,
     files: BTreeMap<String, Vec<u8>>,
     directories: BTreeSet<String>,
+    next_temp: u32,
 }
 
 impl ObjectState {
