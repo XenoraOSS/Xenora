@@ -97,6 +97,8 @@ loader ResourceStates bits. Unsupported formats and layouts fail.
 | 47 | DestroySampler | sampler handle | 0 |
 | 48 | SampledViewHandles | list, address of 32-byte view/sampler-handle payload | 0 |
 | 49 | CreateGuestBackedBuffer | device, byte length, initial state u32, guest address | resource handle |
+| 50 | CopyImageSubresource | list, destination, destination kind, destination subresource, destination A, destination B, source, source kind, source subresource, source A, source B, width, height | 0 |
+| 51 | CreateTextureArray | device, width, height u32, mip count u32, array layer count u32, initial state u32 | RGBA8 array resource handle |
 
 CreatePipeline reads nonempty, four-byte-aligned shader blobs of at most 1024 bytes
 each. Decoding and translation must succeed before a pipeline handle is allocated.
@@ -648,3 +650,52 @@ one, as specified by the [Metal Shading Language specification](https://develope
 (page240). Nearest, unblended samples of bytes0,17,128,255 into a linear RGBA8 target
 therefore have expected bytes `[r,0,0,255]`. This contract does not replicate red
 into the other color channels or apply sRGB decoding.
+
+
+## Explicit image subresource transfers
+
+Opcode50 extends the queued image-copy contract with explicit texture subresources.
+It consumes thirteen argument words; descriptor word15 remains reserved and zero.
+For endpoint kind0 (RGBA8 texture), the subresource word contains mip in low32 bits
+and slice in high32 bits; A/B are texel x/y. For kind1 (owned buffer), the entire
+subresource word must be zero; A/B are byte offset and row pitch. Other kinds reject.
+Mip-only backends require slice0 and reject array storage. Array-capable backends
+validate the selected slice independently. Opcode44 retains its single-mip contract.
+
+The installed backend must explicitly support mip transfers. Positive width/height
+must fit the selected mip of each texture. Buffer offsets and pitches are multiples
+of four; pitch covers the copied row and the final copied byte fits the logical buffer.
+Source requires COPY_SOURCE and destination COPY_DEST at the recorded command.
+Same-backing and buffer-to-buffer image copies reject. Existing upload/readback calls
+use canonical packed bytes: all mips in increasing order, each tightly packed.
+
+A copy produces a fresh complete destination version, preserving other mip levels,
+borders and buffer padding. Source and prior destination are separate immutable
+inputs; both dependencies must be satisfied. Version identity, hazards, allocation
+budgets and publication cover the full backing. Produced mip chains can feed
+read-only sampled mip views directly on the GPU. Multi-mip attachment Load remains
+unsupported. These are original research calls, not a console graphics ABI.
+
+
+## RGBA8 array storage and slice copies
+
+Opcode51 creates owned RGBA8 2D-array storage with 1–256 layers and at most 4096
+layer/mip pairs, subject to existing dimension, mip, 64 MiB resource and context
+budgets. Integer fields must be canonical and nonzero; initial state is COMMON,
+COPY_SOURCE or COPY_DEST using the existing encoding. Each layer contains a complete tightly packed mip chain, so
+`offset(layer,mip) = layer * chain_bytes + mip_offset`. Layer counts do not shrink
+at smaller mip levels. Upload and Readback address this complete byte layout.
+
+Array identity is retained even for one layer. Existing creation, whole-copy,
+view, sampled-binding and attachment APIs do not implicitly reinterpret an array
+as a 2D texture. Array views, shader array indexing and writable views remain
+unsupported. Opcode50 on an array-capable backend copies any selected mip/slice
+to or from another array, a 2D texture mip chain, or an owned pitched buffer.
+The full prior destination is preserved, including every untouched slice/mip.
+
+A copy from an array slice into a 2D texture produces a genuine 2D GPU version,
+which can feed existing sampled mip views without host reconstruction. Array
+inputs and output layouts retain exact extent, mip count and layer count through
+submission and atomic completion. Hazards remain whole-backing: copying between
+two subresources of the same resource is rejected. This feature does not add
+independent subresource concurrency or compressed/depth transfers.

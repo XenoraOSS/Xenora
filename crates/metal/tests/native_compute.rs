@@ -456,3 +456,9 @@ mod pipeline_cache;
 
 #[path = "native/r8_sampled.rs"]
 mod r8_sampled;
+
+#[path = "native/mip_transfers.rs"]
+mod mip_transfers;
+
+#[path = "native/array_transfers.rs"]
+mod array_transfers;

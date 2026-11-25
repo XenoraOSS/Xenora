@@ -36,6 +36,17 @@ pub use texture_pipeline::{
 
 /// Whole-resource source for a queued GPU copy. Produced inputs retain provenance.
 pub enum QueuedCopyInput<'a> {
+    HostRgba8Array {
+        extent: [usize; 2],
+        mip_levels: u32,
+        array_layers: u32,
+        pixels: &'a [u8],
+    },
+    HostRgba8MipChain {
+        extent: [usize; 2],
+        mip_levels: u32,
+        pixels: &'a [u8],
+    },
     HostBuffer(&'a [u8]),
     ProducedBuffer(RenderBufferOutput),
     HostRgba8 {
@@ -58,8 +69,18 @@ pub struct QueuedBufferRegionCopy<'a> {
 /// Location within a full backing for a bounded RGBA8 image transfer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ImageCopyLocation {
-    Rgba8 { origin: [usize; 2] },
-    Buffer { offset: usize, bytes_per_row: usize },
+    Rgba8Mip {
+        mip: u32,
+        slice: u32,
+        origin: [usize; 2],
+    },
+    Rgba8 {
+        origin: [usize; 2],
+    },
+    Buffer {
+        offset: usize,
+        bytes_per_row: usize,
+    },
 }
 
 /// Image transfer into a fresh destination preserving all prior contents.
@@ -81,8 +102,22 @@ pub enum RenderCopyOutput {
 /// Owned host result of collecting a completed GPU copy.
 #[derive(Debug)]
 pub enum OwnedCopyOutput {
+    Rgba8Array {
+        extent: [usize; 2],
+        mip_levels: u32,
+        array_layers: u32,
+        pixels: Vec<u8>,
+    },
+    Rgba8MipChain {
+        extent: [usize; 2],
+        mip_levels: u32,
+        pixels: Vec<u8>,
+    },
     Buffer(Vec<u8>),
-    Rgba8 { extent: [usize; 2], pixels: Vec<u8> },
+    Rgba8 {
+        extent: [usize; 2],
+        pixels: Vec<u8>,
+    },
 }
 
 /// One bounded draw in a trusted-shader RGBA8 render pass.

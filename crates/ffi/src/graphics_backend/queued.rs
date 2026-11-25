@@ -16,6 +16,7 @@ use xenora_metal::{
     QueuedDepthInput, QueuedImageCopy, QueuedSampledBinding, RenderCohort, RenderColorOutput,
     RenderCopyOutput, RenderDepthOutput, RenderPoint, RenderQueue,
 };
+use xenora_texture::PackedTextureArrayLayout;
 
 type Completion = Result<GraphicsQueuedWorkOutput, GraphicsError>;
 
@@ -151,6 +152,30 @@ impl State {
                             .map_err(metal_error)
                             .and_then(|output| {
                                 let (layout, bytes) = match output {
+                                    OwnedCopyOutput::Rgba8Array {
+                                        extent,
+                                        mip_levels,
+                                        array_layers,
+                                        pixels,
+                                    } => (
+                                        GraphicsCopyLayout::Rgba8Array {
+                                            extent: (extent[0], extent[1]),
+                                            mip_levels,
+                                            array_layers,
+                                        },
+                                        pixels,
+                                    ),
+                                    OwnedCopyOutput::Rgba8MipChain {
+                                        extent,
+                                        mip_levels,
+                                        pixels,
+                                    } => (
+                                        GraphicsCopyLayout::Rgba8MipChain {
+                                            extent: (extent[0], extent[1]),
+                                            mip_levels,
+                                        },
+                                        pixels,
+                                    ),
                                     OwnedCopyOutput::Buffer(bytes) => (
                                         GraphicsCopyLayout::Buffer {
                                             byte_len: bytes.len(),
@@ -165,6 +190,29 @@ impl State {
                                     ),
                                 };
                                 let expected_bytes = match expected {
+                                    GraphicsCopyLayout::Rgba8Array {
+                                        extent,
+                                        mip_levels,
+                                        array_layers,
+                                    } => PackedTextureArrayLayout::new(
+                                        TextureFormat::Rgba8Unorm,
+                                        extent.0,
+                                        extent.1,
+                                        mip_levels,
+                                        array_layers,
+                                    )
+                                    .ok()
+                                    .map(|l| l.byte_len()),
+                                    GraphicsCopyLayout::Rgba8MipChain { extent, mip_levels } => {
+                                        PackedTextureLayout::new(
+                                            TextureFormat::Rgba8Unorm,
+                                            extent.0,
+                                            extent.1,
+                                            mip_levels,
+                                        )
+                                        .ok()
+                                        .map(|l| l.byte_len())
+                                    }
                                     GraphicsCopyLayout::Buffer { byte_len } => Some(byte_len),
                                     GraphicsCopyLayout::Rgba8 {
                                         extent: (width, height),
@@ -272,6 +320,12 @@ impl State {
             })
             .collect::<Result<Vec<_>, _>>()?;
         let input = match (&request.layout, &request.source) {
+            (
+                GraphicsCopyLayout::Rgba8Array { .. } | GraphicsCopyLayout::Rgba8MipChain { .. },
+                _,
+            ) => {
+                return Err(GraphicsError::InvalidDescriptor);
+            }
             (GraphicsCopyLayout::Buffer { byte_len }, GraphicsCopyInput::Host(bytes)) => {
                 if bytes.len() != *byte_len {
                     return Err(GraphicsError::InvalidDescriptor);
@@ -297,6 +351,10 @@ impl State {
                     return Err(GraphicsError::InvalidDescriptor);
                 }
                 match layout {
+                    GraphicsCopyLayout::Rgba8Array { .. }
+                    | GraphicsCopyLayout::Rgba8MipChain { .. } => {
+                        return Err(GraphicsError::InvalidDescriptor);
+                    }
                     GraphicsCopyLayout::Buffer { byte_len } => {
                         let entry = self
                             .entries
@@ -318,7 +376,10 @@ impl State {
                         extent: (width, height),
                     } => {
                         let output = produced_output(&self.entries, *version)?;
-                        if output.extent() != [*width, *height] {
+                        if output.is_array()
+                            || output.extent() != [*width, *height]
+                            || output.mip_levels() != 1
+                        {
                             return Err(GraphicsError::InvalidDescriptor);
                         }
                         QueuedCopyInput::ProducedColor(output)
@@ -485,6 +546,85 @@ impl State {
         waits: &[GraphicsQueuePoint],
     ) -> Result<QueuedCopyInput<'a>, GraphicsError> {
         match layout {
+            GraphicsCopyLayout::Rgba8Array {
+                extent: (width, height),
+                mip_levels,
+                array_layers,
+            } => {
+                let packed = PackedTextureArrayLayout::new(
+                    TextureFormat::Rgba8Unorm,
+                    width,
+                    height,
+                    mip_levels,
+                    array_layers,
+                )
+                .map_err(|_| GraphicsError::InvalidDescriptor)?;
+                match input {
+                    GraphicsCopyInput::Host(bytes) => {
+                        if bytes.len() != packed.byte_len() {
+                            return Err(GraphicsError::InvalidDescriptor);
+                        }
+                        Ok(QueuedCopyInput::HostRgba8Array {
+                            extent: [width, height],
+                            mip_levels,
+                            array_layers,
+                            pixels: bytes,
+                        })
+                    }
+                    GraphicsCopyInput::Produced(version) => {
+                        if !waits.contains(&version.point) {
+                            return Err(GraphicsError::InvalidDescriptor);
+                        }
+                        let output = produced_output(&self.entries, *version)?;
+                        if !output.is_array()
+                            || output.extent() != [width, height]
+                            || output.mip_levels() != mip_levels
+                            || output.array_layers() != array_layers
+                        {
+                            return Err(GraphicsError::InvalidDescriptor);
+                        }
+                        Ok(QueuedCopyInput::ProducedColor(output))
+                    }
+                }
+            }
+
+            GraphicsCopyLayout::Rgba8MipChain {
+                extent: (width, height),
+                mip_levels,
+            } => {
+                if mip_levels <= 1 {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                let packed =
+                    PackedTextureLayout::new(TextureFormat::Rgba8Unorm, width, height, mip_levels)
+                        .map_err(|_| GraphicsError::InvalidDescriptor)?;
+                match input {
+                    GraphicsCopyInput::Host(bytes) => {
+                        if bytes.len() != packed.byte_len() {
+                            return Err(GraphicsError::InvalidDescriptor);
+                        }
+                        Ok(QueuedCopyInput::HostRgba8MipChain {
+                            extent: [width, height],
+                            mip_levels,
+                            pixels: bytes,
+                        })
+                    }
+                    GraphicsCopyInput::Produced(version) => {
+                        if !waits.contains(&version.point) {
+                            return Err(GraphicsError::InvalidDescriptor);
+                        }
+                        let output = produced_output(&self.entries, *version)?;
+                        if output.is_array()
+                            || output.extent() != [width, height]
+                            || output.mip_levels() != mip_levels
+                        {
+                            return Err(GraphicsError::InvalidDescriptor);
+                        }
+                        Ok(QueuedCopyInput::ProducedColor(output))
+                    }
+                }
+            }
+
             GraphicsCopyLayout::Buffer { byte_len } => {
                 self.region_buffer_input(input, byte_len, waits)
             }
@@ -506,7 +646,10 @@ impl State {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
                     let output = produced_output(&self.entries, *version)?;
-                    if output.extent() != [width, height] {
+                    if output.is_array()
+                        || output.extent() != [width, height]
+                        || output.mip_levels() != 1
+                    {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
                     Ok(QueuedCopyInput::ProducedColor(output))
@@ -568,7 +711,23 @@ impl State {
             request.destination_layout,
             &request.waits,
         )?;
+        let mip_copy = matches!(
+            request.source_location,
+            GraphicsImageCopyLocation::Rgba8Mip { .. }
+        ) || matches!(
+            request.destination_location,
+            GraphicsImageCopyLocation::Rgba8Mip { .. }
+        );
         let location = |input| match input {
+            GraphicsImageCopyLocation::Rgba8Mip {
+                mip,
+                slice,
+                origin: (x, y),
+            } => ImageCopyLocation::Rgba8Mip {
+                mip,
+                slice,
+                origin: [x, y],
+            },
             GraphicsImageCopyLocation::Rgba8 { origin: (x, y) } => {
                 ImageCopyLocation::Rgba8 { origin: [x, y] }
             }
@@ -580,20 +739,28 @@ impl State {
                 bytes_per_row,
             },
         };
-        let point = self
-            .cohort
-            .submit_image_copy(
-                queue,
-                QueuedImageCopy {
-                    source,
-                    destination,
-                    source_location: location(request.source_location),
-                    destination_location: location(request.destination_location),
-                    extent: [request.extent.0, request.extent.1],
-                },
-                &dependencies,
-            )
-            .map_err(metal_error)?;
+        let copy = QueuedImageCopy {
+            source,
+            destination,
+            source_location: location(request.source_location),
+            destination_location: location(request.destination_location),
+            extent: [request.extent.0, request.extent.1],
+        };
+        let array_copy = matches!(request.source_layout, GraphicsCopyLayout::Rgba8Array { .. })
+            || matches!(
+                request.destination_layout,
+                GraphicsCopyLayout::Rgba8Array { .. }
+            );
+        let point = if array_copy {
+            self.cohort
+                .submit_array_image_copy(queue, copy, &dependencies)
+        } else if mip_copy {
+            self.cohort
+                .submit_mip_image_copy(queue, copy, &dependencies)
+        } else {
+            self.cohort.submit_image_copy(queue, copy, &dependencies)
+        }
+        .map_err(metal_error)?;
         let output = match self.cohort.copy_output(&point).map_err(metal_error) {
             Ok(output) => output,
             Err(error) => {
@@ -732,8 +899,34 @@ fn produced_output(
             .cloned()
             .ok_or(GraphicsError::InvalidResourceHandle),
         GraphicsProducedOutput::Copy(0) => match &entry.copy_output {
+            Some((
+                GraphicsCopyLayout::Rgba8Array {
+                    extent,
+                    mip_levels,
+                    array_layers,
+                },
+                RenderCopyOutput::Color(output),
+            )) if output.is_array()
+                && output.extent() == [extent.0, extent.1]
+                && output.mip_levels() == *mip_levels
+                && output.array_layers() == *array_layers =>
+            {
+                Ok(output.clone())
+            }
+            Some((
+                GraphicsCopyLayout::Rgba8MipChain { extent, mip_levels },
+                RenderCopyOutput::Color(output),
+            )) if !output.is_array()
+                && *mip_levels > 1
+                && output.extent() == [extent.0, extent.1]
+                && output.mip_levels() == *mip_levels =>
+            {
+                Ok(output.clone())
+            }
             Some((GraphicsCopyLayout::Rgba8 { extent }, RenderCopyOutput::Color(output)))
-                if output.extent() == [extent.0, extent.1] =>
+                if !output.is_array()
+                    && output.extent() == [extent.0, extent.1]
+                    && output.mip_levels() == 1 =>
             {
                 Ok(output.clone())
             }
@@ -867,7 +1060,8 @@ fn submit_native(
                     mip_levels,
                 } => {
                     if !request.waits.contains(&version.point)
-                        || *mip_levels != 1
+                        || produced_output(entries, *version)?.is_array()
+                        || produced_output(entries, *version)?.mip_levels() != *mip_levels
                         || produced_output(entries, *version)?.extent() != [*width, *height]
                     {
                         return Err(GraphicsError::InvalidDescriptor);
@@ -1020,7 +1214,11 @@ fn submit_native(
             GraphicsQueuedColorInput::Clear(_) => Ok(QueuedColorLoad::Clear),
             GraphicsQueuedColorInput::Host(bytes) => Ok(QueuedColorLoad::Host(bytes)),
             GraphicsQueuedColorInput::Produced(version) => {
-                produced_output(entries, *version).map(QueuedColorLoad::Produced)
+                let output = produced_output(entries, *version)?;
+                if output.is_array() || output.mip_levels() != 1 {
+                    return Err(GraphicsError::InvalidDescriptor);
+                }
+                Ok(QueuedColorLoad::Produced(output))
             }
         })
         .collect::<Result<Vec<_>, GraphicsError>>()?;
@@ -1142,7 +1340,7 @@ where
         thread: Mutex::new(Some(thread)),
     });
     let capabilities = ready.recv().map_err(|_| disconnected())??;
-    context.set_metal_geometry_graph_backend(capabilities, move |request| {
+    context.set_metal_array_copy_queued_backend(capabilities, move |request| {
         let point = match &request {
             GraphicsQueuedWorkRequest::Render(request) => request.point,
             GraphicsQueuedWorkRequest::ImageCopy(request) => request.point,

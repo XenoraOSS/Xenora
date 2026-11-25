@@ -17,7 +17,7 @@ use crate::memory::{GuestMemory, MemoryError};
 use std::any::Any;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
-use xenora_texture::{PackedTextureLayout, TextureFormat};
+use xenora_texture::{PackedTextureArrayLayout, PackedTextureLayout, TextureFormat};
 
 /// Maximum retained nodes for an explicitly graph-capable queued backend.
 pub const MAX_QUEUED_GRAPH_NODES: usize = 16;
@@ -229,9 +229,19 @@ impl GraphicsTextureCapabilities {
     }
 }
 
+/// Transfer-only RGBA8 array; one layer retains explicit array identity.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GraphicsTextureArrayDesc {
+    pub width: usize,
+    pub height: usize,
+    pub mip_levels: u32,
+    pub array_layers: u32,
+}
+
 /// Guest Graphics Resource.
 #[derive(Clone, Debug)]
 pub struct GraphicsResource {
+    pub is_texture_array: bool,
     pub texture_format: Option<TextureFormat>,
     pub handle: GraphicsHandle,
     pub desc: ResourceDesc,
@@ -713,14 +723,45 @@ pub struct GraphicsQueuedSubmissionRequest {
 /// Exact logical layout for bounded whole-resource copies.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsCopyLayout {
-    Buffer { byte_len: usize },
-    Rgba8 { extent: (usize, usize) },
+    Rgba8Array {
+        extent: (usize, usize),
+        mip_levels: u32,
+        array_layers: u32,
+    },
+    Buffer {
+        byte_len: usize,
+    },
+    Rgba8 {
+        extent: (usize, usize),
+    },
+    Rgba8MipChain {
+        extent: (usize, usize),
+        mip_levels: u32,
+    },
 }
 
 impl GraphicsCopyLayout {
     fn byte_len(self) -> Result<usize, GraphicsError> {
         match self {
+            Self::Rgba8Array {
+                extent,
+                mip_levels,
+                array_layers,
+            } => PackedTextureArrayLayout::new(
+                TextureFormat::Rgba8Unorm,
+                extent.0,
+                extent.1,
+                mip_levels,
+                array_layers,
+            )
+            .map(|l| l.byte_len())
+            .map_err(|_| GraphicsError::InvalidDescriptor),
             Self::Buffer { byte_len } => Ok(byte_len),
+            Self::Rgba8MipChain { extent, mip_levels } => {
+                PackedTextureLayout::new(TextureFormat::Rgba8Unorm, extent.0, extent.1, mip_levels)
+                    .map(|l| l.byte_len())
+                    .map_err(|_| GraphicsError::InvalidDescriptor)
+            }
             Self::Rgba8 {
                 extent: (width, height),
             } => width
@@ -731,8 +772,20 @@ impl GraphicsCopyLayout {
     }
     fn produced(self) -> GraphicsProducedLayout {
         match self {
+            Self::Rgba8Array {
+                extent,
+                mip_levels,
+                array_layers,
+            } => GraphicsProducedLayout::Rgba8Array {
+                extent,
+                mip_levels,
+                array_layers,
+            },
             Self::Buffer { byte_len } => GraphicsProducedLayout::Buffer { byte_len },
             Self::Rgba8 { extent } => GraphicsProducedLayout::Rgba8 { extent },
+            Self::Rgba8MipChain { extent, mip_levels } => {
+                GraphicsProducedLayout::Rgba8MipChain { extent, mip_levels }
+            }
         }
     }
 }
@@ -740,8 +793,18 @@ impl GraphicsCopyLayout {
 /// Texel origin or byte-addressed rows for an image-copy endpoint.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsImageCopyLocation {
-    Rgba8 { origin: (usize, usize) },
-    Buffer { offset: usize, bytes_per_row: usize },
+    Rgba8Mip {
+        mip: u32,
+        slice: u32,
+        origin: (usize, usize),
+    },
+    Rgba8 {
+        origin: (usize, usize),
+    },
+    Buffer {
+        offset: usize,
+        bytes_per_row: usize,
+    },
 }
 impl GraphicsImageCopyLocation {
     fn validate(
@@ -749,6 +812,52 @@ impl GraphicsImageCopyLocation {
         layout: GraphicsCopyLayout,
         extent: (usize, usize),
     ) -> Result<(), GraphicsError> {
+        if let Self::Rgba8Mip { mip, slice, origin } = self {
+            if let GraphicsCopyLayout::Rgba8Array {
+                extent: full,
+                mip_levels,
+                array_layers,
+            } = layout
+            {
+                let packed = PackedTextureArrayLayout::new(
+                    TextureFormat::Rgba8Unorm,
+                    full.0,
+                    full.1,
+                    mip_levels,
+                    array_layers,
+                )
+                .map_err(|_| GraphicsError::InvalidDescriptor)?;
+                let level = packed
+                    .footprint(slice, mip)
+                    .map_err(|_| GraphicsError::InvalidDescriptor)?;
+                return Self::Rgba8 { origin }.validate(
+                    GraphicsCopyLayout::Rgba8 {
+                        extent: (level.width, level.height),
+                    },
+                    extent,
+                );
+            }
+            if slice != 0 {
+                return Err(GraphicsError::InvalidDescriptor);
+            }
+            let (full, mips) = match layout {
+                GraphicsCopyLayout::Rgba8 { extent } => (extent, 1),
+                GraphicsCopyLayout::Rgba8MipChain { extent, mip_levels } => (extent, mip_levels),
+                _ => return Err(GraphicsError::InvalidDescriptor),
+            };
+            let packed = PackedTextureLayout::new(TextureFormat::Rgba8Unorm, full.0, full.1, mips)
+                .map_err(|_| GraphicsError::InvalidDescriptor)?;
+            let level = packed
+                .levels()
+                .get(mip as usize)
+                .ok_or(GraphicsError::InvalidDescriptor)?;
+            return Self::Rgba8 { origin }.validate(
+                GraphicsCopyLayout::Rgba8 {
+                    extent: (level.width, level.height),
+                },
+                extent,
+            );
+        }
         let (width, height) = extent;
         if width == 0 || height == 0 {
             return Err(GraphicsError::InvalidDescriptor);
@@ -798,9 +907,24 @@ impl GraphicsImageCopyLocation {
 /// Authoritative produced storage kind, independent of output-slot identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraphicsProducedLayout {
-    Buffer { byte_len: usize },
-    Rgba8 { extent: (usize, usize) },
-    Depth32Float { extent: (usize, usize) },
+    Rgba8Array {
+        extent: (usize, usize),
+        mip_levels: u32,
+        array_layers: u32,
+    },
+    Buffer {
+        byte_len: usize,
+    },
+    Rgba8 {
+        extent: (usize, usize),
+    },
+    Rgba8MipChain {
+        extent: (usize, usize),
+        mip_levels: u32,
+    },
+    Depth32Float {
+        extent: (usize, usize),
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -1061,6 +1185,8 @@ pub struct GraphicsContext {
     copy_backend: bool,
     buffer_region_backend: bool,
     image_copy_backend: bool,
+    mip_copy_backend: bool,
+    array_copy_backend: bool,
     unaligned_buffer_region_backend: bool,
     graph_backend: bool,
     geometry_backend: bool,
@@ -1141,6 +1267,8 @@ impl GraphicsContext {
             copy_backend: false,
             buffer_region_backend: false,
             image_copy_backend: false,
+            mip_copy_backend: false,
+            array_copy_backend: false,
             unaligned_buffer_region_backend: false,
             graph_backend: false,
             geometry_backend: false,
@@ -1179,6 +1307,8 @@ impl GraphicsContext {
         self.copy_backend = false;
         self.buffer_region_backend = false;
         self.image_copy_backend = false;
+        self.mip_copy_backend = false;
+        self.array_copy_backend = false;
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -1509,17 +1639,24 @@ impl GraphicsContext {
                         if let Some(version) =
                             handles[slot].and_then(|h| preparation.produced.get(&h))
                         {
-                            // Initial producer contract exports the base-level native texture only.
+                            // Match the exact produced backing, including every mip level.
                             if !matches!(
                                 version.output,
                                 GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
                             ) || preparation.layouts.get(&handles[slot].unwrap())
-                                != Some(&GraphicsProducedLayout::Rgba8 {
-                                    extent: (snapshot.width, snapshot.height),
+                                != Some(&if snapshot.mip_levels == 1 {
+                                    GraphicsProducedLayout::Rgba8 {
+                                        extent: (snapshot.width, snapshot.height),
+                                    }
+                                } else {
+                                    GraphicsProducedLayout::Rgba8MipChain {
+                                        extent: (snapshot.width, snapshot.height),
+                                        mip_levels: snapshot.mip_levels,
+                                    }
                                 })
                                 || (matches!(version.output, GraphicsProducedOutput::Copy(_))
                                     && !self.copy_backend)
-                                || snapshot.mip_levels != 1
+                                || (snapshot.mip_levels != 1 && !self.mip_copy_backend)
                                 || snapshot.format != TextureFormat::Rgba8Unorm
                             {
                                 return Err(GraphicsError::InvalidDescriptor);
@@ -1633,15 +1770,42 @@ impl GraphicsContext {
         handle: GraphicsHandle,
         allow_guest_source: bool,
     ) -> Result<GraphicsCopyLayout, GraphicsError> {
+        self.copy_layout_for_transfer(handle, allow_guest_source, false, false)
+    }
+
+    fn copy_layout_for_transfer(
+        &self,
+        handle: GraphicsHandle,
+        allow_guest_source: bool,
+        allow_mips: bool,
+        allow_arrays: bool,
+    ) -> Result<GraphicsCopyLayout, GraphicsError> {
         let resource = self
             .resources
             .get(&handle)
             .ok_or(GraphicsError::InvalidResourceHandle)?;
         let desc = &resource.desc;
+        if resource.is_texture_array {
+            if !allow_arrays
+                || resource.guest_backing_addr.is_some()
+                || resource.texture_format != Some(TextureFormat::Rgba8Unorm)
+            {
+                return Err(GraphicsError::InvalidDescriptor);
+            }
+            let layout = GraphicsCopyLayout::Rgba8Array {
+                extent: (desc.width as usize, desc.height as usize),
+                mip_levels: u32::from(desc.mip_levels),
+                array_layers: u32::from(desc.depth_or_array_size),
+            };
+            if layout.byte_len()? != resource.data.len() {
+                return Err(GraphicsError::InvalidDescriptor);
+            }
+            return Ok(layout);
+        }
         if (resource.guest_backing_addr.is_some()
             && (!allow_guest_source || desc.dimension != ResourceDimension::Buffer))
             || desc.depth_or_array_size != 1
-            || desc.mip_levels != 1
+            || (!allow_mips && desc.mip_levels != 1)
         {
             return Err(GraphicsError::InvalidDescriptor);
         }
@@ -1673,8 +1837,15 @@ impl GraphicsContext {
                 {
                     return Err(GraphicsError::InvalidDescriptor);
                 }
-                GraphicsCopyLayout::Rgba8 {
-                    extent: (width, height),
+                if desc.mip_levels == 1 {
+                    GraphicsCopyLayout::Rgba8 {
+                        extent: (width, height),
+                    }
+                } else {
+                    GraphicsCopyLayout::Rgba8MipChain {
+                        extent: (width, height),
+                        mip_levels: desc.mip_levels as u32,
+                    }
                 }
             }
             _ => return Err(GraphicsError::InvalidDescriptor),
@@ -1715,6 +1886,7 @@ impl GraphicsContext {
         let mut copy = None;
         let mut region = None;
         let mut image = None;
+        let mut mip_copy = false;
         for command in &commands.commands {
             match *command {
                 GraphicsCommand::ResourceBarrier {
@@ -1758,6 +1930,15 @@ impl GraphicsContext {
                         if !self.image_copy_backend {
                             return Err(GraphicsError::NativeMetalRequired);
                         }
+                        mip_copy =
+                            matches!(source_location, GraphicsImageCopyLocation::Rgba8Mip { .. })
+                                || matches!(
+                                    destination_location,
+                                    GraphicsImageCopyLocation::Rgba8Mip { .. }
+                                );
+                        if mip_copy && !self.mip_copy_backend {
+                            return Err(GraphicsError::NativeMetalRequired);
+                        }
                         image = Some((source_location, destination_location, extent));
                     }
                     if let GraphicsCommand::CopyBufferRegion {
@@ -1776,8 +1957,15 @@ impl GraphicsContext {
                         return Err(GraphicsError::InvalidDescriptor);
                     }
                     let source_layout =
-                        self.copy_layout_with_guest_source(source, image.is_none())?;
-                    let layout = self.copy_layout(destination)?;
+                        self.copy_layout_for_transfer(source, image.is_none(), mip_copy, mip_copy)?;
+                    let layout =
+                        self.copy_layout_for_transfer(destination, false, mip_copy, mip_copy)?;
+                    if (matches!(source_layout, GraphicsCopyLayout::Rgba8Array { .. })
+                        || matches!(layout, GraphicsCopyLayout::Rgba8Array { .. }))
+                        && !self.array_copy_backend
+                    {
+                        return Err(GraphicsError::NativeMetalRequired);
+                    }
                     if let Some((source_location, destination_location, extent)) = image {
                         if matches!(
                             (source_location, destination_location),
@@ -1856,7 +2044,8 @@ impl GraphicsContext {
                 return Err(GraphicsError::ResourceLifetimeViolation);
             }
         }
-        let source_layout = self.copy_layout_with_guest_source(source, image.is_none())?;
+        let source_layout =
+            self.copy_layout_for_transfer(source, image.is_none(), mip_copy, mip_copy)?;
         let produced = preparation.produced.get(&source).copied();
         if produced.is_some() && self.resources[&source].guest_backing_addr.is_some() {
             return Err(GraphicsError::InvalidDescriptor);
@@ -1872,10 +2061,14 @@ impl GraphicsContext {
                     GraphicsCopyLayout::Buffer { .. } => {
                         version.output == GraphicsProducedOutput::Copy(0)
                     }
-                    GraphicsCopyLayout::Rgba8 { .. } => matches!(
-                        version.output,
-                        GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
-                    ),
+                    GraphicsCopyLayout::Rgba8 { .. }
+                    | GraphicsCopyLayout::Rgba8MipChain { .. }
+                    | GraphicsCopyLayout::Rgba8Array { .. } => {
+                        matches!(
+                            version.output,
+                            GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
+                        )
+                    }
                 })
         {
             return Err(GraphicsError::InvalidDescriptor);
@@ -1886,10 +2079,14 @@ impl GraphicsContext {
                     GraphicsCopyLayout::Buffer { .. } => {
                         version.output == GraphicsProducedOutput::Copy(0)
                     }
-                    GraphicsCopyLayout::Rgba8 { .. } => matches!(
-                        version.output,
-                        GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
-                    ),
+                    GraphicsCopyLayout::Rgba8 { .. }
+                    | GraphicsCopyLayout::Rgba8MipChain { .. }
+                    | GraphicsCopyLayout::Rgba8Array { .. } => {
+                        matches!(
+                            version.output,
+                            GraphicsProducedOutput::Color(_) | GraphicsProducedOutput::Copy(0)
+                        )
+                    }
                 })
         {
             return Err(GraphicsError::InvalidDescriptor);
@@ -1900,12 +2097,19 @@ impl GraphicsContext {
                 .checked_add(3)
                 .map(|n| n & !3)
                 .ok_or(GraphicsError::InvalidDescriptor)?,
-            GraphicsCopyLayout::Rgba8 { .. } => bytes,
+            GraphicsCopyLayout::Rgba8 { .. }
+            | GraphicsCopyLayout::Rgba8MipChain { .. }
+            | GraphicsCopyLayout::Rgba8Array { .. } => bytes,
         };
         let factor = match (layout, produced.is_some()) {
             (_, true) => 2,
             (GraphicsCopyLayout::Buffer { .. }, false) => 4,
-            (GraphicsCopyLayout::Rgba8 { .. }, false) => 3,
+            (
+                GraphicsCopyLayout::Rgba8 { .. }
+                | GraphicsCopyLayout::Rgba8MipChain { .. }
+                | GraphicsCopyLayout::Rgba8Array { .. },
+                false,
+            ) => 3,
         };
         let copy_allocation_bytes = if region.is_some() || image.is_some() {
             let source_padded = source_layout
@@ -2113,8 +2317,16 @@ impl GraphicsContext {
                 "copy output layout or length mismatch".into(),
             ));
         }
+        // The admitted layout, not the current backend capability, selects the
+        // validation contract. Legacy receipts still require a single mip.
+        let allow_mips = matches!(commit.layout, GraphicsCopyLayout::Rgba8MipChain { .. });
         if self.resources.contains_key(&commit.destination)
-            && self.copy_layout(commit.destination)? != layout
+            && self.copy_layout_for_transfer(
+                commit.destination,
+                false,
+                allow_mips,
+                matches!(commit.layout, GraphicsCopyLayout::Rgba8Array { .. }),
+            )? != layout
         {
             return Err(GraphicsError::BackendError(
                 "copy destination layout changed".into(),
@@ -2471,6 +2683,40 @@ impl GraphicsContext {
         self.graph_backend = true;
     }
 
+    /// Opt in to transfer-only arrays, preserving full backing and explicit array kind.
+    pub fn set_metal_array_copy_queued_backend<F>(
+        &mut self,
+        capabilities: GraphicsTextureCapabilities,
+        renderer: F,
+    ) where
+        F: Fn(
+                GraphicsQueuedWorkRequest,
+            ) -> Result<Box<dyn GraphicsQueuedPendingWork>, GraphicsError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.set_metal_mip_copy_queued_backend(capabilities, renderer);
+        self.array_copy_backend = true;
+    }
+
+    /// Opt in to full-chain RGBA8 copies with explicit mip endpoints.
+    pub fn set_metal_mip_copy_queued_backend<F>(
+        &mut self,
+        capabilities: GraphicsTextureCapabilities,
+        renderer: F,
+    ) where
+        F: Fn(
+                GraphicsQueuedWorkRequest,
+            ) -> Result<Box<dyn GraphicsQueuedPendingWork>, GraphicsError>
+            + Send
+            + Sync
+            + 'static,
+    {
+        self.set_metal_geometry_graph_backend(capabilities, renderer);
+        self.mip_copy_backend = true;
+    }
+
     /// Opt in to exact produced vertex/color/index inputs gathered on the GPU.
     pub fn set_metal_geometry_graph_backend<F>(
         &mut self,
@@ -2807,6 +3053,8 @@ impl GraphicsContext {
         self.copy_backend = false;
         self.buffer_region_backend = false;
         self.image_copy_backend = false;
+        self.mip_copy_backend = false;
+        self.array_copy_backend = false;
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -3112,6 +3360,8 @@ impl GraphicsContext {
         self.copy_backend = false;
         self.buffer_region_backend = false;
         self.image_copy_backend = false;
+        self.mip_copy_backend = false;
+        self.array_copy_backend = false;
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -3228,6 +3478,8 @@ impl GraphicsContext {
         self.copy_backend = false;
         self.buffer_region_backend = false;
         self.image_copy_backend = false;
+        self.mip_copy_backend = false;
+        self.array_copy_backend = false;
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -3250,6 +3502,8 @@ impl GraphicsContext {
         self.copy_backend = false;
         self.buffer_region_backend = false;
         self.image_copy_backend = false;
+        self.mip_copy_backend = false;
+        self.array_copy_backend = false;
         self.unaligned_buffer_region_backend = false;
         self.graph_backend = false;
         self.geometry_backend = false;
@@ -3454,12 +3708,80 @@ impl GraphicsContext {
         guest_addr: Option<u64>,
         texture_format: Option<TextureFormat>,
     ) -> Result<GraphicsHandle, GraphicsError> {
+        self.create_resource_storage_typed(
+            device,
+            desc,
+            initial_state,
+            guest_addr,
+            texture_format,
+            false,
+        )
+    }
+
+    /// Create transfer-only RGBA8 array storage, including explicit one-layer arrays.
+    pub fn create_texture_array_resource(
+        &mut self,
+        device: GraphicsHandle,
+        texture: GraphicsTextureArrayDesc,
+        initial_state: ResourceStates,
+    ) -> Result<GraphicsHandle, GraphicsError> {
+        if self.guest_object_count() >= crate::graphics_service::MAX_GUEST_OBJECTS {
+            return Err(GraphicsError::ResourceLifetimeViolation);
+        }
+        if texture.width > MAX_RENDER_DIMENSION
+            || texture.height > MAX_RENDER_DIMENSION
+            || texture.array_layers == 0
+            || texture.array_layers > 256
+            || texture
+                .mip_levels
+                .checked_mul(texture.array_layers)
+                .is_none_or(|n| n > 4096)
+            || ![
+                ResourceStates::COMMON,
+                ResourceStates::COPY_SOURCE,
+                ResourceStates::COPY_DEST,
+            ]
+            .contains(&initial_state)
+        {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
+        let desc = ResourceDesc {
+            dimension: ResourceDimension::Texture2D,
+            width: texture.width as u64,
+            height: texture.height as u32,
+            depth_or_array_size: texture.array_layers as u16,
+            mip_levels: texture
+                .mip_levels
+                .try_into()
+                .map_err(|_| GraphicsError::InvalidDescriptor)?,
+            format_rgba8: true,
+        };
+        self.create_resource_storage_typed(
+            device,
+            desc,
+            initial_state,
+            None,
+            Some(TextureFormat::Rgba8Unorm),
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // Explicit array identity is separate from legacy resource descriptors.
+    fn create_resource_storage_typed(
+        &mut self,
+        device: GraphicsHandle,
+        desc: ResourceDesc,
+        initial_state: ResourceStates,
+        guest_addr: Option<u64>,
+        texture_format: Option<TextureFormat>,
+        is_texture_array: bool,
+    ) -> Result<GraphicsHandle, GraphicsError> {
         if !self.devices.contains_key(&device) {
             return Err(GraphicsError::InvalidDeviceHandle);
         }
         if desc.width == 0
             || desc.height == 0
-            || desc.depth_or_array_size != 1
+            || (!is_texture_array && desc.depth_or_array_size != 1)
             || desc.mip_levels == 0
         {
             return Err(GraphicsError::InvalidDescriptor);
@@ -3471,6 +3793,15 @@ impl GraphicsContext {
             {
                 width
             }
+            ResourceDimension::Texture2D if is_texture_array => PackedTextureArrayLayout::new(
+                TextureFormat::Rgba8Unorm,
+                width,
+                desc.height as usize,
+                u32::from(desc.mip_levels),
+                u32::from(desc.depth_or_array_size),
+            )
+            .map_err(|_| GraphicsError::InvalidDescriptor)?
+            .byte_len(),
             ResourceDimension::Texture2D => PackedTextureLayout::new(
                 texture_format.ok_or(GraphicsError::InvalidDescriptor)?,
                 width,
@@ -3507,6 +3838,7 @@ impl GraphicsContext {
         self.resources.insert(
             handle,
             GraphicsResource {
+                is_texture_array,
                 texture_format,
                 handle,
                 desc,
@@ -3626,7 +3958,8 @@ impl GraphicsContext {
             .resources
             .get(&backing)
             .ok_or(GraphicsError::InvalidResourceHandle)?;
-        if resource.desc.dimension != ResourceDimension::Texture2D
+        if resource.is_texture_array
+            || resource.desc.dimension != ResourceDimension::Texture2D
             || resource.texture_format != Some(desc.format.storage_format())
             || resource.desc.depth_or_array_size != 1
             || resource.guest_backing_addr.is_some()
@@ -3788,7 +4121,8 @@ impl GraphicsContext {
                 .resources
                 .get(&handle)
                 .ok_or(GraphicsError::InvalidResourceHandle)?;
-            if resource.desc.dimension != ResourceDimension::Texture2D
+            if resource.is_texture_array
+                || resource.desc.dimension != ResourceDimension::Texture2D
                 || resource.texture_format.is_none()
                 || resource.guest_backing_addr.is_some()
             {
@@ -3829,7 +4163,8 @@ impl GraphicsContext {
                 .resources
                 .get(handle)
                 .ok_or(GraphicsError::InvalidResourceHandle)?;
-            if resource.desc.dimension != ResourceDimension::Texture2D
+            if resource.is_texture_array
+                || resource.desc.dimension != ResourceDimension::Texture2D
                 || resource.texture_format.is_none()
                 || resource.guest_backing_addr.is_some()
             {
@@ -4150,7 +4485,9 @@ impl GraphicsContext {
             .ok_or(GraphicsError::InvalidResourceHandle)?;
         // Guest memory may supply an immutable whole-buffer source snapshot.
         // Destination publication remains owned-storage-only.
-        if destination_resource.guest_backing_addr.is_some()
+        if destination_resource.is_texture_array
+            || source_resource.is_texture_array
+            || destination_resource.guest_backing_addr.is_some()
             || (source_resource.guest_backing_addr.is_some()
                 && source_resource.desc.dimension != ResourceDimension::Buffer)
         {
@@ -4262,6 +4599,97 @@ impl GraphicsContext {
         source_location: GraphicsImageCopyLocation,
         extent: (usize, usize),
     ) -> Result<(), GraphicsError> {
+        if matches!(source_location, GraphicsImageCopyLocation::Rgba8Mip { .. })
+            || matches!(
+                destination_location,
+                GraphicsImageCopyLocation::Rgba8Mip { .. }
+            )
+        {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
+        self.record_image_copy(
+            list,
+            destination,
+            destination_location,
+            source,
+            source_location,
+            extent,
+            false,
+            false,
+        )
+    }
+
+    /// Record a full-backing copy preserving all untouched mip levels.
+    pub fn cmd_copy_image_mips(
+        &mut self,
+        list: GraphicsHandle,
+        destination: GraphicsHandle,
+        destination_location: GraphicsImageCopyLocation,
+        source: GraphicsHandle,
+        source_location: GraphicsImageCopyLocation,
+        extent: (usize, usize),
+    ) -> Result<(), GraphicsError> {
+        if matches!(source_location, GraphicsImageCopyLocation::Rgba8 { .. })
+            || matches!(
+                destination_location,
+                GraphicsImageCopyLocation::Rgba8 { .. }
+            )
+        {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
+        self.record_image_copy(
+            list,
+            destination,
+            destination_location,
+            source,
+            source_location,
+            extent,
+            true,
+            false,
+        )
+    }
+
+    pub fn cmd_copy_image_subresources(
+        &mut self,
+        list: GraphicsHandle,
+        destination: GraphicsHandle,
+        destination_location: GraphicsImageCopyLocation,
+        source: GraphicsHandle,
+        source_location: GraphicsImageCopyLocation,
+        extent: (usize, usize),
+    ) -> Result<(), GraphicsError> {
+        if matches!(source_location, GraphicsImageCopyLocation::Rgba8 { .. })
+            || matches!(
+                destination_location,
+                GraphicsImageCopyLocation::Rgba8 { .. }
+            )
+        {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
+        self.record_image_copy(
+            list,
+            destination,
+            destination_location,
+            source,
+            source_location,
+            extent,
+            true,
+            true,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)] // Shared validator preserves the two public recording contracts.
+    fn record_image_copy(
+        &mut self,
+        list: GraphicsHandle,
+        destination: GraphicsHandle,
+        destination_location: GraphicsImageCopyLocation,
+        source: GraphicsHandle,
+        source_location: GraphicsImageCopyLocation,
+        extent: (usize, usize),
+        allow_mips: bool,
+        allow_arrays: bool,
+    ) -> Result<(), GraphicsError> {
         let commands = self
             .command_lists
             .get(&list)
@@ -4280,8 +4708,14 @@ impl GraphicsContext {
         {
             return Err(GraphicsError::InvalidDescriptor);
         }
-        source_location.validate(self.copy_layout(source)?, extent)?;
-        destination_location.validate(self.copy_layout(destination)?, extent)?;
+        source_location.validate(
+            self.copy_layout_for_transfer(source, false, allow_mips, allow_arrays)?,
+            extent,
+        )?;
+        destination_location.validate(
+            self.copy_layout_for_transfer(destination, false, allow_mips, allow_arrays)?,
+            extent,
+        )?;
         self.command_lists
             .get_mut(&list)
             .expect("validated list")
@@ -4341,6 +4775,9 @@ impl GraphicsContext {
             && !self.resources.contains_key(&target)
         {
             return Err(GraphicsError::InvalidResourceHandle);
+        }
+        if color_target.is_some_and(|h| self.resources[&h].is_texture_array) {
+            return Err(GraphicsError::InvalidDescriptor);
         }
         cmd_list.commands.push(GraphicsCommand::SetRenderTargets {
             color_target,
@@ -4403,6 +4840,7 @@ impl GraphicsContext {
             let current = (resource.desc.width as usize, resource.desc.height as usize);
             if targets[..slot].contains(handle)
                 || resource.desc.dimension != ResourceDimension::Texture2D
+                || resource.is_texture_array
                 || resource.texture_format != Some(TextureFormat::Rgba8Unorm)
                 || resource.guest_backing_addr.is_some()
                 || extent.is_some_and(|value| value != current)

@@ -33,11 +33,11 @@ fn queued_copy_host_buffer_to_produced_buffer_literal_baseline() {
     // Collect dependent first; neither returned byte vector supplies another input.
     match cohort.collect_copy(&consumer).unwrap() {
         OwnedCopyOutput::Buffer(bytes) => assert_eq!(bytes, BUFFER_BYTES),
-        OwnedCopyOutput::Rgba8 { .. } => panic!("buffer copy returned texture bytes"),
+        _ => panic!("buffer copy returned texture bytes"),
     }
     match cohort.collect_copy(&producer).unwrap() {
         OwnedCopyOutput::Buffer(bytes) => assert_eq!(bytes, BUFFER_BYTES),
-        OwnedCopyOutput::Rgba8 { .. } => panic!("buffer copy returned texture bytes"),
+        _ => panic!("buffer copy returned texture bytes"),
     }
 }
 
@@ -86,7 +86,7 @@ fn color_output(cohort: &RenderCohort, point: &RenderPoint) -> RenderColorOutput
 fn check_buffer(output: OwnedCopyOutput, expected: &[u8]) {
     match output {
         OwnedCopyOutput::Buffer(bytes) => assert_eq!(bytes, expected),
-        OwnedCopyOutput::Rgba8 { .. } => panic!("expected buffer completion"),
+        _ => panic!("expected buffer completion"),
     }
 }
 fn check_texture(output: OwnedCopyOutput) {
@@ -95,7 +95,7 @@ fn check_texture(output: OwnedCopyOutput) {
             assert_eq!(extent, [3, 2]);
             assert_eq!(pixels, TEXELS);
         }
-        OwnedCopyOutput::Buffer(_) => panic!("expected texture completion"),
+        _ => panic!("expected texture completion"),
     }
 }
 

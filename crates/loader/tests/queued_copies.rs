@@ -22,6 +22,9 @@ fn cpu_queued_copy_typed_buffer_and_texture_publish_exact_bytes_without_presenta
         GraphicsCopyLayout::Rgba8 { extent: (2, 1) },
     ] {
         let literal = match layout {
+            GraphicsCopyLayout::Rgba8MipChain { .. } | GraphicsCopyLayout::Rgba8Array { .. } => {
+                panic!("unexpected subresource layout in legacy copy test")
+            }
             GraphicsCopyLayout::Buffer { .. } => vec![17, 83, 149, 231, 9],
             GraphicsCopyLayout::Rgba8 { .. } => vec![17, 83, 149, 231, 211, 43, 97, 127],
         };
@@ -37,6 +40,9 @@ fn cpu_queued_copy_typed_buffer_and_texture_publish_exact_bytes_without_presenta
             .create_command_list(device, allocator, CommandListType::Direct)
             .unwrap();
         let desc = match layout {
+            GraphicsCopyLayout::Rgba8MipChain { .. } | GraphicsCopyLayout::Rgba8Array { .. } => {
+                panic!("unexpected subresource layout in legacy copy test")
+            }
             GraphicsCopyLayout::Buffer { byte_len } => ResourceDesc {
                 dimension: ResourceDimension::Buffer,
                 width: byte_len as u64,

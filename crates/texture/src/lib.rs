@@ -8,7 +8,9 @@
 #![forbid(unsafe_code)]
 
 mod packed;
-pub use packed::{PackedTextureLayout, TextureFormat, TextureMipFootprint};
+pub use packed::{
+    PackedTextureArrayLayout, PackedTextureLayout, TextureFormat, TextureMipFootprint,
+};
 
 mod bc;
 mod bc6h;

@@ -30,6 +30,21 @@ impl Args {
             .try_into()
             .map_err(|_| GraphicsError::InvalidDescriptor)
     }
+    fn mip_image_location(&self, index: usize) -> Result<GraphicsImageCopyLocation, GraphicsError> {
+        let sub = self.0[index + 1];
+        match self.0[index] {
+            0 => Ok(GraphicsImageCopyLocation::Rgba8Mip {
+                mip: sub as u32,
+                slice: (sub >> 32) as u32,
+                origin: (self.size(index + 2)?, self.size(index + 3)?),
+            }),
+            1 if sub == 0 => Ok(GraphicsImageCopyLocation::Buffer {
+                offset: self.size(index + 2)?,
+                bytes_per_row: self.size(index + 3)?,
+            }),
+            _ => Err(GraphicsError::InvalidDescriptor),
+        }
+    }
     fn image_location(&self, index: usize) -> Result<GraphicsImageCopyLocation, GraphicsError> {
         match self.0[index] {
             0 => Ok(GraphicsImageCopyLocation::Rgba8 {
@@ -93,8 +108,9 @@ pub fn graphics_call_v1(
         5 | 7 | 15 | 17 | 29 | 41 | 42 => 3,
         9 | 10 | 13 | 16 | 18 | 19 | 20 | 35 | 46 | 49 => 4,
         6 | 8 | 21 | 23 | 37 | 45 => 5,
-        24 | 40 | 43 => 6,
+        24 | 40 | 43 | 51 => 6,
         44 => 11,
+        50 => 13,
         22 => 12,
         _ => return Ok(STATUS_INVALID_CALL),
     };
@@ -109,7 +125,8 @@ pub fn graphics_call_v1(
         || opcode == 40
         || opcode == 45
         || opcode == 46
-        || opcode == 49)
+        || opcode == 49
+        || opcode == 51)
         && graphics.guest_object_count() >= MAX_GUEST_OBJECTS
     {
         return Ok(STATUS_GRAPHICS_ERROR);
@@ -124,7 +141,8 @@ pub fn graphics_call_v1(
         || opcode == 42
         || opcode == 43
         || opcode == 44
-        || opcode == 48)
+        || opcode == 48
+        || opcode == 50)
         && graphics
             .guest_command_count(args.handle(0))
             .is_some_and(|count| count >= MAX_GUEST_COMMANDS)
@@ -312,6 +330,30 @@ pub fn graphics_call_v1(
                 } else {
                     graphics.cmd_set_sampled_bindings(args.handle(0), textures, samplers)?;
                 }
+            }
+            51 => {
+                value = graphics
+                    .create_texture_array_resource(
+                        args.handle(0),
+                        GraphicsTextureArrayDesc {
+                            width: args.size(1)?,
+                            height: args.u32(2)? as usize,
+                            mip_levels: args.u32(3)?,
+                            array_layers: args.u32(4)?,
+                        },
+                        ResourceStates(args.u32(5)?),
+                    )?
+                    .to_u64();
+            }
+            50 => {
+                graphics.cmd_copy_image_subresources(
+                    args.handle(0),
+                    args.handle(1),
+                    args.mip_image_location(2)?,
+                    args.handle(6),
+                    args.mip_image_location(7)?,
+                    (args.size(11)?, args.size(12)?),
+                )?;
             }
             44 => {
                 graphics.cmd_copy_image(

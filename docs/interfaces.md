@@ -696,8 +696,10 @@ uploads with GPU use; a view does not make that backing allocation immutable.
 producer point and native parent. `QueuedSampledBinding::ProducedView` derives waits
 from that provenance; it cannot enter the ordinary view/whole-texture APIs.
 `QueuedSampledBinding::Viewed` accepts uploaded-resource views. Existing Uploaded and
-Produced variants are unchanged. Current produced outputs have one mip, so only
-`base_mip=0, mip_count=1` is valid; missing mips cannot come from host snapshots.
+Produced render outputs have one mip, so only `base_mip=0, mip_count=1` is valid
+for those outputs. The explicit mip-copy extension below also produces full 2D
+mip chains; its views select real retained levels. Missing mips never come from
+host snapshots.
 Generation rejection and failure propagation apply equally to produced views.
 
 The loader exposes `create_texture_view`, `destroy_texture_view` and atomic
@@ -1047,7 +1049,8 @@ ordering is implicit; conflicting cross-queue access requires explicit dependenc
 coverage. Preparation uses dependencies' planned resource states and produced-version
 identities while public resource state and bytes remain unchanged. Sampled producer
 outputs resolve to native versions rather than stale committed host snapshots.
-Produced versions currently expose only the base level of single-mip RGBA8 textures.
+This initial render-produced contract exposes single-mip RGBA8 textures. The explicit
+mip-copy extension below additionally retains complete produced mip chains.
 
 The worker acknowledges commit before completion, captures output handles before
 collection, and retains its ticket/version records until loader ticket release.
@@ -1314,8 +1317,8 @@ before any bytes/state mutation and never updates presentation. Destination pres
 is a read hazard as well as a write; failure of either ancestor rejects cached success.
 
 Guest opcode44 exposes the bounded operation. One copy plus barriers per list and
-the legacy two-node limit or opt-in graph limit applies. Additional mips/slices, compressed/depth
-transfers and general graphs remain open Stage2 work.
+the legacy two-node limit or opt-in graph limit applies. Explicit mip/slice transfers
+are described below; compressed/depth transfers and general graphs remain open.
 
 
 ### Opt-in multi-node queued graphs
@@ -1462,3 +1465,65 @@ one, as specified by the [Metal Shading Language specification](https://develope
 (page240). Nearest, unblended samples of bytes0,17,128,255 into a linear RGBA8 target
 therefore have expected bytes `[r,0,0,255]`. This contract does not replicate red
 into the other color channels or apply sRGB decoding.
+
+
+### Explicit queued mip transfers
+
+`GraphicsContext::cmd_copy_image_mips` and guest opcode50 record RGBA8 transfers
+with `GraphicsImageCopyLocation::Rgba8Mip { mip, slice, origin }` endpoints.
+`set_metal_mip_copy_queued_backend` opts into this capability; older installers
+revoke it. Legacy image-copy entry points keep their single-level contract.
+The mip increment requires slice0, with buffer endpoints retaining offset/pitch.
+
+`GraphicsCopyLayout::Rgba8MipChain` and the matching produced layout carry base
+extent and mip count. Canonical `PackedTextureLayout` footprints determine the
+complete byte length and selected mip dimensions. Equal byte counts alone never
+establish layout compatibility. Single-mip resources retain legacy RGBA8 identity.
+
+Native `RenderCohort::submit_mip_image_copy` imports complete host chains or retains
+exact produced GPU storage. It waits for both inputs, clones every destination mip,
+patches the selected rectangle and returns the complete packed chain. Untouched
+mips and borders are preserved. Direct source leases and full-chain payload charges
+remain live through command ownership; publication validates full layout and length.
+Produced mip views retain the producer and use actual native mip storage without
+host readback/reupload. Multi-mip attachment Load remains rejected.
+
+Metal defines source/destination mip and slice independently in its
+[texture blit contract](https://developer.apple.com/documentation/metal/mtlblitcommandencoder/copy(from:sourceslice:sourcelevel:sourceorigin:sourcesize:to:destinationslice:destinationlevel:destinationorigin:)).
+Xenora's packed offsets describe host transfers, not Metal's physical texture layout.
+The existing whole-backing hazards, copy-list limits and queue budgets apply.
+
+
+### RGBA8 array transfers
+
+`PackedTextureArrayLayout` wraps a canonical mip chain with a nonzero layer count,
+checked complete byte length and absolute `(slice,mip)` footprints. No texel storage
+is allocated by the helper. `GraphicsTextureArrayDesc` and
+`create_texture_array_resource` add explicitly typed RGBA8 array storage; existing
+resource creation retains its restrictions. Layer-major bytes are a host transfer
+representation, not a claim about the native texture's physical layout.
+
+`GraphicsCopyLayout::Rgba8Array` and the matching produced layout carry extent,
+mip count and layer count. `cmd_copy_image_subresources` and opcode50 use the
+existing explicit mip/slice endpoint representation. The array backend installer
+opts into this mode; mip-only and older installers reject arrays, even slice0 of a
+one-layer array. Array identity never follows solely from dimensions or byte length.
+
+Native `HostRgba8Array` inputs allocate actual Metal 2D-array textures.
+`RenderCohort::submit_array_image_copy` validates complete layouts, waits for both
+producers, clones all destination slices/mips and patches the selected rectangle.
+Readback returns the complete layer-major backing as `OwnedCopyOutput::Rgba8Array`.
+Existing direct leases, whole-backing hazards and payload ceilings apply. All
+array sizes include every layer and mip in resource and transfer accounting.
+
+`RenderColorOutput::is_array()` distinguishes arrays from 2D storage, even with one
+layer; `array_layers()` and `mip_levels()` expose validated metadata. Array views
+and attachment roles reject. A transfer to a 2D destination creates a 2D output
+which can feed produced sampled views. Array shader views remain separate work.
+Policy limits are 256 layers, 4096 subresources and the existing resource/context
+byte budgets; these are Xenora bounds, not Metal hardware capability claims.
+
+Metal's [array length](https://developer.apple.com/documentation/metal/mtltexturedescriptor/arraylength)
+and [texture blit](https://developer.apple.com/documentation/metal/mtlblitcommandencoder/copy(from:sourceslice:sourcelevel:sourceorigin:sourcesize:to:destinationslice:destinationlevel:destinationorigin:))
+contracts distinguish slice selection from the 2D origin and depth. Each transfer
+uses one slice with origin z0 and depth1; buffer row-pitch rules remain unchanged.

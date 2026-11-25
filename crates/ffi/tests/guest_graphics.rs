@@ -4962,3 +4962,459 @@ fn original_guest_r8_validation_relative_lod_and_legacy_capability_rejection() {
     assert_eq!(presentation.frame_index, 0);
     assert!(presentation.pixels.is_empty());
 }
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_mip_transfers_texture_to_texture() {
+    guest_mip_transfer_pair(0);
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_mip_transfers_buffer_to_texture() {
+    guest_mip_transfer_pair(1);
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_mip_transfers_texture_to_buffer() {
+    guest_mip_transfer_pair(2);
+}
+
+fn guest_mip_transfer_pair(direction: u8) {
+    const PIXELS: [u8; 72] = [
+        1, 41, 81, 121, 2, 42, 82, 122, 3, 43, 83, 123, 4, 44, 84, 124, 5, 45, 85, 125, 6, 46, 86,
+        126, 7, 47, 87, 127, 8, 48, 88, 128, 9, 49, 89, 129, 10, 50, 90, 130, 11, 51, 91, 131, 12,
+        52, 92, 132, 13, 53, 93, 133, 14, 54, 94, 134, 15, 55, 95, 135, 71, 81, 91, 101, 72, 82,
+        92, 102, 201, 211, 221, 231,
+    ];
+    const PITCHED: [u8; 12] = [231, 232, 233, 234, 9, 19, 29, 39, 10, 20, 30, 40];
+    const PRIOR: [u8; 72] = [
+        101, 1, 21, 241, 102, 2, 22, 242, 103, 3, 23, 243, 104, 4, 24, 244, 105, 5, 25, 245, 106,
+        6, 26, 246, 107, 7, 27, 247, 108, 8, 28, 248, 109, 9, 29, 249, 110, 10, 30, 250, 111, 11,
+        31, 251, 112, 12, 32, 252, 113, 13, 33, 253, 114, 14, 34, 254, 115, 15, 35, 255, 31, 41,
+        51, 61, 32, 42, 52, 62, 33, 43, 53, 63,
+    ];
+    const BUFFER_PRIOR: [u8; 13] = [
+        101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
+    ];
+    const BUFFER_EXPECTED: [u8; 13] = [101, 102, 103, 104, 71, 81, 91, 101, 72, 82, 92, 102, 113];
+    const RECT_EXPECTED: [u8; 72] = [
+        101, 1, 21, 241, 102, 2, 22, 242, 103, 3, 23, 243, 104, 4, 24, 244, 105, 5, 25, 245, 106,
+        6, 26, 246, 107, 7, 27, 247, 108, 8, 28, 248, 109, 9, 29, 249, 110, 10, 30, 250, 111, 11,
+        31, 251, 112, 12, 32, 252, 113, 13, 33, 253, 114, 14, 34, 254, 115, 15, 35, 255, 31, 41,
+        51, 61, 32, 42, 52, 62, 72, 82, 92, 102,
+    ];
+    const UPLOAD_EXPECTED: [u8; 72] = [
+        101, 1, 21, 241, 102, 2, 22, 242, 103, 3, 23, 243, 104, 4, 24, 244, 105, 5, 25, 245, 106,
+        6, 26, 246, 107, 7, 27, 247, 108, 8, 28, 248, 109, 9, 29, 249, 110, 10, 30, 250, 111, 11,
+        31, 251, 112, 12, 32, 252, 113, 13, 33, 253, 114, 14, 34, 254, 115, 15, 35, 255, 9, 19, 29,
+        39, 10, 20, 30, 40, 33, 43, 53, 63,
+    ];
+    let source_bytes = if direction == 1 {
+        PITCHED.as_slice()
+    } else {
+        PIXELS.as_slice()
+    };
+    let destination_bytes = if direction == 2 {
+        BUFFER_PRIOR.as_slice()
+    } else {
+        PRIOR.as_slice()
+    };
+    let expected = match direction {
+        0 => RECT_EXPECTED.as_slice(),
+        1 => UPLOAD_EXPECTED.as_slice(),
+        _ => BUFFER_EXPECTED.as_slice(),
+    };
+    for pending_source in [false, true] {
+        let mut expected = expected.to_vec();
+        if direction == 1 && !pending_source {
+            // Consumer replaces only pixel zero. Pixel one must survive from
+            // the producer repair, not the poisoned host destination snapshot.
+            expected[64..68].copy_from_slice(&[32, 42, 52, 62]);
+        }
+        for producer_first in [false, true] {
+            let mut guest = GuestScript::new();
+            let device = guest.handle(1, &[]);
+            let queues = [guest.handle(2, &[H(device)]), guest.handle(2, &[H(device)])];
+            let allocators = [guest.handle(3, &[H(device)]), guest.handle(3, &[H(device)])];
+            let lists = [
+                guest.handle(4, &[H(device), H(allocators[0])]),
+                guest.handle(4, &[H(device), H(allocators[1])]),
+            ];
+            let create = |guest: &mut GuestScript, buffer: bool, len: usize| {
+                if buffer {
+                    guest.handle(5, &[H(device), I(len as u64), I(COPY_DEST)])
+                } else {
+                    guest.handle(6, &[H(device), I(5), I(3), I(3), I(COPY_DEST)])
+                }
+            };
+            let source = create(&mut guest, direction == 1, source_bytes.len());
+            let destination = create(&mut guest, direction == 2, destination_bytes.len());
+            let seed_bytes = if pending_source {
+                source_bytes
+            } else {
+                destination_bytes
+            };
+            let seed_is_buffer = if pending_source {
+                direction == 1
+            } else {
+                direction == 2
+            };
+            let seed = create(&mut guest, seed_is_buffer, seed_bytes.len());
+            let data = guest.bytes(seed_bytes);
+            guest.ok(9, &[H(seed), I(0), I(data), I(seed_bytes.len() as u64)]);
+            let (host, bytes) = if pending_source {
+                (destination, destination_bytes)
+            } else {
+                (source, source_bytes)
+            };
+            let data = guest.bytes(bytes);
+            guest.ok(9, &[H(host), I(0), I(data), I(bytes.len() as u64)]);
+            guest.barrier(lists[0], seed, COPY_DEST, COPY_SOURCE);
+            let changed = if pending_source { source } else { destination };
+            // Initialize untouched levels independently; producer updates mip one only.
+            let mut poisoned = seed_bytes.to_vec();
+            if seed_is_buffer {
+                poisoned.fill(0xee);
+            } else {
+                poisoned[60..68].fill(0xee);
+            }
+            let initial = guest.bytes(&poisoned);
+            guest.ok(
+                9,
+                &[H(changed), I(0), I(initial), I(seed_bytes.len() as u64)],
+            );
+            if seed_is_buffer {
+                guest.ok(42, &[H(lists[0]), H(changed), H(seed)]);
+            } else {
+                guest.ok(
+                    50,
+                    &[
+                        H(lists[0]),
+                        H(changed),
+                        I(0),
+                        I(1),
+                        I(0),
+                        I(0),
+                        H(seed),
+                        I(0),
+                        I(1),
+                        I(0),
+                        I(0),
+                        I(2),
+                        I(1),
+                    ],
+                );
+            }
+            guest.barrier(
+                lists[usize::from(!pending_source)],
+                source,
+                COPY_DEST,
+                COPY_SOURCE,
+            );
+            guest.ok(12, &[H(lists[0])]);
+            let (source_kind, source_a, source_b) = match direction {
+                0 => (0, 1, 0),
+                1 => (1, 4, 12),
+                _ => (0, 0, 0),
+            };
+            let (destination_kind, destination_a, destination_b) = if direction == 2 {
+                (1, 4, 20)
+            } else {
+                (0, 0, 0)
+            };
+            guest.ok(
+                50,
+                &[
+                    H(lists[1]),
+                    H(destination),
+                    I(destination_kind),
+                    I(if direction == 2 {
+                        0
+                    } else if direction == 0 {
+                        2
+                    } else {
+                        1
+                    }),
+                    I(destination_a),
+                    I(destination_b),
+                    H(source),
+                    I(source_kind),
+                    I(if direction == 1 { 0 } else { 1 }),
+                    I(source_a),
+                    I(source_b),
+                    I(if direction == 0 || (direction == 1 && !pending_source) {
+                        1
+                    } else {
+                        2
+                    }),
+                    I(1),
+                ],
+            );
+            guest.barrier(lists[1], destination, COPY_DEST, COPY_SOURCE);
+            guest.ok(12, &[H(lists[1])]);
+            let a = guest.handle(35, &[H(queues[0]), H(lists[0]), I(0), I(0)]);
+            let value = guest.call(36, &[H(a)], 0, Some(1));
+            let dependency = guest.bytes(&[0; 16]);
+            guest.copy_result(queues[0], dependency);
+            guest.copy_result(value, dependency + 8);
+            let b = guest.handle(35, &[H(queues[1]), H(lists[1]), I(dependency), I(1)]);
+            for index in 0..2 {
+                guest.ok(11, &[H(lists[index]), H(allocators[index])]);
+            }
+            guest.ok(26, &[H(seed)]);
+            guest.ok(26, &[H(source)]);
+            for receipt in if producer_first { [a, b] } else { [b, a] } {
+                guest.call(32, &[H(receipt)], 0, Some(1));
+            }
+            guest.ok(33, &[H(a)]);
+            guest.ok(33, &[H(b)]);
+            let output = guest.bytes(&vec![0xa5; expected.len() + 16]);
+            guest.ok(
+                10,
+                &[
+                    H(destination),
+                    I(0),
+                    I(output + 8),
+                    I(expected.len() as u64),
+                ],
+            );
+            check_original_guest_backend(guest, true, true, &[(output, expected.to_vec())], 0, &[]);
+        }
+    }
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_array_transfers_texture_to_texture() {
+    guest_array_transfer_pair(0);
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_array_transfers_buffer_to_texture() {
+    guest_array_transfer_pair(1);
+}
+
+#[test]
+#[cfg_attr(not(feature = "gpu-tests"), ignore = "requires native Metal")]
+fn original_guest_array_transfers_texture_to_buffer() {
+    guest_array_transfer_pair(2);
+}
+
+fn guest_array_transfer_pair(direction: u8) {
+    const PIXELS: [u8; 144] = [
+        1, 41, 81, 121, 2, 42, 82, 122, 3, 43, 83, 123, 4, 44, 84, 124, 5, 45, 85, 125, 6, 46, 86,
+        126, 7, 47, 87, 127, 8, 48, 88, 128, 9, 49, 89, 129, 10, 50, 90, 130, 11, 51, 91, 131, 12,
+        52, 92, 132, 13, 53, 93, 133, 14, 54, 94, 134, 15, 55, 95, 135, 71, 81, 91, 101, 72, 82,
+        92, 102, 201, 211, 221, 231, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39,
+        39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39,
+        39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 39, 17,
+        53, 127, 193, 29, 71, 131, 197, 203, 213, 223, 233,
+    ];
+    const PITCHED: [u8; 12] = [231, 232, 233, 234, 9, 19, 29, 39, 10, 20, 30, 40];
+    const PRIOR: [u8; 144] = [
+        101, 1, 21, 241, 102, 2, 22, 242, 103, 3, 23, 243, 104, 4, 24, 244, 105, 5, 25, 245, 106,
+        6, 26, 246, 107, 7, 27, 247, 108, 8, 28, 248, 109, 9, 29, 249, 110, 10, 30, 250, 111, 11,
+        31, 251, 112, 12, 32, 252, 113, 13, 33, 253, 114, 14, 34, 254, 115, 15, 35, 255, 31, 41,
+        51, 61, 32, 42, 52, 62, 33, 43, 53, 63, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+    ];
+    const BUFFER_PRIOR: [u8; 13] = [
+        101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113,
+    ];
+    const BUFFER_EXPECTED: [u8; 13] = [101, 102, 103, 104, 17, 53, 127, 193, 29, 71, 131, 197, 113];
+    const RECT_EXPECTED: [u8; 144] = [
+        101, 1, 21, 241, 102, 2, 22, 242, 103, 3, 23, 243, 104, 4, 24, 244, 105, 5, 25, 245, 106,
+        6, 26, 246, 107, 7, 27, 247, 108, 8, 28, 248, 109, 9, 29, 249, 110, 10, 30, 250, 111, 11,
+        31, 251, 112, 12, 32, 252, 113, 13, 33, 253, 114, 14, 34, 254, 115, 15, 35, 255, 31, 41,
+        51, 61, 32, 42, 52, 62, 33, 43, 53, 63, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 89, 89, 89, 89, 89, 89, 89, 89, 29, 71, 131, 197,
+    ];
+    const UPLOAD_EXPECTED: [u8; 144] = [
+        101, 1, 21, 241, 102, 2, 22, 242, 103, 3, 23, 243, 104, 4, 24, 244, 105, 5, 25, 245, 106,
+        6, 26, 246, 107, 7, 27, 247, 108, 8, 28, 248, 109, 9, 29, 249, 110, 10, 30, 250, 111, 11,
+        31, 251, 112, 12, 32, 252, 113, 13, 33, 253, 114, 14, 34, 254, 115, 15, 35, 255, 31, 41,
+        51, 61, 32, 42, 52, 62, 33, 43, 53, 63, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89, 89,
+        89, 9, 19, 29, 39, 10, 20, 30, 40, 89, 89, 89, 89,
+    ];
+    let source_bytes = if direction == 1 {
+        PITCHED.as_slice()
+    } else {
+        PIXELS.as_slice()
+    };
+    let destination_bytes = if direction == 2 {
+        BUFFER_PRIOR.as_slice()
+    } else {
+        PRIOR.as_slice()
+    };
+    let expected = match direction {
+        0 => RECT_EXPECTED.as_slice(),
+        1 => UPLOAD_EXPECTED.as_slice(),
+        _ => BUFFER_EXPECTED.as_slice(),
+    };
+    for pending_source in [false, true] {
+        let mut expected = expected.to_vec();
+        if direction == 1 && !pending_source {
+            // Consumer replaces only pixel zero. Pixel one must survive from
+            // the producer repair, not the poisoned host destination snapshot.
+            expected[136..140].copy_from_slice(&[89, 89, 89, 89]);
+        }
+        for producer_first in [false, true] {
+            let mut guest = GuestScript::new();
+            let device = guest.handle(1, &[]);
+            let queues = [guest.handle(2, &[H(device)]), guest.handle(2, &[H(device)])];
+            let allocators = [guest.handle(3, &[H(device)]), guest.handle(3, &[H(device)])];
+            let lists = [
+                guest.handle(4, &[H(device), H(allocators[0])]),
+                guest.handle(4, &[H(device), H(allocators[1])]),
+            ];
+            let create = |guest: &mut GuestScript, buffer: bool, len: usize| {
+                if buffer {
+                    guest.handle(5, &[H(device), I(len as u64), I(COPY_DEST)])
+                } else {
+                    guest.handle(51, &[H(device), I(5), I(3), I(3), I(2), I(COPY_DEST)])
+                }
+            };
+            let source = create(&mut guest, direction == 1, source_bytes.len());
+            let destination = create(&mut guest, direction == 2, destination_bytes.len());
+            let seed_bytes = if pending_source {
+                source_bytes
+            } else {
+                destination_bytes
+            };
+            let seed_is_buffer = if pending_source {
+                direction == 1
+            } else {
+                direction == 2
+            };
+            let seed = create(&mut guest, seed_is_buffer, seed_bytes.len());
+            let data = guest.bytes(seed_bytes);
+            guest.ok(9, &[H(seed), I(0), I(data), I(seed_bytes.len() as u64)]);
+            let (host, bytes) = if pending_source {
+                (destination, destination_bytes)
+            } else {
+                (source, source_bytes)
+            };
+            let data = guest.bytes(bytes);
+            guest.ok(9, &[H(host), I(0), I(data), I(bytes.len() as u64)]);
+            guest.barrier(lists[0], seed, COPY_DEST, COPY_SOURCE);
+            let changed = if pending_source { source } else { destination };
+            // Initialize untouched levels independently; producer updates mip one only.
+            let mut poisoned = seed_bytes.to_vec();
+            if seed_is_buffer {
+                poisoned.fill(0xee);
+            } else {
+                poisoned[132..140].fill(0xee);
+            }
+            let initial = guest.bytes(&poisoned);
+            guest.ok(
+                9,
+                &[H(changed), I(0), I(initial), I(seed_bytes.len() as u64)],
+            );
+            if seed_is_buffer {
+                guest.ok(42, &[H(lists[0]), H(changed), H(seed)]);
+            } else {
+                guest.ok(
+                    50,
+                    &[
+                        H(lists[0]),
+                        H(changed),
+                        I(0),
+                        I((1u64 << 32) | 1),
+                        I(0),
+                        I(0),
+                        H(seed),
+                        I(0),
+                        I((1u64 << 32) | 1),
+                        I(0),
+                        I(0),
+                        I(2),
+                        I(1),
+                    ],
+                );
+            }
+            guest.barrier(
+                lists[usize::from(!pending_source)],
+                source,
+                COPY_DEST,
+                COPY_SOURCE,
+            );
+            guest.ok(12, &[H(lists[0])]);
+            let (source_kind, source_a, source_b) = match direction {
+                0 => (0, 1, 0),
+                1 => (1, 4, 12),
+                _ => (0, 0, 0),
+            };
+            let (destination_kind, destination_a, destination_b) = if direction == 2 {
+                (1, 4, 20)
+            } else {
+                (0, 0, 0)
+            };
+            guest.ok(
+                50,
+                &[
+                    H(lists[1]),
+                    H(destination),
+                    I(destination_kind),
+                    I(if direction == 2 {
+                        0
+                    } else if direction == 0 {
+                        (1u64 << 32) | 2
+                    } else {
+                        (1u64 << 32) | 1
+                    }),
+                    I(destination_a),
+                    I(destination_b),
+                    H(source),
+                    I(source_kind),
+                    I(if direction == 1 { 0 } else { (1u64 << 32) | 1 }),
+                    I(source_a),
+                    I(source_b),
+                    I(if direction == 0 || (direction == 1 && !pending_source) {
+                        1
+                    } else {
+                        2
+                    }),
+                    I(1),
+                ],
+            );
+            guest.barrier(lists[1], destination, COPY_DEST, COPY_SOURCE);
+            guest.ok(12, &[H(lists[1])]);
+            let a = guest.handle(35, &[H(queues[0]), H(lists[0]), I(0), I(0)]);
+            let value = guest.call(36, &[H(a)], 0, Some(1));
+            let dependency = guest.bytes(&[0; 16]);
+            guest.copy_result(queues[0], dependency);
+            guest.copy_result(value, dependency + 8);
+            let b = guest.handle(35, &[H(queues[1]), H(lists[1]), I(dependency), I(1)]);
+            for index in 0..2 {
+                guest.ok(11, &[H(lists[index]), H(allocators[index])]);
+            }
+            guest.ok(26, &[H(seed)]);
+            guest.ok(26, &[H(source)]);
+            for receipt in if producer_first { [a, b] } else { [b, a] } {
+                guest.call(32, &[H(receipt)], 0, Some(1));
+            }
+            guest.ok(33, &[H(a)]);
+            guest.ok(33, &[H(b)]);
+            let output = guest.bytes(&vec![0xa5; expected.len() + 16]);
+            guest.ok(
+                10,
+                &[
+                    H(destination),
+                    I(0),
+                    I(output + 8),
+                    I(expected.len() as u64),
+                ],
+            );
+            check_original_guest_backend(guest, true, true, &[(output, expected.to_vec())], 0, &[]);
+        }
+    }
+}

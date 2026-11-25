@@ -1,7 +1,7 @@
 # Local graphics checkpoint
 
 This summary records the accumulated graphics checkpoint and the subsequent
-nested-view, compute-cache, sampler-handle, guest-copy and R8 increments on 25 November 2026. It is not release certification or a
+nested-view, compute-cache, sampler-handle, guest-copy, R8 and mip/slice increments on 25 November 2026. It is not release certification or a
 claim of Xbox hardware equivalence. Supporting raw logs, mutation records and
 source manifests remain local and are not distributed with the repository.
 
@@ -14,6 +14,61 @@ failure, and saves each step's output under `artifacts/validation-*`. A successf
 run ends with `PASS`. Quick mode also rejects filters that select no passing tests.
 Use `--help` for prerequisites. These tests render offscreen and compare pixels;
 they do not open an application window. Avoid other GPU test runs at the same time.
+
+## Explicit mip and array-slice transfer checkpoint
+
+Guest opcode50 records selected RGBA8 mip/slice transfers; opcode51 creates bounded,
+explicitly typed arrays. Texture→texture, buffer→texture and texture→buffer copies
+preserve complete destination backings, including untouched levels, slices, borders
+and pitched buffer gaps. Arrays remain arrays with one layer. Legacy interfaces retain
+single-level restrictions; mip-only backends reject arrays, including slice0.
+
+Produced versions stay on the GPU and retain exact storage kind, extent, mip count
+and layer count. Copying an array slice into a 2D mip chain creates a 2D output that
+can feed existing sampled views. Array views/sampling, attachment roles, compressed
+or depth transfers, and independent subresource concurrency remain unsupported.
+Limits are 256 layers, 4096 subresources and existing complete-backing byte budgets.
+
+The quick runner passed **105 tests across 29 steps**, with no failures or ignored
+tests. New coverage consists of three array-layout CPU tests, nine loader tests,
+nineteen native transfer tests, two native payload/ownership tests and six original
+guest tests. Native tests exercise all directions with independently gated inputs,
+full literal readbacks, old-version reuse, one-layer identity and direct sampling
+of a 2D GPU copy. Guest tests vary both pending input roles and collection order;
+poisoned host bytes distinguish exact pending versions from stale fallback data.
+
+Focused commands (use the Metal validation environment below):
+
+```sh
+cargo test --locked -p xenora-texture --test packed_layout array_ -- --nocapture
+cargo test --locked -p xenora-loader --test mip_transfers --test array_transfers
+cargo test --locked -p xenora-metal --features gpu-tests --test native_compute transfers:: -- --nocapture --test-threads=1
+cargo test --locked -p xenora-metal --features gpu-tests --lib native_mip_array_ -- --nocapture --test-threads=1
+cargo test --locked -p xenora-ffi --features gpu-tests --test guest_graphics _transfers_ -- --nocapture --test-threads=1
+```
+
+Nine intentional production faults were detected: wrong source/destination mips,
+wrong untouched-mip cloning, wrong source/destination slices, wrong untouched-slice
+cloning, omitted source/prior ownership and omitted GPU waits. The wait fault caused
+explicit early GPU markers in all six array direction/input-role cases; watchdog
+release was not counted as evidence. Ownership faults failed actual retained-budget
+assertions. Byte mutations failed literal readbacks. Sources were restored and their
+hashes checked before the complete validation run.
+
+All nine repository gates passed: **881 workspace tests passed, zero failed,
+96 ignored**; the GPU suite reported **368 passed, zero failed, one manual test
+ignored**. GPU totals include CPU checks and overlapping workspace coverage. The
+native transfer, guest and budget binaries are ARM64 linked to system Metal, verified
+on Apple M4 Max with macOS27.2.1 and API/shader validation enabled. This is local
+synthetic evidence, not Xbox equivalence or game compatibility.
+
+The first loader run exposed a legacy publication guard that rejected mip-chain
+completion; the corrected path validates the admitted complete layout. Initial
+native test setup incorrectly used the legacy whole-copy API for mip chains and was
+corrected. An out-of-range array-test sentinel and the older unknown-opcode50 test
+were also corrected; initial failure logs remain available locally. Independent
+review strengthened equal-length wrong-layout, full-backing budget and stale-host
+oracles before the final run.
 
 ## Linear R8 sampled texture checkpoint
 

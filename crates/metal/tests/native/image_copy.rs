@@ -92,7 +92,7 @@ fn queued_image_copy_rgba_rectangle_preserves_literal_border() {
             assert_eq!(extent, [5, 4]);
             assert_eq!(pixels, expected.as_flattened());
         }
-        OwnedCopyOutput::Buffer(_) => panic!("texture rectangle returned buffer output"),
+        _ => panic!("texture rectangle returned unexpected output kind"),
     }
 }
 
@@ -251,6 +251,9 @@ fn produced_input(cohort: &RenderCohort, point: &RenderPoint) -> QueuedCopyInput
 }
 fn check_image(output: OwnedCopyOutput, direction: u8) {
     match output {
+        OwnedCopyOutput::Rgba8MipChain { .. } | OwnedCopyOutput::Rgba8Array { .. } => {
+            panic!("legacy image copy returned a subresource layout")
+        }
         OwnedCopyOutput::Buffer(bytes) => {
             assert_eq!(direction, 2);
             assert_eq!(bytes, BUFFER_EXPECTED);

@@ -18,6 +18,18 @@ remains unsupported.
 - Extended the read-only RDNA2 planning CLI (`python3 -m qa rdna2`) with family/status filters, compact summaries, Codex-ready manifests under `artifacts/`, active-claim exclusion (family claims exclude those families; path-only claims block overlapping permitted files), coverage reconcile against `semantic_coverage` without inflating counts, and inventory diffs. Covered by `tests/qa/test_rdna2_plan.py`; planning only, no GPU production edits.
 
 ### Added
+- Bounded RGBA8 array storage through guest opcode51 and explicit slice/mip copies
+  through opcode50. Transfers preserve every untouched subresource and retain exact
+  GPU versions; copying a slice into a 2D texture enables existing sampled views.
+  Array sampling/views, attachments and independent subresource concurrency remain
+  unsupported. Limits apply to complete arrays, including one-layer array identity.
+  Quick validation passes 105 checks across 29 steps; all nine repository gates
+  pass. Nine deliberate mip/slice, ownership and ordering faults fail observable
+  assertions, with restored sources verified afterward.
+- Explicit queued RGBA8 mip transfers through guest opcode50, preserving untouched
+  mip levels and borders in complete immutable destination versions. Produced mip
+  chains retain native GPU storage for read-only sampling. Legacy image-copy APIs
+  keep their single-level contract; multi-mip attachment Load remains unsupported.
 - Linear R8 sampled textures with one-byte mip storage, explicit R8 capabilities,
   immutable native Metal uploads and read-only root/nested views. Guest storage
   code3 and view code6 preserve existing codes; uploads retain exact R8 bytes.

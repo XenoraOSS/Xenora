@@ -663,9 +663,11 @@ impl MetalRgba8Texture {
         width: usize,
         height: usize,
     ) -> Result<Self, MetalError> {
+        let mips = u32::try_from(texture.mipmapLevelCount())
+            .map_err(|_| MetalError::new("produced texture", "invalid mip count"))?;
         Ok(Self {
             texture,
-            desc: Rgba8TextureDesc::new(width, height, 1)?,
+            desc: Rgba8TextureDesc::new(width, height, mips)?,
             _parent: None,
         })
     }

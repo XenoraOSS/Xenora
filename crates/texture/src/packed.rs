@@ -85,6 +85,67 @@ impl PackedTextureLayout {
     }
 }
 
+/// Canonical layer-major storage: each layer contains a complete packed mip chain.
+/// This describes transfer bytes, not a native GPU texture's physical allocation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PackedTextureArrayLayout {
+    chain: PackedTextureLayout,
+    layers: u32,
+    byte_len: usize,
+}
+
+impl PackedTextureArrayLayout {
+    /// Device layer limits and resource budgets remain the caller's responsibility.
+    pub fn new(
+        format: TextureFormat,
+        width: usize,
+        height: usize,
+        mips: u32,
+        layers: u32,
+    ) -> Result<Self, TextureError> {
+        if layers == 0 {
+            return Err(TextureError::InvalidLayout);
+        }
+        let chain = PackedTextureLayout::new(format, width, height, mips)?;
+        let byte_len = chain
+            .byte_len()
+            .checked_mul(layers as usize)
+            .ok_or(TextureError::SizeOverflow)?;
+        Ok(Self {
+            chain,
+            layers,
+            byte_len,
+        })
+    }
+
+    pub fn chain(&self) -> &PackedTextureLayout {
+        &self.chain
+    }
+
+    pub fn layers(&self) -> u32 {
+        self.layers
+    }
+
+    pub fn byte_len(&self) -> usize {
+        self.byte_len
+    }
+
+    /// Return a mip footprint with an absolute byte offset in the full array.
+    pub fn footprint(&self, slice: u32, mip: u32) -> Result<TextureMipFootprint, TextureError> {
+        if slice >= self.layers {
+            return Err(TextureError::OutOfBounds);
+        }
+        let mut footprint = *self
+            .chain
+            .levels()
+            .get(mip as usize)
+            .ok_or(TextureError::OutOfBounds)?;
+        // Construction checked the larger full-array byte count.
+        footprint.offset += slice as usize * self.chain.byte_len();
+        Ok(footprint)
+    }
+}
+
 fn footprint(
     format: TextureFormat,
     width: usize,

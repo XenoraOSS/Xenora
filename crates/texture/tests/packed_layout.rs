@@ -136,3 +136,59 @@ fn r8_packed_odd_mips_and_checked_overflow() {
         );
     }
 }
+
+#[test]
+fn array_rgba8_literal_slice_major_mip_footprints() {
+    let layout = xenora_texture::PackedTextureArrayLayout::new(Rgba8Unorm, 5, 3, 3, 2).unwrap();
+    assert_eq!(layout.layers(), 2);
+    let chain: &PackedTextureLayout = layout.chain();
+    assert_eq!(chain.byte_len(), 72);
+    assert_eq!(chain.format(), Rgba8Unorm);
+    assert_eq!(layout.byte_len(), 144);
+    let actual: Vec<_> = (0..2)
+        .flat_map(|slice| {
+            let layout = &layout;
+            (0..3).map(move |mip| {
+                let f = layout.footprint(slice, mip).unwrap();
+                (f.width, f.height, f.offset, f.row_bytes, f.rows, f.byte_len)
+            })
+        })
+        .collect();
+    assert_eq!(
+        actual,
+        vec![
+            (5, 3, 0, 20, 3, 60),
+            (2, 1, 60, 8, 1, 8),
+            (1, 1, 68, 4, 1, 4),
+            (5, 3, 72, 20, 3, 60),
+            (2, 1, 132, 8, 1, 8),
+            (1, 1, 140, 4, 1, 4),
+        ]
+    );
+}
+
+#[test]
+fn array_rejects_zero_layers_and_out_of_range_subresources() {
+    assert!(xenora_texture::PackedTextureArrayLayout::new(Rgba8Unorm, 5, 3, 3, 0).is_err());
+    let layout = xenora_texture::PackedTextureArrayLayout::new(Rgba8Unorm, 5, 3, 3, 2).unwrap();
+    for (slice, mip) in [(2, 0), (0, 3), (1, 3), (u32::MAX, 0), (0, u32::MAX)] {
+        assert!(
+            layout.footprint(slice, mip).is_err(),
+            "slice={slice} mip={mip}"
+        );
+    }
+    assert_eq!(layout.footprint(1, 2).unwrap().offset, 140);
+}
+
+#[test]
+fn array_total_overflow_rejects_even_when_single_chain_fits() {
+    let width = usize::MAX / 4;
+    let chain = PackedTextureLayout::new(Rgba8Unorm, width, 1, 1).unwrap();
+    assert_eq!(chain.byte_len(), usize::MAX - 3);
+    assert!(matches!(
+        xenora_texture::PackedTextureArrayLayout::new(Rgba8Unorm, width, 1, 1, 2),
+        Err(TextureError::SizeOverflow)
+    ));
+    let one = xenora_texture::PackedTextureArrayLayout::new(Rgba8Unorm, width, 1, 1, 1).unwrap();
+    assert_eq!(one.byte_len(), usize::MAX - 3);
+}

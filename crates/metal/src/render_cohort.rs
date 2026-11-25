@@ -8,11 +8,13 @@ use crate::{
 };
 use objc2_metal::{
     MTLComputeCommandEncoder, MTLComputePipelineState, MTLEvent, MTLResource, MTLSharedEvent,
+    MTLTextureType,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::rc::Rc;
+use xenora_texture::{PackedTextureArrayLayout, PackedTextureLayout, TextureFormat};
 
 #[path = "render_geometry.rs"]
 pub(super) mod geometry;
@@ -133,7 +135,19 @@ impl RenderColorView {
     }
 }
 impl RenderColorOutput {
+    pub fn is_array(&self) -> bool {
+        self.texture.textureType() == MTLTextureType::Type2DArray
+    }
+    pub fn array_layers(&self) -> u32 {
+        self.texture.arrayLength() as u32
+    }
+    pub fn mip_levels(&self) -> u32 {
+        self.texture.mipmapLevelCount() as u32
+    }
     pub fn view(&self, desc: crate::TextureViewDesc) -> Result<RenderColorView, MetalError> {
+        if self.is_array() {
+            return Err(error("array views unsupported"));
+        }
         if self.point.inner.generation.poisoned.get() {
             return Err(error("cohort poisoned"));
         }
@@ -341,19 +355,80 @@ impl SubmissionSync {
         command.encodeSignalEvent_value(event, self.value);
     }
 }
+fn copy_chain_layout(extent: [usize; 2], mips: u32) -> Result<PackedTextureLayout, MetalError> {
+    translated_pixels(extent, "copy backing")?;
+    let layout = PackedTextureLayout::new(TextureFormat::Rgba8Unorm, extent[0], extent[1], mips)
+        .map_err(|_| error("invalid copy mip chain"))?;
+    if layout.byte_len() > 64 * 1024 * 1024 {
+        return Err(error("copy mip chain too large"));
+    }
+    Ok(layout)
+}
+fn copy_array_layout(
+    extent: [usize; 2],
+    mips: u32,
+    layers: u32,
+) -> Result<PackedTextureArrayLayout, MetalError> {
+    translated_pixels(extent, "array copy backing")?;
+    if layers == 0 || layers > 256 || mips.checked_mul(layers).is_none_or(|n| n > 4096) {
+        return Err(error("array subresource limit"));
+    }
+    let layout = PackedTextureArrayLayout::new(
+        TextureFormat::Rgba8Unorm,
+        extent[0],
+        extent[1],
+        mips,
+        layers,
+    )
+    .map_err(|_| error("invalid array copy layout"))?;
+    if layout.byte_len() > 64 * 1024 * 1024 {
+        return Err(error("array copy byte limit"));
+    }
+    Ok(layout)
+}
 fn copy_texture(
     gpu: &NativeCompute,
     extent: [usize; 2],
 ) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, MetalError> {
+    copy_mip_texture(gpu, extent, 1)
+}
+fn copy_mip_texture(
+    gpu: &NativeCompute,
+    extent: [usize; 2],
+    mips: u32,
+) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, MetalError> {
+    copy_storage_texture(gpu, extent, mips, None)
+}
+fn copy_storage_texture(
+    gpu: &NativeCompute,
+    extent: [usize; 2],
+    mips: u32,
+    array_layers: Option<u32>,
+) -> Result<Retained<ProtocolObject<dyn MTLTexture>>, MetalError> {
+    if let Some(layers) = array_layers {
+        copy_array_layout(extent, mips, layers)?;
+    }
+    copy_chain_layout(extent, mips)?;
     // SAFETY: Caller validates nonzero RGBA8 dimensions using translated_pixels.
     let descriptor = unsafe {
         MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
             MTLPixelFormat::RGBA8Unorm,
             extent[0],
             extent[1],
-            false,
+            mips > 1,
         )
     };
+    // SAFETY: The complete mip count was validated above.
+    unsafe {
+        descriptor.setMipmapLevelCount(mips as usize);
+    }
+    if let Some(layers) = array_layers {
+        // SAFETY: Nonzero array length and all mip/layer footprints are bounded above.
+        unsafe {
+            descriptor.setTextureType(MTLTextureType::Type2DArray);
+            descriptor.setArrayLength(layers as usize);
+        }
+    }
     descriptor.setStorageMode(MTLStorageMode::Shared);
     descriptor.setUsage(MTLTextureUsage::ShaderRead | MTLTextureUsage::RenderTarget);
     gpu.device
@@ -468,7 +543,56 @@ impl RenderCohort {
         copy: crate::QueuedImageCopy<'_>,
         dependencies: &[RenderPoint],
     ) -> Result<RenderPoint, MetalError> {
+        self.submit_image_copy_internal(queue, copy, dependencies, false, false)
+    }
+    /// Copies a selected mip while preserving the complete destination chain.
+    pub fn submit_mip_image_copy(
+        &mut self,
+        queue: RenderQueue,
+        copy: crate::QueuedImageCopy<'_>,
+        dependencies: &[RenderPoint],
+    ) -> Result<RenderPoint, MetalError> {
+        self.submit_image_copy_internal(queue, copy, dependencies, true, false)
+    }
+    /// Copy one selected array subresource while preserving every other layer and mip.
+    pub fn submit_array_image_copy(
+        &mut self,
+        queue: RenderQueue,
+        copy: crate::QueuedImageCopy<'_>,
+        dependencies: &[RenderPoint],
+    ) -> Result<RenderPoint, MetalError> {
+        self.submit_image_copy_internal(queue, copy, dependencies, true, true)
+    }
+    fn submit_image_copy_internal(
+        &mut self,
+        queue: RenderQueue,
+        copy: crate::QueuedImageCopy<'_>,
+        dependencies: &[RenderPoint],
+        allow_mips: bool,
+        allow_arrays: bool,
+    ) -> Result<RenderPoint, MetalError> {
         use crate::ImageCopyLocation;
+        let endpoint =
+            |location: ImageCopyLocation| -> Result<(ImageCopyLocation, usize, usize), MetalError> {
+                match location {
+                    ImageCopyLocation::Rgba8Mip { mip, slice, origin }
+                        if allow_mips && (slice == 0 || allow_arrays) =>
+                    {
+                        Ok((
+                            ImageCopyLocation::Rgba8 { origin },
+                            mip as usize,
+                            slice as usize,
+                        ))
+                    }
+                    ImageCopyLocation::Rgba8Mip { .. } => {
+                        Err(error("unsupported copy subresource"))
+                    }
+                    other => Ok((other, 0, 0)),
+                }
+            };
+        let (source_location, source_level, source_slice) = endpoint(copy.source_location)?;
+        let (destination_location, destination_level, destination_slice) =
+            endpoint(copy.destination_location)?;
         let index = queue.index();
         if self.generation.poisoned.get() {
             return Err(error("cohort poisoned"));
@@ -489,23 +613,91 @@ impl RenderCohort {
         }
         // Returns full physical bytes and conservative host-upload charge.
         let validate = |input: &QueuedCopyInput<'_>,
-                        location: ImageCopyLocation|
+                        location: ImageCopyLocation,
+                        selected: usize,
+                        slice: usize|
          -> Result<(usize, usize), MetalError> {
             let (logical, extent, host) = match input {
                 QueuedCopyInput::HostBuffer(bytes) => (bytes.len(), None, true),
                 QueuedCopyInput::ProducedBuffer(output) => (output.byte_len, None, false),
+                QueuedCopyInput::HostRgba8Array {
+                    extent,
+                    mip_levels,
+                    array_layers,
+                    pixels,
+                } => {
+                    if !allow_arrays {
+                        return Err(error("array copies require explicit entry point"));
+                    }
+                    let layout = copy_array_layout(*extent, *mip_levels, *array_layers)?;
+                    if pixels.len() != layout.byte_len() {
+                        return Err(error("invalid array host bytes"));
+                    }
+                    let level = layout
+                        .footprint(slice as u32, selected as u32)
+                        .map_err(|_| error("array subresource out of bounds"))?;
+                    (layout.byte_len(), Some([level.width, level.height]), true)
+                }
+                QueuedCopyInput::HostRgba8MipChain {
+                    extent,
+                    mip_levels,
+                    pixels,
+                } => {
+                    if slice != 0 {
+                        return Err(error("2D slice must be zero"));
+                    }
+                    if !allow_mips {
+                        return Err(error("mip copies unsupported by legacy entry point"));
+                    }
+                    let layout = copy_chain_layout(*extent, *mip_levels)?;
+                    if pixels.len() != layout.byte_len() {
+                        return Err(error("invalid host mip bytes"));
+                    }
+                    let level = layout
+                        .levels()
+                        .get(selected)
+                        .ok_or_else(|| error("copy mip out of range"))?;
+                    (layout.byte_len(), Some([level.width, level.height]), true)
+                }
                 QueuedCopyInput::HostRgba8 { extent, pixels } => {
+                    if slice != 0 || selected != 0 {
+                        return Err(error("copy mip out of range"));
+                    }
                     let bytes = translated_pixels(*extent, "image copy backing")? * 4;
                     if pixels.len() != bytes {
                         return Err(error("invalid host copy texture length"));
                     }
                     (bytes, Some(*extent), true)
                 }
-                QueuedCopyInput::ProducedColor(output) => (
-                    translated_pixels(output.extent, "image copy backing")? * 4,
-                    Some(output.extent),
-                    false,
-                ),
+                QueuedCopyInput::ProducedColor(output) => {
+                    if !allow_mips && output.mip_levels() != 1 {
+                        return Err(error("legacy copy requires one mip"));
+                    }
+                    if output.is_array() {
+                        if !allow_arrays {
+                            return Err(error("array copies require explicit entry point"));
+                        }
+                        let layout = copy_array_layout(
+                            output.extent,
+                            output.mip_levels(),
+                            output.array_layers(),
+                        )?;
+                        let level = layout
+                            .footprint(slice as u32, selected as u32)
+                            .map_err(|_| error("array subresource out of bounds"))?;
+                        (layout.byte_len(), Some([level.width, level.height]), false)
+                    } else {
+                        if slice != 0 {
+                            return Err(error("2D slice must be zero"));
+                        }
+                        let layout = copy_chain_layout(output.extent, output.mip_levels())?;
+                        let level = layout
+                            .levels()
+                            .get(selected)
+                            .ok_or_else(|| error("copy mip out of range"))?;
+                        (layout.byte_len(), Some([level.width, level.height]), false)
+                    }
+                }
             };
             let padded = match (extent, location) {
                 (
@@ -563,9 +755,14 @@ impl RenderCohort {
             };
             Ok((padded, upload))
         };
-        let (source_bytes, source_upload) = validate(&copy.source, copy.source_location)?;
-        let (destination_bytes, destination_upload) =
-            validate(&copy.destination, copy.destination_location)?;
+        let (source_bytes, source_upload) =
+            validate(&copy.source, source_location, source_level, source_slice)?;
+        let (destination_bytes, destination_upload) = validate(
+            &copy.destination,
+            destination_location,
+            destination_level,
+            destination_slice,
+        )?;
         if let (QueuedCopyInput::ProducedColor(source), QueuedCopyInput::ProducedColor(destination)) =
             (&copy.source, &copy.destination)
             && std::ptr::eq(&*source.texture, &*destination.texture)
@@ -609,7 +806,7 @@ impl RenderCohort {
                         || output.texture.pixelFormat() != MTLPixelFormat::RGBA8Unorm
                         || output.texture.width() != output.extent[0]
                         || output.texture.height() != output.extent[1]
-                        || output.texture.mipmapLevelCount() != 1
+                        || output.texture.mipmapLevelCount() != output.mip_levels() as usize
                         || output.texture.sampleCount() != 1
                     {
                         return Err(error("invalid produced color storage"));
@@ -639,42 +836,86 @@ impl RenderCohort {
         let lease = ColorLease::reserve(&self.color_bytes, destination_bytes)?;
         let temporary = ColorLease::reserve(&self.color_bytes, scratch)?;
         let gpu = &self.queues[index];
-        let upload =
-            |input: QueuedCopyInput<'_>, bytes: usize| -> Result<CopyStorage, MetalError> {
-                Ok(match input {
-                    QueuedCopyInput::HostBuffer(data) => {
-                        let mut words = vec![0u32; bytes / 4];
-                        for (i, byte) in data.iter().enumerate() {
-                            words[i / 4] |= u32::from(*byte) << ((i % 4) * 8);
-                        }
-                        CopyStorage::Buffer {
-                            buffer: gpu.new_buffer(&words)?,
-                            byte_len: data.len(),
+        let upload = |input: QueuedCopyInput<'_>,
+                      bytes: usize|
+         -> Result<CopyStorage, MetalError> {
+            Ok(match input {
+                QueuedCopyInput::HostBuffer(data) => {
+                    let mut words = vec![0u32; bytes / 4];
+                    for (i, byte) in data.iter().enumerate() {
+                        words[i / 4] |= u32::from(*byte) << ((i % 4) * 8);
+                    }
+                    CopyStorage::Buffer {
+                        buffer: gpu.new_buffer(&words)?,
+                        byte_len: data.len(),
+                    }
+                }
+                QueuedCopyInput::ProducedBuffer(output) => CopyStorage::Buffer {
+                    buffer: output.buffer,
+                    byte_len: output.byte_len,
+                },
+                QueuedCopyInput::HostRgba8Array {
+                    extent,
+                    mip_levels,
+                    array_layers,
+                    pixels,
+                } => {
+                    let layout = copy_array_layout(extent, mip_levels, array_layers)?;
+                    let texture =
+                        copy_storage_texture(gpu, extent, mip_levels, Some(array_layers))?;
+                    for slice in 0..array_layers {
+                        for level in 0..mip_levels {
+                            let mip = layout
+                                .footprint(slice, level)
+                                .map_err(|_| error("array footprint"))?;
+                            // SAFETY: Full checked packed subresource; new storage has no GPU users.
+                            unsafe {
+                                texture.replaceRegion_mipmapLevel_slice_withBytes_bytesPerRow_bytesPerImage(whole(mip.width,mip.height),level as usize,slice as usize,NonNull::from(&pixels[mip.offset..mip.offset+mip.byte_len]).cast(),if mip.height==1 {0} else {mip.row_bytes},0);
+                            }
                         }
                     }
-                    QueuedCopyInput::ProducedBuffer(output) => CopyStorage::Buffer {
-                        buffer: output.buffer,
-                        byte_len: output.byte_len,
-                    },
-                    QueuedCopyInput::HostRgba8 { extent, pixels } => {
-                        let texture = copy_texture(gpu, extent)?;
-                        // SAFETY: Validated full packed bytes; fresh shared texture has no GPU users.
+                    CopyStorage::Color { texture, extent }
+                }
+                QueuedCopyInput::HostRgba8MipChain {
+                    extent,
+                    mip_levels,
+                    pixels,
+                } => {
+                    let layout = copy_chain_layout(extent, mip_levels)?;
+                    let texture = copy_mip_texture(gpu, extent, mip_levels)?;
+                    for (i, mip) in layout.levels().iter().enumerate() {
+                        // SAFETY: Every packed mip span was prevalidated; fresh storage has no GPU users.
                         unsafe {
                             texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
-                                whole(extent[0], extent[1]),
-                                0,
-                                NonNull::from(pixels).cast(),
-                                extent[0] * 4,
+                                whole(mip.width, mip.height),
+                                i,
+                                NonNull::from(&pixels[mip.offset..mip.offset + mip.byte_len])
+                                    .cast(),
+                                if mip.height == 1 { 0 } else { mip.row_bytes },
                             );
                         }
-                        CopyStorage::Color { texture, extent }
                     }
-                    QueuedCopyInput::ProducedColor(output) => CopyStorage::Color {
-                        texture: output.texture,
-                        extent: output.extent,
-                    },
-                })
-            };
+                    CopyStorage::Color { texture, extent }
+                }
+                QueuedCopyInput::HostRgba8 { extent, pixels } => {
+                    let texture = copy_texture(gpu, extent)?;
+                    // SAFETY: Validated full packed bytes; fresh shared texture has no GPU users.
+                    unsafe {
+                        texture.replaceRegion_mipmapLevel_withBytes_bytesPerRow(
+                            whole(extent[0], extent[1]),
+                            0,
+                            NonNull::from(pixels).cast(),
+                            extent[0] * 4,
+                        );
+                    }
+                    CopyStorage::Color { texture, extent }
+                }
+                QueuedCopyInput::ProducedColor(output) => CopyStorage::Color {
+                    texture: output.texture,
+                    extent: output.extent,
+                },
+            })
+        };
         let source = upload(copy.source, source_bytes)?;
         let prior = upload(copy.destination, destination_bytes)?;
         let destination = match &prior {
@@ -682,8 +923,14 @@ impl RenderCohort {
                 buffer: gpu.new_buffer(&vec![0u32; destination_bytes / 4])?,
                 byte_len: *byte_len,
             },
-            CopyStorage::Color { extent, .. } => CopyStorage::Color {
-                texture: copy_texture(gpu, *extent)?,
+            CopyStorage::Color { extent, texture } => CopyStorage::Color {
+                texture: copy_storage_texture(
+                    gpu,
+                    *extent,
+                    texture.mipmapLevelCount() as u32,
+                    (texture.textureType() == MTLTextureType::Type2DArray)
+                        .then_some(texture.arrayLength() as u32),
+                )?,
                 extent: *extent,
             },
         };
@@ -712,19 +959,38 @@ impl RenderCohort {
         // before allocation. Both producers are waited; fresh output cannot alias.
         unsafe {
             match (&prior, &destination) {
-                (CopyStorage::Buffer { buffer: old, .. }, CopyStorage::Buffer { buffer: dst, .. }) =>
-                    blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(old, 0, dst, 0, destination_bytes),
-                (CopyStorage::Color { texture: old, extent }, CopyStorage::Color { texture: dst, .. }) =>
-                    blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(old, 0, 0, origin([0, 0]), MTLSize { width: extent[0], height: extent[1], depth: 1 }, dst, 0, 0, origin([0, 0])),
+                (
+                    CopyStorage::Buffer { buffer: old, .. },
+                    CopyStorage::Buffer { buffer: dst, .. },
+                ) => blit.copyFromBuffer_sourceOffset_toBuffer_destinationOffset_size(
+                    old,
+                    0,
+                    dst,
+                    0,
+                    destination_bytes,
+                ),
+                (
+                    CopyStorage::Color {
+                        texture: old,
+                        extent,
+                    },
+                    CopyStorage::Color { texture: dst, .. },
+                ) => {
+                    for slice in 0..old.arrayLength() {
+                        for level in 0..old.mipmapLevelCount() {
+                            blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(old,slice,level,origin([0,0]),MTLSize{width:(extent[0]>>level).max(1),height:(extent[1]>>level).max(1),depth:1},dst,slice,level,origin([0,0]));
+                        }
+                    }
+                }
                 _ => unreachable!("matching destination layout"),
             }
-            match (&source, &destination, copy.source_location, copy.destination_location) {
+            match (&source, &destination, source_location, destination_location) {
                 (CopyStorage::Color { texture: src, .. }, CopyStorage::Color { texture: dst, .. }, ImageCopyLocation::Rgba8 { origin: src_origin }, ImageCopyLocation::Rgba8 { origin: dst_origin }) =>
-                    blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(src, 0, 0, origin(src_origin), size, dst, 0, 0, origin(dst_origin)),
+                    blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(src, source_slice, source_level, origin(src_origin), size, dst, destination_slice, destination_level, origin(dst_origin)),
                 (CopyStorage::Buffer { buffer: src, .. }, CopyStorage::Color { texture: dst, .. }, ImageCopyLocation::Buffer { offset, bytes_per_row }, ImageCopyLocation::Rgba8 { origin: dst_origin }) =>
-                    blit.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(src, offset, bytes_per_row, 0, size, dst, 0, 0, origin(dst_origin)),
+                    blit.copyFromBuffer_sourceOffset_sourceBytesPerRow_sourceBytesPerImage_sourceSize_toTexture_destinationSlice_destinationLevel_destinationOrigin(src, offset, bytes_per_row, 0, size, dst, destination_slice, destination_level, origin(dst_origin)),
                 (CopyStorage::Color { texture: src, .. }, CopyStorage::Buffer { buffer: dst, .. }, ImageCopyLocation::Rgba8 { origin: src_origin }, ImageCopyLocation::Buffer { offset, bytes_per_row }) =>
-                    blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(src, 0, 0, origin(src_origin), size, dst, offset, bytes_per_row, 0),
+                    blit.copyFromTexture_sourceSlice_sourceLevel_sourceOrigin_sourceSize_toBuffer_destinationOffset_destinationBytesPerRow_destinationBytesPerImage(src, source_slice, source_level, origin(src_origin), size, dst, offset, bytes_per_row, 0),
                 _ => unreachable!("validated image endpoints"),
             }
         }
@@ -1054,6 +1320,9 @@ impl RenderCohort {
             return Err(error("too many producer dependencies"));
         }
         let (logical, padded, host, color) = match &input {
+            QueuedCopyInput::HostRgba8Array { .. } | QueuedCopyInput::HostRgba8MipChain { .. } => {
+                return Err(error("whole-copy API requires single mip"));
+            }
             QueuedCopyInput::HostBuffer(bytes) => (
                 bytes.len(),
                 bytes.len().checked_add(3).map(|n| n & !3),
@@ -1074,6 +1343,9 @@ impl RenderCohort {
                 (bytes, Some(bytes), true, true)
             }
             QueuedCopyInput::ProducedColor(output) => {
+                if output.is_array() {
+                    return Err(error("whole-copy array unsupported"));
+                }
                 let bytes = translated_pixels(output.extent, "copy texture")? * 4;
                 (bytes, Some(bytes), false, true)
             }
@@ -1148,6 +1420,9 @@ impl RenderCohort {
         let temporary = ColorLease::reserve(&self.color_bytes, temporary_bytes)?;
         let gpu = &self.queues[index];
         let source = match input {
+            QueuedCopyInput::HostRgba8Array { .. } | QueuedCopyInput::HostRgba8MipChain { .. } => {
+                return Err(error("whole-copy API requires single mip"));
+            }
             QueuedCopyInput::HostBuffer(bytes) => {
                 let mut words = vec![0u32; padded / 4];
                 for (i, byte) in bytes.iter().enumerate() {
@@ -1306,17 +1581,49 @@ impl RenderCohort {
                 OwnedCopyOutput::Buffer(bytes)
             }
             CopyStorage::Color { texture, extent } => {
-                let mut pixels = vec![0u8; extent[0] * extent[1] * 4];
-                // SAFETY: Completed GPU writes, checked packed extent and owned shared texture.
-                unsafe {
-                    texture.getBytes_bytesPerRow_fromRegion_mipmapLevel(
-                        NonNull::from(pixels.as_mut_slice()).cast(),
-                        extent[0] * 4,
-                        whole(extent[0], extent[1]),
-                        0,
-                    );
+                let mip_levels = texture.mipmapLevelCount() as u32;
+                let array_layers = texture.arrayLength() as u32;
+                let is_array = texture.textureType() == MTLTextureType::Type2DArray;
+                let layout = copy_array_layout(extent, mip_levels, array_layers)?;
+                let mut pixels = vec![0u8; layout.byte_len()];
+                for slice in 0..array_layers {
+                    for level in 0..mip_levels {
+                        let mip = layout
+                            .footprint(slice, level)
+                            .map_err(|_| error("array readback footprint"))?;
+                        // SAFETY: Completed writes and exact checked destination subresource span.
+                        unsafe {
+                            texture
+                                .getBytes_bytesPerRow_bytesPerImage_fromRegion_mipmapLevel_slice(
+                                    NonNull::from(
+                                        &mut pixels[mip.offset..mip.offset + mip.byte_len],
+                                    )
+                                    .cast(),
+                                    mip.row_bytes,
+                                    0,
+                                    whole(mip.width, mip.height),
+                                    level as usize,
+                                    slice as usize,
+                                );
+                        }
+                    }
                 }
-                OwnedCopyOutput::Rgba8 { extent, pixels }
+                if is_array {
+                    OwnedCopyOutput::Rgba8Array {
+                        extent,
+                        mip_levels,
+                        array_layers,
+                        pixels,
+                    }
+                } else if mip_levels == 1 {
+                    OwnedCopyOutput::Rgba8 { extent, pixels }
+                } else {
+                    OwnedCopyOutput::Rgba8MipChain {
+                        extent,
+                        mip_levels,
+                        pixels,
+                    }
+                }
             }
         };
         self.release_collected_latest(point);
@@ -1582,6 +1889,8 @@ impl RenderCohort {
                 QueuedColorLoad::Produced(output) => {
                     self.validate_point(&output.point)?;
                     if output.extent != pass.extent
+                        || output.is_array()
+                        || output.mip_levels() != 1
                         || output.texture.device().registryID()
                             != self.queues[index].device.registryID()
                         || output.texture.pixelFormat() != PIXEL_FORMAT
@@ -1709,6 +2018,9 @@ impl RenderCohort {
                         texture_slot,
                         sampler_slot,
                     } => {
+                        if output.is_array() {
+                            return Err(error("implicit array sampling unsupported"));
+                        }
                         add(&output.point)?;
                         let texture = crate::MetalRgba8Texture::from_render_output(
                             output.texture.clone(),
@@ -2913,6 +3225,9 @@ mod color_budget_tests {
                     assert!(to_buffer);
                     assert_eq!(bytes, [1, 2, 3, 4, 31, 47, 61, 79, 99]);
                 }
+                OwnedCopyOutput::Rgba8Array { .. } | OwnedCopyOutput::Rgba8MipChain { .. } => {
+                    panic!("legacy copy returned mip chain")
+                }
                 OwnedCopyOutput::Rgba8 { extent, pixels } => {
                     assert!(!to_buffer);
                     assert_eq!(extent, [2, 1]);
@@ -3031,6 +3346,9 @@ mod color_budget_tests {
                         )
                     };
                     assert_eq!(padded, &[1, 2, 3, 4, 31, 47, 61, 79, 99, 0, 0, 0]);
+                }
+                OwnedCopyOutput::Rgba8Array { .. } | OwnedCopyOutput::Rgba8MipChain { .. } => {
+                    panic!("legacy copy returned mip chain")
                 }
                 OwnedCopyOutput::Rgba8 { extent, pixels } => {
                     assert_eq!(extent, [2, 1]);
@@ -3459,3 +3777,7 @@ mod graph_admission_tests {
         assert_eq!(bytes, [3, 5, 7, 11]);
     }
 }
+
+#[cfg(test)]
+#[path = "mip_array_budget_tests.rs"]
+mod mip_array_budget_tests;
