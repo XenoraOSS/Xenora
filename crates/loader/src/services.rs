@@ -17,6 +17,7 @@ mod crt_format;
 mod crt_math;
 mod crt_startup;
 mod crt_streams;
+mod crt_wformat;
 mod cxx;
 mod events;
 mod files;
@@ -1041,6 +1042,27 @@ pub(crate) mod handlers {
         arguments: u64,
     ) -> Outcome<i32> {
         let outcome = crt_streams::print_to_buffer(
+            context.memory,
+            options,
+            buffer,
+            count,
+            format,
+            locale,
+            arguments,
+        );
+        or_errno(context, outcome)
+    }
+
+    pub fn vswprintf(
+        context: &mut ServiceContext<'_>,
+        options: u64,
+        buffer: u64,
+        count: u64,
+        format: u64,
+        locale: u64,
+        arguments: u64,
+    ) -> Outcome<i32> {
+        let outcome = crt_streams::print_to_wide_buffer(
             context.memory,
             options,
             buffer,

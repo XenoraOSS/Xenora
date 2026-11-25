@@ -344,6 +344,18 @@ with `CRT_FILES_BREAK`, which expects a text position without the carriage
 returns, so check 17 fails, as a control. `crates/cli/tests/run_program.rs`
 runs all three through `xenora run`. Provenance is as for Gate A2.
 
+## C runtime wide buffer formatting
+
+`tests/compat_fixtures/crt_swprintf.c` (#459) is a hosted C program that
+formats into wide buffers with `swprintf`: both string kinds and both
+character kinds, padding, bases, a width from the arguments, a precision on
+a wide string, and the CRT's default truncation behavior — count characters
+without a terminator and -1, no size query. `build-crt-swprintf.sh` builds
+it with mingw-w64 (UCRT flavour) at `-O0` and `-O2`, and once at `-O1` with
+`CRT_SWPRINTF_BREAK`, which expects the integer conversion to fail, so check
+1 fails, as a control. `crates/cli/tests/run_program.rs` runs all three
+through `xenora run`. Provenance is as for Gate A2.
+
 ## C runtime mathematics
 
 `tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the

@@ -64,6 +64,11 @@ fn crt_math(name: &str) -> PathBuf {
     build("build-crt-math.sh", "run-program-crt-math", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_swprintf(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-swprintf.sh", "run-program-crt-swprintf", &OUT).join(format!("{name}.exe"))
+}
+
 fn freestanding(name: &str) -> PathBuf {
     static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-gate-a1.sh", "run-program-a1", &OUT).join(format!("{name}.exe"))
@@ -360,6 +365,21 @@ fn a_program_moving_through_files_and_renaming_them_passes_its_checks() {
     assert_eq!(
         run.stdout,
         "check 17 failed: text position counts the CR\r\ncrt_files: 27 of 28 checks passed\r\n"
+    );
+}
+
+#[test]
+fn a_program_formatting_wide_strings_in_buffers_passes_its_checks() {
+    for name in ["crt-swprintf-O0", "crt-swprintf-O2"] {
+        let run = run_program(&crt_swprintf(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {}{}", run.stdout, run.stderr);
+        assert_eq!(run.stderr, "crt-swprintf: 9/9 checks passed\r\n", "{name}");
+    }
+    let run = run_program(&crt_swprintf("crt-swprintf-break"), &[], &[]);
+    assert_eq!(run.code, Some(1), "{}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        "check 1 failed: integer conversion\r\ncrt-swprintf: 8/9 checks passed\r\n"
     );
 }
 

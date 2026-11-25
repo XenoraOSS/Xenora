@@ -149,6 +149,15 @@ service ucrtbase.dll __stdio_common_vsprintf(options: u64, buffer: ptr, count: u
     test legacy_snprintf_truncates_without_a_terminator_and_returns_minus_one
     test sprintf_faults_inside_the_buffer_stop_the_guest_and_nothing_leaves_it
 
+# The wide buffer forms (#459): same rules counted in wide characters.
+service ucrtbase.dll __stdio_common_vswprintf(options: u64, buffer: ptr, count: u64, format: ptr, locale: ptr, arguments: ptr) -> i32
+    handler vswprintf
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    fails -1 with errno EINVAL for a null format or an invalid one; stops the guest for what is not modelled
+    ref corecrt_stdio_config.h __stdio_common_vswprintf; Microsoft Learn, swprintf and format specification syntax
+    test wide_buffer_formatting_counts_in_wide_units
+
 service ucrtbase.dll __stdio_common_vsprintf_s(options: u64, buffer: ptr, count: u64, format: ptr, locale: ptr, arguments: ptr) -> i32
     handler vsprintf_s
     status partial

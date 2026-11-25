@@ -486,6 +486,20 @@ a string as it pads a number; a precision also limits `(null)`; `%#.0o` of
 zero prints `0`, which is ISO C's rule. All six services are `partial`. None
 of this has been compared with Windows.
 
+### Wide buffer formatting in the C runtime
+
+`__stdio_common_vswprintf` formats into wide buffers: the syntax and the
+conversions are the narrow engine's, with the wide family's turned-around
+character and string types — `%c` and `%s` are wide, `%C` and `%S` narrow,
+`h` forces narrow and `l` wide. Everything is counted in wide units. The
+default behavior is the CRT's legacy one, measured against a mingw-w64
+binary: truncation writes the count characters without a terminator and
+answers -1, a null buffer answers -1 with `EINVAL` — there is no size query.
+A program that sets the standard-snprintf option bit gets the standard rules
+instead, as the narrow buffer forms implement them. The service is `partial`:
+the wide printf forms for streams (`wprintf`, `fwprintf`) do not exist yet.
+None of this has been compared with Windows.
+
 ### Files through the C runtime
 
 `fopen`, `fclose` and `fgets` give a hosted C program files, and the output
