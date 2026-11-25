@@ -344,6 +344,16 @@ with `CRT_FILES_BREAK`, which expects a text position without the carriage
 returns, so check 17 fails, as a control. `crates/cli/tests/run_program.rs`
 runs all three through `xenora run`. Provenance is as for Gate A2.
 
+## The C clock
+
+`tests/compat_fixtures/crt_clock.c` (#459, package 5) is a hosted C program
+that breaks down and composes known seconds since the epoch, checks the
+CRT's string forms and `strftime`, and verifies `mktime`'s normalization.
+`build-crt-clock.sh` builds it with mingw-w64 (UCRT flavour) at `-O0` and
+`-O2`, and once at `-O1` with `CRT_CLOCK_BREAK`, whose control check must
+fail. `crates/cli/tests/run_program.rs` runs all three through
+`xenora run`. Provenance is as for Gate A2.
+
 ## C runtime mathematics
 
 `tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the

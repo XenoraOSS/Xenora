@@ -555,6 +555,23 @@ later operations fail with `EBADF`. `fseek`, `ftell` and `rewind` remain
 unprovided here; #312 holds them. `remove` is `implemented`, the other five
 `partial`.
 
+**The C time services (#459, package 5).** `_gmtime64`/`gmtime`,
+`_localtime64`/`localtime`, `_mktime64`/`mktime`, `asctime`, `_ctime64`/
+`ctime`, `asctime_s`, `_ctime64_s`/`ctime_s`, `clock`, `_difftime64`/
+`difftime` and `strftime` come in through `api-ms-win-crt-time-l1-1-0.dll`.
+The calendar arithmetic is exact (Hinnant's public-domain civil
+conversions). The machine's clock is UTC throughout: Xenora has no answer
+for what zone it stands in, so local time is UTC, `tm_isdst` is 0, and
+`mktime` composes what `gmtime` breaks down. The CRT's shared static
+buffers are reproduced: one `struct tm` for `gmtime`/`localtime`, one
+string for `asctime`/`ctime`. `clock` reads the injected clock's
+performance count in milliseconds. `strftime` covers the documented C
+locale conversions and copies unknown ones verbatim. Times before 1970 or
+after 3000 are `EINVAL`, as the Microsoft pages say. All `implemented`.
+`FileTimeToLocalFileTime` is the identity under the UTC clock (`partial`).
+`GetDateFormatW` and `GetTimeFormatW` belong to the locale package and are
+not served.
+
 ### CRT integer conversion
 
 UCRT and the CRT conversion API set expose strtol, strtoul, wcstol, and
