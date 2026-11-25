@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 204 |
-| Generated adapters | 204 |
-| Unique handler implementations | 196 |
-| Implemented | 68 |
-| Partial | 134 |
+| Services with a declared ABI | 211 |
+| Generated adapters | 211 |
+| Unique handler implementations | 202 |
+| Implemented | 71 |
+| Partial | 138 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 204 |
-| API-set aliases (not services) | 230 |
+| Conformance-tested through guest dispatch | 211 |
+| API-set aliases (not services) | 232 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -222,3 +222,10 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `msvcrt.dll!__getmainargs` | `(argc: ptr, argv: ptr, envp: ptr, dowildcard: i32, start_info: ptr) -> i32` | partial | -1 with errno EINVAL when any of the three output pointers is null; the start-up information is not written |
 | `msvcrt.dll!___mb_cur_max_func` | `() -> u32` | partial | never |
 | `msvcrt.dll!_amsg_exit` | `(code: i32) -> void` | partial | never returns; the runtime-error message of the CRT is not written |
+| `kernel32.dll!GetEnvironmentVariableA` | `(name: ptr, buffer: ptr, size: u32) -> u32` | implemented | 0 with ERROR_ENVVAR_NOT_FOUND for every name: the environment is empty |
+| `kernel32.dll!GetEnvironmentVariableW` | `(name: ptr, buffer: ptr, size: u32) -> u32` | implemented | 0 with ERROR_ENVVAR_NOT_FOUND for every name: the environment is empty |
+| `kernel32.dll!GetConsoleWindow` | `() -> handle` | implemented | never; the answer is null, the hosted runtime has no console window |
+| `kernel32.dll!SetConsoleTitleW` | `(title: ptr) -> bool32` | partial | FALSE with ERROR_INVALID_PARAMETER for a null title |
+| `kernel32.dll!GetConsoleTitleW` | `(buffer: ptr, size: u32) -> u32` | partial | 0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size; the answer is the title length even when the buffer holds less, Xenora's documented choice |
+| `kernel32.dll!SetConsoleTitleA` | `(title: ptr) -> bool32` | partial | FALSE with ERROR_INVALID_PARAMETER for a null title |
+| `kernel32.dll!GetConsoleTitleA` | `(buffer: ptr, size: u32) -> u32` | partial | 0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size, the same documented length answer as the wide form |
