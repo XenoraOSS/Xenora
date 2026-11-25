@@ -5,7 +5,10 @@
 //! The only process the guest can name is its own, through the
 //! current-process pseudo-handle. No service here reaches a host process.
 
-use super::{CURRENT_PROCESS, ERROR_INVALID_HANDLE, ERROR_NOACCESS, KERNEL32, ServicesState};
+use super::{
+    CURRENT_PROCESS, ERROR_INVALID_HANDLE, ERROR_NOACCESS, ERROR_NOT_SUPPORTED, KERNEL32,
+    ServicesState,
+};
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
 use std::sync::Arc;
@@ -57,6 +60,29 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         }
         Ok(1)
     });
+
+    // CreateProcess cannot exist in this world: the guest is the only
+    // process, and starting another would require a second emulated machine
+    // that does not exist. Both forms fail honestly with ERROR_NOT_SUPPORTED
+    // instead of pretending a child started, which the documentation states.
+    for symbol in ["CreateProcessA", "CreateProcessW"] {
+        let s = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            // The output structure, when given, is zeroed like a failed call
+            // leaves it - programs that check it see no process handles.
+            let info = args.get(9, memory).map_err(ExitReason::MemoryFault)?;
+            if info != 0 {
+                for field in 0..4 {
+                    memory
+                        .write_u64(info + 8 * field, 0)
+                        .map_err(ExitReason::MemoryFault)?;
+                }
+            }
+            s.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0)
+        });
+        registry.alias(PROCESS_THREADS_API, KERNEL32, symbol);
+        registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
+    }
 
     for symbol in ["TerminateProcess", "GetExitCodeProcess"] {
         registry.alias(PROCESS_THREADS_API, KERNEL32, symbol);

@@ -21,6 +21,7 @@ mod cxx;
 mod environment;
 mod errors;
 mod events;
+mod file_mapping;
 mod files;
 mod gdk_queue;
 mod graphics;
@@ -161,7 +162,7 @@ impl Clock for SystemClock {
     }
 }
 
-enum GuestObject {
+pub(crate) enum GuestObject {
     Thread(u32),
     File(files::OpenFile),
     Search(files::Search),
@@ -169,26 +170,29 @@ enum GuestObject {
         state: Arc<Mutex<events::Waitable>>,
         access: u32,
     },
+    FileMapping {
+        size: u64,
+    },
 }
 
 #[derive(Default)]
-struct ObjectState {
+pub(crate) struct ObjectState {
     priority: i32,
     last_handle: u64,
-    handles: BTreeMap<u64, GuestObject>,
+    pub(crate) handles: BTreeMap<u64, GuestObject>,
     files: BTreeMap<String, Vec<u8>>,
     directories: BTreeSet<String>,
     next_temp: u32,
 }
 
 impl ObjectState {
-    fn next_handle(&self) -> Option<u64> {
+    pub(crate) fn next_handle(&self) -> Option<u64> {
         self.last_handle
             .checked_add(4)
             .filter(|_| self.handles.len() < MAX_OBJECT_HANDLES)
     }
 
-    fn insert_handle(&mut self, handle: u64, object: GuestObject) {
+    pub(crate) fn insert_handle(&mut self, handle: u64, object: GuestObject) {
         self.handles.insert(handle, object);
         self.last_handle = handle;
     }
@@ -547,7 +551,9 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
                     },
                 ),
                 Some(GuestObject::File(file)) => (file.access, GuestObject::File(file.clone())),
-                Some(GuestObject::Search(_)) => return s.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0),
+                Some(GuestObject::Search(_) | GuestObject::FileMapping { .. }) => {
+                    return s.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0)
+                }
                 None => return s.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0),
             }
         };
@@ -569,7 +575,9 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
                 *rights = access
             }
             GuestObject::File(file) => file.access = access,
-            GuestObject::Search(_) => unreachable!("search handles cannot be duplicated"),
+            GuestObject::Search(_) | GuestObject::FileMapping { .. } => {
+                unreachable!("these handles cannot be duplicated")
+            }
         }
         thread.insert_handle(handle, object);
         Ok(1)
@@ -591,6 +599,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     environment::register(registry, &state);
     errors::register(registry, &state);
     registry::register(registry, &state);
+    file_mapping::register(registry, &state);
     heap::register(registry, &state);
     cxx::register(registry, &state);
 
