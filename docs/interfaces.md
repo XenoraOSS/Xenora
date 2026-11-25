@@ -745,6 +745,22 @@ reports. Numa, cache and group relationships are not modeled yet:
 enumerating them alone answers zero entries. Nothing was compared with
 Windows.
 
+### Encoding conversions and code pages
+
+`MultiByteToWideChar` and `WideCharToMultiByte` convert between the narrow
+and wide forms of three documented public pages: UTF-8 exactly (surrogate
+pairs and the malformed sequences of the Unicode standard's substitution
+included), Windows-1252 and IBM 437. `GetACP` answers UTF-8 — Xenora's
+choice, the value of a Windows installation in its documented UTF-8 mode,
+coherent with the UTF-8 process arguments — and `GetOEMCP` answers 437.
+`IsValidCodePage` is true for exactly the three numbers; `GetCPInfo`
+reports their widest characters and default bytes. Malformed input is
+replaced with U+FFFD unless the caller passes the strict flag, which fails
+with `ERROR_NO_UNICODE_TRANSLATION`; a character the target page cannot
+represent becomes the default byte and raises the caller's flag. A zero
+byte count is the documented failure Microsoft's pages describe, not an
+empty conversion. Nothing was compared with Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.

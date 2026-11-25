@@ -124,6 +124,9 @@ fn crt_crtutils(name: &str) -> PathBuf {
     build("build-crt-crtutils.sh", "run-program-crt-crtutils", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_codepages(name: &str) -> PathBuf {
+    build("build-crt-codepages.sh", "run-program-crt-codepages", &OUT).join(format!("{name}.exe"))
+
 /// The SHA-256 of a file, from the host's `shasum`.
 fn digest(path: &Path) -> String {
     let output = Command::new("shasum")
@@ -1081,3 +1084,11 @@ fn a_program_using_the_small_crt_utilities_runs() {
     let run = run_program(&crt_crtutils("crt-crtutils-break"), &[], &[]);
     assert_eq!(run.code, Some(24), "control: {:?}", run.stdout);
 }
+
+fn a_program_using_the_encoding_conversions_runs_and_detects_a_wrong_result() {
+    for name in ["crt-codepages-O0", "crt-codepages-O2"] {
+        let run = run_program(&crt_codepages(name), &[], &[]);
+            run.stdout, "crt-codepages: 23/23 checks passed\r\n",
+    let run = run_program(&crt_codepages("crt-codepages-break"), &[], &[]);
+        run.stdout,
+        "check 24 failed: the control fails\r\ncrt-codepages: 1/24 checks failed, first 24\r\n"
