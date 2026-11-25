@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `betterxen imports coverage` is deterministic and agrees with the registry.
+//! `xenora imports coverage` is deterministic and agrees with the registry.
 
 use std::process::Command;
 

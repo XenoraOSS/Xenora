@@ -834,13 +834,13 @@ struct ContentView: View {
     }
 }
 
-struct BetterXenApp: App {
+struct XenoraApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
     let model = FrameModel()
     let loop = FrameLoopModel()
 
     var body: some Scene {
-        WindowGroup("BetterXen") { ContentView(model: model, loop: loop) }
+        WindowGroup("Xenora") { ContentView(model: model, loop: loop) }
     }
 }
 
@@ -1015,4 +1015,4 @@ if CommandLine.arguments.contains("--smoke") {
     print(probe.summary)
     exit(probe.connected ? 0 : 1)
 }
-BetterXenApp.main()
+XenoraApp.main()

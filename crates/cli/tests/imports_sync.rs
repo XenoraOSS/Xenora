@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! `betterxen imports sync` over a probe report that lists delay-loaded imports.
+//! `xenora imports sync` over a probe report that lists delay-loaded imports.
 
 use std::process::Command;
 
@@ -13,8 +13,8 @@ fn backlog_leaves_out_delay_loaded_imports() {
         "/../../fixtures/pe/delay-imports.exe"
     );
     let report = std::env::temp_dir().join(format!("xenora-sync-delayed-{}", std::process::id()));
-    let betterxen = |arguments: &[&str]| {
-        let status = Command::new(env!("CARGO_BIN_EXE_betterxen"))
+    let xenora = |arguments: &[&str]| {
+        let status = Command::new(env!("CARGO_BIN_EXE_xenora"))
             .args(arguments)
             .arg("--report")
             .arg(&report)
@@ -22,8 +22,8 @@ fn backlog_leaves_out_delay_loaded_imports() {
             .unwrap();
         assert!(status.success(), "{arguments:?}");
     };
-    betterxen(&["probe", "--pe", fixture]);
-    betterxen(&["imports", "sync"]);
+    xenora(&["probe", "--pe", fixture]);
+    xenora(&["imports", "sync"]);
     let listed = std::fs::read_to_string(report.join("imports.csv")).unwrap();
     let backlog = std::fs::read_to_string(report.join("import_backlog.md")).unwrap();
     std::fs::remove_dir_all(report).unwrap();

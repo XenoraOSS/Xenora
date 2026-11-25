@@ -104,7 +104,7 @@ section table and data directories; it cannot write or execute them.
 When startup loads an image away from its preferred base, it writes the load
 base into the mapped optional header's `ImageBase` field after the relocations
 have been applied, so an entry aimed at that field cannot leave any other value
-there. This is BetterXen's policy: the PE specification defines `ImageBase` as the
+there. This is Xenora's policy: the PE specification defines `ImageBase` as the
 preferred base, and the behaviour has not been compared with Windows.
 
 The load is refused with `PeError::InvalidHeaderSize` when `SizeOfHeaders` is
@@ -117,9 +117,9 @@ pages count toward the 256 MiB mapping budget of one image, which is checked
 before anything is mapped. `ParsedPe::parse` does not make these checks, so
 static inspection of a file is unchanged.
 
-`betterxen probe --mode static` inventories ordinary and delay-loaded PE imports
+`xenora probe --mode static` inventories ordinary and delay-loaded PE imports
 without guest execution. Without `--report` it writes to `diagnostics/probe`,
-where `betterxen imports sync` also looks. `missing_imports.csv` lists unresolved ordinary keys
+where `xenora imports sync` also looks. `missing_imports.csv` lists unresolved ordinary keys
 with their import address table relative virtual addresses. The full inventory,
 `imports.csv`, marks each entry `ordinary` or `delayed` in its `import_table`
 column and records whether each key is registered, its implementation
@@ -138,7 +138,7 @@ ordinal, and slot in the delay import address table, after the ordinary rows.
 Binding does not resolve them: the PE format leaves that to a delay-load helper
 inside the image. The totals above and `missing_imports.csv` therefore cover
 ordinary imports only, and the JSON report counts delayed slots and DLLs in
-`delayed_imports` and `delayed_imported_dlls_count`. `betterxen imports sync`
+`delayed_imports` and `delayed_imported_dlls_count`. `xenora imports sync`
 leaves delayed rows out of its backlog for the same reason.
 
 The probe reads only descriptors that lie wholly inside the directory's
@@ -883,7 +883,7 @@ four row-major Block Compression 1 (BC1) blocks, including slots beyond the
 logical edge. The reader validates the full byte length, rejects padding
 coordinates and can decode each logical block to sixteen RGBA8 texels.
 The decoder uses bit replication to expand 5:6:5 endpoints and rounds integer
-palette interpolation down. This layout is specific to BetterXen fixtures. The block encoding follows the
+palette interpolation down. This layout is specific to Xenora fixtures. The block encoding follows the
 [Direct3D BC1 description](https://learn.microsoft.com/en-us/windows/win32/direct3d10/d3d10-graphics-programming-guide-resources-block-compression).
 
 `TiledBc1::linearize` strips the tile padding from one selected subresource
