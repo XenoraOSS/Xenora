@@ -54,6 +54,21 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             .unwrap_or(0))
     });
 
+    // Heap allocations use separate guest memory regions, with no free-block
+    // list to compact. Return zero for both this case and an invalid handle.
+    registry.register(KERNEL32, "HeapCompact", |_, _, _| Ok(0));
+
+    // The allocator keeps its bookkeeping outside guest memory. Check the
+    // heap handle or the exact base of a live allocation owned by that heap.
+    registry.register(KERNEL32, "HeapValidate", |args, _, memory| {
+        let valid = if args.r8 == 0 {
+            memory.has_heap(args.rcx)
+        } else {
+            memory.heap_allocation_size(args.rcx, args.r8).is_some()
+        };
+        Ok(u64::from(valid))
+    });
+
     registry.register(KERNEL32, "HeapSize", |args, _, memory| {
         let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
         let flags = args.get(1, memory).map_err(ExitReason::MemoryFault)? as u32;
@@ -149,6 +164,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "HeapAlloc",
         "HeapReAlloc",
         "HeapSize",
+        "HeapCompact",
+        "HeapValidate",
         "HeapFree",
         "HeapCreate",
         "HeapDestroy",

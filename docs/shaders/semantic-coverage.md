@@ -24,7 +24,7 @@ acceptance remain outside the verified count. All results concern synthetic fixt
 | MUBUF | 75 | 2 | 0 | 2 | 2 | 2 | 2 | 2 | 0 |
 | SCRATCH | 22 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | SMEM | 14 | 3 | 0 | 3 | 3 | 3 | 0 | 0 | 0 |
-| SOP1 | 65 | 12 | 12 | 12 | 12 | 12 | 1 | 1 | 11 |
+| SOP1 | 65 | 24 | 24 | 24 | 24 | 24 | 1 | 1 | 11 |
 | SOP2 | 51 | 33 | 33 | 33 | 33 | 33 | 0 | 0 | 12 |
 | SOPC | 18 | 12 | 12 | 12 | 12 | 12 | 1 | 1 | 7 |
 | SOPK | 27 | 17 | 16 | 17 | 17 | 17 | 1 | 1 | 5 |
@@ -36,7 +36,7 @@ acceptance remain outside the verified count. All results concern synthetic fixt
 | VOP3P | 29 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | VOP3SDST | 10 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | VOPC | 190 | 28 | 44 | 44 | 44 | 44 | 0 | 0 | 9 |
-| **Total** | 1465 | 176 | 183 | 196 | 192 | 192 | 18 | 18 | 84 |
+| **Total** | 1465 | 188 | 195 | 208 | 204 | 204 | 18 | 18 | 84 |
 
 ## Unsupported operand variants
 
@@ -45,6 +45,7 @@ The table counts distinct variant names per family across registry operand rules
 | Family | Operand rule | Unsupported variants |
 | --- | --- | --- |
 | SOP1 | `sop1_move` | `dst_m0`, `dst_null`, `dst_ttmp`, `src_exec`, `src_float_inline`, `src_m0`, `src_special`, `src_ttmp`, `src_vcc` |
+| SOP1 | `sop1_saveexec` | `dst_exec`, `dst_m0`, `dst_null`, `dst_ttmp`, `dst_vcc`, `src_exec`, `src_float_inline`, `src_m0`, `src_special`, `src_ttmp`, `src_vcc` |
 | SOP1 | `sop1_sgpr` | `dst_exec`, `dst_m0`, `dst_null`, `dst_ttmp`, `dst_vcc`, `src_exec`, `src_float_inline`, `src_m0`, `src_special`, `src_ttmp`, `src_vcc` |
 | SOP2 | `sop2_sgpr` | `dst_exec`, `dst_m0`, `dst_null`, `dst_ttmp`, `dst_vcc`, `src_exec`, `src_float_inline`, `src_m0`, `src_special`, `src_ttmp`, `src_vcc`, `two_literals` |
 | SOPC | `sopc_scalar` | `src_exec`, `src_float_inline`, `src_m0`, `src_special`, `src_ttmp`, `src_vcc`, `two_literals` |

@@ -294,6 +294,54 @@ pub enum ScalarUnary {
     SignExtendShort,
     /// D = |S0| (0x80000000 stays), SCC = (D != 0).
     Absolute,
+    /// 60 `s_and_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = S0 & EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 120).
+    AndSaveExec,
+    /// 61 `s_or_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = S0 | EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 121).
+    OrSaveExec,
+    /// 62 `s_xor_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = S0 ^ EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 121).
+    XorSaveExec,
+    /// 63 `s_andn2_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = S0 & ~EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 121).
+    Andn2SaveExec,
+    /// 64 `s_orn2_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = S0 | ~EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 121).
+    Orn2SaveExec,
+    /// 65 `s_nand_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = ~(S0 & EXEC_LO), SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 121).
+    NandSaveExec,
+    /// 66 `s_nor_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = ~(S0 | EXEC_LO), SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 121).
+    NorSaveExec,
+    /// 67 `s_xnor_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = ~(S0 ^ EXEC_LO), SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 121).
+    XnorSaveExec,
+    /// 68 `s_andn1_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = ~S0 & EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 122).
+    Andn1SaveExec,
+    /// 69 `s_orn1_saveexec_b32`: D = the previous EXEC_LO, then
+    /// EXEC_LO = ~S0 | EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 122).
+    Orn1SaveExec,
+    /// 70 `s_andn1_wrexec_b32`: EXEC_LO = ~S0 & EXEC_LO, then
+    /// D = the new EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 122).
+    Andn1Wrexec,
+    /// 71 `s_andn2_wrexec_b32`: EXEC_LO = S0 & ~EXEC_LO, then
+    /// D = the new EXEC_LO, SCC = (EXEC_LO != 0)
+    /// (RDNA 2 ISA guide 12.3, printed page 122).
+    Andn2Wrexec,
 }
 
 /// SOPK operations decoded by the reference interpreter (RDNA 2 ISA guide
@@ -746,7 +794,7 @@ pub fn decode(code: &[u8]) -> Result<Vec<DecodedInstruction>, ReferenceError> {
             // only), OP in 8-15.
             [
                 source,
-                op @ (7 | 11 | 13 | 15 | 17 | 19 | 21 | 23 | 25 | 26 | 52),
+                op @ (7 | 11 | 13 | 15 | 17 | 19 | 21 | 23 | 25 | 26 | 52 | 60..=71),
                 destination @ 0x80..=0xe9,
                 0xbe,
                 tail @ ..,
@@ -762,6 +810,20 @@ pub fn decode(code: &[u8]) -> Result<Vec<DecodedInstruction>, ReferenceError> {
                     23 => ScalarUnary::FindLastSignBit,
                     25 => ScalarUnary::SignExtendByte,
                     26 => ScalarUnary::SignExtendShort,
+                    // The twelve EXEC-writing forms of guide 12.3, printed
+                    // pages 120-122.
+                    60 => ScalarUnary::AndSaveExec,
+                    61 => ScalarUnary::OrSaveExec,
+                    62 => ScalarUnary::XorSaveExec,
+                    63 => ScalarUnary::Andn2SaveExec,
+                    64 => ScalarUnary::Orn2SaveExec,
+                    65 => ScalarUnary::NandSaveExec,
+                    66 => ScalarUnary::NorSaveExec,
+                    67 => ScalarUnary::XnorSaveExec,
+                    68 => ScalarUnary::Andn1SaveExec,
+                    69 => ScalarUnary::Orn1SaveExec,
+                    70 => ScalarUnary::Andn1Wrexec,
+                    71 => ScalarUnary::Andn2Wrexec,
                     _ => ScalarUnary::Absolute,
                 };
                 let (source, length) = decode_scalar(*source, tail, offset)?;
@@ -1468,28 +1530,57 @@ fn execute_wave(
                 let value = read_scalar(src)?;
                 // -1 (all ones) when no bit is found.
                 let found = |index: u32| if index == 32 { u32::MAX } else { index };
-                let result = match kind {
-                    ScalarUnary::Not => !value,
-                    ScalarUnary::ReverseBits => value.reverse_bits(),
-                    ScalarUnary::CountZeros => value.count_zeros(),
-                    ScalarUnary::CountOnes => value.count_ones(),
-                    ScalarUnary::FindFirstZero => found(value.trailing_ones()),
-                    ScalarUnary::FindFirstOne => found(value.trailing_zeros()),
-                    ScalarUnary::FindLastBit => found(value.leading_zeros()),
+                // The destination value and, for the EXEC-writing forms of
+                // guide 12.3 (printed pages 120-122), the new EXEC_LO. The ten
+                // SAVEEXEC forms leave the previous EXEC_LO in the
+                // destination, the two WREXEC forms the new one.
+                let (result, new_exec) = match kind {
+                    ScalarUnary::Not => (!value, None),
+                    ScalarUnary::ReverseBits => (value.reverse_bits(), None),
+                    ScalarUnary::CountZeros => (value.count_zeros(), None),
+                    ScalarUnary::CountOnes => (value.count_ones(), None),
+                    ScalarUnary::FindFirstZero => (found(value.trailing_ones()), None),
+                    ScalarUnary::FindFirstOne => (found(value.trailing_zeros()), None),
+                    ScalarUnary::FindLastBit => (found(value.leading_zeros()), None),
                     ScalarUnary::FindLastSignBit => {
                         let same = if value >> 31 == 1 {
                             value.leading_ones()
                         } else {
                             value.leading_zeros()
                         };
-                        found(same)
+                        (found(same), None)
                     }
-                    ScalarUnary::SignExtendByte => value as u8 as i8 as i32 as u32,
-                    ScalarUnary::SignExtendShort => value as u16 as i16 as i32 as u32,
-                    ScalarUnary::Absolute => (value as i32).wrapping_abs() as u32,
+                    ScalarUnary::SignExtendByte => (value as u8 as i8 as i32 as u32, None),
+                    ScalarUnary::SignExtendShort => (value as u16 as i16 as i32 as u32, None),
+                    ScalarUnary::Absolute => ((value as i32).wrapping_abs() as u32, None),
+                    ScalarUnary::AndSaveExec => (exec, Some(value & exec)),
+                    ScalarUnary::OrSaveExec => (exec, Some(value | exec)),
+                    ScalarUnary::XorSaveExec => (exec, Some(value ^ exec)),
+                    ScalarUnary::Andn2SaveExec => (exec, Some(value & !exec)),
+                    ScalarUnary::Orn2SaveExec => (exec, Some(value | !exec)),
+                    ScalarUnary::NandSaveExec => (exec, Some(!(value & exec))),
+                    ScalarUnary::NorSaveExec => (exec, Some(!(value | exec))),
+                    ScalarUnary::XnorSaveExec => (exec, Some(!(value ^ exec))),
+                    ScalarUnary::Andn1SaveExec => (exec, Some(!value & exec)),
+                    ScalarUnary::Orn1SaveExec => (exec, Some(!value | exec)),
+                    ScalarUnary::Andn1Wrexec => {
+                        let exec = !value & exec;
+                        (exec, Some(exec))
+                    }
+                    ScalarUnary::Andn2Wrexec => {
+                        let exec = value & !exec;
+                        (exec, Some(exec))
+                    }
                 };
                 scalars[usize::from(dst)] = Some(result);
-                if matches!(
+                if let Some(new_exec) = new_exec {
+                    // The mask does not gate this instruction, but it does
+                    // gate the vector work that follows it.
+                    exec = new_exec;
+                    scalars[EXEC_LO] = Some(new_exec);
+                    runtime_scc = runtime;
+                    scc = Some(new_exec != 0);
+                } else if matches!(
                     kind,
                     ScalarUnary::Not
                         | ScalarUnary::CountZeros

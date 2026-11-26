@@ -102,6 +102,9 @@ spec = [
 ]
 verify = ["reference", "independent", "metal", "llvm_encoding"]
 
+# The guide's table for this form is garbled: it writes the carry-in as
+# if it were the output flag. The carry-in is read and the carry-out is
+# written, which is the reading the errata record records.
 [[form]]
 name = "S_ADDC_U32"
 family = "SOP2"
@@ -122,6 +125,7 @@ spec = [
 ]
 verify = ["reference", "independent", "metal", "llvm_encoding"]
 
+# The guide's table for this form is garbled in the same way as S_ADDC_U32.
 [[form]]
 name = "S_SUBB_U32"
 family = "SOP2"
@@ -480,6 +484,7 @@ spec = [
 ]
 verify = ["reference", "independent", "metal", "llvm_encoding"]
 
+# Older guides omit the SCC write for this form; the RDNA 2 guide states it.
 [[form]]
 name = "S_BFE_U32"
 family = "SOP2"

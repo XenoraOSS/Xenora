@@ -379,6 +379,12 @@ fn decode_gfx1030(bytes: &[u8], offset: usize) -> Result<(Instruction, u8), Deco
             OperandRule::Sop1Sgpr if dst > 105 => {
                 return Err(unsupported(mnemonic, "expected a normal SGPR destination"));
             }
+            OperandRule::Sop1SaveExec if dst > 105 => {
+                // Guide 5.3, printed page 33: an out-of-range destination leaves
+                // no SGPR written, but SCC and EXEC are still written. The form
+                // is refused here rather than executed with a discarded result.
+                return Err(unsupported(mnemonic, "expected a normal SGPR destination"));
+            }
             _ => {}
         }
         let (src, len) = scalar_source(first as u8, bytes, mnemonic)?;

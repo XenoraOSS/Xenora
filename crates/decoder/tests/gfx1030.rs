@@ -600,6 +600,18 @@ fn reference_op(instruction: Instruction) -> Op {
                 ScalarUnaryOp::SextI32I8 => ScalarUnary::SignExtendByte,
                 ScalarUnaryOp::SextI32I16 => ScalarUnary::SignExtendShort,
                 ScalarUnaryOp::AbsI32 => ScalarUnary::Absolute,
+                ScalarUnaryOp::AndSaveExecB32 => ScalarUnary::AndSaveExec,
+                ScalarUnaryOp::OrSaveExecB32 => ScalarUnary::OrSaveExec,
+                ScalarUnaryOp::XorSaveExecB32 => ScalarUnary::XorSaveExec,
+                ScalarUnaryOp::Andn2SaveExecB32 => ScalarUnary::Andn2SaveExec,
+                ScalarUnaryOp::Orn2SaveExecB32 => ScalarUnary::Orn2SaveExec,
+                ScalarUnaryOp::NandSaveExecB32 => ScalarUnary::NandSaveExec,
+                ScalarUnaryOp::NorSaveExecB32 => ScalarUnary::NorSaveExec,
+                ScalarUnaryOp::XnorSaveExecB32 => ScalarUnary::XnorSaveExec,
+                ScalarUnaryOp::Andn1SaveExecB32 => ScalarUnary::Andn1SaveExec,
+                ScalarUnaryOp::Orn1SaveExecB32 => ScalarUnary::Orn1SaveExec,
+                ScalarUnaryOp::Andn1WrexecB32 => ScalarUnary::Andn1Wrexec,
+                ScalarUnaryOp::Andn2WrexecB32 => ScalarUnary::Andn2Wrexec,
             };
             Op::ScalarUnary(unary, dst, src)
         }
@@ -814,6 +826,7 @@ fn compares_fixture_instructions_against_llvm() {
         include_bytes!("../../../fixtures/rdna2/scalar-logic.bin"),
         include_bytes!("../../../fixtures/rdna2/scalar-compare.bin"),
         include_bytes!("../../../fixtures/rdna2/scalar-unary.bin"),
+        include_bytes!("../../../fixtures/rdna2/scalar-saveexec.bin"),
         include_bytes!("../../../fixtures/rdna2/scalar-arith.bin"),
         include_bytes!("../../../fixtures/rdna2/scalar-immediate.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-integer.bin"),
@@ -832,7 +845,7 @@ fn compares_fixture_instructions_against_llvm() {
     ] {
         count += compare_against_llvm(fixture, &mut forms);
     }
-    assert_eq!(forms.len(), 176, "forms compared: {forms:?}");
+    assert_eq!(forms.len(), 188, "forms compared: {forms:?}");
     eprintln!(
         "{count} three-way instruction comparisons across {} forms",
         forms.len()

@@ -188,6 +188,15 @@ fn the_unhandled_exception_filter_can_continue_execution() {
 }
 
 #[test]
+fn debug_break_dispatches_a_continuable_breakpoint() {
+    check(
+        "debug_break",
+        ExitReason::ProcessExit(0x8000_0003),
+        &[0x8000_0003, 67],
+    );
+}
+
+#[test]
 fn execute_handler_and_continue_search_take_the_default_action() {
     check(
         "filter_execute",

@@ -8,18 +8,12 @@ unsupported. The preflight stops at the console bootstrap boundary.
 ## Experimental launch preflight
 
 Build the native CLI, build the original PE32+ fixture, and declare the file
-as a Series X|S target in a local test manifest:
+as a Series X|S target using the fixture builder’s manifest. Set
+`LLD_LINK` to a native `lld-link` if your Rust installation lacks `rust-lld`:
 
 ```sh
 cargo build --locked --target aarch64-apple-darwin -p xenora
 tests/compat_fixtures/build-xbox-launch.sh
-cat > artifacts/xbox-launch/MicrosoftGame.config <<'XML'
-<Game configVersion="1">
-  <ExecutableList>
-    <Executable Name="large-startup.exe" TargetDeviceFamily="Scarlett"/>
-  </ExecutableList>
-</Game>
-XML
 python3 scripts/xbox-launch-preflight.py \
   --xenora target/aarch64-apple-darwin/debug/xenora \
   --config artifacts/xbox-launch/MicrosoftGame.config
@@ -129,6 +123,16 @@ the first unresolved ordinary import before reaching guest entry.
 Other cases check truncated input, invalid mapped-header size, malformed
 relocation and TLS data, the entry step budget, and the distinction between
 ordinary and delay-import inventory.
+
+The build also emits `scarlett-runtime.exe` and its loose
+`MicrosoftGame.config`. The original C entry requests Gaming Runtime
+initialization, checks the result, and requests teardown on success.
+The import library encodes an intentionally synthetic DLL linkage for
+those documented API names. Static inspection counts both imports as
+unresolved. The Windows-shaped worker maps the image and stops at import
+binding before reaching the entry point. This exercises the diagnostics for
+a missing service. The exact console import linkage remains unknown.
+[Gaming Runtime initialization](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/system/xgameruntimeinit/functions/xgameruntimeinitialize)
 
 GNU objdump can independently inspect the linker's PE headers and
 relocation records. It is a static format check. The fixture suite does

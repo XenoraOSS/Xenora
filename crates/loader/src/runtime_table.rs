@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 230] = [
+pub static SERVICES: [ServiceMetadata; 231] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -2539,6 +2539,17 @@ pub static SERVICES: [ServiceMetadata; 230] = [
         reference: "Microsoft Learn, GetConsoleTitleA",
         tests: &["the_hosted_console_has_no_window_and_its_title_round_trips"],
     },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_getpid",
+        parameters: &[],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-runtime-l1-1-0.dll"],
+        failure: "never",
+        reference: "process.h _getpid",
+        tests: &["crt_getpid_matches_the_process_identity"],
+    },
 ];
 
 /// Register every generated service and its API-set aliases.
@@ -4563,6 +4574,13 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a1 = call.u32(1)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: u32 = handlers::console_title_narrow(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_getpid", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::crt_getpid(&mut context)?;
         Ok(result.place(cpu))
     });
     for service in &SERVICES {

@@ -9,7 +9,9 @@
 //! a defect in the production decoder or reference cannot cancel out here.
 //!
 //! Scope matches the demo fixtures: scalar move, eleven SOP1 unary forms
-//! (NOT, BREV, BCNT0/1, FF0/1, FLBIT, FLBIT_I32, SEXT_I8/I16, ABS), the twelve SOPC 32-bit integer
+//! (NOT, BREV, BCNT0/1, FF0/1, FLBIT, FLBIT_I32, SEXT_I8/I16, ABS), the
+//! twelve SOP1 SAVEEXEC and WREXEC forms (AND, OR, XOR, ANDN2, ORN2, NAND,
+//! NOR, XNOR, ANDN1, ORN1, ANDN1_WREXEC and ANDN2_WREXEC), the twelve SOPC 32-bit integer
 //! compares, branch, SOP2 unsigned
 //! and signed add and subtract, add-with-carry, subtract-with-borrow, AND, OR
 //! and XOR, the stage C forms ANDN2, ORN2, NAND, NOR, XNOR, LSHL, LSHR and
@@ -46,6 +48,10 @@
 const MAX_CODE_BYTES: usize = 1024;
 const MAX_INPUT_WORDS: usize = 4096;
 
+/// The SGPR number of EXEC_LO (guide 3.3, printed page 13). EXEC_HI is 127
+/// and is never written by the forms in this subset.
+const EXEC_LO: usize = 126;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Src {
     Reg(u8),
@@ -66,6 +72,10 @@ enum Insn {
     SMov(u8, Src),
     /// SOP1 unary opcode 7, 11, 13, 15, 17, 19, 21, 23, 25, 26 or 52.
     SUnary(u32, u8, Src),
+    /// SOP1 opcode 60-71: the ten SAVEEXEC forms (60-69) and the two WREXEC
+    /// forms (70-71). Each writes the destination and EXEC_LO, in the order
+    /// the guide's pseudocode gives.
+    SSaveExec(u32, u8, Src),
     /// SOP2 opcode 0-10, 14, 16, 18, an even opcode 20-36, 38-40, 44, 46-49,
     /// 53 or 54.
     SAlu(u32, u8, Src, Src),
@@ -172,7 +182,7 @@ fn run_wave(program: &[(usize, Insn)], wave: &[u32]) -> Result<Vec<u32>, String>
         .collect();
     // Scalar state is wave-uniform and shared by all lanes.
     let mut sgpr = [None::<u32>; 128];
-    sgpr[126] = Some(u32::MAX);
+    sgpr[EXEC_LO] = Some(u32::MAX);
     let mut scc: Option<bool> = None;
     // sgpr[106] holds VCC_LO's value; this flag marks it lane-derived.
     let mut vcc_lane_derived = false;
@@ -191,7 +201,7 @@ fn run_wave(program: &[(usize, Insn)], wave: &[u32]) -> Result<Vec<u32>, String>
                 }
             }
         };
-        let execution_mask = match read_s(&sgpr, Src::Reg(126)) {
+        let execution_mask = match read_s(&sgpr, Src::Reg(EXEC_LO as u8)) {
             Ok(mask) => mask,
             Err(error) => return Err(wave_error(&mut lanes, error)),
         };
@@ -270,6 +280,28 @@ fn run_wave(program: &[(usize, Insn)], wave: &[u32]) -> Result<Vec<u32>, String>
                         if let Some(flag) = flag {
                             scc = Some(flag);
                         }
+                        None
+                    })
+                }
+            }
+            Insn::SSaveExec(opcode, dst, src) => {
+                if dst < 8 {
+                    Err(format!("{offset:#x}: write to a resource SGPR"))
+                } else {
+                    let exec_lo = sgpr[EXEC_LO]
+                        .ok_or_else(|| format!("{offset:#x}: uninitialized exec_lo"))?;
+                    read_s(&sgpr, src).map(|value| {
+                        // Guide 12.3, printed pages 120-122: the ten SAVEEXEC
+                        // forms write the previous EXEC_LO to the destination
+                        // and then update EXEC_LO; the two WREXEC forms update
+                        // EXEC_LO first and write the new value. The mask does
+                        // not affect scalar execution, so the form runs even
+                        // when EXEC_LO is zero.
+                        let updated = saveexec_mask(opcode, value, exec_lo);
+                        let destination = if opcode <= 69 { exec_lo } else { updated };
+                        sgpr[dst as usize] = Some(destination);
+                        sgpr[EXEC_LO] = Some(updated);
+                        scc = Some(updated != 0);
                         None
                     })
                 }
@@ -690,6 +722,47 @@ fn scalar_unary(opcode: u32, value: u32) -> (u32, Option<bool>) {
     };
     let flag = matches!(opcode, 7 | 13 | 15 | 52).then_some(result != 0);
     (result, flag)
+}
+
+/// RDNA 2 ISA guide 12.3, printed pages 120-122: the new EXEC_LO of the
+/// twelve SAVEEXEC and WREXEC forms, one bit at a time, so that the oracle
+/// does not use the host's bitwise operators on the mask. The guide's
+/// pseudocode names the bits of S0 and of the old EXEC_LO; the ten SAVEEXEC
+/// forms (60-69) and the two WREXEC forms (70-71) differ only in the order
+/// of the two writes, which the caller applies.
+fn saveexec_mask(opcode: u32, s0: u32, exec: u32) -> u32 {
+    let bits = |value: u32| {
+        let mut bits = [false; 32];
+        let mut rest = u64::from(value);
+        for slot in &mut bits {
+            *slot = rest % 2 == 1;
+            rest /= 2;
+        }
+        bits
+    };
+    let (a, b) = (bits(s0), bits(exec));
+    let word =
+        |bits: [bool; 32]| (0..32).rev().fold(0u64, |w, i| w * 2 + u64::from(bits[i])) as u32;
+    let mut out = [false; 32];
+    for i in 0..32 {
+        // `a` is a bit of S0 and `b` a bit of the old EXEC_LO.
+        out[i] = match opcode {
+            60 => a[i] && b[i],
+            61 => a[i] || b[i],
+            62 => a[i] != b[i],
+            63 => a[i] && !b[i],
+            64 => a[i] || !b[i],
+            65 => !(a[i] && b[i]),
+            66 => !(a[i] || b[i]),
+            67 => !(a[i] != b[i]),
+            68 => !a[i] && b[i],
+            69 => !a[i] || b[i],
+            70 => !a[i] && b[i],
+            71 => a[i] && !b[i],
+            _ => unreachable!("not a SAVEEXEC or WREXEC opcode"),
+        };
+    }
+    word(out)
 }
 
 fn read_vgpr(lane: &Lane, reg: u8, offset: usize) -> Result<u32, String> {
@@ -1418,6 +1491,17 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
         }
         let (src, len) = scalar_source(code, offset, first as u8)?;
         return Ok((Insn::SUnary(sop1_op, dst, src), len));
+    }
+    // The twelve SAVEEXEC and WREXEC forms share the SOP1 encoding. Guide
+    // 12.3, printed pages 120-122: the destination is a normal SGPR, so
+    // EXEC_LO and EXEC_HI are refused as destinations.
+    if first >> 23 == 0b1_0111_1101 && (60..=71).contains(&sop1_op) {
+        let dst = ((first >> 16) & 0x7f) as u8;
+        if dst > 105 {
+            return Err(fail("unsupported SOP1 destination"));
+        }
+        let (src, len) = scalar_source(code, offset, first as u8)?;
+        return Ok((Insn::SSaveExec(sop1_op, dst, src), len));
     }
     if first & 0xff80_ff00 == 0xbe80_0300 {
         let dst = ((first >> 16) & 0x7f) as u8;

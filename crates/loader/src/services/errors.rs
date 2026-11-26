@@ -399,4 +399,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.alias(ERRHANDLING_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Implemented);
     }
+
+    registry.register_context_service(
+        KERNEL32,
+        "DebugBreak",
+        ServiceStatus::Partial,
+        crate::exceptions::debug_break,
+    );
+    registry.alias("api-ms-win-core-debug-l1-1-2.dll", KERNEL32, "DebugBreak");
 }

@@ -9,6 +9,7 @@
 //! - Virtual memory: `VirtualAlloc`, `VirtualFree`
 //! - Xbox physical memory: `XMemAlloc`, `XMemFree`
 
+mod advapi;
 mod codepages;
 mod compare;
 mod console;
@@ -31,6 +32,7 @@ mod errors;
 mod events;
 mod file_mapping;
 mod files;
+pub mod gaming_runtime;
 mod gdk_queue;
 mod graphics;
 mod heap;
@@ -66,6 +68,9 @@ const ERROR_ACCESS_DENIED: u32 = 5;
 const ERROR_INVALID_HANDLE: u32 = 6;
 const ERROR_NOT_ENOUGH_MEMORY: u32 = 8;
 const ERROR_NOT_SUPPORTED: u32 = 50;
+/// Locking a range that overlaps an existing lock fails with this error.
+pub(crate) const ERROR_LOCK_VIOLATION: u32 = 33;
+pub(crate) const ERROR_NOT_LOCKED: u32 = 158;
 const ERROR_INVALID_PARAMETER: u32 = 87;
 /// ERROR_ENVVAR_NOT_FOUND (winerror.h).
 const ERROR_ENVVAR_NOT_FOUND: u32 = 203;
@@ -203,6 +208,8 @@ struct ObjectState {
     handles: BTreeMap<u64, GuestObject>,
     files: BTreeMap<String, Vec<u8>>,
     directories: BTreeSet<String>,
+    /// Locked byte ranges per file path, as (owning handle, offset, length, exclusive).
+    locks: BTreeMap<String, Vec<(u64, u64, u64, bool)>>,
     next_temp: u32,
 }
 
@@ -243,6 +250,9 @@ pub struct ServicesState {
     objects: Mutex<ObjectState>,
     last_errors: Mutex<BTreeMap<u64, u32>>,
     error_mode: Mutex<u32>,
+    /// The mode reported by AreFileApisANSI. The synthetic drive keeps its
+    /// UTF-8 narrow paths in either mode.
+    file_apis_ansi: AtomicBool,
     crt_arguments: Mutex<crt_arguments::CrtArguments>,
     console: Mutex<ConsoleState>,
     startup: Mutex<startup_info::StartupState>,
@@ -322,6 +332,7 @@ impl ServicesState {
             objects: Mutex::new(ObjectState::default()),
             last_errors: Mutex::default(),
             error_mode: Mutex::new(0),
+            file_apis_ansi: AtomicBool::new(true),
             crt_arguments: Mutex::default(),
             startup: Mutex::default(),
             synch: Mutex::default(),
@@ -366,6 +377,14 @@ impl ServicesState {
 
     fn crt_arguments(&self) -> std::sync::MutexGuard<'_, crt_arguments::CrtArguments> {
         self.crt_arguments.lock().expect("program arguments")
+    }
+
+    pub(crate) fn file_apis_use_ansi(&self) -> bool {
+        self.file_apis_ansi.load(Ordering::Relaxed)
+    }
+
+    pub(crate) fn set_file_apis_ansi(&self, ansi: bool) {
+        self.file_apis_ansi.store(ansi, Ordering::Relaxed);
     }
 
     /// Exchange the process error mode, returning the previous one. The
@@ -444,11 +463,11 @@ impl ServicesState {
         }
         *exited = Some(status);
         // The three table locks are taken one at a time, never nested.
-        self.objects
-            .lock()
-            .expect("guest object state")
-            .handles
-            .clear();
+        {
+            let mut objects = self.objects.lock().expect("guest object state");
+            objects.handles.clear();
+            objects.locks.clear();
+        }
         self.winsock
             .lock()
             .expect("guest Winsock state")
@@ -739,6 +758,8 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     errors::register(registry, &state);
     registry::register(registry, &state);
     file_mapping::register(registry, &state);
+    advapi::register(registry, &state);
+    advapi::register_tokens(registry, &state);
     // The legacy CRT's printf family, which the variadic calling convention
     // keeps out of the typed table (#459).
     crt_streams::register_legacy(registry, &state);
@@ -1128,8 +1149,16 @@ pub(crate) mod handlers {
             // closing: reads then drain what remains and answer empty.
             state.lock().expect("pipe state").write_open = false;
         }
-        let closed = matches!(handle, CURRENT_PROCESS | CURRENT_THREAD)
-            || objects.handles.remove(&handle).is_some();
+        let removed = objects.handles.remove(&handle);
+        if let Some(GuestObject::File(file)) = &removed
+            && let Some(ranges) = objects.locks.get_mut(&file.path)
+        {
+            ranges.retain(|&(owner, ..)| owner != handle);
+            if ranges.is_empty() {
+                objects.locks.remove(&file.path);
+            }
+        }
+        let closed = matches!(handle, CURRENT_PROCESS | CURRENT_THREAD) || removed.is_some();
         if closed {
             Ok(true)
         } else {
@@ -2860,6 +2889,13 @@ pub(crate) mod handlers {
     pub fn set_app_type(context: &mut ServiceContext<'_>, kind: i32) -> Outcome<()> {
         context.state.crt_startup().set_app_type(kind);
         Ok(())
+    }
+
+    /// The CRT process-id query reads the same identity as the Win32 one:
+    /// xenora runs exactly one guest process per invocation, so the id is
+    /// stable for the process lifetime.
+    pub fn crt_getpid(context: &mut ServiceContext<'_>) -> Outcome<i32> {
+        Ok(context.state.process_id as i32)
     }
 
     pub fn set_new_mode(context: &mut ServiceContext<'_>, mode: i32) -> Outcome<i32> {

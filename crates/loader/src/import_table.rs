@@ -373,8 +373,11 @@ fn collect_symbols<F: Fn(u32) -> Option<usize>>(
                 .ok()
                 .filter(|rva| rva >> 31 == 0)
                 .ok_or(ImportTableError::ReservedBits { rva: lookup })?;
-            // The name follows a two-byte export-table hint.
-            ImportName::Name(reader.name(hint + 2)?)
+            // Keep name diagnostics for unreadable strings. A valid name
+            // still needs both hint bytes before this record can be admitted.
+            let name = reader.name(hint + 2)?;
+            reader.array::<2>(hint)?;
+            ImportName::Name(name)
         };
         entries.push(ImportEntry {
             module: module.to_owned(),
@@ -388,6 +391,69 @@ fn collect_symbols<F: Fn(u32) -> Option<usize>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn named_import_requires_both_hint_bytes_in_ordinary_and_delay_tables() {
+        const LOOKUP_RVA: u32 = 0x1000;
+        const ADDRESS_RVA: u32 = 0x2000;
+        const HINT_RVA: u32 = 0x3000;
+        let mut bytes = [0; 64];
+        bytes[..8].copy_from_slice(&(ORDINAL_FLAG | 42).to_le_bytes());
+        bytes[8..16].copy_from_slice(&u64::from(HINT_RVA).to_le_bytes());
+        bytes[48] = 0x34;
+        bytes[32] = 0x12;
+        bytes[33..40].copy_from_slice(b"Symbol\0");
+
+        let ordinal = ImportEntry {
+            module: "guest.dll".into(),
+            name: ImportName::Ordinal(42),
+            iat_rva: ADDRESS_RVA,
+        };
+        for slots_on_disk in [false, true] {
+            for (first_backed, second_backed) in
+                [(false, false), (false, true), (true, false), (true, true)]
+            {
+                let reader = Reader {
+                    bytes: &bytes,
+                    rva_to_offset: |rva| match rva {
+                        0x1000..=0x1017 => Some((rva - LOOKUP_RVA) as usize),
+                        0x2000..=0x200f => Some(16 + (rva - ADDRESS_RVA) as usize),
+                        HINT_RVA if first_backed => Some(48),
+                        0x3001 if second_backed => Some(32),
+                        0x3002..=0x3008 => Some(32 + (rva - 0x3001) as usize),
+                        _ => None,
+                    },
+                };
+                let mut entries = Vec::new();
+                let result = collect_symbols(
+                    &reader,
+                    "guest.dll",
+                    LOOKUP_RVA,
+                    ADDRESS_RVA,
+                    slots_on_disk,
+                    &mut entries,
+                );
+
+                if first_backed && second_backed {
+                    assert_eq!(result, Ok(()));
+                    assert_eq!(
+                        entries,
+                        [
+                            ordinal.clone(),
+                            ImportEntry {
+                                module: "guest.dll".into(),
+                                name: ImportName::Name("Symbol".into()),
+                                iat_rva: ADDRESS_RVA + 8,
+                            },
+                        ],
+                    );
+                } else {
+                    assert_eq!(result, Err(ImportTableError::OutOfBounds { rva: HINT_RVA }));
+                    assert_eq!(entries.as_slice(), std::slice::from_ref(&ordinal));
+                }
+            }
+        }
+    }
 
     #[test]
     fn import_names_keep_printable_bytes_and_reject_malformed_strings() {

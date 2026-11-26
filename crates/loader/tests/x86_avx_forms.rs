@@ -315,6 +315,36 @@ fn integer_and_shuffle_forms_match_the_legacy_reference() {
     assert_eq!(flags.len(), 8, "{flags:?}");
 }
 
+#[test]
+fn avx2_signed_multiply_endpoints_wrap_in_both_halves() {
+    let fixtures = fixture();
+    let mut state = Random(0x711).state();
+    // Signed words -32768 fill the low half and +1 fill the high half.
+    let input = joined(
+        0x8000_8000_8000_8000_8000_8000_8000_8000,
+        0x0001_0001_0001_0001_0001_0001_0001_0001,
+    );
+    state.ymm[9] = input;
+    state.ymm[10] = input;
+    for (text, result) in [
+        (
+            "vpmaddwd ymm3, ymm9, ymm10",
+            joined(
+                0x8000_0000_8000_0000_8000_0000_8000_0000,
+                0x0000_0002_0000_0002_0000_0002_0000_0002,
+            ),
+        ),
+        (
+            "vpmulhrsw ymm3, ymm9, ymm10",
+            joined(0x8000_8000_8000_8000_8000_8000_8000_8000, 0),
+        ),
+    ] {
+        let mut wanted = state.clone();
+        wanted.ymm[3] = result;
+        expect(&state, &wanted, &fixtures[text], (0x1F80, 0x1F80), text);
+    }
+}
+
 /// VEX.W selects RAX and RDX over EAX and EDX as the lengths.
 #[test]
 fn string_lengths_are_64_bit_with_w() {

@@ -48,3 +48,11 @@ done
 "$linker" "$@" /timestamp:0 /machine:x64 /entry:launch_entry /subsystem:console /nodefaultlib \
     /base:0x150000000 /out:dependent-startup.exe dependent-startup.obj \
     dependency-one.lib dependency-two.lib
+
+# Produce import metadata only. The fixture ships no implementation DLL.
+"$linker" "$@" /lib /machine:x64 "/def:$src/scarlett-runtime.def" /out:scarlett-runtime.lib
+"$clang" -target x86_64-pc-windows-msvc -ffreestanding -O2 \
+    -c "$src/scarlett-runtime.c" -o scarlett-runtime.obj
+"$linker" "$@" /timestamp:0 /machine:x64 /entry:launch_entry /subsystem:console \
+    /nodefaultlib /out:scarlett-runtime.exe scarlett-runtime.obj scarlett-runtime.lib
+cp "$src/MicrosoftGame.config" "$out/MicrosoftGame.config"

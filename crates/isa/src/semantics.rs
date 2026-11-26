@@ -35,6 +35,10 @@ pub enum Operation {
     AndNot,
     /// Bitwise OR with the complement of S1.
     OrNot,
+    /// Bitwise AND with the complement of S0.
+    AndNot0,
+    /// Bitwise OR with the complement of S0.
+    OrNot0,
     /// Complement of bitwise AND.
     Nand,
     /// Complement of bitwise OR.
@@ -257,6 +261,13 @@ pub enum MaskEffect {
     LaneMask,
     /// Wave32 VOP3A compare mask written to SDST, which may be `vcc_lo`.
     SdstLaneMask,
+    /// The form combines its source with EXEC_LO, writes the result to EXEC_LO
+    /// and leaves the previous EXEC_LO in the destination. Guide 12.3, printed
+    /// pages 120-122.
+    ExecSave,
+    /// The form combines its source with EXEC_LO and writes the result to both
+    /// EXEC_LO and the destination. Guide 12.3, printed page 122.
+    ExecWrite,
 }
 
 /// Wave-size restriction.
@@ -283,6 +294,9 @@ pub enum OperandRule {
     /// SOP1 move: the same sources as Sop1Sgpr, with VCC and EXEC halves
     /// also allowed as explicit destinations.
     Sop1Move,
+    /// SOP1 EXEC-writing: the same sources and destination as Sop1Sgpr, with the
+    /// form also writing EXEC_LO and SCC.
+    Sop1SaveExec,
     /// SOPK integer: SDST is s0-s105 and, except for compares, written (never s0-s7,
     /// which hold resource descriptors); SIMM16 is the 16-bit immediate. The word
     /// never takes a literal. Everything else is rejected as unsupported.

@@ -452,20 +452,41 @@ fn wait_for_worker(
     }
 }
 
-fn verify_fixture(path: &Path) -> Result<&'static [u8], Box<dyn Error>> {
-    let valid_metadata =
-        |metadata: fs::Metadata| metadata.is_file() && metadata.len() == FIXTURE.len() as u64;
-    let rejection =
-        "execution denied: input must match an embedded trusted PE fixture byte for byte";
-    // Check size before opening and again on the descriptor. Bound the read
-    // even if another process changes the file after the metadata checks.
+fn open_regular(
+    path: &Path,
+    expected_len: Option<u64>,
+    rejection: &'static str,
+) -> Result<File, Box<dyn Error>> {
+    let valid_metadata = |metadata: fs::Metadata| {
+        metadata.is_file() && expected_len.is_none_or(|len| metadata.len() == len)
+    };
     if !valid_metadata(fs::metadata(path)?) {
         return Err(rejection.into());
     }
-    let file = File::open(path)?;
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+
+        // Darwin <sys/fcntl.h>. A path can be replaced with a FIFO after
+        // the first check. A nonblocking open lets the descriptor check
+        // refuse it without waiting for a writer.
+        const O_NONBLOCK: i32 = 0x0004;
+        options.custom_flags(O_NONBLOCK);
+    }
+    let file = options.open(path)?;
     if !valid_metadata(file.metadata()?) {
         return Err(rejection.into());
     }
+    Ok(file)
+}
+
+fn verify_fixture(path: &Path) -> Result<&'static [u8], Box<dyn Error>> {
+    let rejection =
+        "execution denied: input must match an embedded trusted PE fixture byte for byte";
+    let file = open_regular(path, Some(FIXTURE.len() as u64), rejection)?;
+    // Bound the read even if another process changes the file after opening.
     let mut bytes = Vec::with_capacity(FIXTURE.len() + 1);
     file.take(FIXTURE.len() as u64 + 1)
         .read_to_end(&mut bytes)?;
@@ -528,11 +549,11 @@ fn start_deadline(
 /// the loader still refuses an image that maps to more than its own limit
 /// (`MAX_MAPPED_IMAGE_BYTES` in `crates/loader/src/pe.rs`).
 fn read_program(path: &Path, digest: Option<[u8; 32]>) -> Result<Vec<u8>, Box<dyn Error>> {
-    let mut file = File::open(path)?;
-    let metadata = file.metadata()?;
-    if !metadata.is_file() {
-        return Err("execution denied: a program must be a regular file".into());
-    }
+    let mut file = open_regular(
+        path,
+        None,
+        "execution denied: a program must be a regular file",
+    )?;
     let mut bytes = Vec::new();
     file.read_to_end(&mut bytes)?;
     if let Some(expected) = digest

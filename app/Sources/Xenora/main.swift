@@ -577,14 +577,18 @@ final class InspectionModel: ObservableObject {
     nonisolated static func run(_ url: URL) -> (Int32, String) {
         let scoped = url.startAccessingSecurityScopedResource()
         defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-        // Check the size before reading so an oversized file is never loaded into memory.
-        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else {
-            return (Int32(XENORA_INVALID_ARGUMENT), "Could not read the file's size.")
-        }
-        guard UInt64(size) <= UInt64(XENORA_MAX_INSPECT_BYTES) else {
-            return (Int32(XENORA_LIMIT_EXCEEDED), "The file is \(size) bytes; inspection accepts at most \(XENORA_MAX_INSPECT_BYTES).")
-        }
-        guard let data = try? Data(contentsOf: url) else {
+        let limit = Int(XENORA_MAX_INSPECT_BYTES)
+        let data: Data
+        do {
+            data = try InspectionInput.read(url, limit: limit)
+        } catch InspectionInputError.notRegular {
+            return (Int32(XENORA_INVALID_ARGUMENT), "Expected a regular file.")
+        } catch InspectionInputError.tooLarge {
+            return (Int32(XENORA_LIMIT_EXCEEDED), "The file exceeds the \(limit)-byte inspection limit.")
+        } catch InspectionInputError.cannotRead(let code) {
+            let error = NSError(domain: NSPOSIXErrorDomain, code: Int(code))
+            return (Int32(XENORA_INVALID_ARGUMENT), "Could not read the file: \(error.localizedDescription)")
+        } catch {
             return (Int32(XENORA_INVALID_ARGUMENT), "Could not read the file.")
         }
         return data.withUnsafeBytes { raw in

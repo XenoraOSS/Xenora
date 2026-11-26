@@ -139,6 +139,11 @@ fn crt_winsys(name: &str) -> PathBuf {
     build("build-crt-winsys.sh", "run-program-crt-winsys", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_winlocks(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-winlocks.sh", "run-program-crt-winlocks", &OUT).join(format!("{name}.exe"))
+}
+
 fn crt_crtutils(name: &str) -> PathBuf {
     static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-crt-crtutils.sh", "run-program-crt-crtutils", &OUT).join(format!("{name}.exe"))
@@ -1160,6 +1165,22 @@ fn a_program_using_the_error_environment_and_system_services_runs() {
     // The control must fail its last check: the exit code is its number.
     let run = run_program(&crt_winsys("crt-winsys-break"), &[], &[]);
     assert_eq!(run.code, Some(26), "control: {:?}", run.stdout);
+}
+
+#[test]
+fn a_program_using_byte_range_locks_and_the_file_mode_services_runs() {
+    for name in ["crt-winlocks-O0", "crt-winlocks-O2"] {
+        let run = run_program(&crt_winlocks(name), &[], &[]);
+        assert_eq!(run.code, Some(0), "{name}: {:?}", run.stdout);
+        assert_eq!(
+            run.stdout, "crt-winlocks: 33/33 checks passed\r\n",
+            "{name}"
+        );
+        assert_eq!(run.stderr, "", "{name}");
+    }
+    // The control must fail its last check: the exit code is its number.
+    let run = run_program(&crt_winlocks("crt-winlocks-break"), &[], &[]);
+    assert_eq!(run.code, Some(34), "control: {:?}", run.stdout);
 }
 
 #[test]

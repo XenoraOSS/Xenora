@@ -11,7 +11,7 @@ use super::crt_files;
 use super::crt_streams::{Failed, Outcome};
 
 const SCAN_BUDGET: u64 = 1_048_576;
-const UCRT: &str = "ucrtbase.dll";
+pub(super) const UCRT: &str = "ucrtbase.dll";
 const CRT_STRING_API: &str = "api-ms-win-crt-string-l1-1-0.dll";
 /// The legacy CRT module that pre-UCRT mingw binaries import directly.
 const MSVCRT: &str = "msvcrt.dll";

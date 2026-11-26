@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 230 |
-| Generated adapters | 230 |
-| Unique handler implementations | 220 |
-| Implemented | 79 |
+| Services with a declared ABI | 231 |
+| Generated adapters | 231 |
+| Unique handler implementations | 221 |
+| Implemented | 80 |
 | Partial | 149 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 230 |
-| API-set aliases (not services) | 271 |
+| Conformance-tested through guest dispatch | 231 |
+| API-set aliases (not services) | 272 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -248,3 +248,4 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `kernel32.dll!GetConsoleTitleW` | `(buffer: ptr, size: u32) -> u32` | partial | 0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size; the answer is the title length even when the buffer holds less, Xenora's documented choice |
 | `kernel32.dll!SetConsoleTitleA` | `(title: ptr) -> bool32` | partial | FALSE with ERROR_INVALID_PARAMETER for a null title |
 | `kernel32.dll!GetConsoleTitleA` | `(buffer: ptr, size: u32) -> u32` | partial | 0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size, the same documented length answer as the wide form |
+| `ucrtbase.dll!_getpid` | `() -> i32` | implemented | never |

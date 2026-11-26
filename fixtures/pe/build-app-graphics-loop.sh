@@ -24,7 +24,7 @@ if [ -z "${LLD_LINK:-}" ] && [ ! -x "$linker" ]; then
     linker="$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"
 fi
 for tool in "$clang" "$linker"; do
-    if [ ! -x "$tool" ] || ! lipo -verify_arch arm64 "$tool"; then
+    if [ ! -x "$tool" ] || ! lipo "$tool" -verify_arch arm64; then
         printf 'Native ARM64 tool required: %s\n' "$tool" >&2
         exit 1
     fi
@@ -43,6 +43,11 @@ cd "$scratch"
 cat > kernel32.def <<'DEF'
 LIBRARY kernel32.dll
 EXPORTS
+    CreateFileW
+    WriteFile
+    ReadFile
+    SetFilePointerEx
+    CloseHandle
     ExitProcess
 DEF
 cat > xenora.def <<'DEF'
@@ -51,6 +56,7 @@ EXPORTS
     frame_begin
     input_poll
     frame_present
+    frame_finish
 DEF
 cat > xenora_graphics.def <<'DEF'
 LIBRARY xenora_graphics.dll

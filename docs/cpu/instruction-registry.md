@@ -43,7 +43,7 @@ C4 and C5 always start a VEX prefix in 64-bit mode. The registry lists VEX forms
 - 66, F2, F3, LOCK or REX before VEX, an opcode map other than 1 to 3, a vector length or W without a form, and VEX.vvvv other than 1111b on a form without that operand are illegal instructions. A REX that a segment override makes ineffective is refused too.
 - Scalar forms ignore VEX.L, where the manual says so.
 
-Implemented: VMOVAPS, VMOVAPD, VMOVUPS, VMOVUPD, VMOVDQA, VMOVDQU, VLDDQU, VMOVNTPS, VMOVNTPD, VMOVNTDQ, VMOVNTDQA, VMOVSS, VMOVSD, VMOVD, VMOVQ, VMOVLPS, VMOVLPD, VMOVHPS, VMOVHPD, VMOVHLPS, VMOVLHPS, VMOVMSKPS, VMOVMSKPD, VMOVDDUP, VMOVSLDUP, VMOVSHDUP, bitwise logic, VBROADCASTSS, VBROADCASTSD, VBROADCASTF128, VINSERTF128, VEXTRACTF128, VPERM2F128, VPERMILPS, VPERMILPD, VLDMXCSR, VSTMXCSR, VZEROUPPER, VZEROALL, and the VEX form of every other legacy instruction in the registry that has one. The packed integer, insert, extract and string forms are 128-bit, as in AVX. Refused are VRCPPS, VRSQRTPS and their scalar forms, VHADDPS, VHSUBPS, VADDSUBPS and their double forms, VTESTPS, VTESTPD, VMASKMOVPS, VMASKMOVPD, VMASKMOVDQU, AES, PCLMULQDQ, AVX2, FMA, F16C and BMI.
+Implemented: VMOVAPS, VMOVAPD, VMOVUPS, VMOVUPD, VMOVDQA, VMOVDQU, VLDDQU, VMOVNTPS, VMOVNTPD, VMOVNTDQ, VMOVNTDQA, VMOVSS, VMOVSD, VMOVD, VMOVQ, VMOVLPS, VMOVLPD, VMOVHPS, VMOVHPD, VMOVHLPS, VMOVLHPS, VMOVMSKPS, VMOVMSKPD, VMOVDDUP, VMOVSLDUP, VMOVSHDUP, bitwise logic, VBROADCASTSS, VBROADCASTSD, VBROADCASTF128, VINSERTF128, VEXTRACTF128, VPERM2F128, VPERMILPS, VPERMILPD, VLDMXCSR, VSTMXCSR, VZEROUPPER, VZEROALL, and the VEX form of every other legacy instruction in the registry that has one. AVX2 adds 256-bit forms for packed integer arithmetic, comparisons, min/max, saturation, packing, unpacking, horizontal arithmetic, absolute value and byte shuffles. These operations process each 128-bit half separately. Refused are VRCPPS, VRSQRTPS and their scalar forms, VHADDPS, VHSUBPS, VADDSUBPS and their double forms, VTESTPS, VTESTPD, VMASKMOVPS, VMASKMOVPD, VMASKMOVDQU, AES, PCLMULQDQ, AVX2 gathers, masked moves, variable shifts and cross-lane permutations, FMA, F16C and most BMI forms.
 
 - A 256-bit form of a legacy operation computes both halves as that operation does. The exceptions of both halves are collected before any is reported. VDPPS computes the low half first, as the operation section of the Intel SDM lists them, and stops there on an unmasked exception.
 - Scalar forms take the bits above the result from VEX.vvvv.
@@ -149,3 +149,38 @@ A feature bit is set only when every instruction of that feature is implemented.
 ## Rejected on purpose
 
 LOCK except as described above, F2 or F3 where it is neither PAUSE nor part of a declared form, F2 combined with F3, address-size overrides, an ignored segment override after FS or GS, 16-bit stack and branch forms, 16-bit BSWAP and MOVSXD, bit tests of memory by a register index, LODS, CMPS, SCAS, REPE and REPNE, every x87 instruction except FNINIT, MMX, the RCP and RSQRT approximations, SSE3, the MMX forms of SSSE3, SSE4a, AES, PCLMULQDQ, SHA, MOVBE, VEX except as described above, EVEX, XOP, CMPXCHG8B and CMPXCHG16B. The DBT also refuses raw SYSCALL.
+
+
+## CPU semantic expansion audit
+
+The first AVX2 batch widens 73 existing registry rows from 128-bit-only to
+128- and 256-bit operands. It adds 359 assembly cases. Opcode-slot counts
+stay constant because the vector-length predicate belongs to an existing row.
+The current CPU inventory omits that predicate, so its slot total alone cannot
+measure this expansion.
+
+Identification and decoding follow the generated VEX table. Interpreter and
+dynamic binary translator execution use the same software vector operations.
+All VEX forms use the DBT helper, with no direct ARM64 NEON lowering.
+Assembly-text references and explicit signed-multiply boundary values check
+architectural results separately from execution. Independent acceptance of
+the full expanded set remains pending.
+
+The remaining extension work has these implementation dependencies.
+
+- Gather needs vector-index SIB decoding and restartable per-lane destination
+  and mask updates on faults.
+- Masked loads and stores need enabled-element address and permission checks.
+- Per-element variable shifts and whole-YMM permutations need dedicated
+  operations. Existing F128 bitwise lane movement can serve integer lane moves.
+- FMA3 needs an exact product-plus-add primitive with one final rounding,
+  operand permutations and instruction-specific MXCSR exception handling.
+- F16C needs binary16 conversion and its DAZ, FTZ and rounding-control rules.
+- BMI1 currently has TZCNT. Other BMI1 and BMI2 operations need scalar VEX
+  dispatch and instruction-specific flag handling.
+- XSAVE, XRSTOR and XGETBV need a coherent guest XCR0 policy, CPUID state
+  enumeration, save-area validation and extended exception-context handling.
+
+CPUID continues to withhold these incomplete feature groups. No speedup is
+claimed. Direct host lowering requires measurements and semantic equivalence.
+The architectural reference is the public [Intel instruction-set manual](https://cdrdv2-public.intel.com/843829/325383-sdm-vol-2abcd-dec-24.pdf).

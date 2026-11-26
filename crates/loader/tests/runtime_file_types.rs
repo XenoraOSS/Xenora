@@ -26,6 +26,8 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "AreFileApisANSI"),
     (KERNEL32, "GetLogicalDrives"),
     (KERNEL32, "GetDriveTypeA"),
+    (KERNEL32, "GetDiskFreeSpaceA"),
+    (KERNEL32, "GetDiskFreeSpaceW"),
     (KERNEL32, "GetDiskFreeSpaceExW"),
     (KERNEL32, "SetHandleInformation"),
     (KERNEL32, "GetFileSize"),
@@ -51,6 +53,8 @@ const CREATE_ALWAYS: u64 = 2;
 const INVALID_HANDLE_VALUE: u64 = u64::MAX;
 const ERROR_INVALID_HANDLE: u64 = 6;
 const ERROR_ACCESS_DENIED: u64 = 5;
+const ERROR_NOT_LOCKED: u64 = 158;
+const ERROR_NOACCESS: u64 = 998;
 const STD_OUTPUT_HANDLE: u64 = 0xFFFF_FFF5; // -11
 
 fn wide(guest: &mut Guest, text: &str) -> u64 {
@@ -153,6 +157,48 @@ fn the_volume_queries_describe_the_one_disk() {
     assert_eq!(guest.u64_at(TOTAL_FREE), gig);
 }
 
+#[test]
+fn legacy_disk_space_queries_use_the_explicit_root_and_check_all_outputs() {
+    const OUT: [u64; 4] = [
+        SCRATCH + 0x100,
+        SCRATCH + 0x104,
+        SCRATCH + 0x108,
+        SCRATCH + 0x10c,
+    ];
+    const NARROW: u64 = SCRATCH + 0x40;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    let file = create_file(&mut guest, "one-byte.bin", GENERIC_WRITE);
+    assert_ne!(file, INVALID_HANDLE_VALUE);
+    guest.memory.write_bytes(SCRATCH + 0x80, b"x").unwrap();
+    assert_eq!(
+        guest.call("WriteFile", &[file, SCRATCH + 0x80, 1, SCRATCH + 0x84, 0]),
+        1
+    );
+    let root = wide(&mut guest, "C:\\");
+    narrow_at(&mut guest, NARROW, "C:\\");
+    for (symbol, path) in [
+        ("GetDiskFreeSpaceW", root),
+        ("GetDiskFreeSpaceA", NARROW),
+        ("GetDiskFreeSpaceW", 0),
+    ] {
+        assert_eq!(
+            guest.call(symbol, &[path, OUT[0], OUT[1], OUT[2], OUT[3]]),
+            1
+        );
+        assert_eq!(OUT.map(|at| guest.u32_at(at)), [1, 4096, 4095, 4096]);
+    }
+    guest.memory.write_u32(OUT[0], 123).unwrap();
+    assert_eq!(
+        guest.call(
+            "GetDiskFreeSpaceW",
+            &[root, OUT[0], OUT[1], OUT[2], u64::MAX]
+        ),
+        0
+    );
+    assert_eq!(last_error(&mut guest), ERROR_NOACCESS);
+    assert_eq!(guest.u32_at(OUT[0]), 123);
+}
+
 /// SetHandleInformation accepts a valid handle and refuses an unknown one;
 /// GetFileSize answers the low word with the high word through its pointer.
 #[test]
@@ -184,24 +230,47 @@ fn narrow_at(guest: &mut Guest, at: u64, text: &str) -> u64 {
     at
 }
 
-/// MoveFileExA renames with REPLACE_EXISTING, refuses the reboot flag, and
-/// the byte-range locks accept any valid file handle.
+/// MoveFileExA renames a file after its lock is released and refuses the reboot flag.
 #[test]
 fn move_file_ex_and_the_byte_range_locks() {
     const NAME_A: u64 = SCRATCH;
     const NAME_B: u64 = SCRATCH + 0x40;
     const OUT2: u64 = SCRATCH + 0x400;
     const GOT: u64 = SCRATCH + 0x808;
+    const OVERLAPPED: u64 = SCRATCH + 0x840;
     let mut guest = Guest::new(IMPORTS, &[]);
     let handle = create_file(&mut guest, "moved.bin", GENERIC_WRITE);
     assert_ne!(handle, INVALID_HANDLE_VALUE);
     guest.memory.write_bytes(OUT2, b"payload").unwrap();
     assert_eq!(guest.call("WriteFile", &[handle, OUT2, 7, GOT, 0]), 1);
-    // The locks of a machine with one executor accept a valid file handle.
-    assert_eq!(guest.call("LockFileEx", &[handle, 0, 0, 1, 0, OUT2]), 1);
-    assert_eq!(guest.call("UnlockFileEx", &[handle, 0, 1, 0, OUT2]), 1);
-    assert_eq!(guest.call("LockFileEx", &[0xDEAD, 0, 0, 1, 0, OUT2]), 0);
+    guest.memory.write_bytes(OVERLAPPED, &[0; 32]).unwrap();
+    assert_eq!(
+        guest.call("LockFileEx", &[handle, 0, 0, 1, 0, OVERLAPPED]),
+        1
+    );
+    assert_eq!(
+        guest.call("UnlockFileEx", &[handle, 0, 1, 0, OVERLAPPED]),
+        1
+    );
+    assert_eq!(
+        guest.call("UnlockFileEx", &[handle, 0, 1, 0, OVERLAPPED]),
+        0
+    );
+    assert_eq!(last_error(&mut guest), ERROR_NOT_LOCKED);
+    assert_eq!(
+        guest.call("LockFileEx", &[0xDEAD, 0, 0, 1, 0, OVERLAPPED]),
+        0
+    );
     assert_eq!(last_error(&mut guest), ERROR_INVALID_HANDLE);
+    // A valid file handle with metadata-only access cannot lock data.
+    let metadata = create_file_disposition(&mut guest, "moved.bin", 0, 3); // OPEN_EXISTING
+    assert_ne!(metadata, INVALID_HANDLE_VALUE);
+    assert_eq!(
+        guest.call("LockFileEx", &[metadata, 0, 0, 1, 0, OVERLAPPED]),
+        0
+    );
+    assert_eq!(last_error(&mut guest), ERROR_ACCESS_DENIED);
+    assert_eq!(guest.call("CloseHandle", &[metadata]), 1);
     assert_eq!(guest.call("CloseHandle", &[handle]), 1);
     // A plain rename, then one over an existing target without the flag
     // refused and with it accepted.

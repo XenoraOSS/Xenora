@@ -237,7 +237,7 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("F16C", 1, ECX, 29, &[0xC4, 0xE2, 0x79, 0x13, 0xC1]), // vcvtph2ps xmm0, xmm1
         ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]),     // rdrand eax
         ("BMI1", 7, EBX, 3, &[0xC4, 0xE2, 0x70, 0xF2, 0xC2]), // andn eax, ecx, edx
-        ("AVX2", 7, EBX, 5, &[0xC5, 0xF5, 0xFE, 0xC2]),  // vpaddd ymm0, ymm1, ymm2
+        ("AVX2", 7, EBX, 5, &[0xC4, 0xE2, 0x75, 0x47, 0xC2]), // vpsllvd ymm0, ymm1, ymm2
         ("BMI2", 7, EBX, 8, &[0xC4, 0xE2, 0x73, 0xF6, 0xC2]), // mulx eax, ecx, edx
         ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),     // rdseed eax
         ("ADX", 7, EBX, 19, &[0x66, 0x0F, 0x38, 0xF6, 0xC1]), // adcx eax, ecx

@@ -5,7 +5,7 @@
  * exceptions. tests/compat_fixtures/build-guest-c-seh.sh builds one
  * executable per case with clang -fasync-exceptions, choosing the case with
  * -DCASE=<name>. The program is freestanding: it has no C runtime, so its only
- * imports are the five services named below. #476 added the cases that use
+ * imports are the services named below. #476 added the cases that use
  * the unhandled-exception filter and change the exception context.
  *
  * Every case reports what ran by calling xenora_note, a service the test
@@ -24,6 +24,7 @@ typedef unsigned long long u64;
 
 __declspec(dllimport) void ExitProcess(unsigned int status);
 __declspec(dllimport) void RaiseException(u32 code, u32 flags, u32 count, const u64 *arguments);
+__declspec(dllimport) void DebugBreak(void);
 __declspec(dllimport) void xenora_note(u64 value);
 
 struct pointers;
@@ -227,6 +228,18 @@ static int filter_continue(void) {
     RaiseException(0xE0005EA3, 0, 0, 0);
     xenora_note(61);
     return 51;
+}
+
+/* A filter can continue past DebugBreak. With the filter removed, the
+ * second breakpoint ends the process with STATUS_BREAKPOINT. */
+static int debug_break(void) {
+    SetUnhandledExceptionFilter(note_and_continue);
+    DebugBreak();
+    xenora_note(67);
+    SetUnhandledExceptionFilter(0);
+    DebugBreak();
+    xenora_note(99);
+    return 1;
 }
 
 /* The unhandled-exception filter returns EXCEPTION_EXECUTE_HANDLER for a

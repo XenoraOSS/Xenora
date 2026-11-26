@@ -653,6 +653,149 @@ decoded = true
 llvm = "three-way passed"
 
 [[instruction]]
+form = "s_and_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = S0 & EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE8A3C00`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_or_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = S0 | EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE8B3D00`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_xor_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = S0 ^ EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE8C3E00`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_andn2_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = S0 & ~EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE8D3F00`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_orn2_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = S0 | ~EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE8E4000`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_nand_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = ~(S0 & EXEC_LO); SCC = EXEC_LO != 0"
+representation = "`BE8F4100`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_nor_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = ~(S0 | EXEC_LO); SCC = EXEC_LO != 0"
+representation = "`BE904200`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_xnor_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = ~(S0 ^ EXEC_LO); SCC = EXEC_LO != 0"
+representation = "`BE914300`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_andn1_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = ~S0 & EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE924400`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_orn1_saveexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; D = previous EXEC_LO; EXEC_LO = ~S0 | EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE934500`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_andn1_wrexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; EXEC_LO = ~S0 & EXEC_LO; D = new EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE944600`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "s_andn2_wrexec_b32"
+encoding = "SOP1, normal SGPR destination; normal SGPR, inline integer or literal source; EXEC_LO = S0 & ~EXEC_LO; D = new EXEC_LO; SCC = EXEC_LO != 0"
+representation = "`BE954700`"
+lowering = "resolved scalar state, execution mask and SCC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+[[instruction]]
 form = "s_cmp_eq_u32"
 encoding = "Normal SGPR or integer operands, with at most one source selecting a literal"
 representation = "`BF068708`"

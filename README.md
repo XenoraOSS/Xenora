@@ -42,6 +42,13 @@ check the synthetic pixels on the GPU from a terminal, run:
 build/Xenora.app/Contents/MacOS/Xenora --smoke-frame
 ```
 
+In **Run executable (experimental)**, use **Choose input file…** under
+**Standard input** to select a regular file of at most 1 MiB. When you click
+**Run**, the app sends the file's bytes to the guest worker as standard
+input. Use **Clear input file** to remove the selection. Opening another
+executable also clears it. With no file selected, the guest sees end-of-file
+immediately.
+
 Closing the app and running `scripts/build-app.sh` again rebuilds the same
 bundle. Commercial Xbox game execution is unsupported.
 
@@ -65,6 +72,27 @@ RGBA bytes and the backend, followed by the guest exit status and journal.
 Each run accepts up to 32 directions and uses one instruction budget across
 the application. `--steps` changes that budget, and the supervising process
 stops a worker that exceeds the 15-second wall deadline.
+
+To replay a saved sequence, put the version on the first line of a text file,
+followed by one to 32 directions, one per line. Save the following example to
+`sequence.txt`.
+
+```text
+xenora-session-v1
+right
+left
+left
+right
+```
+
+```sh
+cargo run --locked -p xenora --bin xenora-session -- --backend reference --replay sequence.txt --frame-dir replay-frames
+```
+
+Use a regular file of at most 256 bytes, with LF or CRLF line endings and an
+optional final newline. Choose one source for directions per run, either
+`--replay` or positional arguments. The backend and instruction budget are
+selected on the command line.
 
 The command supports the embedded synthetic application. External PE
 admission and a macOS interface for this session are future work.

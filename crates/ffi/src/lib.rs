@@ -601,6 +601,45 @@ pub unsafe extern "C" fn xenora_session_get_recorded_frame(
 }
 
 /// # Safety
+/// `out_required` must be valid for an aligned write. `out_records` may be null
+/// only for a zero-capacity query. Otherwise it must be valid for `capacity`
+/// byte writes and not overlap `out_required`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn xenora_session_frame_loop_journal(
+    session: u64,
+    out_records: *mut u8,
+    capacity: u64,
+    out_required: *mut u64,
+) -> i32 {
+    guarded(|| {
+        if out_required.is_null() || (capacity != 0 && out_records.is_null()) {
+            return XENORA_INVALID_ARGUMENT;
+        }
+        // SAFETY: out_required is non-null and the caller guarantees validity.
+        unsafe { out_required.write(0) };
+        let running = match session_loop(session) {
+            Ok(Some(running)) => running,
+            Ok(None) => return XENORA_INVALID_STATE,
+            Err(status) => return status,
+        };
+        let Some(records) = running.verified_journal() else {
+            return XENORA_INVALID_STATE;
+        };
+        let length = records.len();
+        // SAFETY: the same output pointer was checked above.
+        unsafe { out_required.write(length as u64) };
+        if capacity < length as u64 {
+            return XENORA_BUFFER_TOO_SMALL;
+        }
+        if length != 0 {
+            // SAFETY: for a nonempty copy capacity is sufficient and out_records is non-null.
+            unsafe { std::ptr::copy_nonoverlapping(records.as_ptr(), out_records, length) };
+        }
+        XENORA_OK
+    })
+}
+
+/// # Safety
 /// Each output pointer must be null or valid for one aligned `u32` write.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn xenora_session_inspect_trusted_fixture(

@@ -154,6 +154,24 @@ xenora_status xenora_session_frame_loop_status(
     uint8_t *out_rgba,
     uint64_t capacity);
 
+/*
+ * Read the verified guest journal once a frame loop has cleanly finished or
+ * stopped. Each byte records one completed frame. The low two bits hold
+ * the column. Standard mode uses 0x10; interactive neutral, right and left
+ * use 0x20, 0x24 and 0x28 respectively, before adding the column.
+ *
+ * out_required is mandatory. Query with NULL out_records and zero capacity.
+ * An insufficient buffer returns XENORA_BUFFER_TOO_SMALL, reports the full
+ * size and leaves out_records unchanged. A verified empty journal returns
+ * XENORA_OK with size zero. No finalized journal returns XENORA_INVALID_STATE
+ * and size zero. The maximum size is XENORA_FRAME_LOOP_MAX_FRAMES bytes.
+ */
+xenora_status xenora_session_frame_loop_journal(
+    xenora_session session,
+    uint8_t *out_records,
+    uint64_t capacity,
+    uint64_t *out_required);
+
 /* Largest file xenora_inspect_executable accepts, in bytes. */
 #define XENORA_MAX_INSPECT_BYTES 268435456u
 

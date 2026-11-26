@@ -8,6 +8,7 @@ typedef unsigned long long u64;
 
 IMPORT u32 XenoraNextEvent(void);
 IMPORT u32 XenoraPresent(u32 sequence);
+IMPORT void XenoraFinish(u32 frames);
 
 IMPORT u64 CreateFileW(const u16 *path, u32 access, u32 share, void *security,
                        u32 disposition, u32 flags, u64 template);
@@ -137,5 +138,6 @@ void entry(void) {
     require(XenoraDestroyCommandQueue(queue) == S_OK, 11);
     require(XenoraDestroyDevice(device) == S_OK, 11);
     require(CloseHandle(latch) && CloseHandle(file), 12);
+    XenoraFinish(frames);
     ExitProcess(0);
 }

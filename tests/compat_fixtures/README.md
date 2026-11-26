@@ -501,6 +501,20 @@ and `-O2`, and once at `-O1` with `CRT_WINSYS_BREAK` as a control.
 Provenance is as for Gate A2: the source and scripts are Xenora's, and the
 executables are test output that contains mingw-w64 startup code.
 
+## Byte-range locks and the file-mode services
+
+`tests/compat_fixtures/crt_winlocks.c` is a hosted C program for the
+kernel32 services that a database engine such as sqlite3 imports besides
+plain file I/O. It takes and releases exclusive locks with `LockFile` and
+shared and exclusive locks with `LockFileEx` through an `OVERLAPPED`,
+checks the conflict and unlock errors, switches the file-API code page
+mode, reads the free space of the current root, validates the process
+heap, flushes a mapped view and compares `_getpid` with
+`GetCurrentProcessId`. Built by `build-crt-winlocks.sh` with mingw-w64, it
+is built at `-O0` and `-O2`, and once at `-O1` with `CRT_WINLOCKS_BREAK` as
+a control. `crates/cli/tests/run_program.rs` runs all three through
+`xenora run`. Provenance is as for Gate A2.
+
 `tests/compat_fixtures/crt_crtutils.c` (the survey residue of #459) is a
 hosted C program that exercises the small CRT utilities: narrow string
 copying and concatenation, `strrchr`, `_strdup`, the in-place case

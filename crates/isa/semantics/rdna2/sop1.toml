@@ -187,6 +187,9 @@ spec = [
 ]
 verify = ["reference", "independent", "metal", "llvm_encoding"]
 
+# The guide prints this name twice in its table, once for the find-last-bit
+# form and once for this sign-bit-run count. This row is the sign-bit
+# run count, which is what opcode 23 does.
 [[form]]
 name = "S_FLBIT_I32"
 family = "SOP1"
@@ -246,6 +249,263 @@ operands = "sop1_sgpr"
 spec = [
   { document = "guide", section = "12.3", page = 0 },
   { document = "guide", section = "5.3", page = 33 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+# ---- SOP1 32-bit EXEC-writing forms (#740) ----
+# The ten SAVEEXEC forms save the previous EXEC_LO in the destination and then
+# combine S0 with it; the two WREXEC forms write the combined result to both
+# EXEC_LO and the destination. All twelve set SCC = (EXEC_LO != 0).
+# Under Wave32 the upper half of EXEC is ignored (guide 3.3), so these forms
+# touch EXEC_LO only. Guide 5.7 and 12.3, printed pages 36 and 120-122.
+
+[operand_rules.sop1_saveexec]
+family = "SOP1"
+dst = { field = "SDST", class = "sgpr", min = 0, max = 105 }
+src = [{ field = "SSRC0", class = "scalar_source" }]
+max_literals = 1
+unsupported = [
+  "dst_vcc", "dst_exec", "dst_ttmp", "dst_m0", "dst_null",
+  "src_vcc", "src_exec", "src_m0", "src_ttmp", "src_float_inline", "src_special",
+]
+
+[[form]]
+name = "S_AND_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 60
+variant = "AndSaveExecB32"
+operation = "and"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 120 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_OR_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 61
+variant = "OrSaveExecB32"
+operation = "or"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 121 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_XOR_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 62
+variant = "XorSaveExecB32"
+operation = "xor"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 121 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_ANDN2_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 63
+variant = "Andn2SaveExecB32"
+operation = "andn2"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 121 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_ORN2_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 64
+variant = "Orn2SaveExecB32"
+operation = "orn2"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 121 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_NAND_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 65
+variant = "NandSaveExecB32"
+operation = "nand"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 121 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_NOR_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 66
+variant = "NorSaveExecB32"
+operation = "nor"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 121 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_XNOR_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 67
+variant = "XnorSaveExecB32"
+operation = "xnor"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 121 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_ANDN1_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 68
+variant = "Andn1SaveExecB32"
+operation = "andn1"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 122 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_ORN1_SAVEEXEC_B32"
+family = "SOP1"
+opcode = 69
+variant = "Orn1SaveExecB32"
+operation = "orn1"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_save"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 122 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_ANDN1_WREXEC_B32"
+family = "SOP1"
+opcode = 70
+variant = "Andn1WrexecB32"
+operation = "andn1"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_write"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 122 },
+  { document = "guide", section = "5.7", page = 36 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "S_ANDN2_WREXEC_B32"
+family = "SOP1"
+opcode = 71
+variant = "Andn2WrexecB32"
+operation = "andn2"
+signedness = "bitwise"
+carry_in = "none"
+width = 32
+scc = "nonzero"
+vcc = "unchanged"
+exec = "exec_write"
+wave = "any"
+operands = "sop1_saveexec"
+spec = [
+  { document = "guide", section = "12.3", page = 122 },
+  { document = "guide", section = "5.7", page = 36 },
 ]
 verify = ["reference", "independent", "metal", "llvm_encoding"]
 

@@ -101,7 +101,7 @@ def snapshot():
             ["SSRC0", [[0, 8]]], ["OP", [[8, 8]]], ["SDST", [[16, 7]]], ["ENCODING", [[23, 9]]],
         ],
         "identifier_mask": 0xFF80FF00,
-        "identifiers": [0xBE800000 | (op << 8) for op in (7, 11, 25)],
+        "identifiers": [0xBE800000 | (op << 8) for op in (7, 11, 25, 60)],
     }
 
     def unary(dst, src, size, scc):
@@ -113,10 +113,22 @@ def snapshot():
             rows.append(["", "FMT_NUM_B1", "OPR_SSRC_SPECIAL_SCC", 1, False, True, True, True])
         return rows
 
+    def saveexec(src, size):
+        # The EXEC-writing forms of guide 12.3: the XML lists the mask as an
+        # implicit read and an implicit write, next to the SCC output.
+        return [
+            ["SDST", "FMT_NUM_U32", "OPR_SREG", 32, False, True, False, True],
+            ["SSRC0", src, "OPR_SSRC_NOLDS", size, True, False, False, True],
+            ["", "FMT_NUM_M64", "OPR_SDST_EXEC", 64, True, False, True, True],
+            ["", "FMT_NUM_B1", "OPR_SSRC_SPECIAL_SCC", 1, False, True, True, True],
+            ["", "FMT_NUM_M64", "OPR_SDST_EXEC", 64, False, True, True, True],
+        ]
+
     for name, opcode, operands in (
         ("S_NOT_B32", 7, unary(U32, U32, 32, True)),
         ("S_BREV_B32", 11, unary(U32, U32, 32, False)),
         ("S_SEXT_I32_I8", 25, unary(I32, "FMT_NUM_I8", 8, False)),
+        ("S_AND_SAVEEXEC_B32", 60, saveexec(U32, 32)),
     ):
         variants[(name, "ENC_SOP1")] = {
             "instruction": name, "encoding": "ENC_SOP1", "opcode": opcode, "operands": operands,
@@ -236,6 +248,18 @@ def unaries():
         unary("S_BREV_B32", 11, "BrevB32", "brev", "bitwise", "unchanged"),
         unary("S_SEXT_I32_I8", 25, "SextI32I8", "sext", "signed", "unchanged", source_bits=8),
     ]
+    return reg
+
+
+def saveexec():
+    """A registry with the ten SAVEEXEC forms' rule and one of them."""
+    reg = unaries()
+    rule = copy.deepcopy(gen.OPERAND_RULES["sop1_saveexec"]["shape"])
+    rule["unsupported"] = sorted(gen.OPERAND_RULES["sop1_saveexec"]["unsupported"])
+    reg["operand_rules"]["sop1_saveexec"] = rule
+    form = _form("S_AND_SAVEEXEC_B32", 60, "AndSaveExecB32", "and", "bitwise", "nonzero")
+    form.update(family="SOP1", operands="sop1_saveexec", exec="exec_save")
+    reg["form"].append(form)
     return reg
 
 
@@ -660,8 +684,8 @@ class Validate(unittest.TestCase):
 
     def test_renders_unary_scc_as_optional(self):
         text = gen.render(unaries(), snapshot())
-        self.assertIn("Self::BrevB32 => (primitive::brev_b32(src), None),", text)
-        self.assertIn("Self::SextI32I8 => (primitive::sext_i32(src, 8), None),", text)
+        self.assertIn("Self::BrevB32 => (primitive::brev_b32(src), exec, None),", text)
+        self.assertIn("Self::SextI32I8 => (primitive::sext_i32(src, 8), exec, None),", text)
         self.assertIn("let (value, scc) = primitive::not_nonzero_b32(src);", text)
 
     def test_accepts_ariths(self):
@@ -1074,7 +1098,41 @@ class Validate(unittest.TestCase):
     def test_rejects_an_exec_write(self):
         reg = vector_compares()
         form(reg, "V_CMP_LT_I32")["exec"] = "lane_mask"
-        self.rejects(reg, "V_CMP_LT_I32: exec lane_mask has no contract (requires unchanged)")
+        self.rejects(reg, "V_CMP_LT_I32: unknown exec 'lane_mask'")
+
+    def test_accepts_an_exec_write_on_a_saveexec_form(self):
+        reg = saveexec()
+        self.assertEqual(self.errors(reg), [])
+        text = gen.render(reg, snapshot())
+        # The destination keeps the previous mask and the mask is updated.
+        self.assertIn("Self::AndSaveExecB32 => {", text)
+        self.assertIn("let (value, scc) = primitive::and_nonzero_b32(src, exec);", text)
+        self.assertIn("(exec, value, Some(scc))", text)
+        self.assertIn("exec: MaskEffect::ExecSave,", text)
+
+    def test_rejects_an_exec_write_outside_the_sop1_contract(self):
+        reg = saveexec()
+        form(reg, "S_AND_SAVEEXEC_B32")["family"] = "VOP1"
+        self.rejects(reg, "S_AND_SAVEEXEC_B32: exec exec_save is only defined for 32-bit SOP1 forms")
+
+    def test_rejects_an_exec_write_without_the_saveexec_rule(self):
+        reg = saveexec()
+        form(reg, "S_AND_SAVEEXEC_B32")["operands"] = "sop1_sgpr"
+        self.rejects(reg, "S_AND_SAVEEXEC_B32: exec exec_save requires the sop1_saveexec rule")
+
+    def test_rejects_an_exec_write_with_an_unchanged_scc(self):
+        reg = saveexec()
+        form(reg, "S_AND_SAVEEXEC_B32")["scc"] = "unchanged"
+        self.rejects(reg, "S_AND_SAVEEXEC_B32: exec exec_save requires the nonzero SCC effect")
+
+    def test_rejects_an_exec_write_the_xml_does_not_show(self):
+        reg = saveexec()
+        snap = snapshot()
+        rows = snap["variants"][("S_AND_SAVEEXEC_B32", "ENC_SOP1")]["operands"]
+        snap["variants"][("S_AND_SAVEEXEC_B32", "ENC_SOP1")]["operands"] = [
+            row for row in rows if row[2] != "OPR_SDST_EXEC"
+        ]
+        self.rejects(reg, "S_AND_SAVEEXEC_B32: exec exec_save needs one implicit EXEC read and one implicit EXEC write", snap)
 
     def test_rejects_a_vector_compare_that_writes_scc(self):
         reg = vector_compares()

@@ -49,6 +49,7 @@ LIBRARY xenora_session.dll
 EXPORTS
     XenoraNextEvent
     XenoraPresent
+    XenoraFinish
 DEF
 cat > xenora_graphics.def <<'DEF'
 LIBRARY xenora_graphics.dll

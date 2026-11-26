@@ -12,6 +12,9 @@ use xenora_loader::{ExitReason, ImportRegistry};
 use xenora_metal::NativeCompute;
 use xenora_shader::{Architecture, PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics};
 
+#[cfg(test)]
+mod tests;
+
 const GUEST: &[u8] = include_bytes!("../../../../../fixtures/pe/persistent-guest.exe");
 const VERTEX_SHADER: &[u8] = include_bytes!("../../../../../fixtures/rdna2/x9-constant-vs.bin");
 const PIXEL_SHADER: &[u8] = include_bytes!("../../../../../fixtures/rdna2/x9-constant-ps.bin");
@@ -195,8 +198,9 @@ pub(super) fn run(
 #[derive(Default)]
 struct GuestProgress {
     presented: usize,
-    pending: bool,
+    pending: Option<Direction>,
     stopping: bool,
+    finished: bool,
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> Result<std::sync::MutexGuard<'_, T>, ExitReason> {
@@ -210,6 +214,7 @@ fn install_exchange(
     presentation: Arc<Mutex<FramePresentation>>,
     native_draws: Arc<AtomicUsize>,
     backend: Backend,
+    services: Arc<ServicesState>,
 ) -> Arc<Mutex<GuestProgress>> {
     let progress = Arc::new(Mutex::new(GuestProgress::default()));
     let next = Arc::clone(&progress);
@@ -217,7 +222,7 @@ fn install_exchange(
     registry.register(MODULE, "XenoraNextEvent", move |_, _, _| {
         {
             let state = lock(&next)?;
-            if state.pending || state.stopping {
+            if state.pending.is_some() || state.stopping {
                 return Err(ExitReason::ServiceAbiViolation);
             }
         }
@@ -225,7 +230,7 @@ fn install_exchange(
         let mut state = lock(&next)?;
         match event {
             Ok(direction) if state.presented < MAX_EVENTS => {
-                state.pending = true;
+                state.pending = Some(direction);
                 Ok(direction.guest_code())
             }
             Ok(_) => Err(ExitReason::ServiceAbiViolation),
@@ -238,16 +243,16 @@ fn install_exchange(
     let current = Arc::clone(&progress);
     registry.register(MODULE, "XenoraPresent", move |args, _, _| {
         let mut state = lock(&current)?;
+        let direction = state.pending.ok_or(ExitReason::ServiceAbiViolation)?;
         let next = state.presented + 1;
         let frame = lock(&presentation)?;
-        if !state.pending
-            || args.rcx as u32 as usize != next
+        if args.rcx as u32 as usize != next
             || frame.frame_index != next as u64
             || frame.backend != Some(backend.id())
             || frame.width != WIDTH
             || frame.height != HEIGHT
             || frame.draw_count != 1
-            || frame.pixels.len() != WIDTH * HEIGHT * 4
+            || !matches_frame_pixels(direction, &frame.pixels)
             || native_draws.load(Ordering::Relaxed) != backend.expected_native_draws(next)
         {
             return Err(ExitReason::ServiceAbiViolation);
@@ -256,14 +261,47 @@ fn install_exchange(
             sequence: next as u32,
             rgba: frame.pixels.clone(),
         };
-        state.presented = next;
-        state.pending = false;
         report
             .send(Report::Frame(rendered))
             .map_err(|_| ExitReason::ServiceAbiViolation)?;
+        state.presented = next;
+        state.pending = None;
+        Ok(1)
+    });
+    let final_progress = Arc::clone(&progress);
+    registry.register(MODULE, "XenoraFinish", move |args, _, _| {
+        let mut state = lock(&final_progress)?;
+        if !state.stopping
+            || state.pending.is_some()
+            || state.finished
+            || args.rcx as u32 as usize != state.presented
+            || services.open_handle_count() != 0
+        {
+            return Err(ExitReason::ServiceAbiViolation);
+        }
+        state.finished = true;
         Ok(1)
     });
     progress
+}
+
+fn matches_frame_pixels(direction: Direction, rgba: &[u8]) -> bool {
+    const RED: [u8; 4] = [255, 0, 0, 255];
+    const CLEAR: [u8; 4] = [19, 43, 93, 251];
+    let red_column = match direction {
+        Direction::Left => 0,
+        Direction::Right => WIDTH - 1,
+    };
+    let (pixels, _) = rgba.as_chunks::<4>();
+    rgba.len() == WIDTH * HEIGHT * 4
+        && pixels.iter().enumerate().all(|(index, &pixel)| {
+            let expected = if index % WIDTH == red_column {
+                RED
+            } else {
+                CLEAR
+            };
+            pixel == expected
+        })
 }
 
 fn execute_guest(
@@ -289,9 +327,10 @@ fn execute_guest(
         &mut imports,
         commands,
         report,
-        presentation,
+        Arc::clone(&presentation),
         Arc::clone(&native_draws),
         backend,
+        Arc::clone(&services),
     );
     let result = run_synthetic_startup(
         GUEST,
@@ -319,8 +358,19 @@ fn execute_guest(
     let state = progress
         .lock()
         .map_err(|_| "guest protocol state is poisoned")?;
-    if state.pending || !state.stopping || services.exit_status() != Some(exit_status) {
+    if state.pending.is_some()
+        || !state.stopping
+        || !state.finished
+        || services.exit_status() != Some(exit_status)
+    {
         return Err("guest exited without completing its application protocol".to_owned());
+    }
+    let frame_index = presentation
+        .lock()
+        .map_err(|_| "guest graphics presentation is poisoned")?
+        .frame_index;
+    if frame_index != state.presented as u64 {
+        return Err("guest drew a frame without presenting it".to_owned());
     }
     let open_handles = services.open_handle_count();
     if open_handles != 0 {

@@ -12,7 +12,7 @@ use crate::CompareRelation;
 /// Registry schema of the generated tables.
 pub const GENERATED_SCHEMA: u32 = 1;
 
-/// SOP1 operations declared in the semantic registry (operand rules `sop1_move`, `sop1_sgpr`).
+/// SOP1 operations declared in the semantic registry (operand rules `sop1_move`, `sop1_saveexec`, `sop1_sgpr`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScalarUnaryOp {
     /// `s_mov_b32` (SOP1 opcode 3): bitwise mov, SCC = unchanged.
@@ -37,6 +37,30 @@ pub enum ScalarUnaryOp {
     SextI32I8,
     /// `s_sext_i32_i16` (SOP1 opcode 26): signed sext, SCC = unchanged.
     SextI32I16,
+    /// `s_and_saveexec_b32` (SOP1 opcode 60): bitwise and, SCC = nonzero.
+    AndSaveExecB32,
+    /// `s_or_saveexec_b32` (SOP1 opcode 61): bitwise or, SCC = nonzero.
+    OrSaveExecB32,
+    /// `s_xor_saveexec_b32` (SOP1 opcode 62): bitwise xor, SCC = nonzero.
+    XorSaveExecB32,
+    /// `s_andn2_saveexec_b32` (SOP1 opcode 63): bitwise andn2, SCC = nonzero.
+    Andn2SaveExecB32,
+    /// `s_orn2_saveexec_b32` (SOP1 opcode 64): bitwise orn2, SCC = nonzero.
+    Orn2SaveExecB32,
+    /// `s_nand_saveexec_b32` (SOP1 opcode 65): bitwise nand, SCC = nonzero.
+    NandSaveExecB32,
+    /// `s_nor_saveexec_b32` (SOP1 opcode 66): bitwise nor, SCC = nonzero.
+    NorSaveExecB32,
+    /// `s_xnor_saveexec_b32` (SOP1 opcode 67): bitwise xnor, SCC = nonzero.
+    XnorSaveExecB32,
+    /// `s_andn1_saveexec_b32` (SOP1 opcode 68): bitwise andn1, SCC = nonzero.
+    Andn1SaveExecB32,
+    /// `s_orn1_saveexec_b32` (SOP1 opcode 69): bitwise orn1, SCC = nonzero.
+    Orn1SaveExecB32,
+    /// `s_andn1_wrexec_b32` (SOP1 opcode 70): bitwise andn1, SCC = nonzero.
+    Andn1WrexecB32,
+    /// `s_andn2_wrexec_b32` (SOP1 opcode 71): bitwise andn2, SCC = nonzero.
+    Andn2WrexecB32,
     /// `s_abs_i32` (SOP1 opcode 52): signed abs, SCC = nonzero.
     AbsI32,
 }
@@ -103,18 +127,18 @@ const SCALAR_UNARY_OP_BY_OPCODE: [Option<ScalarUnaryOp>; 256] = [
     None,
     None,
     None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
-    None,
+    Some(ScalarUnaryOp::AndSaveExecB32),
+    Some(ScalarUnaryOp::OrSaveExecB32),
+    Some(ScalarUnaryOp::XorSaveExecB32),
+    Some(ScalarUnaryOp::Andn2SaveExecB32),
+    Some(ScalarUnaryOp::Orn2SaveExecB32),
+    Some(ScalarUnaryOp::NandSaveExecB32),
+    Some(ScalarUnaryOp::NorSaveExecB32),
+    Some(ScalarUnaryOp::XnorSaveExecB32),
+    Some(ScalarUnaryOp::Andn1SaveExecB32),
+    Some(ScalarUnaryOp::Orn1SaveExecB32),
+    Some(ScalarUnaryOp::Andn1WrexecB32),
+    Some(ScalarUnaryOp::Andn2WrexecB32),
     None,
     None,
     None,
@@ -303,7 +327,7 @@ const SCALAR_UNARY_OP_BY_OPCODE: [Option<ScalarUnaryOp>; 256] = [
 
 impl ScalarUnaryOp {
     /// Every operation, in registry order.
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 24] = [
         Self::MovB32,
         Self::NotB32,
         Self::BrevB32,
@@ -315,6 +339,18 @@ impl ScalarUnaryOp {
         Self::FlbitI32,
         Self::SextI32I8,
         Self::SextI32I16,
+        Self::AndSaveExecB32,
+        Self::OrSaveExecB32,
+        Self::XorSaveExecB32,
+        Self::Andn2SaveExecB32,
+        Self::Orn2SaveExecB32,
+        Self::NandSaveExecB32,
+        Self::NorSaveExecB32,
+        Self::XnorSaveExecB32,
+        Self::Andn1SaveExecB32,
+        Self::Orn1SaveExecB32,
+        Self::Andn1WrexecB32,
+        Self::Andn2WrexecB32,
         Self::AbsI32,
     ];
 
@@ -341,6 +377,18 @@ impl ScalarUnaryOp {
             Self::FlbitI32 => "s_flbit_i32",
             Self::SextI32I8 => "s_sext_i32_i8",
             Self::SextI32I16 => "s_sext_i32_i16",
+            Self::AndSaveExecB32 => "s_and_saveexec_b32",
+            Self::OrSaveExecB32 => "s_or_saveexec_b32",
+            Self::XorSaveExecB32 => "s_xor_saveexec_b32",
+            Self::Andn2SaveExecB32 => "s_andn2_saveexec_b32",
+            Self::Orn2SaveExecB32 => "s_orn2_saveexec_b32",
+            Self::NandSaveExecB32 => "s_nand_saveexec_b32",
+            Self::NorSaveExecB32 => "s_nor_saveexec_b32",
+            Self::XnorSaveExecB32 => "s_xnor_saveexec_b32",
+            Self::Andn1SaveExecB32 => "s_andn1_saveexec_b32",
+            Self::Orn1SaveExecB32 => "s_orn1_saveexec_b32",
+            Self::Andn1WrexecB32 => "s_andn1_wrexec_b32",
+            Self::Andn2WrexecB32 => "s_andn2_wrexec_b32",
             Self::AbsI32 => "s_abs_i32",
         }
     }
@@ -359,7 +407,19 @@ impl ScalarUnaryOp {
             Self::FlbitI32 => 69,
             Self::SextI32I8 => 70,
             Self::SextI32I16 => 71,
-            Self::AbsI32 => 72,
+            Self::AndSaveExecB32 => 72,
+            Self::OrSaveExecB32 => 73,
+            Self::XorSaveExecB32 => 74,
+            Self::Andn2SaveExecB32 => 75,
+            Self::Orn2SaveExecB32 => 76,
+            Self::NandSaveExecB32 => 77,
+            Self::NorSaveExecB32 => 78,
+            Self::XnorSaveExecB32 => 79,
+            Self::Andn1SaveExecB32 => 80,
+            Self::Orn1SaveExecB32 => 81,
+            Self::Andn1WrexecB32 => 82,
+            Self::Andn2WrexecB32 => 83,
+            Self::AbsI32 => 84,
         }]
     }
 
@@ -377,37 +437,131 @@ impl ScalarUnaryOp {
             Self::FlbitI32 => false,
             Self::SextI32I8 => false,
             Self::SextI32I16 => false,
+            Self::AndSaveExecB32 => true,
+            Self::OrSaveExecB32 => true,
+            Self::XorSaveExecB32 => true,
+            Self::Andn2SaveExecB32 => true,
+            Self::Orn2SaveExecB32 => true,
+            Self::NandSaveExecB32 => true,
+            Self::NorSaveExecB32 => true,
+            Self::XnorSaveExecB32 => true,
+            Self::Andn1SaveExecB32 => true,
+            Self::Orn1SaveExecB32 => true,
+            Self::Andn1WrexecB32 => true,
+            Self::Andn2WrexecB32 => true,
             Self::AbsI32 => true,
         }
     }
 
-    /// The result and, for forms that write it, the new SCC (`None` leaves SCC
-    /// unchanged).
-    pub const fn evaluate(self, src: u32) -> (u32, Option<bool>) {
+    /// Whether the operation writes the EXEC mask.
+    pub const fn writes_exec(self) -> bool {
         match self {
-            Self::MovB32 => (primitive::mov_b32(src), None),
+            Self::MovB32 => false,
+            Self::NotB32 => false,
+            Self::BrevB32 => false,
+            Self::Bcnt0I32B32 => false,
+            Self::Bcnt1I32B32 => false,
+            Self::Ff0I32B32 => false,
+            Self::Ff1I32B32 => false,
+            Self::FlbitI32B32 => false,
+            Self::FlbitI32 => false,
+            Self::SextI32I8 => false,
+            Self::SextI32I16 => false,
+            Self::AndSaveExecB32 => true,
+            Self::OrSaveExecB32 => true,
+            Self::XorSaveExecB32 => true,
+            Self::Andn2SaveExecB32 => true,
+            Self::Orn2SaveExecB32 => true,
+            Self::NandSaveExecB32 => true,
+            Self::NorSaveExecB32 => true,
+            Self::XnorSaveExecB32 => true,
+            Self::Andn1SaveExecB32 => true,
+            Self::Orn1SaveExecB32 => true,
+            Self::Andn1WrexecB32 => true,
+            Self::Andn2WrexecB32 => true,
+            Self::AbsI32 => false,
+        }
+    }
+
+    /// The destination value, the new EXEC mask and, for forms that write it,
+    /// the new SCC (`None` leaves SCC unchanged).
+    ///
+    /// EXEC is an implicit operand of the forms that write it: they combine
+    /// the source with the current mask. For every other form the mask is
+    /// returned unchanged.
+    pub const fn evaluate(self, src: u32, exec: u32) -> (u32, u32, Option<bool>) {
+        match self {
+            Self::MovB32 => (primitive::mov_b32(src), exec, None),
             Self::NotB32 => {
                 let (value, scc) = primitive::not_nonzero_b32(src);
-                (value, Some(scc))
+                (value, exec, Some(scc))
             }
-            Self::BrevB32 => (primitive::brev_b32(src), None),
+            Self::BrevB32 => (primitive::brev_b32(src), exec, None),
             Self::Bcnt0I32B32 => {
                 let (value, scc) = primitive::bcnt0_nonzero_b32(src);
-                (value, Some(scc))
+                (value, exec, Some(scc))
             }
             Self::Bcnt1I32B32 => {
                 let (value, scc) = primitive::bcnt1_nonzero_b32(src);
-                (value, Some(scc))
+                (value, exec, Some(scc))
             }
-            Self::Ff0I32B32 => (primitive::ff0_b32(src), None),
-            Self::Ff1I32B32 => (primitive::ff1_b32(src), None),
-            Self::FlbitI32B32 => (primitive::flbit_b32(src), None),
-            Self::FlbitI32 => (primitive::flbit_i32(src), None),
-            Self::SextI32I8 => (primitive::sext_i32(src, 8), None),
-            Self::SextI32I16 => (primitive::sext_i32(src, 16), None),
+            Self::Ff0I32B32 => (primitive::ff0_b32(src), exec, None),
+            Self::Ff1I32B32 => (primitive::ff1_b32(src), exec, None),
+            Self::FlbitI32B32 => (primitive::flbit_b32(src), exec, None),
+            Self::FlbitI32 => (primitive::flbit_i32(src), exec, None),
+            Self::SextI32I8 => (primitive::sext_i32(src, 8), exec, None),
+            Self::SextI32I16 => (primitive::sext_i32(src, 16), exec, None),
+            Self::AndSaveExecB32 => {
+                let (value, scc) = primitive::and_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::OrSaveExecB32 => {
+                let (value, scc) = primitive::or_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::XorSaveExecB32 => {
+                let (value, scc) = primitive::xor_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::Andn2SaveExecB32 => {
+                let (value, scc) = primitive::andn2_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::Orn2SaveExecB32 => {
+                let (value, scc) = primitive::orn2_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::NandSaveExecB32 => {
+                let (value, scc) = primitive::nand_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::NorSaveExecB32 => {
+                let (value, scc) = primitive::nor_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::XnorSaveExecB32 => {
+                let (value, scc) = primitive::xnor_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::Andn1SaveExecB32 => {
+                let (value, scc) = primitive::andn1_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::Orn1SaveExecB32 => {
+                let (value, scc) = primitive::orn1_nonzero_b32(src, exec);
+                (exec, value, Some(scc))
+            }
+            Self::Andn1WrexecB32 => {
+                let (value, scc) = primitive::andn1_nonzero_b32(src, exec);
+                (value, value, Some(scc))
+            }
+            Self::Andn2WrexecB32 => {
+                let (value, scc) = primitive::andn2_nonzero_b32(src, exec);
+                (value, value, Some(scc))
+            }
             Self::AbsI32 => {
                 let (value, scc) = primitive::abs_nonzero_i32(src);
-                (value, Some(scc))
+                (value, exec, Some(scc))
             }
         }
     }
@@ -1687,12 +1841,12 @@ impl SoppControlOp {
     /// The validated registry row.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::EndProgram => 149,
-            Self::Branch => 150,
-            Self::BranchSccZero => 151,
-            Self::BranchVccZero => 152,
-            Self::BranchExecZero => 153,
-            Self::WaitLoad => 154,
+            Self::EndProgram => 161,
+            Self::Branch => 162,
+            Self::BranchSccZero => 163,
+            Self::BranchVccZero => 164,
+            Self::BranchExecZero => 165,
+            Self::WaitLoad => 166,
         }]
     }
 
@@ -2063,15 +2217,15 @@ impl VectorUnaryOp {
     /// The validated registry row.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::NotB32 => 73,
-            Self::BfrevB32 => 74,
-            Self::FfbhU32 => 75,
-            Self::FfblB32 => 76,
-            Self::FfbhI32 => 77,
-            Self::TruncF32 => 79,
-            Self::CeilF32 => 80,
-            Self::RndneF32 => 81,
-            Self::FloorF32 => 82,
+            Self::NotB32 => 85,
+            Self::BfrevB32 => 86,
+            Self::FfbhU32 => 87,
+            Self::FfblB32 => 88,
+            Self::FfbhI32 => 89,
+            Self::TruncF32 => 91,
+            Self::CeilF32 => 92,
+            Self::RndneF32 => 93,
+            Self::FloorF32 => 94,
         }]
     }
 
@@ -2398,7 +2552,7 @@ impl VectorSwapOp {
     /// The validated registry row.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::SwapB32 => 78,
+            Self::SwapB32 => 90,
         }]
     }
 
@@ -2594,28 +2748,28 @@ impl VectorAluOp {
     /// The validated registry row.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::MulI32I24 => 83,
-            Self::MulHiI32I24 => 84,
-            Self::MulU32U24 => 85,
-            Self::MulHiU32U24 => 86,
-            Self::MinI32 => 87,
-            Self::MaxI32 => 88,
-            Self::MinU32 => 89,
-            Self::MaxU32 => 90,
-            Self::XnorB32 => 91,
-            Self::AddNcU32 => 92,
-            Self::SubNcU32 => 93,
-            Self::SubrevNcU32 => 94,
-            Self::LshrrevB32 => 95,
-            Self::AshrrevI32 => 96,
-            Self::LshlrevB32 => 97,
-            Self::AndB32 => 98,
-            Self::OrB32 => 99,
-            Self::XorB32 => 100,
-            Self::CndmaskB32 => 101,
-            Self::AddCoCiU32 => 102,
-            Self::SubCoCiU32 => 103,
-            Self::SubrevCoCiU32 => 104,
+            Self::MulI32I24 => 95,
+            Self::MulHiI32I24 => 96,
+            Self::MulU32U24 => 97,
+            Self::MulHiU32U24 => 98,
+            Self::MinI32 => 99,
+            Self::MaxI32 => 100,
+            Self::MinU32 => 101,
+            Self::MaxU32 => 102,
+            Self::XnorB32 => 103,
+            Self::AddNcU32 => 104,
+            Self::SubNcU32 => 105,
+            Self::SubrevNcU32 => 106,
+            Self::LshrrevB32 => 107,
+            Self::AshrrevI32 => 108,
+            Self::LshlrevB32 => 109,
+            Self::AndB32 => 110,
+            Self::OrB32 => 111,
+            Self::XorB32 => 112,
+            Self::CndmaskB32 => 113,
+            Self::AddCoCiU32 => 114,
+            Self::SubCoCiU32 => 115,
+            Self::SubrevCoCiU32 => 116,
         }]
     }
 
@@ -3196,50 +3350,50 @@ impl VectorCompareOp {
     /// The validated registry row.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::CmpLtI32 => 105,
-            Self::CmpEqI32 => 106,
-            Self::CmpLeI32 => 107,
-            Self::CmpGtI32 => 108,
-            Self::CmpNeI32 => 109,
-            Self::CmpGeI32 => 110,
-            Self::CmpLtU32 => 111,
-            Self::CmpEqU32 => 112,
-            Self::CmpLeU32 => 113,
-            Self::CmpGtU32 => 114,
-            Self::CmpNeU32 => 115,
-            Self::CmpGeU32 => 116,
-            Self::CmpFI32 => 117,
-            Self::CmpTI32 => 118,
-            Self::CmpFU32 => 119,
-            Self::CmpTU32 => 120,
-            Self::CmpLtI64 => 121,
-            Self::CmpEqI64 => 122,
-            Self::CmpLeI64 => 123,
-            Self::CmpGtI64 => 124,
-            Self::CmpNeI64 => 125,
-            Self::CmpGeI64 => 126,
-            Self::CmpLtU64 => 127,
-            Self::CmpEqU64 => 128,
-            Self::CmpLeU64 => 129,
-            Self::CmpGtU64 => 130,
-            Self::CmpNeU64 => 131,
-            Self::CmpGeU64 => 132,
-            Self::CmpFI64 => 133,
-            Self::CmpTI64 => 134,
-            Self::CmpFU64 => 135,
-            Self::CmpTU64 => 136,
-            Self::CmpLtI16 => 137,
-            Self::CmpEqI16 => 138,
-            Self::CmpLeI16 => 139,
-            Self::CmpGtI16 => 140,
-            Self::CmpNeI16 => 141,
-            Self::CmpGeI16 => 142,
-            Self::CmpLtU16 => 143,
-            Self::CmpEqU16 => 144,
-            Self::CmpLeU16 => 145,
-            Self::CmpGtU16 => 146,
-            Self::CmpNeU16 => 147,
-            Self::CmpGeU16 => 148,
+            Self::CmpLtI32 => 117,
+            Self::CmpEqI32 => 118,
+            Self::CmpLeI32 => 119,
+            Self::CmpGtI32 => 120,
+            Self::CmpNeI32 => 121,
+            Self::CmpGeI32 => 122,
+            Self::CmpLtU32 => 123,
+            Self::CmpEqU32 => 124,
+            Self::CmpLeU32 => 125,
+            Self::CmpGtU32 => 126,
+            Self::CmpNeU32 => 127,
+            Self::CmpGeU32 => 128,
+            Self::CmpFI32 => 129,
+            Self::CmpTI32 => 130,
+            Self::CmpFU32 => 131,
+            Self::CmpTU32 => 132,
+            Self::CmpLtI64 => 133,
+            Self::CmpEqI64 => 134,
+            Self::CmpLeI64 => 135,
+            Self::CmpGtI64 => 136,
+            Self::CmpNeI64 => 137,
+            Self::CmpGeI64 => 138,
+            Self::CmpLtU64 => 139,
+            Self::CmpEqU64 => 140,
+            Self::CmpLeU64 => 141,
+            Self::CmpGtU64 => 142,
+            Self::CmpNeU64 => 143,
+            Self::CmpGeU64 => 144,
+            Self::CmpFI64 => 145,
+            Self::CmpTI64 => 146,
+            Self::CmpFU64 => 147,
+            Self::CmpTU64 => 148,
+            Self::CmpLtI16 => 149,
+            Self::CmpEqI16 => 150,
+            Self::CmpLeI16 => 151,
+            Self::CmpGtI16 => 152,
+            Self::CmpNeI16 => 153,
+            Self::CmpGeI16 => 154,
+            Self::CmpLtU16 => 155,
+            Self::CmpEqU16 => 156,
+            Self::CmpLeU16 => 157,
+            Self::CmpGtU16 => 158,
+            Self::CmpNeU16 => 159,
+            Self::CmpGeU16 => 160,
         }]
     }
 
@@ -3582,22 +3736,22 @@ impl VectorCompareVop3Op {
     /// The validated registry row of this encoding.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::CmpLtI32 => 155,
-            Self::CmpEqI32 => 156,
-            Self::CmpLeI32 => 157,
-            Self::CmpGtI32 => 158,
-            Self::CmpNeI32 => 159,
-            Self::CmpGeI32 => 160,
-            Self::CmpLtU32 => 161,
-            Self::CmpEqU32 => 162,
-            Self::CmpLeU32 => 163,
-            Self::CmpGtU32 => 164,
-            Self::CmpNeU32 => 165,
-            Self::CmpGeU32 => 166,
-            Self::CmpFI32 => 167,
-            Self::CmpTI32 => 168,
-            Self::CmpFU32 => 169,
-            Self::CmpTU32 => 170,
+            Self::CmpLtI32 => 167,
+            Self::CmpEqI32 => 168,
+            Self::CmpLeI32 => 169,
+            Self::CmpGtI32 => 170,
+            Self::CmpNeI32 => 171,
+            Self::CmpGeI32 => 172,
+            Self::CmpLtU32 => 173,
+            Self::CmpEqU32 => 174,
+            Self::CmpLeU32 => 175,
+            Self::CmpGtU32 => 176,
+            Self::CmpNeU32 => 177,
+            Self::CmpGeU32 => 178,
+            Self::CmpFI32 => 179,
+            Self::CmpTI32 => 180,
+            Self::CmpFU32 => 181,
+            Self::CmpTU32 => 182,
         }]
     }
 }
@@ -3711,24 +3865,24 @@ impl VectorAluVop3Op {
     /// The validated registry row of this encoding.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::AddNcU32 => 171,
-            Self::MulI32I24 => 172,
-            Self::MulHiI32I24 => 173,
-            Self::MulU32U24 => 174,
-            Self::MulHiU32U24 => 175,
-            Self::MinI32 => 176,
-            Self::MaxI32 => 177,
-            Self::MinU32 => 178,
-            Self::MaxU32 => 179,
-            Self::XnorB32 => 180,
-            Self::SubNcU32 => 181,
-            Self::SubrevNcU32 => 182,
+            Self::AddNcU32 => 183,
+            Self::MulI32I24 => 184,
+            Self::MulHiI32I24 => 185,
+            Self::MulU32U24 => 186,
+            Self::MulHiU32U24 => 187,
+            Self::MinI32 => 188,
+            Self::MaxI32 => 189,
+            Self::MinU32 => 190,
+            Self::MaxU32 => 191,
+            Self::XnorB32 => 192,
+            Self::SubNcU32 => 193,
+            Self::SubrevNcU32 => 194,
         }]
     }
 }
 
 /// Identity of every registry form and encoding variant, in registry order.
-pub const FORM_IDS: [(&str, EncodingFamily); 183] = [
+pub const FORM_IDS: [(&str, EncodingFamily); 195] = [
     ("S_ADD_U32", EncodingFamily::Sop2),
     ("S_SUB_U32", EncodingFamily::Sop2),
     ("S_ADD_I32", EncodingFamily::Sop2),
@@ -3801,6 +3955,18 @@ pub const FORM_IDS: [(&str, EncodingFamily); 183] = [
     ("S_FLBIT_I32", EncodingFamily::Sop1),
     ("S_SEXT_I32_I8", EncodingFamily::Sop1),
     ("S_SEXT_I32_I16", EncodingFamily::Sop1),
+    ("S_AND_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_OR_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_XOR_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_ANDN2_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_ORN2_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_NAND_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_NOR_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_XNOR_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_ANDN1_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_ORN1_SAVEEXEC_B32", EncodingFamily::Sop1),
+    ("S_ANDN1_WREXEC_B32", EncodingFamily::Sop1),
+    ("S_ANDN2_WREXEC_B32", EncodingFamily::Sop1),
     ("S_ABS_I32", EncodingFamily::Sop1),
     ("V_NOT_B32", EncodingFamily::Vop1),
     ("V_BFREV_B32", EncodingFamily::Vop1),
@@ -3915,7 +4081,7 @@ pub const FORM_IDS: [(&str, EncodingFamily); 183] = [
 ];
 
 /// One validated row per registry form, in registry order.
-pub static FORMS: [FormSemantics; 183] = [
+pub static FORMS: [FormSemantics; 195] = [
     FormSemantics {
         name: "S_ADD_U32",
         family: EncodingFamily::Sop2,
@@ -5426,6 +5592,258 @@ pub static FORMS: [FormSemantics; 183] = [
         wave: Wave::Any,
         operands: OperandRule::Sop1Sgpr,
         spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 0 }, SpecRef { document: Document::Guide, section: "5.3", page: 33 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_AND_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 60,
+        operation: Operation::And,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 120 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_OR_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 61,
+        operation: Operation::Or,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 121 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_XOR_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 62,
+        operation: Operation::Xor,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 121 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_ANDN2_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 63,
+        operation: Operation::AndNot,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 121 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_ORN2_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 64,
+        operation: Operation::OrNot,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 121 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_NAND_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 65,
+        operation: Operation::Nand,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 121 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_NOR_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 66,
+        operation: Operation::Nor,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 121 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_XNOR_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 67,
+        operation: Operation::Xnor,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 121 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_ANDN1_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 68,
+        operation: Operation::AndNot0,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 122 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_ORN1_SAVEEXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 69,
+        operation: Operation::OrNot0,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecSave,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 122 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_ANDN1_WREXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 70,
+        operation: Operation::AndNot0,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecWrite,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 122 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "S_ANDN2_WREXEC_B32",
+        family: EncodingFamily::Sop1,
+        opcode: 71,
+        operation: Operation::AndNot,
+        signedness: Signedness::Bitwise,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: None,
+        scc: SccEffect::Nonzero,
+        vcc: MaskEffect::Unchanged,
+        exec: MaskEffect::ExecWrite,
+        wave: Wave::Any,
+        operands: OperandRule::Sop1SaveExec,
+        spec: &[SpecRef { document: Document::Guide, section: "12.3", page: 122 }, SpecRef { document: Document::Guide, section: "5.7", page: 36 }],
         verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
     },
     FormSemantics {

@@ -4037,8 +4037,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x00
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4047,8 +4047,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x01
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4057,8 +4057,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x02
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4067,8 +4067,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x03
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4077,8 +4077,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x04
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4087,8 +4087,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x05
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4097,8 +4097,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x06
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4107,8 +4107,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x07
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4117,8 +4117,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x08
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4127,8 +4127,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x09
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4137,8 +4137,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x0A
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4147,8 +4147,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x0B
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4157,8 +4157,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x1C
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "pabsw"
@@ -4166,8 +4166,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x1D
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "pabsd"
@@ -4175,8 +4175,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x1E
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "palignr"
@@ -4214,8 +4214,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x28
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4224,8 +4224,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x29
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4234,8 +4234,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x2B
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4244,8 +4244,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x38
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4254,8 +4254,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x39
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4264,8 +4264,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x3A
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4274,8 +4274,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x3B
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4284,8 +4284,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x3C
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4294,8 +4294,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x3D
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4304,8 +4304,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x3E
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4314,8 +4314,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x3F
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4324,8 +4324,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x40
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4635,8 +4635,8 @@ map = "0f38"
 prefix = "66"
 opcode = 0x37
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4691,8 +4691,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x60
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4701,8 +4701,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x61
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4711,8 +4711,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x62
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4721,8 +4721,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x63
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4731,8 +4731,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x64
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4741,8 +4741,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x65
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4751,8 +4751,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x66
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4761,8 +4761,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x67
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4771,8 +4771,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x68
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4781,8 +4781,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x69
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4791,8 +4791,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x6A
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4801,8 +4801,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x6B
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4811,8 +4811,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x6C
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4821,8 +4821,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x6D
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4831,8 +4831,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x74
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4841,8 +4841,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x75
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4851,8 +4851,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x76
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4861,8 +4861,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xD4
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4871,8 +4871,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xD5
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4881,8 +4881,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xD8
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4891,8 +4891,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xD9
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4901,8 +4901,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xDA
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4911,8 +4911,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xDC
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4921,8 +4921,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xDD
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4931,8 +4931,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xDE
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4941,8 +4941,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xE0
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4951,8 +4951,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xE3
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4961,8 +4961,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xE4
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4971,8 +4971,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xE5
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4981,8 +4981,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xE8
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -4991,8 +4991,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xE9
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5001,8 +5001,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xEA
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5011,8 +5011,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xEC
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5021,8 +5021,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xED
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5031,8 +5031,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xEE
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5041,8 +5041,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xF4
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5051,8 +5051,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xF5
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5061,8 +5061,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xF6
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5071,8 +5071,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xF8
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5081,8 +5081,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xF9
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5091,8 +5091,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xFA
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5101,8 +5101,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xFB
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5111,8 +5111,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xFC
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5121,8 +5121,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xFD
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]
@@ -5131,8 +5131,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xFE
 enc = "xmm_rm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]

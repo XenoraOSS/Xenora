@@ -1048,6 +1048,23 @@ pub(crate) fn resume(cpu: &mut CpuState, memory: &mut GuestMemory) -> Result<(),
     }
 }
 
+/// Raise a breakpoint from a DebugBreak service call.
+pub(crate) fn debug_break(
+    args: &Win64Args,
+    cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<(), ExitReason> {
+    const STATUS_BREAKPOINT: u64 = 0x8000_0003;
+    let breakpoint = Win64Args {
+        rcx: STATUS_BREAKPOINT,
+        rdx: 0,
+        r8: 0,
+        r9: 0,
+        rsp: args.rsp,
+    };
+    raise_exception(&breakpoint, cpu, memory)
+}
+
 /// `RaiseException(code, flags, count, arguments)`.
 fn raise_exception(
     args: &Win64Args,

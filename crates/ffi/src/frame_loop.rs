@@ -19,13 +19,14 @@ use xenora_metal::NativeCompute;
 use xenora_shader::{Architecture, PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics};
 
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/pe/app-graphics-loop.exe");
+const FRAME_JOURNAL: &str = "C:\\xenora-app-frames.bin";
 pub const WIDTH: usize = 4;
 pub const HEIGHT: usize = 3;
 pub const FRAME_BYTES: usize = WIDTH * HEIGHT * 4;
 pub const MAX_FRAMES: u32 = 100_000;
 /// Budget for startup, four command recordings, the final gate and teardown.
 const SETUP_AND_EXIT_STEPS: usize = 2048;
-/// Budget per guest frame, including input, execute, readback and publication.
+/// Budget per guest frame, including graphics and journal write/readback.
 const STEPS_PER_FRAME: usize = 96;
 /// `x9-constant-ps.s` exports (1, 0, 0, 1): opaque red. Everything else is the clear colour.
 const RED: [u8; 4] = [255, 0, 0, 255];
@@ -97,10 +98,13 @@ struct State {
     input: ControllerInput,
     input_queue: std::collections::VecDeque<InputState>,
     recorded_frames: Vec<(u32, Vec<u8>)>,
-    frame_admitted: bool,
+    admitted_record: Option<u8>,
     frame_input: Option<FrameCommand>,
     expected_column: u32,
     end_seen: bool,
+    finish_seen: bool,
+    expected_journal: Vec<u8>,
+    verified_journal: Option<Arc<[u8]>>,
     latest: Option<(u32, Vec<u8>)>,
 }
 
@@ -199,17 +203,30 @@ impl FrameLoop {
         }
     }
 
+    pub fn verified_journal(&self) -> Option<Arc<[u8]>> {
+        self.lock().verified_journal.clone()
+    }
+
     fn run(self: Arc<Self>) {
-        let outcome = self.execute();
+        self.finish_run(self.execute());
+    }
+
+    fn finish_run(&self, outcome: Result<Arc<[u8]>, String>) {
         let mut state = self.lock();
         state.status = match outcome {
             Err(_) => FAILED,
-            Ok(()) if state.stop && state.completed < state.limit => STOPPED,
-            Ok(()) => FINISHED,
+            Ok(journal) => {
+                state.verified_journal = Some(journal);
+                if state.stop && state.completed < state.limit {
+                    STOPPED
+                } else {
+                    FINISHED
+                }
+            }
         };
     }
 
-    fn execute(self: &Arc<Self>) -> Result<(), String> {
+    fn execute(self: &Arc<Self>) -> Result<Arc<[u8]>, String> {
         let msl = compile_graphics(
             Architecture::Gfx1030,
             include_bytes!("../../../fixtures/rdna2/x9-constant-vs.bin"),
@@ -247,7 +264,7 @@ impl FrameLoop {
         services: &Arc<ServicesState>,
         backend: GraphicsBackendId,
         native_draws: &Arc<AtomicU32>,
-    ) -> Result<(), String> {
+    ) -> Result<Arc<[u8]>, String> {
         let last_presentation = services
             .graphics
             .lock()
@@ -289,6 +306,11 @@ impl FrameLoop {
                 .map(|command| command as u64)
                 .ok_or(ExitReason::ServiceAbiViolation)
         });
+        let shared_finish = Arc::clone(self);
+        let finish_services = Arc::clone(services);
+        imports.register("xenora.dll", "frame_finish", move |args, _, _| {
+            shared_finish.frame_finish(args.rcx as u32, finish_services.open_handle_count())
+        });
         let snapshot = Arc::clone(self);
         imports.register(
             "xenora.dll",
@@ -324,7 +346,11 @@ impl FrameLoop {
             .map_err(|_| "guest graphics presentation is poisoned")?
             .frame_index;
         let state = self.lock();
-        if !state.end_seen || state.frame_admitted || services.exit_status() != Some(0) {
+        if !state.end_seen
+            || state.admitted_record.is_some()
+            || !state.finish_seen
+            || services.exit_status() != Some(0)
+        {
             return Err("guest exited before completing the frame protocol".to_owned());
         }
         if rendered != u64::from(state.completed) {
@@ -337,12 +363,18 @@ impl FrameLoop {
                 "guest native draw count differs from the completed frame count".to_owned(),
             );
         }
-        Ok(())
+        let journal = services
+            .file_contents(FRAME_JOURNAL)
+            .ok_or("guest did not create its frame journal")?;
+        if journal != state.expected_journal {
+            return Err("guest frame journal differs from accepted frames".to_owned());
+        }
+        Ok(journal.into())
     }
 
     fn begin_frame(&self, sequence: u32) -> Result<u64, ExitReason> {
         let mut state = self.lock();
-        if state.frame_admitted || state.end_seen || sequence != state.completed {
+        if state.admitted_record.is_some() || state.end_seen || sequence != state.completed {
             return Err(ExitReason::ServiceAbiViolation);
         }
         // The interactive loop samples the next direction before waiting on a pause.
@@ -364,7 +396,7 @@ impl FrameLoop {
             state.end_seen = true;
             return Ok(0);
         }
-        if let Some(command) = input {
+        let record = if let Some(command) = input {
             let previous = state.latest.as_ref().map_or(0, |(column, _)| *column);
             let width = WIDTH as u32;
             state.expected_column = match command {
@@ -372,8 +404,11 @@ impl FrameLoop {
                 FrameCommand::Right => (previous + 1) % width,
                 FrameCommand::Left => (previous + width - 1) % width,
             };
-        }
-        state.frame_admitted = true;
+            0x20 | ((command as u8) << 2) | state.expected_column as u8
+        } else {
+            0x10 | (sequence % WIDTH as u32) as u8
+        };
+        state.admitted_record = Some(record);
         state.frame_input = input;
         Ok(if state.interactive { 2 } else { 1 })
     }
@@ -388,13 +423,15 @@ impl FrameLoop {
         native_draws: u32,
     ) -> Result<u64, ExitReason> {
         let mut state = self.lock();
+        let record = state
+            .admitted_record
+            .ok_or(ExitReason::ServiceAbiViolation)?;
         let id = if state.interactive {
             state.expected_column
         } else {
             sequence
         };
-        if !state.frame_admitted
-            || state.frame_input.is_some()
+        if state.frame_input.is_some()
             || sequence != state.completed
             || column >= WIDTH as u32
             || column != id % WIDTH as u32
@@ -408,13 +445,29 @@ impl FrameLoop {
         {
             return Err(ExitReason::ServiceAbiViolation);
         }
-        state.frame_admitted = false;
+        state.admitted_record = None;
+        state.expected_journal.push(record);
         state.completed += 1;
         let pixels = readback.to_vec();
         if state.interactive {
             state.recorded_frames.push((id, pixels.clone()));
         }
         state.latest = Some((id, pixels));
+        Ok(1)
+    }
+
+    fn frame_finish(&self, count: u32, open_handles: usize) -> Result<u64, ExitReason> {
+        let mut state = self.lock();
+        if !state.end_seen
+            || state.admitted_record.is_some()
+            || state.frame_input.is_some()
+            || state.finish_seen
+            || count != state.completed
+            || open_handles != 0
+        {
+            return Err(ExitReason::ServiceAbiViolation);
+        }
+        state.finish_seen = true;
         Ok(1)
     }
 }
@@ -480,15 +533,28 @@ fn embedded_guest_renders_standard_and_queued_interactive_frames() {
             });
         }
         let services = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
-        session
+        let journal = session
             .execute_guest(
                 &services,
                 GraphicsBackendId::SoftwareReference,
                 &Arc::new(AtomicU32::new(0)),
             )
             .unwrap();
+        let expected_journal: &[u8] = if interactive {
+            &[0x2b, 0x24, 0x20, 0x25, 0x28]
+        } else {
+            &[0x10, 0x11, 0x12, 0x13, 0x10]
+        };
+        assert_eq!(journal.as_ref(), expected_journal);
+        assert!(session.verified_journal().is_none());
+        session.finish_run(Ok(journal));
+        assert_eq!(
+            session.verified_journal().as_deref(),
+            Some(expected_journal)
+        );
 
         let snapshot = session.snapshot();
+        assert_eq!(snapshot.status, FINISHED);
         assert_eq!(snapshot.completed, 5);
         let (id, pixels) = snapshot.latest.unwrap();
         assert_eq!(id, if interactive { 0 } else { 4 });
@@ -506,21 +572,85 @@ fn embedded_guest_renders_standard_and_queued_interactive_frames() {
 
 #[cfg(test)]
 #[test]
+fn guest_journal_crosses_readback_chunk_boundary_and_isolates_sessions() {
+    let run = |limit| {
+        let session = Arc::new(FrameLoop::default());
+        session.lock().limit = limit;
+        let services = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+        let journal = session
+            .execute_guest(
+                &services,
+                GraphicsBackendId::SoftwareReference,
+                &Arc::new(AtomicU32::new(0)),
+            )
+            .unwrap();
+        session.finish_run(Ok(journal));
+        session
+    };
+
+    let first = run(257);
+    let second = run(1);
+    let cycle: Vec<_> = [0x10, 0x11, 0x12, 0x13]
+        .into_iter()
+        .cycle()
+        .take(257)
+        .collect();
+    assert_eq!(first.verified_journal().as_deref(), Some(cycle.as_slice()));
+    assert_eq!(
+        second.verified_journal().as_deref(),
+        Some([0x10].as_slice())
+    );
+}
+
+#[cfg(test)]
+#[test]
 fn embedded_guest_releases_resources_on_stop_before_first_draw() {
+    use std::time::{Duration, Instant};
+
     let session = Arc::new(FrameLoop::default());
-    session.lock().limit = 5;
-    session.lock().paused = true;
-    session.stop();
+    {
+        let mut state = session.lock();
+        state.limit = 5;
+        state.interactive = true;
+        state.paused = true;
+        state.status = PAUSED;
+    }
+    session.queue_input(InputState::default());
     let services = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
-    session
-        .execute_guest(
-            &services,
+    let worker_session = Arc::clone(&session);
+    let worker_services = Arc::clone(&services);
+    let worker = std::thread::spawn(move || {
+        worker_session.execute_guest(
+            &worker_services,
             GraphicsBackendId::SoftwareReference,
             &Arc::new(AtomicU32::new(0)),
         )
-        .unwrap();
+    });
+    let deadline = Instant::now() + Duration::from_secs(5);
+    // The queued command is sampled at the first gate before the guest waits.
+    while !session.lock().input_queue.is_empty()
+        && !worker.is_finished()
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    let reached_gate = session.lock().input_queue.is_empty();
+    let open_handles = services.open_handle_count();
+    let file = services.file_contents(FRAME_JOURNAL);
+    let exposed = session.verified_journal();
+    session.stop();
+    let journal = worker.join().unwrap().unwrap();
+    assert!(reached_gate);
+    assert_eq!(open_handles, 1);
+    assert_eq!(file.as_deref(), Some(&[][..]));
+    assert!(exposed.is_none());
+    assert!(journal.is_empty());
+    session.finish_run(Ok(journal));
+    assert_eq!(session.snapshot().status, STOPPED);
     assert_eq!(session.snapshot().completed, 0);
     assert!(session.snapshot().latest.is_none());
+    assert_eq!(session.verified_journal().as_deref(), Some(&[][..]));
+    assert_eq!(services.open_handle_count(), 0);
 }
 
 #[cfg(test)]
@@ -562,6 +692,7 @@ fn paused_interactive_frame_keeps_its_sampled_command() {
     let state = session.lock();
     assert_eq!(state.frame_input, Some(FrameCommand::Left));
     assert_eq!(state.expected_column, 3);
+    assert_eq!(state.admitted_record, Some(0x2b));
 }
 
 #[cfg(test)]
@@ -605,9 +736,26 @@ fn interactive_publication_rejects_a_coherent_frame_for_the_wrong_column() {
     assert_eq!(snapshot.completed, 1);
     assert_eq!(snapshot.latest, Some((1, expected(1))));
     assert!(session.get_recorded_frame(1).is_none());
+    assert_eq!(session.lock().expected_journal, [0x25]);
+    assert!(session.verified_journal().is_none());
 
     assert!(matches!(publish(1, 2), Ok(1)));
     assert_eq!(session.get_recorded_frame(1), Some((2, expected(2))));
+    assert_eq!(session.lock().expected_journal, [0x25, 0x26]);
+}
+
+#[cfg(test)]
+#[test]
+fn frame_finish_requires_the_end_gate_and_explicit_cleanup() {
+    let session = FrameLoop::default();
+    assert!(session.frame_finish(0, 0).is_err());
+    assert!(matches!(session.begin_frame(0), Ok(0)));
+    assert!(session.frame_finish(1, 0).is_err());
+    assert!(session.frame_finish(0, 1).is_err());
+    assert!(matches!(session.frame_finish(0, 0), Ok(1)));
+    assert!(session.frame_finish(0, 0).is_err());
+    assert!(session.begin_frame(0).is_err());
+    assert!(session.verified_journal().is_none());
 }
 
 #[cfg(test)]

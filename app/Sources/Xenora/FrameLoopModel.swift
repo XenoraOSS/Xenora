@@ -24,6 +24,7 @@ protocol FrameLoopAPI: Sendable {
     func pause(_ handle: xenora_session) -> Int32
     func resume(_ handle: xenora_session) -> Int32
     func stop(_ handle: xenora_session) -> Int32
+    func journalSize(_ handle: xenora_session, required: inout UInt64) -> Int32
     func status(
         _ handle: xenora_session, _ state: inout UInt32, _ completed: inout UInt32,
         _ frame: inout UInt32, _ rgba: UnsafeMutableBufferPointer<UInt8>
@@ -54,6 +55,10 @@ struct NativeFrameLoopAPI: FrameLoopAPI {
     func resume(_ handle: xenora_session) -> Int32 { xenora_session_resume_frame_loop(handle) }
     func stop(_ handle: xenora_session) -> Int32 { xenora_session_stop_frame_loop(handle) }
 
+    func journalSize(_ handle: xenora_session, required: inout UInt64) -> Int32 {
+        xenora_session_frame_loop_journal(handle, nil, 0, &required)
+    }
+
     func status(
         _ handle: xenora_session, _ state: inout UInt32, _ completed: inout UInt32,
         _ frame: inout UInt32, _ rgba: UnsafeMutableBufferPointer<UInt8>
@@ -75,6 +80,7 @@ final class FrameLoopModel: ObservableObject {
     @Published var hostFps: Double?
     @Published private(set) var controller: DetectedController?
     @Published private(set) var isStopping = false
+    @Published private(set) var journalRecordCount: UInt64?
 
     private let api: any FrameLoopAPI
     private let readController: @MainActor () -> DetectedController?
@@ -115,12 +121,18 @@ final class FrameLoopModel: ObservableObject {
 
     var stateDescription: String {
         if isStopping { return "Stopping…" }
+        let summary: String
+        if let count = journalRecordCount {
+            summary = " • \(count) verified journal \(count == 1 ? "entry" : "entries")"
+        } else {
+            summary = ""
+        }
         return switch state {
         case UInt32(XENORA_LOOP_NONE): "Idle"
         case UInt32(XENORA_LOOP_RUNNING): "Running"
         case UInt32(XENORA_LOOP_PAUSED): "Paused"
-        case UInt32(XENORA_LOOP_FINISHED): "Finished"
-        case UInt32(XENORA_LOOP_STOPPED): "Stopped"
+        case UInt32(XENORA_LOOP_FINISHED): "Finished" + summary
+        case UInt32(XENORA_LOOP_STOPPED): "Stopped" + summary
         case UInt32(XENORA_LOOP_FAILED): "Failed"
         default: "Unknown (\(state))"
         }
@@ -138,6 +150,7 @@ final class FrameLoopModel: ObservableObject {
         guard !isStopping else { return }
         errorMessage = nil
         cancelPolling()
+        journalRecordCount = nil
         state = UInt32(XENORA_LOOP_FAILED)
         isInteractive = false
         controller = nil
@@ -330,6 +343,7 @@ final class FrameLoopModel: ObservableObject {
             api.status(session, &st, &comp, &fId, buffer)
         }
         guard check(code, operation: "read frame loop status") else {
+            journalRecordCount = nil
             state = UInt32(XENORA_LOOP_FAILED)
             cancelPolling()
             _ = destroySession()
@@ -338,7 +352,14 @@ final class FrameLoopModel: ObservableObject {
 
         let active = st == XENORA_LOOP_RUNNING || st == XENORA_LOOP_PAUSED
         if isInteractive && active { updateGameController() }
-        if state != st { state = st }
+        if state != st {
+            if st == XENORA_LOOP_FINISHED || st == XENORA_LOOP_STOPPED {
+                readJournalSize(completed: comp)
+            } else if journalRecordCount != nil {
+                journalRecordCount = nil
+            }
+            state = st
+        }
         if completed != comp { completed = comp }
         // Interactive frame IDs identify fixture columns, whose pixels repeat.
         if frameId != fId {
@@ -372,6 +393,25 @@ final class FrameLoopModel: ObservableObject {
             cancelPolling()
         }
         return active
+    }
+
+    private func readJournalSize(completed: UInt32) {
+        var required: UInt64 = 0
+        let code = api.journalSize(session, required: &required)
+        let expectedCode = required == 0 ? XENORA_OK : XENORA_BUFFER_TOO_SMALL
+        guard code == expectedCode else {
+            if code == XENORA_OK || code == XENORA_BUFFER_TOO_SMALL {
+                errorMessage = "The guest journal returned an invalid size response."
+            } else {
+                check(code, operation: "read guest journal size", append: true)
+            }
+            return
+        }
+        guard required == UInt64(completed) && required <= UInt64(XENORA_FRAME_LOOP_MAX_FRAMES) else {
+            errorMessage = "The guest journal entry count does not match the completed frames."
+            return
+        }
+        journalRecordCount = required
     }
 
     private func makeImage() -> CGImage? {

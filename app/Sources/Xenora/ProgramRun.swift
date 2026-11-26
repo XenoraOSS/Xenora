@@ -10,9 +10,11 @@
 // it is supported; most executables stop at an unresolved import or an
 // unsupported instruction, and the run reports where.
 
+import Darwin
 import Foundation
 import Metal
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// What one run of the worker produced.
 struct ProgramRunResult: Equatable, Sendable {
@@ -48,6 +50,50 @@ enum ProgramRunner {
     static let outputLimit = 256 * 1024
     /// A backstop only: the worker enforces its own 15-second wall deadline.
     static let backstopSeconds: Double = 60
+    /// Keep the file admission limit in sync with the CLI worker's input limit.
+    private static let standardInputLimit = 1 << 20
+
+    private enum InputFileError: LocalizedError {
+        case notRegular
+        case tooLarge
+        case posix(Int32)
+
+        var errorDescription: String? {
+            switch self {
+            case .notRegular: return "Expected a regular file."
+            case .tooLarge: return "The file exceeds the 1 MiB standard input limit."
+            case let .posix(code):
+                return NSError(domain: NSPOSIXErrorDomain, code: Int(code)).localizedDescription
+            }
+        }
+    }
+
+    private static func openStandardInput(_ url: URL) throws -> FileHandle {
+        try url.withUnsafeFileSystemRepresentation { path in
+            guard url.isFileURL, let path else { throw InputFileError.notRegular }
+            var info = stat()
+            guard Darwin.fstatat(AT_FDCWD, path, &info, 0) == 0 else {
+                throw InputFileError.posix(errno)
+            }
+            guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
+                throw InputFileError.notRegular
+            }
+
+            // The path may have been replaced after stat. A FIFO must never
+            // block the app, and the opened descriptor decides what to admit.
+            let descriptor = Darwin.open(path, O_RDONLY | O_NONBLOCK | O_CLOEXEC)
+            guard descriptor >= 0 else { throw InputFileError.posix(errno) }
+            let handle = FileHandle(fileDescriptor: descriptor, closeOnDealloc: true)
+            guard Darwin.fstat(descriptor, &info) == 0 else {
+                throw InputFileError.posix(errno)
+            }
+            guard info.st_mode & mode_t(S_IFMT) == mode_t(S_IFREG) else {
+                throw InputFileError.notRegular
+            }
+            guard info.st_size <= off_t(standardInputLimit) else { throw InputFileError.tooLarge }
+            return handle
+        }
+    }
 
     /// The bundled worker, or the one named by `XENORA_CLI` (for `swift run`).
     static func workerURL() -> URL? {
@@ -89,6 +135,7 @@ enum ProgramRunner {
 
     /// Run the worker and wait for it. Blocking: call it off the main thread.
     static func run(_ file: URL, trace: Bool, programArguments: [String] = [],
+                    standardInput: URL? = nil,
                     worker: URL? = workerURL()) -> ProgramRunResult {
         let started = Date()
         func failed(_ reason: String) -> ProgramRunResult {
@@ -101,11 +148,24 @@ enum ProgramRunner {
         }
         let scoped = file.startAccessingSecurityScopedResource()
         defer { if scoped { file.stopAccessingSecurityScopedResource() } }
+        let inputScoped = standardInput?.startAccessingSecurityScopedResource() ?? false
+        defer { if inputScoped { standardInput?.stopAccessingSecurityScopedResource() } }
+        let input: FileHandle?
+        if let standardInput {
+            do {
+                input = try openStandardInput(standardInput)
+            } catch {
+                return failed("Could not use standard input file \(standardInput.lastPathComponent): \(error.localizedDescription)")
+            }
+        } else {
+            input = nil
+        }
+        defer { try? input?.close() }
 
         let process = Process()
         process.executableURL = worker
         process.arguments = arguments(for: file, trace: trace, programArguments: programArguments)
-        process.standardInput = FileHandle.nullDevice
+        process.standardInput = input ?? FileHandle.nullDevice
         let out = Pipe()
         let err = Pipe()
         process.standardOutput = out
@@ -173,19 +233,20 @@ struct ProgramArgument: Identifiable {
 /// Owns one worker slot and publishes results for the current selection.
 @MainActor
 final class ProgramRunModel: ObservableObject {
-    typealias Worker = @Sendable (URL, Bool, [String]) async -> ProgramRunResult
+    typealias Worker = @Sendable (URL, Bool, [String], URL?) async -> ProgramRunResult
 
     static let shared = ProgramRunModel()
     @Published private(set) var running = false
     @Published private(set) var result: ProgramRunResult?
     @Published private(set) var fileName: String?
     @Published var arguments: [ProgramArgument] = []
+    @Published var standardInput: URL?
     private let worker: Worker
     private var latestRequest: UInt64 = 0
 
-    init(worker: @escaping Worker = { url, trace, arguments in
+    init(worker: @escaping Worker = { url, trace, arguments, standardInput in
         await Task.detached {
-            ProgramRunner.run(url, trace: trace, programArguments: arguments)
+            ProgramRunner.run(url, trace: trace, programArguments: arguments, standardInput: standardInput)
         }.value
     }) {
         self.worker = worker
@@ -215,8 +276,9 @@ final class ProgramRunModel: ObservableObject {
         result = nil
         running = true
         let arguments = workerArguments
+        let standardInput = self.standardInput
         return Task {
-            let outcome = await worker(url, trace, arguments)
+            let outcome = await worker(url, trace, arguments, standardInput)
             if request == latestRequest {
                 result = outcome
             }
@@ -229,6 +291,7 @@ final class ProgramRunModel: ObservableObject {
         latestRequest &+= 1
         result = nil
         fileName = nil
+        standardInput = nil
     }
 }
 
@@ -291,6 +354,8 @@ struct ProgramRunView: View {
     @ObservedObject var model: ProgramRunModel
     @ObservedObject var hud: HudSettings
     @FocusState private var argumentFocus: ArgumentFocus?
+    @State private var importingStandardInput = false
+    @State private var standardInputImportError: String?
 
     private var runButtonTitle: String {
         guard model.running else { return "Run" }
@@ -300,6 +365,7 @@ struct ProgramRunView: View {
     var body: some View {
         Section("Run executable (experimental)") {
             argumentEditor
+            standardInputEditor
             Button(runButtonTitle) {
                 if let url { model.run(url, trace: hud.enabled) }
             }
@@ -329,6 +395,40 @@ struct ProgramRunView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
+    }
+
+    private var standardInputEditor: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            LabeledContent("Standard input", value: model.standardInput?.lastPathComponent ?? "No input file")
+                .accessibilityIdentifier("program-stdin-file")
+            HStack {
+                Button("Choose input file…") { importingStandardInput = true }
+                    .accessibilityIdentifier("program-stdin-choose")
+                if model.standardInput != nil {
+                    Button("Clear input file") {
+                        model.standardInput = nil
+                        standardInputImportError = nil
+                    }
+                    .accessibilityIdentifier("program-stdin-clear")
+                }
+            }
+            .disabled(model.running)
+            if let standardInputImportError {
+                Text(standardInputImportError).foregroundStyle(.red)
+            }
+        }
+        .fileImporter(isPresented: $importingStandardInput, allowedContentTypes: [.item]) { result in
+            switch result {
+            case let .success(file):
+                model.standardInput = file
+                standardInputImportError = nil
+            case let .failure(error):
+                if (error as? CocoaError)?.code != .userCancelled {
+                    standardInputImportError = error.localizedDescription
+                }
+            }
+        }
+        .onChange(of: url) { _, _ in standardInputImportError = nil }
     }
 
     private var argumentEditor: some View {

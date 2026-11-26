@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+mod replay;
 mod session;
 
 use session::{Backend, CompletedSession, Direction, Frame, HEIGHT, MAX_EVENTS, MAX_STEPS, WIDTH};
@@ -12,9 +13,10 @@ use std::process::{Child, Command, ExitCode, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
-const USAGE: &str = "Usage: xenora-session [--backend metal|reference] [--steps N] [--frame-dir PATH] [left|right ...]\n\
+const USAGE: &str = "Usage: xenora-session [--backend metal|reference] [--steps N] [--frame-dir PATH] [--replay PATH | left|right ...]\n\
 Runs the embedded guest in one bounded session. Defaults to Metal, 1000000 steps and left right left.\n\
-Specify up to 32 directions. --frame-dir creates a new directory of PPM frames after a successful session.";
+Specify up to 32 directions, or replay a xenora-session-v1 file.\n\
+--frame-dir creates a new directory of PPM frames after a successful session.";
 const WORKER: &str = "--session-worker";
 const WALL_LIMIT: Duration = Duration::from_secs(15);
 const RGBA_BYTES: usize = WIDTH * HEIGHT * 4;
@@ -54,11 +56,27 @@ fn direction_byte(direction: &Direction) -> u8 {
     }
 }
 
-fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Request, String> {
+fn parse_direction(value: &str) -> Option<Direction> {
+    match value {
+        "left" => Some(Direction::Left),
+        "right" => Some(Direction::Right),
+        _ => None,
+    }
+}
+
+fn parse_path(value: Option<OsString>, option: &str) -> Result<PathBuf, String> {
+    value
+        .filter(|value| !value.is_empty() && !value.as_encoded_bytes().starts_with(b"--"))
+        .map(PathBuf::from)
+        .ok_or_else(|| format!("{option} requires a path"))
+}
+
+fn parse(args: impl IntoIterator<Item = OsString>, worker_mode: bool) -> Result<Request, String> {
     let mut args = args.into_iter();
     let mut backend = None;
     let mut steps = None;
     let mut frame_dir = None;
+    let mut replay_path = None;
     let mut directions = Vec::new();
     let mut positional = false;
     while let Some(arg) = args.next() {
@@ -85,26 +103,33 @@ fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Request, String> {
                 );
             }
             (Some("--frame-dir"), false) if frame_dir.is_none() => {
-                frame_dir = Some(PathBuf::from(
-                    args.next()
-                        .filter(|value| {
-                            !value.is_empty() && !value.as_encoded_bytes().starts_with(b"--")
-                        })
-                        .ok_or("--frame-dir requires a path")?,
-                ));
+                frame_dir = Some(parse_path(args.next(), "--frame-dir")?);
             }
-            (Some("--backend" | "--steps" | "--frame-dir"), false) => {
+            (Some("--replay"), false) if worker_mode => {
+                return Err("--replay is available only in the session supervisor".into());
+            }
+            (Some("--replay"), false) if replay_path.is_none() => {
+                replay_path = Some(parse_path(args.next(), "--replay")?);
+            }
+            (Some("--backend" | "--steps" | "--frame-dir" | "--replay"), false) => {
                 return Err(format!("duplicate option {:?}", arg));
             }
-            (Some("left"), _) => directions.push(Direction::Left),
-            (Some("right"), _) => directions.push(Direction::Right),
-            _ => return Err(format!("unexpected argument {:?}", arg)),
+            (value, _) => directions.push(
+                value
+                    .and_then(parse_direction)
+                    .ok_or_else(|| format!("unexpected argument {:?}", arg))?,
+            ),
         }
         if directions.len() > MAX_EVENTS {
             return Err(format!("specify at most {MAX_EVENTS} directions"));
         }
     }
-    if directions.is_empty() {
+    if let Some(path) = replay_path {
+        if !directions.is_empty() {
+            return Err("--replay cannot be combined with positional directions".into());
+        }
+        directions = replay::read_directions(&path)?;
+    } else if directions.is_empty() {
         directions.extend([Direction::Left, Direction::Right, Direction::Left]);
     }
     Ok(Request::Run(Options {
@@ -374,7 +399,7 @@ fn main() -> ExitCode {
     if worker_mode {
         args.next();
     }
-    let options = match parse(args) {
+    let options = match parse(args, worker_mode) {
         Ok(Request::Help) => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;

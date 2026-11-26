@@ -3,226 +3,451 @@ c5 71 60 64 be 10 | vpunpcklbw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 60 d2 | vpunpcklbw xmm2, xmm2, xmm2
 c5 b1 60 db | vpunpcklbw xmm3, xmm9, xmm3
 c5 e1 60 dd | vpunpcklbw xmm3, xmm3, xmm5
+c4 c1 35 60 da | vpunpcklbw ymm3, ymm9, ymm10
+c5 75 60 64 be 10 | vpunpcklbw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 60 d2 | vpunpcklbw ymm2, ymm2, ymm2
+c5 b5 60 db | vpunpcklbw ymm3, ymm9, ymm3
+c5 e5 60 dd | vpunpcklbw ymm3, ymm3, ymm5
 c4 c1 31 61 da | vpunpcklwd xmm3, xmm9, xmm10
 c5 71 61 64 be 10 | vpunpcklwd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 61 d2 | vpunpcklwd xmm2, xmm2, xmm2
 c5 b1 61 db | vpunpcklwd xmm3, xmm9, xmm3
 c5 e1 61 dd | vpunpcklwd xmm3, xmm3, xmm5
+c4 c1 35 61 da | vpunpcklwd ymm3, ymm9, ymm10
+c5 75 61 64 be 10 | vpunpcklwd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 61 d2 | vpunpcklwd ymm2, ymm2, ymm2
+c5 b5 61 db | vpunpcklwd ymm3, ymm9, ymm3
+c5 e5 61 dd | vpunpcklwd ymm3, ymm3, ymm5
 c4 c1 31 62 da | vpunpckldq xmm3, xmm9, xmm10
 c5 71 62 64 be 10 | vpunpckldq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 62 d2 | vpunpckldq xmm2, xmm2, xmm2
 c5 b1 62 db | vpunpckldq xmm3, xmm9, xmm3
 c5 e1 62 dd | vpunpckldq xmm3, xmm3, xmm5
+c4 c1 35 62 da | vpunpckldq ymm3, ymm9, ymm10
+c5 75 62 64 be 10 | vpunpckldq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 62 d2 | vpunpckldq ymm2, ymm2, ymm2
+c5 b5 62 db | vpunpckldq ymm3, ymm9, ymm3
+c5 e5 62 dd | vpunpckldq ymm3, ymm3, ymm5
 c4 c1 31 6c da | vpunpcklqdq xmm3, xmm9, xmm10
 c5 71 6c 64 be 10 | vpunpcklqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 6c d2 | vpunpcklqdq xmm2, xmm2, xmm2
 c5 b1 6c db | vpunpcklqdq xmm3, xmm9, xmm3
 c5 e1 6c dd | vpunpcklqdq xmm3, xmm3, xmm5
+c4 c1 35 6c da | vpunpcklqdq ymm3, ymm9, ymm10
+c5 75 6c 64 be 10 | vpunpcklqdq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 6c d2 | vpunpcklqdq ymm2, ymm2, ymm2
+c5 b5 6c db | vpunpcklqdq ymm3, ymm9, ymm3
+c5 e5 6c dd | vpunpcklqdq ymm3, ymm3, ymm5
 c4 c1 31 68 da | vpunpckhbw xmm3, xmm9, xmm10
 c5 71 68 64 be 10 | vpunpckhbw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 68 d2 | vpunpckhbw xmm2, xmm2, xmm2
 c5 b1 68 db | vpunpckhbw xmm3, xmm9, xmm3
 c5 e1 68 dd | vpunpckhbw xmm3, xmm3, xmm5
+c4 c1 35 68 da | vpunpckhbw ymm3, ymm9, ymm10
+c5 75 68 64 be 10 | vpunpckhbw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 68 d2 | vpunpckhbw ymm2, ymm2, ymm2
+c5 b5 68 db | vpunpckhbw ymm3, ymm9, ymm3
+c5 e5 68 dd | vpunpckhbw ymm3, ymm3, ymm5
 c4 c1 31 69 da | vpunpckhwd xmm3, xmm9, xmm10
 c5 71 69 64 be 10 | vpunpckhwd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 69 d2 | vpunpckhwd xmm2, xmm2, xmm2
 c5 b1 69 db | vpunpckhwd xmm3, xmm9, xmm3
 c5 e1 69 dd | vpunpckhwd xmm3, xmm3, xmm5
+c4 c1 35 69 da | vpunpckhwd ymm3, ymm9, ymm10
+c5 75 69 64 be 10 | vpunpckhwd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 69 d2 | vpunpckhwd ymm2, ymm2, ymm2
+c5 b5 69 db | vpunpckhwd ymm3, ymm9, ymm3
+c5 e5 69 dd | vpunpckhwd ymm3, ymm3, ymm5
 c4 c1 31 6a da | vpunpckhdq xmm3, xmm9, xmm10
 c5 71 6a 64 be 10 | vpunpckhdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 6a d2 | vpunpckhdq xmm2, xmm2, xmm2
 c5 b1 6a db | vpunpckhdq xmm3, xmm9, xmm3
 c5 e1 6a dd | vpunpckhdq xmm3, xmm3, xmm5
+c4 c1 35 6a da | vpunpckhdq ymm3, ymm9, ymm10
+c5 75 6a 64 be 10 | vpunpckhdq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 6a d2 | vpunpckhdq ymm2, ymm2, ymm2
+c5 b5 6a db | vpunpckhdq ymm3, ymm9, ymm3
+c5 e5 6a dd | vpunpckhdq ymm3, ymm3, ymm5
 c4 c1 31 6d da | vpunpckhqdq xmm3, xmm9, xmm10
 c5 71 6d 64 be 10 | vpunpckhqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 6d d2 | vpunpckhqdq xmm2, xmm2, xmm2
 c5 b1 6d db | vpunpckhqdq xmm3, xmm9, xmm3
 c5 e1 6d dd | vpunpckhqdq xmm3, xmm3, xmm5
+c4 c1 35 6d da | vpunpckhqdq ymm3, ymm9, ymm10
+c5 75 6d 64 be 10 | vpunpckhqdq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 6d d2 | vpunpckhqdq ymm2, ymm2, ymm2
+c5 b5 6d db | vpunpckhqdq ymm3, ymm9, ymm3
+c5 e5 6d dd | vpunpckhqdq ymm3, ymm3, ymm5
 c4 c1 31 63 da | vpacksswb xmm3, xmm9, xmm10
 c5 71 63 64 be 10 | vpacksswb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 63 d2 | vpacksswb xmm2, xmm2, xmm2
 c5 b1 63 db | vpacksswb xmm3, xmm9, xmm3
 c5 e1 63 dd | vpacksswb xmm3, xmm3, xmm5
+c4 c1 35 63 da | vpacksswb ymm3, ymm9, ymm10
+c5 75 63 64 be 10 | vpacksswb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 63 d2 | vpacksswb ymm2, ymm2, ymm2
+c5 b5 63 db | vpacksswb ymm3, ymm9, ymm3
+c5 e5 63 dd | vpacksswb ymm3, ymm3, ymm5
 c4 c1 31 6b da | vpackssdw xmm3, xmm9, xmm10
 c5 71 6b 64 be 10 | vpackssdw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 6b d2 | vpackssdw xmm2, xmm2, xmm2
 c5 b1 6b db | vpackssdw xmm3, xmm9, xmm3
 c5 e1 6b dd | vpackssdw xmm3, xmm3, xmm5
+c4 c1 35 6b da | vpackssdw ymm3, ymm9, ymm10
+c5 75 6b 64 be 10 | vpackssdw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 6b d2 | vpackssdw ymm2, ymm2, ymm2
+c5 b5 6b db | vpackssdw ymm3, ymm9, ymm3
+c5 e5 6b dd | vpackssdw ymm3, ymm3, ymm5
 c4 c1 31 67 da | vpackuswb xmm3, xmm9, xmm10
 c5 71 67 64 be 10 | vpackuswb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 67 d2 | vpackuswb xmm2, xmm2, xmm2
 c5 b1 67 db | vpackuswb xmm3, xmm9, xmm3
 c5 e1 67 dd | vpackuswb xmm3, xmm3, xmm5
+c4 c1 35 67 da | vpackuswb ymm3, ymm9, ymm10
+c5 75 67 64 be 10 | vpackuswb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 67 d2 | vpackuswb ymm2, ymm2, ymm2
+c5 b5 67 db | vpackuswb ymm3, ymm9, ymm3
+c5 e5 67 dd | vpackuswb ymm3, ymm3, ymm5
 c4 c1 31 64 da | vpcmpgtb xmm3, xmm9, xmm10
 c5 71 64 64 be 10 | vpcmpgtb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 64 d2 | vpcmpgtb xmm2, xmm2, xmm2
 c5 b1 64 db | vpcmpgtb xmm3, xmm9, xmm3
 c5 e1 64 dd | vpcmpgtb xmm3, xmm3, xmm5
+c4 c1 35 64 da | vpcmpgtb ymm3, ymm9, ymm10
+c5 75 64 64 be 10 | vpcmpgtb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 64 d2 | vpcmpgtb ymm2, ymm2, ymm2
+c5 b5 64 db | vpcmpgtb ymm3, ymm9, ymm3
+c5 e5 64 dd | vpcmpgtb ymm3, ymm3, ymm5
 c4 c1 31 65 da | vpcmpgtw xmm3, xmm9, xmm10
 c5 71 65 64 be 10 | vpcmpgtw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 65 d2 | vpcmpgtw xmm2, xmm2, xmm2
 c5 b1 65 db | vpcmpgtw xmm3, xmm9, xmm3
 c5 e1 65 dd | vpcmpgtw xmm3, xmm3, xmm5
+c4 c1 35 65 da | vpcmpgtw ymm3, ymm9, ymm10
+c5 75 65 64 be 10 | vpcmpgtw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 65 d2 | vpcmpgtw ymm2, ymm2, ymm2
+c5 b5 65 db | vpcmpgtw ymm3, ymm9, ymm3
+c5 e5 65 dd | vpcmpgtw ymm3, ymm3, ymm5
 c4 c1 31 66 da | vpcmpgtd xmm3, xmm9, xmm10
 c5 71 66 64 be 10 | vpcmpgtd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 66 d2 | vpcmpgtd xmm2, xmm2, xmm2
 c5 b1 66 db | vpcmpgtd xmm3, xmm9, xmm3
 c5 e1 66 dd | vpcmpgtd xmm3, xmm3, xmm5
+c4 c1 35 66 da | vpcmpgtd ymm3, ymm9, ymm10
+c5 75 66 64 be 10 | vpcmpgtd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 66 d2 | vpcmpgtd ymm2, ymm2, ymm2
+c5 b5 66 db | vpcmpgtd ymm3, ymm9, ymm3
+c5 e5 66 dd | vpcmpgtd ymm3, ymm3, ymm5
 c4 c1 31 74 da | vpcmpeqb xmm3, xmm9, xmm10
 c5 71 74 64 be 10 | vpcmpeqb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 74 d2 | vpcmpeqb xmm2, xmm2, xmm2
 c5 b1 74 db | vpcmpeqb xmm3, xmm9, xmm3
 c5 e1 74 dd | vpcmpeqb xmm3, xmm3, xmm5
+c4 c1 35 74 da | vpcmpeqb ymm3, ymm9, ymm10
+c5 75 74 64 be 10 | vpcmpeqb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 74 d2 | vpcmpeqb ymm2, ymm2, ymm2
+c5 b5 74 db | vpcmpeqb ymm3, ymm9, ymm3
+c5 e5 74 dd | vpcmpeqb ymm3, ymm3, ymm5
 c4 c1 31 75 da | vpcmpeqw xmm3, xmm9, xmm10
 c5 71 75 64 be 10 | vpcmpeqw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 75 d2 | vpcmpeqw xmm2, xmm2, xmm2
 c5 b1 75 db | vpcmpeqw xmm3, xmm9, xmm3
 c5 e1 75 dd | vpcmpeqw xmm3, xmm3, xmm5
+c4 c1 35 75 da | vpcmpeqw ymm3, ymm9, ymm10
+c5 75 75 64 be 10 | vpcmpeqw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 75 d2 | vpcmpeqw ymm2, ymm2, ymm2
+c5 b5 75 db | vpcmpeqw ymm3, ymm9, ymm3
+c5 e5 75 dd | vpcmpeqw ymm3, ymm3, ymm5
 c4 c1 31 76 da | vpcmpeqd xmm3, xmm9, xmm10
 c5 71 76 64 be 10 | vpcmpeqd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 76 d2 | vpcmpeqd xmm2, xmm2, xmm2
 c5 b1 76 db | vpcmpeqd xmm3, xmm9, xmm3
 c5 e1 76 dd | vpcmpeqd xmm3, xmm3, xmm5
+c4 c1 35 76 da | vpcmpeqd ymm3, ymm9, ymm10
+c5 75 76 64 be 10 | vpcmpeqd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 76 d2 | vpcmpeqd ymm2, ymm2, ymm2
+c5 b5 76 db | vpcmpeqd ymm3, ymm9, ymm3
+c5 e5 76 dd | vpcmpeqd ymm3, ymm3, ymm5
 c4 c1 31 fc da | vpaddb xmm3, xmm9, xmm10
 c5 71 fc 64 be 10 | vpaddb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 fc d2 | vpaddb xmm2, xmm2, xmm2
 c5 b1 fc db | vpaddb xmm3, xmm9, xmm3
 c5 e1 fc dd | vpaddb xmm3, xmm3, xmm5
+c4 c1 35 fc da | vpaddb ymm3, ymm9, ymm10
+c5 75 fc 64 be 10 | vpaddb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed fc d2 | vpaddb ymm2, ymm2, ymm2
+c5 b5 fc db | vpaddb ymm3, ymm9, ymm3
+c5 e5 fc dd | vpaddb ymm3, ymm3, ymm5
 c4 c1 31 fd da | vpaddw xmm3, xmm9, xmm10
 c5 71 fd 64 be 10 | vpaddw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 fd d2 | vpaddw xmm2, xmm2, xmm2
 c5 b1 fd db | vpaddw xmm3, xmm9, xmm3
 c5 e1 fd dd | vpaddw xmm3, xmm3, xmm5
+c4 c1 35 fd da | vpaddw ymm3, ymm9, ymm10
+c5 75 fd 64 be 10 | vpaddw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed fd d2 | vpaddw ymm2, ymm2, ymm2
+c5 b5 fd db | vpaddw ymm3, ymm9, ymm3
+c5 e5 fd dd | vpaddw ymm3, ymm3, ymm5
 c4 c1 31 fe da | vpaddd xmm3, xmm9, xmm10
 c5 71 fe 64 be 10 | vpaddd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 fe d2 | vpaddd xmm2, xmm2, xmm2
 c5 b1 fe db | vpaddd xmm3, xmm9, xmm3
 c5 e1 fe dd | vpaddd xmm3, xmm3, xmm5
+c4 c1 35 fe da | vpaddd ymm3, ymm9, ymm10
+c5 75 fe 64 be 10 | vpaddd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed fe d2 | vpaddd ymm2, ymm2, ymm2
+c5 b5 fe db | vpaddd ymm3, ymm9, ymm3
+c5 e5 fe dd | vpaddd ymm3, ymm3, ymm5
 c4 c1 31 d4 da | vpaddq xmm3, xmm9, xmm10
 c5 71 d4 64 be 10 | vpaddq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 d4 d2 | vpaddq xmm2, xmm2, xmm2
 c5 b1 d4 db | vpaddq xmm3, xmm9, xmm3
 c5 e1 d4 dd | vpaddq xmm3, xmm3, xmm5
+c4 c1 35 d4 da | vpaddq ymm3, ymm9, ymm10
+c5 75 d4 64 be 10 | vpaddq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed d4 d2 | vpaddq ymm2, ymm2, ymm2
+c5 b5 d4 db | vpaddq ymm3, ymm9, ymm3
+c5 e5 d4 dd | vpaddq ymm3, ymm3, ymm5
 c4 c1 31 f8 da | vpsubb xmm3, xmm9, xmm10
 c5 71 f8 64 be 10 | vpsubb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 f8 d2 | vpsubb xmm2, xmm2, xmm2
 c5 b1 f8 db | vpsubb xmm3, xmm9, xmm3
 c5 e1 f8 dd | vpsubb xmm3, xmm3, xmm5
+c4 c1 35 f8 da | vpsubb ymm3, ymm9, ymm10
+c5 75 f8 64 be 10 | vpsubb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed f8 d2 | vpsubb ymm2, ymm2, ymm2
+c5 b5 f8 db | vpsubb ymm3, ymm9, ymm3
+c5 e5 f8 dd | vpsubb ymm3, ymm3, ymm5
 c4 c1 31 f9 da | vpsubw xmm3, xmm9, xmm10
 c5 71 f9 64 be 10 | vpsubw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 f9 d2 | vpsubw xmm2, xmm2, xmm2
 c5 b1 f9 db | vpsubw xmm3, xmm9, xmm3
 c5 e1 f9 dd | vpsubw xmm3, xmm3, xmm5
+c4 c1 35 f9 da | vpsubw ymm3, ymm9, ymm10
+c5 75 f9 64 be 10 | vpsubw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed f9 d2 | vpsubw ymm2, ymm2, ymm2
+c5 b5 f9 db | vpsubw ymm3, ymm9, ymm3
+c5 e5 f9 dd | vpsubw ymm3, ymm3, ymm5
 c4 c1 31 fa da | vpsubd xmm3, xmm9, xmm10
 c5 71 fa 64 be 10 | vpsubd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 fa d2 | vpsubd xmm2, xmm2, xmm2
 c5 b1 fa db | vpsubd xmm3, xmm9, xmm3
 c5 e1 fa dd | vpsubd xmm3, xmm3, xmm5
+c4 c1 35 fa da | vpsubd ymm3, ymm9, ymm10
+c5 75 fa 64 be 10 | vpsubd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed fa d2 | vpsubd ymm2, ymm2, ymm2
+c5 b5 fa db | vpsubd ymm3, ymm9, ymm3
+c5 e5 fa dd | vpsubd ymm3, ymm3, ymm5
 c4 c1 31 fb da | vpsubq xmm3, xmm9, xmm10
 c5 71 fb 64 be 10 | vpsubq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 fb d2 | vpsubq xmm2, xmm2, xmm2
 c5 b1 fb db | vpsubq xmm3, xmm9, xmm3
 c5 e1 fb dd | vpsubq xmm3, xmm3, xmm5
+c4 c1 35 fb da | vpsubq ymm3, ymm9, ymm10
+c5 75 fb 64 be 10 | vpsubq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed fb d2 | vpsubq ymm2, ymm2, ymm2
+c5 b5 fb db | vpsubq ymm3, ymm9, ymm3
+c5 e5 fb dd | vpsubq ymm3, ymm3, ymm5
 c4 c1 31 ec da | vpaddsb xmm3, xmm9, xmm10
 c5 71 ec 64 be 10 | vpaddsb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 ec d2 | vpaddsb xmm2, xmm2, xmm2
 c5 b1 ec db | vpaddsb xmm3, xmm9, xmm3
 c5 e1 ec dd | vpaddsb xmm3, xmm3, xmm5
+c4 c1 35 ec da | vpaddsb ymm3, ymm9, ymm10
+c5 75 ec 64 be 10 | vpaddsb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed ec d2 | vpaddsb ymm2, ymm2, ymm2
+c5 b5 ec db | vpaddsb ymm3, ymm9, ymm3
+c5 e5 ec dd | vpaddsb ymm3, ymm3, ymm5
 c4 c1 31 ed da | vpaddsw xmm3, xmm9, xmm10
 c5 71 ed 64 be 10 | vpaddsw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 ed d2 | vpaddsw xmm2, xmm2, xmm2
 c5 b1 ed db | vpaddsw xmm3, xmm9, xmm3
 c5 e1 ed dd | vpaddsw xmm3, xmm3, xmm5
+c4 c1 35 ed da | vpaddsw ymm3, ymm9, ymm10
+c5 75 ed 64 be 10 | vpaddsw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed ed d2 | vpaddsw ymm2, ymm2, ymm2
+c5 b5 ed db | vpaddsw ymm3, ymm9, ymm3
+c5 e5 ed dd | vpaddsw ymm3, ymm3, ymm5
 c4 c1 31 dc da | vpaddusb xmm3, xmm9, xmm10
 c5 71 dc 64 be 10 | vpaddusb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 dc d2 | vpaddusb xmm2, xmm2, xmm2
 c5 b1 dc db | vpaddusb xmm3, xmm9, xmm3
 c5 e1 dc dd | vpaddusb xmm3, xmm3, xmm5
+c4 c1 35 dc da | vpaddusb ymm3, ymm9, ymm10
+c5 75 dc 64 be 10 | vpaddusb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed dc d2 | vpaddusb ymm2, ymm2, ymm2
+c5 b5 dc db | vpaddusb ymm3, ymm9, ymm3
+c5 e5 dc dd | vpaddusb ymm3, ymm3, ymm5
 c4 c1 31 dd da | vpaddusw xmm3, xmm9, xmm10
 c5 71 dd 64 be 10 | vpaddusw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 dd d2 | vpaddusw xmm2, xmm2, xmm2
 c5 b1 dd db | vpaddusw xmm3, xmm9, xmm3
 c5 e1 dd dd | vpaddusw xmm3, xmm3, xmm5
+c4 c1 35 dd da | vpaddusw ymm3, ymm9, ymm10
+c5 75 dd 64 be 10 | vpaddusw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed dd d2 | vpaddusw ymm2, ymm2, ymm2
+c5 b5 dd db | vpaddusw ymm3, ymm9, ymm3
+c5 e5 dd dd | vpaddusw ymm3, ymm3, ymm5
 c4 c1 31 e8 da | vpsubsb xmm3, xmm9, xmm10
 c5 71 e8 64 be 10 | vpsubsb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 e8 d2 | vpsubsb xmm2, xmm2, xmm2
 c5 b1 e8 db | vpsubsb xmm3, xmm9, xmm3
 c5 e1 e8 dd | vpsubsb xmm3, xmm3, xmm5
+c4 c1 35 e8 da | vpsubsb ymm3, ymm9, ymm10
+c5 75 e8 64 be 10 | vpsubsb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed e8 d2 | vpsubsb ymm2, ymm2, ymm2
+c5 b5 e8 db | vpsubsb ymm3, ymm9, ymm3
+c5 e5 e8 dd | vpsubsb ymm3, ymm3, ymm5
 c4 c1 31 e9 da | vpsubsw xmm3, xmm9, xmm10
 c5 71 e9 64 be 10 | vpsubsw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 e9 d2 | vpsubsw xmm2, xmm2, xmm2
 c5 b1 e9 db | vpsubsw xmm3, xmm9, xmm3
 c5 e1 e9 dd | vpsubsw xmm3, xmm3, xmm5
+c4 c1 35 e9 da | vpsubsw ymm3, ymm9, ymm10
+c5 75 e9 64 be 10 | vpsubsw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed e9 d2 | vpsubsw ymm2, ymm2, ymm2
+c5 b5 e9 db | vpsubsw ymm3, ymm9, ymm3
+c5 e5 e9 dd | vpsubsw ymm3, ymm3, ymm5
 c4 c1 31 d8 da | vpsubusb xmm3, xmm9, xmm10
 c5 71 d8 64 be 10 | vpsubusb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 d8 d2 | vpsubusb xmm2, xmm2, xmm2
 c5 b1 d8 db | vpsubusb xmm3, xmm9, xmm3
 c5 e1 d8 dd | vpsubusb xmm3, xmm3, xmm5
+c4 c1 35 d8 da | vpsubusb ymm3, ymm9, ymm10
+c5 75 d8 64 be 10 | vpsubusb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed d8 d2 | vpsubusb ymm2, ymm2, ymm2
+c5 b5 d8 db | vpsubusb ymm3, ymm9, ymm3
+c5 e5 d8 dd | vpsubusb ymm3, ymm3, ymm5
 c4 c1 31 d9 da | vpsubusw xmm3, xmm9, xmm10
 c5 71 d9 64 be 10 | vpsubusw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 d9 d2 | vpsubusw xmm2, xmm2, xmm2
 c5 b1 d9 db | vpsubusw xmm3, xmm9, xmm3
 c5 e1 d9 dd | vpsubusw xmm3, xmm3, xmm5
+c4 c1 35 d9 da | vpsubusw ymm3, ymm9, ymm10
+c5 75 d9 64 be 10 | vpsubusw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed d9 d2 | vpsubusw ymm2, ymm2, ymm2
+c5 b5 d9 db | vpsubusw ymm3, ymm9, ymm3
+c5 e5 d9 dd | vpsubusw ymm3, ymm3, ymm5
 c4 c1 31 d5 da | vpmullw xmm3, xmm9, xmm10
 c5 71 d5 64 be 10 | vpmullw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 d5 d2 | vpmullw xmm2, xmm2, xmm2
 c5 b1 d5 db | vpmullw xmm3, xmm9, xmm3
 c5 e1 d5 dd | vpmullw xmm3, xmm3, xmm5
+c4 c1 35 d5 da | vpmullw ymm3, ymm9, ymm10
+c5 75 d5 64 be 10 | vpmullw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed d5 d2 | vpmullw ymm2, ymm2, ymm2
+c5 b5 d5 db | vpmullw ymm3, ymm9, ymm3
+c5 e5 d5 dd | vpmullw ymm3, ymm3, ymm5
 c4 c1 31 e5 da | vpmulhw xmm3, xmm9, xmm10
 c5 71 e5 64 be 10 | vpmulhw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 e5 d2 | vpmulhw xmm2, xmm2, xmm2
 c5 b1 e5 db | vpmulhw xmm3, xmm9, xmm3
 c5 e1 e5 dd | vpmulhw xmm3, xmm3, xmm5
+c4 c1 35 e5 da | vpmulhw ymm3, ymm9, ymm10
+c5 75 e5 64 be 10 | vpmulhw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed e5 d2 | vpmulhw ymm2, ymm2, ymm2
+c5 b5 e5 db | vpmulhw ymm3, ymm9, ymm3
+c5 e5 e5 dd | vpmulhw ymm3, ymm3, ymm5
 c4 c1 31 e4 da | vpmulhuw xmm3, xmm9, xmm10
 c5 71 e4 64 be 10 | vpmulhuw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 e4 d2 | vpmulhuw xmm2, xmm2, xmm2
 c5 b1 e4 db | vpmulhuw xmm3, xmm9, xmm3
 c5 e1 e4 dd | vpmulhuw xmm3, xmm3, xmm5
+c4 c1 35 e4 da | vpmulhuw ymm3, ymm9, ymm10
+c5 75 e4 64 be 10 | vpmulhuw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed e4 d2 | vpmulhuw ymm2, ymm2, ymm2
+c5 b5 e4 db | vpmulhuw ymm3, ymm9, ymm3
+c5 e5 e4 dd | vpmulhuw ymm3, ymm3, ymm5
 c4 c1 31 f4 da | vpmuludq xmm3, xmm9, xmm10
 c5 71 f4 64 be 10 | vpmuludq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 f4 d2 | vpmuludq xmm2, xmm2, xmm2
 c5 b1 f4 db | vpmuludq xmm3, xmm9, xmm3
 c5 e1 f4 dd | vpmuludq xmm3, xmm3, xmm5
+c4 c1 35 f4 da | vpmuludq ymm3, ymm9, ymm10
+c5 75 f4 64 be 10 | vpmuludq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed f4 d2 | vpmuludq ymm2, ymm2, ymm2
+c5 b5 f4 db | vpmuludq ymm3, ymm9, ymm3
+c5 e5 f4 dd | vpmuludq ymm3, ymm3, ymm5
 c4 c1 31 f5 da | vpmaddwd xmm3, xmm9, xmm10
 c5 71 f5 64 be 10 | vpmaddwd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 f5 d2 | vpmaddwd xmm2, xmm2, xmm2
 c5 b1 f5 db | vpmaddwd xmm3, xmm9, xmm3
 c5 e1 f5 dd | vpmaddwd xmm3, xmm3, xmm5
+c4 c1 35 f5 da | vpmaddwd ymm3, ymm9, ymm10
+c5 75 f5 64 be 10 | vpmaddwd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed f5 d2 | vpmaddwd ymm2, ymm2, ymm2
+c5 b5 f5 db | vpmaddwd ymm3, ymm9, ymm3
+c5 e5 f5 dd | vpmaddwd ymm3, ymm3, ymm5
 c4 c1 31 f6 da | vpsadbw xmm3, xmm9, xmm10
 c5 71 f6 64 be 10 | vpsadbw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 f6 d2 | vpsadbw xmm2, xmm2, xmm2
 c5 b1 f6 db | vpsadbw xmm3, xmm9, xmm3
 c5 e1 f6 dd | vpsadbw xmm3, xmm3, xmm5
+c4 c1 35 f6 da | vpsadbw ymm3, ymm9, ymm10
+c5 75 f6 64 be 10 | vpsadbw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed f6 d2 | vpsadbw ymm2, ymm2, ymm2
+c5 b5 f6 db | vpsadbw ymm3, ymm9, ymm3
+c5 e5 f6 dd | vpsadbw ymm3, ymm3, ymm5
 c4 c1 31 e0 da | vpavgb xmm3, xmm9, xmm10
 c5 71 e0 64 be 10 | vpavgb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 e0 d2 | vpavgb xmm2, xmm2, xmm2
 c5 b1 e0 db | vpavgb xmm3, xmm9, xmm3
 c5 e1 e0 dd | vpavgb xmm3, xmm3, xmm5
+c4 c1 35 e0 da | vpavgb ymm3, ymm9, ymm10
+c5 75 e0 64 be 10 | vpavgb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed e0 d2 | vpavgb ymm2, ymm2, ymm2
+c5 b5 e0 db | vpavgb ymm3, ymm9, ymm3
+c5 e5 e0 dd | vpavgb ymm3, ymm3, ymm5
 c4 c1 31 e3 da | vpavgw xmm3, xmm9, xmm10
 c5 71 e3 64 be 10 | vpavgw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 e3 d2 | vpavgw xmm2, xmm2, xmm2
 c5 b1 e3 db | vpavgw xmm3, xmm9, xmm3
 c5 e1 e3 dd | vpavgw xmm3, xmm3, xmm5
+c4 c1 35 e3 da | vpavgw ymm3, ymm9, ymm10
+c5 75 e3 64 be 10 | vpavgw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed e3 d2 | vpavgw ymm2, ymm2, ymm2
+c5 b5 e3 db | vpavgw ymm3, ymm9, ymm3
+c5 e5 e3 dd | vpavgw ymm3, ymm3, ymm5
 c4 c1 31 da da | vpminub xmm3, xmm9, xmm10
 c5 71 da 64 be 10 | vpminub xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 da d2 | vpminub xmm2, xmm2, xmm2
 c5 b1 da db | vpminub xmm3, xmm9, xmm3
 c5 e1 da dd | vpminub xmm3, xmm3, xmm5
+c4 c1 35 da da | vpminub ymm3, ymm9, ymm10
+c5 75 da 64 be 10 | vpminub ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed da d2 | vpminub ymm2, ymm2, ymm2
+c5 b5 da db | vpminub ymm3, ymm9, ymm3
+c5 e5 da dd | vpminub ymm3, ymm3, ymm5
 c4 c1 31 de da | vpmaxub xmm3, xmm9, xmm10
 c5 71 de 64 be 10 | vpmaxub xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 de d2 | vpmaxub xmm2, xmm2, xmm2
 c5 b1 de db | vpmaxub xmm3, xmm9, xmm3
 c5 e1 de dd | vpmaxub xmm3, xmm3, xmm5
+c4 c1 35 de da | vpmaxub ymm3, ymm9, ymm10
+c5 75 de 64 be 10 | vpmaxub ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed de d2 | vpmaxub ymm2, ymm2, ymm2
+c5 b5 de db | vpmaxub ymm3, ymm9, ymm3
+c5 e5 de dd | vpmaxub ymm3, ymm3, ymm5
 c4 c1 31 ea da | vpminsw xmm3, xmm9, xmm10
 c5 71 ea 64 be 10 | vpminsw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 ea d2 | vpminsw xmm2, xmm2, xmm2
 c5 b1 ea db | vpminsw xmm3, xmm9, xmm3
 c5 e1 ea dd | vpminsw xmm3, xmm3, xmm5
+c4 c1 35 ea da | vpminsw ymm3, ymm9, ymm10
+c5 75 ea 64 be 10 | vpminsw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed ea d2 | vpminsw ymm2, ymm2, ymm2
+c5 b5 ea db | vpminsw ymm3, ymm9, ymm3
+c5 e5 ea dd | vpminsw ymm3, ymm3, ymm5
 c4 c1 31 ee da | vpmaxsw xmm3, xmm9, xmm10
 c5 71 ee 64 be 10 | vpmaxsw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 ee d2 | vpmaxsw xmm2, xmm2, xmm2
 c5 b1 ee db | vpmaxsw xmm3, xmm9, xmm3
 c5 e1 ee dd | vpmaxsw xmm3, xmm3, xmm5
+c4 c1 35 ee da | vpmaxsw ymm3, ymm9, ymm10
+c5 75 ee 64 be 10 | vpmaxsw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed ee d2 | vpmaxsw ymm2, ymm2, ymm2
+c5 b5 ee db | vpmaxsw ymm3, ymm9, ymm3
+c5 e5 ee dd | vpmaxsw ymm3, ymm3, ymm5
 c4 c1 31 f1 da | vpsllw xmm3, xmm9, xmm10
 c5 71 f1 64 be 10 | vpsllw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c5 e9 f1 d2 | vpsllw xmm2, xmm2, xmm2
@@ -268,135 +493,269 @@ c4 62 71 00 64 be 10 | vpshufb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 00 d2 | vpshufb xmm2, xmm2, xmm2
 c4 e2 31 00 db | vpshufb xmm3, xmm9, xmm3
 c4 e2 61 00 dd | vpshufb xmm3, xmm3, xmm5
+c4 c2 35 00 da | vpshufb ymm3, ymm9, ymm10
+c4 62 75 00 64 be 10 | vpshufb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 00 d2 | vpshufb ymm2, ymm2, ymm2
+c4 e2 35 00 db | vpshufb ymm3, ymm9, ymm3
+c4 e2 65 00 dd | vpshufb ymm3, ymm3, ymm5
 c4 c2 31 01 da | vphaddw xmm3, xmm9, xmm10
 c4 62 71 01 64 be 10 | vphaddw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 01 d2 | vphaddw xmm2, xmm2, xmm2
 c4 e2 31 01 db | vphaddw xmm3, xmm9, xmm3
 c4 e2 61 01 dd | vphaddw xmm3, xmm3, xmm5
+c4 c2 35 01 da | vphaddw ymm3, ymm9, ymm10
+c4 62 75 01 64 be 10 | vphaddw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 01 d2 | vphaddw ymm2, ymm2, ymm2
+c4 e2 35 01 db | vphaddw ymm3, ymm9, ymm3
+c4 e2 65 01 dd | vphaddw ymm3, ymm3, ymm5
 c4 c2 31 02 da | vphaddd xmm3, xmm9, xmm10
 c4 62 71 02 64 be 10 | vphaddd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 02 d2 | vphaddd xmm2, xmm2, xmm2
 c4 e2 31 02 db | vphaddd xmm3, xmm9, xmm3
 c4 e2 61 02 dd | vphaddd xmm3, xmm3, xmm5
+c4 c2 35 02 da | vphaddd ymm3, ymm9, ymm10
+c4 62 75 02 64 be 10 | vphaddd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 02 d2 | vphaddd ymm2, ymm2, ymm2
+c4 e2 35 02 db | vphaddd ymm3, ymm9, ymm3
+c4 e2 65 02 dd | vphaddd ymm3, ymm3, ymm5
 c4 c2 31 03 da | vphaddsw xmm3, xmm9, xmm10
 c4 62 71 03 64 be 10 | vphaddsw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 03 d2 | vphaddsw xmm2, xmm2, xmm2
 c4 e2 31 03 db | vphaddsw xmm3, xmm9, xmm3
 c4 e2 61 03 dd | vphaddsw xmm3, xmm3, xmm5
+c4 c2 35 03 da | vphaddsw ymm3, ymm9, ymm10
+c4 62 75 03 64 be 10 | vphaddsw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 03 d2 | vphaddsw ymm2, ymm2, ymm2
+c4 e2 35 03 db | vphaddsw ymm3, ymm9, ymm3
+c4 e2 65 03 dd | vphaddsw ymm3, ymm3, ymm5
 c4 c2 31 04 da | vpmaddubsw xmm3, xmm9, xmm10
 c4 62 71 04 64 be 10 | vpmaddubsw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 04 d2 | vpmaddubsw xmm2, xmm2, xmm2
 c4 e2 31 04 db | vpmaddubsw xmm3, xmm9, xmm3
 c4 e2 61 04 dd | vpmaddubsw xmm3, xmm3, xmm5
+c4 c2 35 04 da | vpmaddubsw ymm3, ymm9, ymm10
+c4 62 75 04 64 be 10 | vpmaddubsw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 04 d2 | vpmaddubsw ymm2, ymm2, ymm2
+c4 e2 35 04 db | vpmaddubsw ymm3, ymm9, ymm3
+c4 e2 65 04 dd | vpmaddubsw ymm3, ymm3, ymm5
 c4 c2 31 05 da | vphsubw xmm3, xmm9, xmm10
 c4 62 71 05 64 be 10 | vphsubw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 05 d2 | vphsubw xmm2, xmm2, xmm2
 c4 e2 31 05 db | vphsubw xmm3, xmm9, xmm3
 c4 e2 61 05 dd | vphsubw xmm3, xmm3, xmm5
+c4 c2 35 05 da | vphsubw ymm3, ymm9, ymm10
+c4 62 75 05 64 be 10 | vphsubw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 05 d2 | vphsubw ymm2, ymm2, ymm2
+c4 e2 35 05 db | vphsubw ymm3, ymm9, ymm3
+c4 e2 65 05 dd | vphsubw ymm3, ymm3, ymm5
 c4 c2 31 06 da | vphsubd xmm3, xmm9, xmm10
 c4 62 71 06 64 be 10 | vphsubd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 06 d2 | vphsubd xmm2, xmm2, xmm2
 c4 e2 31 06 db | vphsubd xmm3, xmm9, xmm3
 c4 e2 61 06 dd | vphsubd xmm3, xmm3, xmm5
+c4 c2 35 06 da | vphsubd ymm3, ymm9, ymm10
+c4 62 75 06 64 be 10 | vphsubd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 06 d2 | vphsubd ymm2, ymm2, ymm2
+c4 e2 35 06 db | vphsubd ymm3, ymm9, ymm3
+c4 e2 65 06 dd | vphsubd ymm3, ymm3, ymm5
 c4 c2 31 07 da | vphsubsw xmm3, xmm9, xmm10
 c4 62 71 07 64 be 10 | vphsubsw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 07 d2 | vphsubsw xmm2, xmm2, xmm2
 c4 e2 31 07 db | vphsubsw xmm3, xmm9, xmm3
 c4 e2 61 07 dd | vphsubsw xmm3, xmm3, xmm5
+c4 c2 35 07 da | vphsubsw ymm3, ymm9, ymm10
+c4 62 75 07 64 be 10 | vphsubsw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 07 d2 | vphsubsw ymm2, ymm2, ymm2
+c4 e2 35 07 db | vphsubsw ymm3, ymm9, ymm3
+c4 e2 65 07 dd | vphsubsw ymm3, ymm3, ymm5
 c4 c2 31 08 da | vpsignb xmm3, xmm9, xmm10
 c4 62 71 08 64 be 10 | vpsignb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 08 d2 | vpsignb xmm2, xmm2, xmm2
 c4 e2 31 08 db | vpsignb xmm3, xmm9, xmm3
 c4 e2 61 08 dd | vpsignb xmm3, xmm3, xmm5
+c4 c2 35 08 da | vpsignb ymm3, ymm9, ymm10
+c4 62 75 08 64 be 10 | vpsignb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 08 d2 | vpsignb ymm2, ymm2, ymm2
+c4 e2 35 08 db | vpsignb ymm3, ymm9, ymm3
+c4 e2 65 08 dd | vpsignb ymm3, ymm3, ymm5
 c4 c2 31 09 da | vpsignw xmm3, xmm9, xmm10
 c4 62 71 09 64 be 10 | vpsignw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 09 d2 | vpsignw xmm2, xmm2, xmm2
 c4 e2 31 09 db | vpsignw xmm3, xmm9, xmm3
 c4 e2 61 09 dd | vpsignw xmm3, xmm3, xmm5
+c4 c2 35 09 da | vpsignw ymm3, ymm9, ymm10
+c4 62 75 09 64 be 10 | vpsignw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 09 d2 | vpsignw ymm2, ymm2, ymm2
+c4 e2 35 09 db | vpsignw ymm3, ymm9, ymm3
+c4 e2 65 09 dd | vpsignw ymm3, ymm3, ymm5
 c4 c2 31 0a da | vpsignd xmm3, xmm9, xmm10
 c4 62 71 0a 64 be 10 | vpsignd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 0a d2 | vpsignd xmm2, xmm2, xmm2
 c4 e2 31 0a db | vpsignd xmm3, xmm9, xmm3
 c4 e2 61 0a dd | vpsignd xmm3, xmm3, xmm5
+c4 c2 35 0a da | vpsignd ymm3, ymm9, ymm10
+c4 62 75 0a 64 be 10 | vpsignd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 0a d2 | vpsignd ymm2, ymm2, ymm2
+c4 e2 35 0a db | vpsignd ymm3, ymm9, ymm3
+c4 e2 65 0a dd | vpsignd ymm3, ymm3, ymm5
 c4 c2 31 0b da | vpmulhrsw xmm3, xmm9, xmm10
 c4 62 71 0b 64 be 10 | vpmulhrsw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 0b d2 | vpmulhrsw xmm2, xmm2, xmm2
 c4 e2 31 0b db | vpmulhrsw xmm3, xmm9, xmm3
 c4 e2 61 0b dd | vpmulhrsw xmm3, xmm3, xmm5
+c4 c2 35 0b da | vpmulhrsw ymm3, ymm9, ymm10
+c4 62 75 0b 64 be 10 | vpmulhrsw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 0b d2 | vpmulhrsw ymm2, ymm2, ymm2
+c4 e2 35 0b db | vpmulhrsw ymm3, ymm9, ymm3
+c4 e2 65 0b dd | vpmulhrsw ymm3, ymm3, ymm5
 c4 c2 31 28 da | vpmuldq xmm3, xmm9, xmm10
 c4 62 71 28 64 be 10 | vpmuldq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 28 d2 | vpmuldq xmm2, xmm2, xmm2
 c4 e2 31 28 db | vpmuldq xmm3, xmm9, xmm3
 c4 e2 61 28 dd | vpmuldq xmm3, xmm3, xmm5
+c4 c2 35 28 da | vpmuldq ymm3, ymm9, ymm10
+c4 62 75 28 64 be 10 | vpmuldq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 28 d2 | vpmuldq ymm2, ymm2, ymm2
+c4 e2 35 28 db | vpmuldq ymm3, ymm9, ymm3
+c4 e2 65 28 dd | vpmuldq ymm3, ymm3, ymm5
 c4 c2 31 29 da | vpcmpeqq xmm3, xmm9, xmm10
 c4 62 71 29 64 be 10 | vpcmpeqq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 29 d2 | vpcmpeqq xmm2, xmm2, xmm2
 c4 e2 31 29 db | vpcmpeqq xmm3, xmm9, xmm3
 c4 e2 61 29 dd | vpcmpeqq xmm3, xmm3, xmm5
+c4 c2 35 29 da | vpcmpeqq ymm3, ymm9, ymm10
+c4 62 75 29 64 be 10 | vpcmpeqq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 29 d2 | vpcmpeqq ymm2, ymm2, ymm2
+c4 e2 35 29 db | vpcmpeqq ymm3, ymm9, ymm3
+c4 e2 65 29 dd | vpcmpeqq ymm3, ymm3, ymm5
 c4 c2 31 37 da | vpcmpgtq xmm3, xmm9, xmm10
 c4 62 71 37 64 be 10 | vpcmpgtq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 37 d2 | vpcmpgtq xmm2, xmm2, xmm2
 c4 e2 31 37 db | vpcmpgtq xmm3, xmm9, xmm3
 c4 e2 61 37 dd | vpcmpgtq xmm3, xmm3, xmm5
+c4 c2 35 37 da | vpcmpgtq ymm3, ymm9, ymm10
+c4 62 75 37 64 be 10 | vpcmpgtq ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 37 d2 | vpcmpgtq ymm2, ymm2, ymm2
+c4 e2 35 37 db | vpcmpgtq ymm3, ymm9, ymm3
+c4 e2 65 37 dd | vpcmpgtq ymm3, ymm3, ymm5
 c4 c2 31 2b da | vpackusdw xmm3, xmm9, xmm10
 c4 62 71 2b 64 be 10 | vpackusdw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 2b d2 | vpackusdw xmm2, xmm2, xmm2
 c4 e2 31 2b db | vpackusdw xmm3, xmm9, xmm3
 c4 e2 61 2b dd | vpackusdw xmm3, xmm3, xmm5
+c4 c2 35 2b da | vpackusdw ymm3, ymm9, ymm10
+c4 62 75 2b 64 be 10 | vpackusdw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 2b d2 | vpackusdw ymm2, ymm2, ymm2
+c4 e2 35 2b db | vpackusdw ymm3, ymm9, ymm3
+c4 e2 65 2b dd | vpackusdw ymm3, ymm3, ymm5
 c4 c2 31 38 da | vpminsb xmm3, xmm9, xmm10
 c4 62 71 38 64 be 10 | vpminsb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 38 d2 | vpminsb xmm2, xmm2, xmm2
 c4 e2 31 38 db | vpminsb xmm3, xmm9, xmm3
 c4 e2 61 38 dd | vpminsb xmm3, xmm3, xmm5
+c4 c2 35 38 da | vpminsb ymm3, ymm9, ymm10
+c4 62 75 38 64 be 10 | vpminsb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 38 d2 | vpminsb ymm2, ymm2, ymm2
+c4 e2 35 38 db | vpminsb ymm3, ymm9, ymm3
+c4 e2 65 38 dd | vpminsb ymm3, ymm3, ymm5
 c4 c2 31 39 da | vpminsd xmm3, xmm9, xmm10
 c4 62 71 39 64 be 10 | vpminsd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 39 d2 | vpminsd xmm2, xmm2, xmm2
 c4 e2 31 39 db | vpminsd xmm3, xmm9, xmm3
 c4 e2 61 39 dd | vpminsd xmm3, xmm3, xmm5
+c4 c2 35 39 da | vpminsd ymm3, ymm9, ymm10
+c4 62 75 39 64 be 10 | vpminsd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 39 d2 | vpminsd ymm2, ymm2, ymm2
+c4 e2 35 39 db | vpminsd ymm3, ymm9, ymm3
+c4 e2 65 39 dd | vpminsd ymm3, ymm3, ymm5
 c4 c2 31 3a da | vpminuw xmm3, xmm9, xmm10
 c4 62 71 3a 64 be 10 | vpminuw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 3a d2 | vpminuw xmm2, xmm2, xmm2
 c4 e2 31 3a db | vpminuw xmm3, xmm9, xmm3
 c4 e2 61 3a dd | vpminuw xmm3, xmm3, xmm5
+c4 c2 35 3a da | vpminuw ymm3, ymm9, ymm10
+c4 62 75 3a 64 be 10 | vpminuw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 3a d2 | vpminuw ymm2, ymm2, ymm2
+c4 e2 35 3a db | vpminuw ymm3, ymm9, ymm3
+c4 e2 65 3a dd | vpminuw ymm3, ymm3, ymm5
 c4 c2 31 3b da | vpminud xmm3, xmm9, xmm10
 c4 62 71 3b 64 be 10 | vpminud xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 3b d2 | vpminud xmm2, xmm2, xmm2
 c4 e2 31 3b db | vpminud xmm3, xmm9, xmm3
 c4 e2 61 3b dd | vpminud xmm3, xmm3, xmm5
+c4 c2 35 3b da | vpminud ymm3, ymm9, ymm10
+c4 62 75 3b 64 be 10 | vpminud ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 3b d2 | vpminud ymm2, ymm2, ymm2
+c4 e2 35 3b db | vpminud ymm3, ymm9, ymm3
+c4 e2 65 3b dd | vpminud ymm3, ymm3, ymm5
 c4 c2 31 3c da | vpmaxsb xmm3, xmm9, xmm10
 c4 62 71 3c 64 be 10 | vpmaxsb xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 3c d2 | vpmaxsb xmm2, xmm2, xmm2
 c4 e2 31 3c db | vpmaxsb xmm3, xmm9, xmm3
 c4 e2 61 3c dd | vpmaxsb xmm3, xmm3, xmm5
+c4 c2 35 3c da | vpmaxsb ymm3, ymm9, ymm10
+c4 62 75 3c 64 be 10 | vpmaxsb ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 3c d2 | vpmaxsb ymm2, ymm2, ymm2
+c4 e2 35 3c db | vpmaxsb ymm3, ymm9, ymm3
+c4 e2 65 3c dd | vpmaxsb ymm3, ymm3, ymm5
 c4 c2 31 3d da | vpmaxsd xmm3, xmm9, xmm10
 c4 62 71 3d 64 be 10 | vpmaxsd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 3d d2 | vpmaxsd xmm2, xmm2, xmm2
 c4 e2 31 3d db | vpmaxsd xmm3, xmm9, xmm3
 c4 e2 61 3d dd | vpmaxsd xmm3, xmm3, xmm5
+c4 c2 35 3d da | vpmaxsd ymm3, ymm9, ymm10
+c4 62 75 3d 64 be 10 | vpmaxsd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 3d d2 | vpmaxsd ymm2, ymm2, ymm2
+c4 e2 35 3d db | vpmaxsd ymm3, ymm9, ymm3
+c4 e2 65 3d dd | vpmaxsd ymm3, ymm3, ymm5
 c4 c2 31 3e da | vpmaxuw xmm3, xmm9, xmm10
 c4 62 71 3e 64 be 10 | vpmaxuw xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 3e d2 | vpmaxuw xmm2, xmm2, xmm2
 c4 e2 31 3e db | vpmaxuw xmm3, xmm9, xmm3
 c4 e2 61 3e dd | vpmaxuw xmm3, xmm3, xmm5
+c4 c2 35 3e da | vpmaxuw ymm3, ymm9, ymm10
+c4 62 75 3e 64 be 10 | vpmaxuw ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 3e d2 | vpmaxuw ymm2, ymm2, ymm2
+c4 e2 35 3e db | vpmaxuw ymm3, ymm9, ymm3
+c4 e2 65 3e dd | vpmaxuw ymm3, ymm3, ymm5
 c4 c2 31 3f da | vpmaxud xmm3, xmm9, xmm10
 c4 62 71 3f 64 be 10 | vpmaxud xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 3f d2 | vpmaxud xmm2, xmm2, xmm2
 c4 e2 31 3f db | vpmaxud xmm3, xmm9, xmm3
 c4 e2 61 3f dd | vpmaxud xmm3, xmm3, xmm5
+c4 c2 35 3f da | vpmaxud ymm3, ymm9, ymm10
+c4 62 75 3f 64 be 10 | vpmaxud ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 3f d2 | vpmaxud ymm2, ymm2, ymm2
+c4 e2 35 3f db | vpmaxud ymm3, ymm9, ymm3
+c4 e2 65 3f dd | vpmaxud ymm3, ymm3, ymm5
 c4 c2 31 40 da | vpmulld xmm3, xmm9, xmm10
 c4 62 71 40 64 be 10 | vpmulld xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 69 40 d2 | vpmulld xmm2, xmm2, xmm2
 c4 e2 31 40 db | vpmulld xmm3, xmm9, xmm3
 c4 e2 61 40 dd | vpmulld xmm3, xmm3, xmm5
+c4 c2 35 40 da | vpmulld ymm3, ymm9, ymm10
+c4 62 75 40 64 be 10 | vpmulld ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 6d 40 d2 | vpmulld ymm2, ymm2, ymm2
+c4 e2 35 40 db | vpmulld ymm3, ymm9, ymm3
+c4 e2 65 40 dd | vpmulld ymm3, ymm3, ymm5
 c4 c2 79 1c d9 | vpabsb xmm3, xmm9
 c4 62 79 1c 64 be 10 | vpabsb xmm12, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 79 1c d2 | vpabsb xmm2, xmm2
+c4 c2 7d 1c d9 | vpabsb ymm3, ymm9
+c4 62 7d 1c 64 be 10 | vpabsb ymm12, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 7d 1c d2 | vpabsb ymm2, ymm2
 c4 c2 79 1d d9 | vpabsw xmm3, xmm9
 c4 62 79 1d 64 be 10 | vpabsw xmm12, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 79 1d d2 | vpabsw xmm2, xmm2
+c4 c2 7d 1d d9 | vpabsw ymm3, ymm9
+c4 62 7d 1d 64 be 10 | vpabsw ymm12, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 7d 1d d2 | vpabsw ymm2, ymm2
 c4 c2 79 1e d9 | vpabsd xmm3, xmm9
 c4 62 79 1e 64 be 10 | vpabsd xmm12, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 79 1e d2 | vpabsd xmm2, xmm2
+c4 c2 7d 1e d9 | vpabsd ymm3, ymm9
+c4 62 7d 1e 64 be 10 | vpabsd ymm12, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 7d 1e d2 | vpabsd ymm2, ymm2
 c4 c2 79 41 d9 | vphminposuw xmm3, xmm9
 c4 62 79 41 64 be 10 | vphminposuw xmm12, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 79 41 d2 | vphminposuw xmm2, xmm2

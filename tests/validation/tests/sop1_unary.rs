@@ -487,11 +487,13 @@ fn unsupported_sop1_operands_are_rejected() {
 
 #[test]
 fn other_sop1_opcodes_stay_unsupported() {
-    // Every 8-bit SOP1 opcode except s_mov_b32 (3) and the eleven forms.
+    // Every 8-bit SOP1 opcode except s_mov_b32 (3), the eleven forms and the
+    // twelve EXEC-writing forms of guide 12.3, printed pages 120-122.
     let supported: Vec<u32> = FORMS
         .iter()
         .map(|&(form, _)| form as u32)
         .chain([3])
+        .chain(60..=71)
         .collect();
     for op in (0..=255).filter(|op| !supported.contains(op)) {
         let code = program(&[(8, 1)], false, &[sop1(op, 10, 8)], 10);

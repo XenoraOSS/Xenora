@@ -80,6 +80,20 @@ pub const fn xnor_nonzero_b32(a: u32, b: u32) -> (u32, bool) {
     (value, value != 0)
 }
 
+/// Bitwise `!a & b` and whether the result is nonzero.
+///
+/// The `andn1` forms negate the first operand. Guide 12.3, printed page 122.
+pub const fn andn1_nonzero_b32(a: u32, b: u32) -> (u32, bool) {
+    andn2_nonzero_b32(b, a)
+}
+
+/// Bitwise `!a | b` and whether the result is nonzero.
+///
+/// The `orn1` forms negate the first operand. Guide 12.3, printed page 122.
+pub const fn orn1_nonzero_b32(a: u32, b: u32) -> (u32, bool) {
+    orn2_nonzero_b32(b, a)
+}
+
 /// `a << count` and whether the result is nonzero. The caller masks the count
 /// to the declared count width, so `count` is below 32.
 pub const fn lshl_nonzero_b32(a: u32, count: u32) -> (u32, bool) {

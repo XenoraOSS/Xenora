@@ -38,6 +38,11 @@ final class AudioVfsPlaybackModel: ObservableObject {
     var canRun: Bool { phase == .idle }
     var canListen: Bool { phase == .idle && frame?.previewPCM != nil }
 
+    func captureForExport() -> AudioVfsCaptureDocument? {
+        guard phase == .idle, let pcm = frame?.previewPCM else { return nil }
+        return AudioVfsCaptureDocument(pcm: pcm)
+    }
+
     var captureFailure: String? {
         guard let frame else { return nil }
         if frame.status != XENORA_OK {
@@ -78,6 +83,9 @@ struct AudioVfsFixtureView: View {
     @ObservedObject var model: AudioVfsPlaybackModel
     let connected: Bool
     let hudEnabled: Bool
+    @State private var exportingAudio = false
+    @State private var exportDocument: AudioVfsCaptureDocument?
+    @State private var exportError: String?
 
     var body: some View {
         Section("Audio/VFS fixture") {
@@ -112,6 +120,17 @@ struct AudioVfsFixtureView: View {
                 }
                 .disabled(!model.canListen)
             }
+            Button("Save captured audio…") {
+                guard let document = model.captureForExport() else { return }
+                exportDocument = document
+                exportError = nil
+                exportingAudio = true
+            }
+            .disabled(!model.canListen)
+            .accessibilityIdentifier("audio-vfs-save")
+            if let exportError {
+                Text(exportError).foregroundStyle(.red)
+            }
             if let failure = model.captureFailure {
                 Text(failure).foregroundStyle(.red)
             }
@@ -123,6 +142,19 @@ struct AudioVfsFixtureView: View {
                     Text(message).foregroundStyle(.red)
                 }
             }
+        }
+        .fileExporter(
+            isPresented: $exportingAudio,
+            document: exportDocument,
+            contentTypes: [.wav],
+            defaultFilename: "xenora-guest-audio"
+        ) { result in
+            exportDocument = nil
+            if case let .failure(error) = result, (error as? CocoaError)?.code != .userCancelled {
+                exportError = "Could not save captured audio: \(error.localizedDescription)"
+            }
+        } onCancellation: {
+            exportDocument = nil
         }
     }
 }

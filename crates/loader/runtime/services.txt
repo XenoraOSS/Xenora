@@ -2020,3 +2020,11 @@ service kernel32.dll GetConsoleTitleA(buffer: ptr, size: u32) -> u32
     fails 0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size, the same documented length answer as the wide form
     ref Microsoft Learn, GetConsoleTitleA
     test the_hosted_console_has_no_window_and_its_title_round_trips
+
+service ucrtbase.dll _getpid() -> i32
+    handler crt_getpid
+    status implemented
+    alias api-ms-win-crt-runtime-l1-1-0.dll
+    fails never
+    ref process.h _getpid
+    test crt_getpid_matches_the_process_identity

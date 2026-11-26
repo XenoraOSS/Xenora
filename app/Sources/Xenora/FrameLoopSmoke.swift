@@ -14,7 +14,7 @@ private final class StopGate: Sendable {
 /// Scripted failure paths. This never opens a Metal device.
 private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
     enum Operation: String {
-        case create, destroy, standard, interactive, sendInput, pause, resume, stop, status
+        case create, destroy, standard, interactive, sendInput, pause, resume, stop, status, journalSize
     }
 
     // Deinitialization can call the API from outside the main actor.
@@ -102,6 +102,19 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
         }
         if let gate, !gate.wait() { return Int32(XENORA_INTERNAL_ERROR) }
         return code
+    }
+
+    func journalSize(_ handle: xenora_session, required: inout UInt64) -> Int32 {
+        lock.withLock {
+            let code = call(.journalSize, handle)
+            guard code == XENORA_OK else { return code }
+            guard snapshot.state == XENORA_LOOP_FINISHED || snapshot.state == XENORA_LOOP_STOPPED else {
+                required = 0
+                return Int32(XENORA_INVALID_STATE)
+            }
+            required = UInt64(snapshot.completed)
+            return required == 0 ? Int32(XENORA_OK) : Int32(XENORA_BUFFER_TOO_SMALL)
+        }
     }
 
     func status(
@@ -367,12 +380,18 @@ private func checkFramePolling() async -> [String] {
            "new status did not publish a separate, immutable pixel snapshot")
     expect(model.controller == nil && api.count(.sendInput) == 2,
            "paused interactive loop did not report the controller disconnect")
+    expect(model.journalRecordCount == nil && api.count(.journalSize) == 0,
+           "active frame loop queried a guest journal")
 
     api.report(XENORA_LOOP_STOPPED, completed: 3, frame: 1, pixel: 0x77)
     await model.stop()?.value
     expect(model.state == XENORA_LOOP_STOPPED && model.canStart && model.image === second
-           && api.count(.status) == 4,
+           && api.count(.status) == 4 && api.count(.journalSize) == 1
+           && model.stateDescription == "Stopped • 3 verified journal entries",
            "joined stop did not publish terminal status and retain the last frame")
+    model.startInteractive()
+    expect(model.journalRecordCount == nil && model.stateDescription == "Running",
+           "replacement retained a stale guest journal count")
     return failures
 }
 
@@ -586,7 +605,8 @@ func checkNativeFrameLoop() async -> [String] {
             failures.append("resumed standard fixture did not publish a frame")
         }
         await model.stop()?.value
-        if !(await waitForLoop({ model.state == XENORA_LOOP_STOPPED })) {
+        if !(await waitForLoop({ model.state == XENORA_LOOP_STOPPED }))
+            || model.journalRecordCount != UInt64(model.completed) {
             failures.append("resumed standard fixture did not stop")
         }
     } else {
@@ -595,8 +615,10 @@ func checkNativeFrameLoop() async -> [String] {
     if let error = model.errorMessage { failures.append(error) }
 
     model.start(frameCount: 4)
+    if model.journalRecordCount != nil { failures.append("standard restart retained a stale guest journal") }
     if !(await waitForLoop({ model.canStart })) || model.completed != 4
-        || model.frameId != 3 || pixels() != expectedPixels(redColumn: 3) || model.errorMessage != nil {
+        || model.frameId != 3 || pixels() != expectedPixels(redColumn: 3) || model.errorMessage != nil
+        || model.stateDescription != "Finished • 4 verified journal entries" {
         failures.append("standard fixture restart did not finish with frame 3")
     }
 
@@ -612,7 +634,8 @@ func checkNativeFrameLoop() async -> [String] {
             await stop?.value
             if model.isStopping || !model.canStart || model.state != XENORA_LOOP_STOPPED
                 || model.completed < beforeStop || model.frameId != 0
-                || pixels() != expectedPixels(redColumn: 0) || model.errorMessage != nil {
+                || pixels() != expectedPixels(redColumn: 0) || model.errorMessage != nil
+                || model.journalRecordCount != UInt64(model.completed) {
                 failures.append("interactive stop did not retain its last native frame")
             }
         } else {
@@ -623,10 +646,81 @@ func checkNativeFrameLoop() async -> [String] {
     }
 
     model.startInteractive(frameCount: 8)
+    if model.journalRecordCount != nil { failures.append("interactive restart retained a stale guest journal") }
     if !(await waitForLoop({ model.canStart })) || model.completed != 8
         || model.frameId != 0 || pixels() != expectedPixels(redColumn: 0) || !model.isInteractive
-        || model.errorMessage != nil {
+        || model.errorMessage != nil || model.journalRecordCount != 8 {
         failures.append("interactive fixture did not finish with eight frames at column 0")
+    }
+    failures += await checkNativeFrameJournal(mode: .standard)
+    failures += await checkNativeFrameJournal(mode: .interactive)
+    return failures
+}
+
+@MainActor
+private func checkNativeFrameJournal(mode: FrameLoopMode) async -> [String] {
+    let api = NativeFrameLoopAPI()
+    var failures: [String] = []
+    var handle: xenora_session = 0
+    guard api.create(&handle) == XENORA_OK else { return ["could not create a native journal session"] }
+    defer { _ = api.destroy(handle) }
+
+    var required: UInt64 = 99
+    if api.journalSize(handle, required: &required) != XENORA_INVALID_STATE || required != 0 {
+        failures.append("journal query before start did not reject the unstarted loop")
+    }
+    guard api.start(handle, mode: mode, frames: 10_000) == XENORA_OK,
+          api.pause(handle) == XENORA_OK else {
+        return failures + ["could not start and pause the native journal fixture"]
+    }
+    required = 99
+    if api.journalSize(handle, required: &required) != XENORA_INVALID_STATE || required != 0 {
+        failures.append("journal query while paused did not reject the unfinished loop")
+    }
+    guard api.resume(handle) == XENORA_OK else {
+        return failures + ["could not resume the native journal fixture"]
+    }
+
+    var state: UInt32 = 0
+    var completed: UInt32 = 0
+    var frame: UInt32 = 0
+    var rgba = [UInt8](repeating: 0, count: Int(XENORA_FIXTURE_FRAME_WIDTH * XENORA_FIXTURE_FRAME_HEIGHT * 4))
+    func readStatus() -> Int32 {
+        rgba.withUnsafeMutableBufferPointer {
+            api.status(handle, &state, &completed, &frame, $0)
+        }
+    }
+    guard await waitForLoop({
+        readStatus() != XENORA_OK || completed >= 4 || state == XENORA_LOOP_FAILED
+    }), completed >= 4,
+          api.stop(handle) == XENORA_OK, readStatus() == XENORA_OK, state == XENORA_LOOP_STOPPED else {
+        return failures + ["native journal fixture did not stop after publishing at least four frames"]
+    }
+    let count = UInt64(completed)
+    if api.journalSize(handle, required: &required) != XENORA_BUFFER_TOO_SMALL || required != count {
+        failures.append("native journal sizing did not report the completed record count")
+    }
+    var sentinel: UInt8 = 0xa5
+    if xenora_session_frame_loop_journal(handle, &sentinel, 1, &required) != XENORA_BUFFER_TOO_SMALL
+        || required != count || sentinel != 0xa5 {
+        failures.append("short native journal buffer was modified or reported the wrong size")
+    }
+    if xenora_session_frame_loop_journal(handle, nil, 1, &required) != XENORA_INVALID_ARGUMENT {
+        failures.append("native journal accepted null output with positive capacity")
+    }
+    var records = [UInt8](repeating: 0, count: Int(count))
+    let status = records.withUnsafeMutableBufferPointer {
+        xenora_session_frame_loop_journal(handle, $0.baseAddress, UInt64($0.count), &required)
+    }
+    let expected: [UInt8]
+    switch mode {
+    case .standard:
+        expected = (0..<Int(count)).map { 0x10 | UInt8($0 % 4) }
+    case .interactive:
+        expected = [UInt8](repeating: 0x20, count: Int(count))
+    }
+    if status != XENORA_OK || required != count || records != expected {
+        failures.append("native journal did not return the exact \(mode) frame records")
     }
     return failures
 }

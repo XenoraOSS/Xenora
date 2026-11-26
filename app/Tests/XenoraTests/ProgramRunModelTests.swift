@@ -9,6 +9,7 @@ struct ProgramRunModelTests {
         let url: URL
         let trace: Bool
         let arguments: [String]
+        let standardInput: URL?
     }
 
     private actor InvocationLog {
@@ -23,6 +24,8 @@ struct ProgramRunModelTests {
         let firstURL = URL(fileURLWithPath: "/nonexistent/first.exe")
         let blockedURL = URL(fileURLWithPath: "/nonexistent/blocked.exe")
         let nextURL = URL(fileURLWithPath: "/nonexistent/next.exe")
+        let firstInput = URL(fileURLWithPath: "/nonexistent/first input.dat")
+        let editedInput = URL(fileURLWithPath: "/nonexistent/edited input.dat")
         let firstOutcome = outcome(output: "previous selection", status: 23)
         let nextOutcome = outcome(output: "current selection", status: 0)
         let firstStarted = AsyncStream<Void>.makeStream()
@@ -34,8 +37,10 @@ struct ProgramRunModelTests {
             nextGate.continuation.finish()
         }
         let invocations = InvocationLog()
-        let model = ProgramRunModel(worker: { url, trace, arguments in
-            await invocations.append(Invocation(url: url, trace: trace, arguments: arguments))
+        let model = ProgramRunModel(worker: { url, trace, arguments, standardInput in
+            await invocations.append(Invocation(
+                url: url, trace: trace, arguments: arguments, standardInput: standardInput
+            ))
             switch url {
             case firstURL:
                 firstStarted.continuation.yield(())
@@ -54,8 +59,11 @@ struct ProgramRunModelTests {
         _ = model.addArgument()
         model.arguments[0].value = "  first argument  "
         _ = model.addArgument()
+        #expect(model.standardInput == nil)
+        model.standardInput = firstInput
         let first = try #require(model.run(firstURL, trace: true))
         model.arguments[0].value = "edited argument"
+        model.standardInput = editedInput
         var started = firstStarted.stream.makeAsyncIterator()
         _ = await started.next()
         #expect(model.running)
@@ -68,6 +76,7 @@ struct ProgramRunModelTests {
         #expect(model.running)
         #expect(model.fileName == nil)
         #expect(model.result == nil)
+        #expect(model.standardInput == nil)
         let blockedAfterClear = model.run(blockedURL, trace: false)
         #expect(blockedAfterClear == nil)
         #expect(model.fileName == nil)
@@ -79,7 +88,9 @@ struct ProgramRunModelTests {
         #expect(!model.running)
         #expect(model.fileName == nil)
         #expect(model.result == nil)
-        let firstInvocation = Invocation(url: firstURL, trace: true, arguments: ["  first argument  ", ""])
+        let firstInvocation = Invocation(
+            url: firstURL, trace: true, arguments: ["  first argument  ", ""], standardInput: firstInput
+        )
         #expect(await invocations.entries == [firstInvocation])
 
         let next = try #require(model.run(nextURL, trace: false))
@@ -91,7 +102,9 @@ struct ProgramRunModelTests {
         #expect(!model.running)
         #expect(model.fileName == "next.exe")
         #expect(model.result == nextOutcome)
-        let nextInvocation = Invocation(url: nextURL, trace: false, arguments: ["edited argument", ""])
+        let nextInvocation = Invocation(
+            url: nextURL, trace: false, arguments: ["edited argument", ""], standardInput: nil
+        )
         #expect(await invocations.entries == [firstInvocation, nextInvocation])
     }
 
@@ -101,7 +114,7 @@ struct ProgramRunModelTests {
             exitStatus: nil, standardOutput: "", standardError: "", truncated: false,
             lastStage: nil, launchError: "runner not found", hostMilliseconds: 1
         )
-        let model = ProgramRunModel(worker: { _, _, _ in failure })
+        let model = ProgramRunModel(worker: { _, _, _, _ in failure })
         for _ in 0..<2 {
             let run = try #require(model.run(url, trace: false))
             await run.value

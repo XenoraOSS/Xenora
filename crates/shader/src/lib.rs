@@ -20,6 +20,8 @@ use xenora_decoder::{
 const VCC_LO: usize = 106;
 /// SGPR index of `vcc_hi`.
 const VCC_HI: usize = 107;
+/// SGPR index of `exec_lo`.
+const EXEC_LO: usize = 126;
 
 /// Entry point of all kernels produced by this compiler.
 pub const ENTRY_POINT: &str = "xenora_compute";
@@ -1350,7 +1352,7 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                 dst,
                 src,
             } => {
-                let (value, _) = op.evaluate(read_scalar(src)?);
+                let (value, _, _) = op.evaluate(read_scalar(src)?, exec);
                 if dst < 8 {
                     return Err(error("scalar move would modify a resource descriptor"));
                 }
@@ -1371,7 +1373,14 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                 if dst < 8 {
                     return Err(error("scalar unary would modify a resource descriptor"));
                 }
-                let (value, flag) = op.evaluate(src);
+                let (value, mask, flag) = op.evaluate(src, exec);
+                if op.writes_exec() {
+                    // The EXEC-writing forms combine the source with the mask and
+                    // write the result back to EXEC_LO. The mask is a compile-time
+                    // value here, so the destination and the mask agree.
+                    exec = mask;
+                    scalars[EXEC_LO] = ScalarValue::Known(mask);
+                }
                 let slot = scalars
                     .get_mut(usize::from(dst))
                     .ok_or_else(|| error("scalar destination exceeds the fixture register file"))?;

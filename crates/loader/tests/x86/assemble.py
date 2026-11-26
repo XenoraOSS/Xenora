@@ -308,6 +308,18 @@ PACKED_128 = [op for op in PACKED if op[0] == "p" and op not in ("pand", "pandn"
 pmuldq pcmpeqq pcmpgtq packusdw pminsb pminsd pminuw pminud pmaxsb pmaxsd pmaxuw pmaxud pmulld""".split()
 
 
+AVX2_PACKED = """pabsb pabsd pabsw packssdw packsswb packusdw packuswb paddb
+paddd paddq paddsb paddsw paddusb paddusw paddw pavgb
+pavgw pcmpeqb pcmpeqd pcmpeqq pcmpeqw pcmpgtb pcmpgtd pcmpgtq
+pcmpgtw phaddd phaddsw phaddw phsubd phsubsw phsubw pmaddubsw
+pmaddwd pmaxsb pmaxsd pmaxsw pmaxub pmaxud pmaxuw pminsb
+pminsd pminsw pminub pminud pminuw pmuldq pmulhrsw pmulhuw
+pmulhw pmulld pmullw pmuludq psadbw pshufb psignb psignd
+psignw psubb psubd psubq psubsb psubsw psubusb psubusw
+psubw punpckhbw punpckhdq punpckhqdq punpckhwd punpcklbw punpckldq punpcklqdq
+punpcklwd""".split()
+
+
 def avx_form_cases():
     """VEX forms of legacy SSE instructions."""
     place = " ptr [rsi + 4*rdi + 16]"
@@ -326,8 +338,12 @@ def avx_form_cases():
 
     for op in PACKED_128:
         three("v" + op, "xmm")
+        if op in AVX2_PACKED:
+            three("v" + op, "ymm")
     for op in "pabsb pabsw pabsd phminposuw ptest".split():
         two("v" + op, "xmm", xmm)
+        if op in AVX2_PACKED:
+            two("v" + op, "ymm", ymm)
     two("vptest", "ymm", ymm)
     for kind, width in (("bw", quad), ("bd", dword), ("bq", word), ("wd", quad), ("wq", dword), ("dq", quad)):
         for op in ("vpmovsx", "vpmovzx"):

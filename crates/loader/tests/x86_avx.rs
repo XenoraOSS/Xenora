@@ -690,12 +690,20 @@ fn a_vector_length_without_a_form_is_invalid() {
         "vextractf128",
         "vperm2f128",
     ];
-    for case in all_cases() {
+    let cases = all_cases();
+    let wide_integer_forms: BTreeSet<_> = cases
+        .iter()
+        .filter(|case| case.text.contains("ymm"))
+        .map(Case::name)
+        .collect();
+    for case in &cases {
         let (position, _) = layout(&case.code);
         let mut code = case.code.clone();
         code[position] ^= 4;
         let name = case.name();
-        let integer = name.starts_with("vp") && !name.starts_with("vperm") && name != "vptest";
+        let integer = name.starts_with("vp")
+            && !name.starts_with("vperm")
+            && !wide_integer_forms.contains(name);
         if integer || only_128.contains(&name) || only_256.contains(&name) {
             refused(&code, case.text);
         } else {
@@ -745,7 +753,6 @@ fn undeclared_vex_encodings_are_rejected() {
         &[0xC5, 0xF9, 0xF7, 0xC1],             // vmaskmovdqu (not implemented)
         &[0xC4, 0xE2, 0x71, 0xDC, 0xC2],       // vaesenc
         &[0xC4, 0xE3, 0x71, 0x44, 0xC2, 0],    // vpclmulqdq
-        &[0xC5, 0xF5, 0xFC, 0xC1],             // vpaddb ymm (AVX2)
         &[0xC5, 0xFD, 0x70, 0xC1, 0x1B],       // vpshufd ymm (AVX2)
         &[0xC5, 0xF5, 0x71, 0xF1, 0x01],       // vpsllw ymm by an immediate (AVX2)
         &[0xC5, 0xFD, 0xD7, 0xC1],             // vpmovmskb ymm (AVX2)

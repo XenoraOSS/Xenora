@@ -21,8 +21,13 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "LocalAlloc"),
     (KERNEL32, "LocalFree"),
     (KERNEL32, "GetLastError"),
+    (KERNEL32, "SetLastError"),
     (KERNEL32, "GetProcessHeap"),
     (KERNEL32, "HeapAlloc"),
+    (KERNEL32, "HeapCreate"),
+    (KERNEL32, "HeapDestroy"),
+    (KERNEL32, "HeapFree"),
+    (KERNEL32, "HeapValidate"),
 ];
 
 const GMEM_MOVEABLE: u64 = 0x2;
@@ -81,6 +86,26 @@ fn the_legacy_allocations_share_the_process_heap() {
     assert_ne!(direct, 0);
     assert_ne!(legacy, direct);
     assert_eq!(guest.call("LocalFree", &[legacy]), 0);
+}
+
+#[test]
+fn heap_validation_checks_the_exact_live_block_and_its_owner() {
+    let mut guest = Guest::new(IMPORTS, &[]);
+    let heap = guest.call("GetProcessHeap", &[]);
+    let private = guest.call("HeapCreate", &[0, 0, 0]);
+    let block = guest.call("HeapAlloc", &[heap, 0, 16]);
+    assert_ne!(private, 0);
+    assert_ne!(block, 0);
+
+    guest.call("SetLastError", &[419]);
+    assert_eq!(guest.call("HeapValidate", &[heap, 0, 0]), 1);
+    assert_eq!(guest.call("HeapValidate", &[heap, 0, block]), 1);
+    assert_eq!(guest.call("HeapValidate", &[heap, 0, block + 1]), 0);
+    assert_eq!(guest.call("HeapValidate", &[private, 0, block]), 0);
+    assert_eq!(guest.call("GetLastError", &[]), 419);
+    assert_eq!(guest.call("HeapFree", &[heap, 0, block]), 1);
+    assert_eq!(guest.call("HeapValidate", &[heap, 0, block]), 0);
+    assert_eq!(guest.call("HeapDestroy", &[private]), 1);
 }
 
 #[test]

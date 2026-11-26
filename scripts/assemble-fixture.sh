@@ -13,7 +13,8 @@ esac
 
 fixtures='add bitwise-branch float-exact or shifts ashr
     x9-constant-vs x9-constant-ps x9-varying-vs x9-varying-ps x9-transform-vs
-    scalar-alu vector-compare scalar-logic scalar-compare scalar-unary scalar-arith
+    scalar-alu vector-compare scalar-logic scalar-compare scalar-unary scalar-saveexec
+    scalar-arith
     scalar-immediate vector-integer vector-compare-ft vector-vcc vop3-integer
     vop3-compare vector-unary vector-compare-64 vector-compare-16 scalar-memory runtime-branch
     vector-round'
