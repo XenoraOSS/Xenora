@@ -158,6 +158,9 @@ pub const fn gt_f32(a: u32, b: u32) -> bool {
 /// V_CMP_LG_F32: ordered inequality, "less or greater" - true exactly when the
 /// inputs are ordered and different; false when either is a NaN and when they
 /// are equal (signed zeros included).
+/// clippy::double_comparisons suggests `a != b`, which is unordered-true on
+/// NaN - wrong for the ordered LG.
+#[allow(clippy::double_comparisons)]
 pub const fn lg_f32(a: u32, b: u32) -> bool {
     let (a, b) = (f32::from_bits(a), f32::from_bits(b));
     a < b || a > b
@@ -181,32 +184,50 @@ pub const fn unordered_f32(a: u32, b: u32) -> bool {
 }
 
 /// V_CMP_NGE_F32: not (ordered greater-or-equal) - either NaN or S0 < S1.
+/// clippy::neg_cmp_op_on_partial_ord suggests partial_cmp folding, which
+/// hides exactly the unordered-on-NaN semantics the complement requires.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub const fn nge_f32(a: u32, b: u32) -> bool {
     !(f32::from_bits(a) >= f32::from_bits(b))
 }
 
 /// V_CMP_NLG_F32: not (ordered less-or-greater) - either NaN or S0 == S1.
+/// clippy::neg_cmp_op_on_partial_ord suggests partial_cmp folding, which
+/// hides exactly the unordered-on-NaN semantics the complement requires.
+#[allow(clippy::double_comparisons, clippy::neg_cmp_op_on_partial_ord)]
 pub const fn nlg_f32(a: u32, b: u32) -> bool {
     let (a, b) = (f32::from_bits(a), f32::from_bits(b));
     !(a < b || a > b)
 }
 
 /// V_CMP_NGT_F32: not (ordered greater) - either NaN or S0 <= S1.
+/// clippy::neg_cmp_op_on_partial_ord suggests partial_cmp folding, which
+/// hides exactly the unordered-on-NaN semantics the complement requires.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub const fn ngt_f32(a: u32, b: u32) -> bool {
     !(f32::from_bits(a) > f32::from_bits(b))
 }
 
 /// V_CMP_NLE_F32: not (ordered less-or-equal) - either NaN or S0 > S1.
+/// clippy::neg_cmp_op_on_partial_ord suggests partial_cmp folding, which
+/// hides exactly the unordered-on-NaN semantics the complement requires.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub const fn nle_f32(a: u32, b: u32) -> bool {
     !(f32::from_bits(a) <= f32::from_bits(b))
 }
 
 /// V_CMP_NEQ_F32: unordered inequality - either NaN or S0 != S1.
+/// clippy::neg_cmp_op_on_partial_ord suggests partial_cmp folding, which
+/// hides exactly the unordered-on-NaN semantics the complement requires.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub const fn neq_f32(a: u32, b: u32) -> bool {
     !(f32::from_bits(a) == f32::from_bits(b))
 }
 
 /// V_CMP_NLT_F32: not (ordered less) - either NaN or S0 >= S1.
+/// clippy::neg_cmp_op_on_partial_ord suggests partial_cmp folding, which
+/// hides exactly the unordered-on-NaN semantics the complement requires.
+#[allow(clippy::neg_cmp_op_on_partial_ord)]
 pub const fn nlt_f32(a: u32, b: u32) -> bool {
     !(f32::from_bits(a) < f32::from_bits(b))
 }

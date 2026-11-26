@@ -220,6 +220,11 @@ impl FloatComparison {
     /// relations are false when either input is a NaN; +0 and -0 compare
     /// equal and the infinities order as numbers. Rust's partial float
     /// comparisons are exactly the IEEE ordered predicates.
+    // clippy::double_comparisons and neg_cmp_op_on_partial_ord suggest
+    // transformations that are wrong here: `a != b` is unordered-true on NaN
+    // where LG is ordered, and partial_cmp folding hides exactly the NaN
+    // behaviour the unordered complement forms require.
+    #[allow(clippy::double_comparisons, clippy::neg_cmp_op_on_partial_ord)]
     fn holds_f32(self, s0: u32, s1: u32) -> bool {
         let (a, b) = (f32::from_bits(s0), f32::from_bits(s1));
         match self.offset {

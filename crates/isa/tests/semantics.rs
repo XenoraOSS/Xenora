@@ -167,6 +167,8 @@ fn vector_alu_dispatch_selects_exactly_the_registry_vop2_forms() {
     });
 }
 
+// The IEEE complement forms are deliberately negated partial comparisons.
+#[allow(clippy::double_comparisons, clippy::neg_cmp_op_on_partial_ord)]
 #[test]
 fn vector_compare_dispatch_selects_exactly_the_registry_vopc_forms() {
     const OPERANDS16: [u64; 6] = [
@@ -207,17 +209,14 @@ fn vector_compare_dispatch_selects_exactly_the_registry_vopc_forms() {
         let float_operands: Vec<u64> = operands
             .iter()
             .copied()
-            .chain(
-                [
-                    0x7f80_0000u64,
-                    0xff80_0000,
-                    0x7fc0_0000,
-                    0x7f80_0001,
-                    0x0000_0001,
-                    0x7f7f_ffff,
-                ]
-                .into_iter(),
-            )
+            .chain([
+                0x7f80_0000u64,
+                0xff80_0000,
+                0x7fc0_0000,
+                0x7f80_0001,
+                0x0000_0001,
+                0x7f7f_ffff,
+            ])
             .collect();
         let operands: &[u64] = if row.signedness == Signedness::Float {
             &float_operands

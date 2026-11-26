@@ -1024,6 +1024,9 @@ fn read_vgpr(lane: &Lane, reg: u8, offset: usize) -> Result<u32, String> {
 /// IEEE binary32 compare, float per-opcode table offsets 0-15. Rust's partial
 /// float comparisons are exactly the IEEE ordered predicates: false when
 /// either input is a NaN. +0 and -0 compare equal.
+// IEEE: `a != b` is unordered-true where LG is ordered, and the
+// complement forms are deliberately negated partial comparisons.
+#[allow(clippy::double_comparisons, clippy::neg_cmp_op_on_partial_ord)]
 fn compare_f32(
     lanes: &[Lane],
     sgpr: &[Option<u32>; 128],

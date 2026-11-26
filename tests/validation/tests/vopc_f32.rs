@@ -122,6 +122,9 @@ const LANES: [u32; 32] = [
 
 /// The IEEE relation of a form for binary32 bit patterns, written from the
 /// float per-opcode table alone.
+// IEEE: `a != b` is unordered-true where LG is ordered, and the
+// complement forms are deliberately negated partial comparisons.
+#[allow(clippy::double_comparisons, clippy::neg_cmp_op_on_partial_ord)]
 fn test(form: Form, s0: u32, s1: u32) -> bool {
     let (a, b) = (f32::from_bits(s0), f32::from_bits(s1));
     match form.offset {
@@ -173,16 +176,12 @@ const READ_VCC: u32 = 0x7e04_026a;
 const VCCZ_OVER_ONE: u32 = 0xbf86_0001;
 /// `v_xor_b32 v2, v1, v2`.
 const XOR_V2_V1: u32 = 29 << 25 | 2 << 17 | 2 << 9 | (256 + 1);
-const SMOV_S8_0: u32 = 0xbe88_0380;
-const SMOV_S8_1: u32 = 0xbe88_0381;
-const V2_FROM_S8: u32 = 0x7e04_0208;
 
 const PREFIX: [u32; 3] = [0xe030_2000, 0x8000_0100, 0xbf8c_3f70];
 const STORE_V2: [u32; 4] = [0xe070_2000, 0x8001_0200, 0xbbfd_0000, 0xbf81_0000];
 
 const EXEC_LO: u32 = 126;
 const LITERAL: u32 = 255;
-const VCC_LO_SEL: u32 = 106;
 
 /// ENCODING 0b0111110 in bits 25-31, OP 17-24, VSRC1 9-16, SRC0 0-8 (guide
 /// 13.3.3); SRC0 256 + n is VGPR n.

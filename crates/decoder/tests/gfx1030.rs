@@ -764,7 +764,7 @@ fn reference_op(instruction: Instruction) -> Op {
             };
             if op.semantics().signedness == xenora_isa::semantics::Signedness::Float {
                 return Op::FloatCompare(
-                    xenora_ref::FloatComparison::from_opcode(op.semantics().opcode as u16)
+                    xenora_ref::FloatComparison::from_opcode(op.semantics().opcode)
                         .expect("float compare opcodes 0-15"),
                     src0,
                     src1,
