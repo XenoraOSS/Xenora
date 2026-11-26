@@ -236,9 +236,14 @@ pub(super) fn register(registry: &mut ImportRegistry) {
     // serves it since #466.
     // `FormatMessageA` is no longer a stub here: the error services
     // implement it since package 9 of #459. `_read` is served since #493.
-    registry.register_with_status(UCRT, "rand_s", ServiceStatus::Stub, |_, _, _| {
-        Err(UNSUPPORTED)
-    });
+    for (module, symbol) in [(UCRT, "rand_s")] {
+    // `FormatMessageA` is no longer a stub here: the error services
+    // implement it since package 9 of #459.
+    for (module, symbol) in [(UCRT, "rand_s"), (UCRT, "_read")] {
+        registry.register_with_status(module, symbol, ServiceStatus::Stub, |_, _, _| {
+            Err(UNSUPPORTED)
+        });
+    }
     for (api_set, symbol) in [
         ("api-ms-win-crt-private-l1-1-0.dll", "memchr"),
         ("api-ms-win-crt-private-l1-1-0.dll", "strchr"),
