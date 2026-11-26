@@ -572,7 +572,10 @@ fn vopcf32_rejections_at_the_same_byte() {
 }
 
 #[test]
+#[ignore = "requires a native Metal device with API and shader validation"]
 fn vopcf32_match_metal_natively() {
+    assert_eq!(std::env::var("MTL_DEBUG_LAYER").as_deref(), Ok("1"));
+    assert_eq!(std::env::var("MTL_SHADER_VALIDATION").as_deref(), Ok("1"));
     let cases = checked_cases();
     let (failures, programs) = harness::check_metal(&cases);
     failures.assert_none("native Metal disagrees with the guide");
