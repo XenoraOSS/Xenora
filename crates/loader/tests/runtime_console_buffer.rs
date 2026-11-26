@@ -27,6 +27,8 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "FillConsoleOutputCharacterW"),
     (KERNEL32, "FillConsoleOutputCharacterA"),
     (KERNEL32, "FillConsoleOutputAttribute"),
+    (KERNEL32, "WriteConsoleOutputW"),
+    (KERNEL32, "ReadConsoleOutputW"),
 ];
 
 const INFO: u64 = SCRATCH;
@@ -129,4 +131,79 @@ fn fills_write_their_count_and_stay_in_the_grid() {
         ),
         0
     );
+}
+
+#[test]
+fn console_output_round_trips_through_the_grid() {
+    const CELLS: u64 = SCRATCH + 0x200;
+    const REGION: u64 = SCRATCH + 0x600;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    let buffer = guest.call("CreateConsoleScreenBuffer", &[GENERIC_RW, 0, 0, 1, 0]);
+    assert_ne!(buffer, u64::MAX);
+    // A 2x2 source of distinct cells: characters A B C D with attributes 1..4.
+    for (index, (ch, attr)) in [(b'A', 1u16), (b'B', 2), (b'C', 3), (b'D', 4)]
+        .iter()
+        .enumerate()
+    {
+        guest
+            .memory
+            .write_u16(CELLS + index as u64 * 4, u64::from(*ch) as u16)
+            .unwrap();
+        guest
+            .memory
+            .write_u16(CELLS + index as u64 * 4 + 2, *attr)
+            .unwrap();
+    }
+    // Write the 2x2 rectangle at grid position (5, 3): buffer size 2x2, buffer
+    // coord (0,0), region left 5 top 3 right 6 bottom 4.
+    for (offset, value) in [(0, 5u16), (2, 3), (4, 6), (6, 4)] {
+        guest.memory.write_u16(REGION + offset, value).unwrap();
+    }
+    let buffer_size = 2 | (2 << 16);
+    assert_eq!(
+        guest.call(
+            "WriteConsoleOutputW",
+            &[buffer, CELLS, buffer_size, 0, REGION]
+        ),
+        1
+    );
+    // Read the same rectangle back into a zeroed target.
+    for index in 0..4 {
+        guest
+            .memory
+            .write_u16(CELLS + 0x100 + index as u64 * 4, 0)
+            .unwrap();
+        guest
+            .memory
+            .write_u16(CELLS + 0x100 + index as u64 * 4 + 2, 0)
+            .unwrap();
+    }
+    for (offset, value) in [(0, 5u16), (2, 3), (4, 6), (6, 4)] {
+        guest.memory.write_u16(REGION + offset, value).unwrap();
+    }
+    assert_eq!(
+        guest.call(
+            "ReadConsoleOutputW",
+            &[buffer, CELLS + 0x100, buffer_size, 0, REGION]
+        ),
+        1
+    );
+    assert_eq!(
+        guest.memory.read_u16(CELLS + 0x100).unwrap(),
+        u64::from(b'A') as u16
+    );
+    assert_eq!(guest.memory.read_u16(CELLS + 0x102).unwrap(), 1);
+    assert_eq!(
+        guest.memory.read_u16(CELLS + 0x104).unwrap(),
+        u64::from(b'B') as u16
+    );
+    assert_eq!(
+        guest.memory.read_u16(CELLS + 0x108).unwrap(),
+        u64::from(b'C') as u16
+    );
+    assert_eq!(
+        guest.memory.read_u16(CELLS + 0x10C).unwrap(),
+        u64::from(b'D') as u16
+    );
+    assert_eq!(guest.memory.read_u16(CELLS + 0x10E).unwrap(), 4);
 }
