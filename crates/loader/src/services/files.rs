@@ -1788,6 +1788,21 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         });
     }
 
+    // DeviceIoControl needs device drivers the machine does not have. The
+    // handle validates - a bad handle is a bad handle - and every control
+    // code is honestly unsupported rather than silently ignored.
+    let device_control = Arc::clone(state);
+    registry.register(KERNEL32, "DeviceIoControl", move |args, cpu, memory| {
+        let _ = memory;
+        {
+            let objects = device_control.objects.lock().expect("guest object state");
+            if !objects.handles.contains_key(&args.rcx) {
+                return device_control.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+            }
+        }
+        device_control.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0)
+    });
+
     for symbol in [
         "CreateFileW",
         "GetFileSizeEx",
@@ -1836,6 +1851,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "IsDBCSLeadByteEx",
         "SetFileTime",
         "SetSystemTime",
+        "DeviceIoControl",
     ] {
         registry.alias(FILE_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
