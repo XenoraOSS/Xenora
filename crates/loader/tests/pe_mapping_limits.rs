@@ -45,6 +45,8 @@ fn build(bss_sizes: &[u32]) -> Vec<u8> {
         section(i + 1, va, size, 0, 0xC000_0080);
         va += size;
     }
+    // The image span includes the gaps and is independent of allocated bytes.
+    pe[opt + 56..opt + 60].copy_from_slice(&va.next_multiple_of(0x1000).to_le_bytes());
     pe
 }
 

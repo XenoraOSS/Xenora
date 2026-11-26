@@ -34,6 +34,7 @@ pub enum AbiType {
     Handle,
     /// Raw guest pointer (virtual address).
     Pointer {
+        /// Whether the immediate pointee is const-qualified.
         is_const: bool,
         pointee: String,
     },

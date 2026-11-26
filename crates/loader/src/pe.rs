@@ -26,6 +26,11 @@ pub enum PeError {
     /// file, or its pages reach into a section; or the bytes given to the
     /// loader do not hold the PE32+ headers that were parsed.
     InvalidHeaderSize,
+    /// `SizeOfImage` is smaller than the highest mapped RVA plus one.
+    InvalidImageSize {
+        declared: u32,
+        required: u64,
+    },
 }
 
 impl fmt::Display for PeError {
@@ -54,6 +59,10 @@ impl fmt::Display for PeError {
                 "the PE headers cannot be mapped: SizeOfHeaders is zero, shorter than the section \
                  table, longer than the file or reaches into a section, or the bytes do not match \
                  the parsed headers"
+            ),
+            Self::InvalidImageSize { declared, required } => write!(
+                f,
+                "SizeOfImage {declared:#x} is too small: the PE mappings require {required:#x} bytes of image space"
             ),
         }
     }
@@ -115,8 +124,9 @@ const SECTION_HEADER_SIZE: usize = 40;
 const MAX_MAPPED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
 /// The mapped headers end on a guest page boundary.
 const HEADER_PAGE: u64 = 0x1000;
-/// `ImageBase` and `SizeOfHeaders` within the PE32+ optional header.
+/// Field offsets within the PE32+ optional header.
 const OPTIONAL_IMAGE_BASE: usize = 24;
+const OPTIONAL_SIZE_OF_IMAGE: usize = 56;
 const OPTIONAL_SIZE_OF_HEADERS: usize = 60;
 
 fn read_u16(bytes: &[u8], at: usize) -> u16 {
@@ -203,7 +213,7 @@ impl ParsedPe {
         );
         let section_alignment = read_u32(&optional, 32);
         let file_alignment = read_u32(&optional, 36);
-        let size_of_image = read_u32(&optional, 56);
+        let size_of_image = read_u32(&optional, OPTIONAL_SIZE_OF_IMAGE);
         let size_of_headers = read_u32(&optional, OPTIONAL_SIZE_OF_HEADERS);
 
         // A 32-bit PE offset and 16-bit optional size and section count all
@@ -329,6 +339,7 @@ impl ParsedPe {
                 && optional_size >= PE32_PLUS_MIN_OPTIONAL_HEADER
                 && sections == self.number_of_sections
                 && u64::from_le_bytes(field(image_base, 8)?.try_into().ok()?) == self.image_base
+                && u32_at(optional.checked_add(OPTIONAL_SIZE_OF_IMAGE)?)? == self.size_of_image
                 && u32_at(optional.checked_add(OPTIONAL_SIZE_OF_HEADERS)?)? == self.size_of_headers;
             let table_end = optional
                 .checked_add(optional_size)?
@@ -377,25 +388,30 @@ impl ParsedPe {
     fn map_at_base(&self, bytes: &[u8], base: u64) -> Result<(GuestMemory, u64, u64), PeError> {
         let (headers_len, headers_mapped, image_base_field) = self.headers_for(bytes)?;
 
-        // The headers and each section become zero-filled host allocations, so bound
-        // the total before allocating anything. Sections may not overlap, so the sum
-        // is the mapped size.
-        let mapped = self
-            .sections
-            .iter()
-            .map(|sec| u64::from(sec.virtual_size.max(sec.raw_data_size)))
-            .sum::<u64>()
-            + headers_mapped;
+        // Count allocated bytes and measure the full image span separately.
+        // RVA gaps do not consume host memory.
+        let mut mapped = headers_mapped;
+        let mut required = headers_mapped;
+        for sec in &self.sections {
+            let size = u64::from(sec.virtual_size.max(sec.raw_data_size));
+            mapped += size;
+            if size != 0 {
+                required = required.max(u64::from(sec.virtual_address) + size);
+            }
+        }
         if mapped > MAX_MAPPED_IMAGE_BYTES {
             return Err(PeError::SectionMappingError(MemoryError::AllocationFailed));
+        }
+        let declared = self.size_of_image;
+        if required > u64::from(declared) {
+            return Err(PeError::InvalidImageSize { declared, required });
         }
 
         let mut memory = GuestMemory::new();
 
         // Windows maps the headers read-only at the image base, and programs read
         // them: a C runtime finds its own sections this way before `main`. The
-        // budget above is checked first, and the file bytes are the initial data
-        // of the mapping, so nothing else is copied.
+        // file bytes are the initial data of the mapping.
         memory
             .map_region_with_data(
                 base,

@@ -3,11 +3,11 @@
 //! Process startup for trusted, original PE32+ fixtures.
 
 use crate::dbt::DbtMetrics;
-use crate::tls::TlsError;
+use crate::tls::{TlsError, setup_tls_avoiding};
 use crate::{
     CpuState, DbtEngine, ExecutionResult, ExitReason, ImportRegistry, LoadedImage, MemoryError,
     MemoryPermissions, ParsedPe, PeError, RelocationReport, apply_relocations,
-    execute_tls_callbacks, parse_tls_directory, setup_tls,
+    execute_tls_callbacks, parse_tls_directory,
 };
 
 const STACK_SIZE: usize = 64 * 1024;
@@ -248,12 +248,13 @@ fn run_startup_with(
     });
     let tls = parse_tls_directory(bytes, pe)?;
     if let Some(tls) = &tls {
-        setup_tls(
+        setup_tls_avoiding(
             tls,
             layout.image_base,
             pe.image_base,
             memory,
             layout.tls_base,
+            Some(teb_base..teb_base + TEB_SIZE as u64),
         )?;
     }
 

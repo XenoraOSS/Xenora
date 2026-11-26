@@ -1188,12 +1188,25 @@ class Validate(unittest.TestCase):
 
     def test_rejects_unknown_signedness_carry_in_exec_and_wave(self):
         for key, value in (
-            ("signedness", "float"), ("carry_in", "exec"), ("exec", "written"), ("wave", "wave64"),
+            ("signedness", "bogus-signedness"), ("carry_in", "exec"),
+            ("exec", "written"), ("wave", "wave64"),
         ):
             with self.subTest(key=key):
                 reg = registry()
                 form(reg, "S_ADD_U32")[key] = value
                 self.rejects(reg, f"S_ADD_U32: unknown {key} {value!r}")
+
+    def test_rejects_float_signedness_for_integer_add(self):
+        reg = registry()
+        form(reg, "S_ADD_U32")["signedness"] = "float"
+        self.rejects(reg, "S_ADD_U32: signedness float contradicts operation add")
+
+    def test_rejects_unsigned_signedness_for_float_rounding(self):
+        reg = gen.load_registry()
+        form(reg, "V_TRUNC_F32")["signedness"] = "unsigned"
+        self.rejects(
+            reg, "V_TRUNC_F32: signedness unsigned contradicts operation trunc", gen.load_snapshot()
+        )
 
     def test_rejects_invalid_name_variant_and_opcode(self):
         for key, value, fragment in (

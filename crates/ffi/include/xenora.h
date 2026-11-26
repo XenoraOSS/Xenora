@@ -245,6 +245,10 @@ enum {
 
 /*
  * Initialize the audio subsystem for a session.
+ *
+ * Reinitialization discards queued PCM and resets the underrun count. The
+ * volume, mute state and cumulative submitted-byte count are preserved. The
+ * new sample rate, channel count and format take effect immediately.
  */
 xenora_status xenora_session_audio_init(
     xenora_session session,
@@ -256,6 +260,11 @@ xenora_status xenora_session_audio_init(
 /*
  * Submit PCM audio bytes into the session audio queue.
  * byte_count must contain a whole number of interleaved sample frames.
+ *
+ * The queue stores raw PCM and keeps at most the newest 256 KiB. An oversized
+ * submission discards its oldest bytes and enough older queued bytes to fit.
+ * The submitted-byte count includes discarded bytes. Gain and mute are applied
+ * when frames are read or rendered, not when they are submitted.
  */
 xenora_status xenora_session_audio_submit(
     xenora_session session,
@@ -266,6 +275,10 @@ xenora_status xenora_session_audio_submit(
 /*
  * Read PCM audio bytes from the session audio queue.
  * Only whole frames are returned. Any remaining output bytes are untouched.
+ *
+ * The current volume and mute state are applied to the returned frames. Muted
+ * frames still count as read. Frames queued before a control change use the
+ * setting in effect when they are read.
  */
 xenora_status xenora_session_audio_read(
     xenora_session session,
@@ -277,6 +290,9 @@ xenora_status xenora_session_audio_read(
 /*
  * Fill one playback block with whole frames, padding a shortfall with silence.
  * out_source_bytes reports how much PCM was supplied before padding.
+ *
+ * Current volume and mute are applied to supplied frames. Muted frames count
+ * as supplied; a shortfall still increments the underrun count.
  */
 xenora_status xenora_session_audio_render(
     xenora_session session,
@@ -287,6 +303,8 @@ xenora_status xenora_session_audio_render(
 
 /*
  * Query queued bytes, render calls that ran short, and total bytes submitted.
+ * The queued count is raw PCM. The total includes bytes discarded by the
+ * retention bound or by reinitialization.
  */
 xenora_status xenora_session_audio_status(
     xenora_session session,
@@ -297,6 +315,9 @@ xenora_status xenora_session_audio_status(
 
 /*
  * Set audio volume (0.0 to 1.0) and mute state (non-zero = muted).
+ *
+ * The setting applies to the next read or render, including frames already
+ * queued. Volume and mute are preserved across reinitialization.
  */
 xenora_status xenora_session_audio_set_volume(
     xenora_session session,

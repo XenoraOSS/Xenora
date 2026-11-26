@@ -90,6 +90,36 @@ class Check(unittest.TestCase):
         self.assertEqual(c.check(body), [])
         self.assertIn("<!-- evidence -->", c.sections(body)[1]["verification"])
 
+    def test_inline_code_comment_marker_does_not_hide_sections(self):
+        body = GOOD.replace(
+            "Touches crates/texture only.",
+            "Touches crates/texture only. A literal `<!--` in inline code.",
+        )
+        self.assertEqual(c.check(body), [])
+
+    def test_inline_code_comment_marker_keeps_real_comment_removed(self):
+        body = GOOD.replace(
+            "Touches crates/texture only.",
+            "Touches crates/texture only. A literal `<!--` in inline code.\n<!-- template note -->",
+        )
+        self.assertEqual(c.check(body), [])
+        self.assertNotIn("template note", c.sections(body)[0])
+
+    def test_checklist_boxes_only_inside_fence_fail(self):
+        body = GOOD.replace(
+            "- [x] I claimed the linked issue before starting, and the claim was still mine when I opened this pull request.\n"
+            "- [x] I reviewed the changes and disclosed material AI assistance below, if applicable.\n"
+            "- [x] My commits are signed off under the DCO.",
+            "```\n"
+            "- [x] I claimed the linked issue before starting, and the claim was still mine when I opened this pull request.\n"
+            "- [x] My commits are signed off under the DCO.\n"
+            "```",
+        )
+        problems = c.check(body)
+        self.assertIn('Section "## Checklist" is empty.', problems)
+        self.assertIn("Checklist is missing the claimed-first checkbox.", problems)
+        self.assertIn("Checklist is missing the DCO sign-off checkbox.", problems)
+
     def test_fenced_report_heading_does_not_replace_checklist(self):
         for fence in ("```", "~~~"):
             with self.subTest(fence=fence):

@@ -74,6 +74,7 @@ final class FrameLoopModel: ObservableObject {
     /// Completed frames per second over the last half second, measured on the host.
     @Published var hostFps: Double?
     @Published private(set) var controller: DetectedController?
+    @Published private(set) var isStopping = false
 
     private let api: any FrameLoopAPI
     private let readController: @MainActor () -> DetectedController?
@@ -104,22 +105,24 @@ final class FrameLoopModel: ObservableObject {
         }
     }
 
-    var isRunning: Bool { state == UInt32(XENORA_LOOP_RUNNING) }
-    var isPaused: Bool { state == UInt32(XENORA_LOOP_PAUSED) }
+    var isRunning: Bool { !isStopping && state == UInt32(XENORA_LOOP_RUNNING) }
+    var isPaused: Bool { !isStopping && state == UInt32(XENORA_LOOP_PAUSED) }
     var canStart: Bool {
-        session == 0 || state == UInt32(XENORA_LOOP_NONE) || state == UInt32(XENORA_LOOP_FINISHED)
+        guard !isStopping else { return false }
+        return session == 0 || state == UInt32(XENORA_LOOP_NONE) || state == UInt32(XENORA_LOOP_FINISHED)
             || state == UInt32(XENORA_LOOP_STOPPED) || state == UInt32(XENORA_LOOP_FAILED)
     }
 
     var stateDescription: String {
-        switch state {
-        case UInt32(XENORA_LOOP_NONE): return "Idle"
-        case UInt32(XENORA_LOOP_RUNNING): return "Running"
-        case UInt32(XENORA_LOOP_PAUSED): return "Paused"
-        case UInt32(XENORA_LOOP_FINISHED): return "Finished"
-        case UInt32(XENORA_LOOP_STOPPED): return "Stopped"
-        case UInt32(XENORA_LOOP_FAILED): return "Failed"
-        default: return "Unknown (\(state))"
+        if isStopping { return "Stopping…" }
+        return switch state {
+        case UInt32(XENORA_LOOP_NONE): "Idle"
+        case UInt32(XENORA_LOOP_RUNNING): "Running"
+        case UInt32(XENORA_LOOP_PAUSED): "Paused"
+        case UInt32(XENORA_LOOP_FINISHED): "Finished"
+        case UInt32(XENORA_LOOP_STOPPED): "Stopped"
+        case UInt32(XENORA_LOOP_FAILED): "Failed"
+        default: "Unknown (\(state))"
         }
     }
 
@@ -132,6 +135,7 @@ final class FrameLoopModel: ObservableObject {
     }
 
     private func start(_ mode: FrameLoopMode, frameCount: UInt32) {
+        guard !isStopping else { return }
         errorMessage = nil
         cancelPolling()
         state = UInt32(XENORA_LOOP_FAILED)
@@ -190,7 +194,7 @@ final class FrameLoopModel: ObservableObject {
     }
 
     func sendInput(buttons: UInt32) {
-        guard session != 0, isInteractive else { return }
+        guard session != 0, isInteractive, !isStopping else { return }
         screenDirection = buttons & Self.horizontalButtons
         updateGameController()
     }
@@ -248,18 +252,44 @@ final class FrameLoopModel: ObservableObject {
     }
 
     func pause() {
-        guard session != 0, check(api.pause(session), operation: "pause frame loop") else { return }
+        guard session != 0, !isStopping,
+              check(api.pause(session), operation: "pause frame loop") else { return }
         refreshPolling()
     }
 
     func resume() {
-        guard session != 0, check(api.resume(session), operation: "resume frame loop") else { return }
+        guard session != 0, !isStopping,
+              check(api.resume(session), operation: "resume frame loop") else { return }
         refreshPolling()
     }
 
-    func stop() {
-        guard session != 0, check(api.stop(session), operation: "stop frame loop") else { return }
-        refreshPolling()
+    @discardableResult
+    func stop() -> Task<Void, Never>? {
+        guard session != 0, !isStopping else { return nil }
+        let handle = session
+        let api = self.api
+        let wasPolling = pollTask != nil
+        isStopping = true
+        cancelPolling()
+
+        // Stop joins the native worker. The task keeps the session alive
+        // through the join, and the dispatch queue can block without
+        // occupying the main actor or a Swift concurrency executor thread.
+        return Task {
+            let code: Int32 = await withCheckedContinuation { continuation in
+                DispatchQueue.global(qos: .userInitiated).async {
+                    continuation.resume(returning: api.stop(handle))
+                }
+            }
+            let shouldPoll: Bool
+            if check(code, operation: "stop frame loop") {
+                shouldPoll = poll()
+            } else {
+                shouldPoll = wasPolling
+            }
+            isStopping = false
+            if shouldPoll { startPolling(handle) }
+        }
     }
 
     // Refresh native state after a successful control command, then replace the

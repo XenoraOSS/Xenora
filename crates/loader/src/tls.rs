@@ -10,6 +10,7 @@ use crate::dbt::DbtEngine;
 use crate::memory::{GuestMemory, MemoryError, MemoryPermissions};
 use crate::pe::ParsedPe;
 use std::fmt;
+use std::ops::Range;
 
 /// Most callbacks one TLS directory may list.
 pub const MAX_TLS_CALLBACKS: usize = 64;
@@ -313,6 +314,26 @@ pub fn setup_tls(
     memory: &mut GuestMemory,
     thread_tls_base: u64,
 ) -> Result<(), TlsError> {
+    setup_tls_avoiding(
+        tls,
+        loaded_base,
+        preferred_base,
+        memory,
+        thread_tls_base,
+        None,
+    )
+}
+
+/// Set up the TLS array at its usual address, placing a block that intersects
+/// the reserved range after that range.
+pub(crate) fn setup_tls_avoiding(
+    tls: &TlsDirectory,
+    loaded_base: u64,
+    preferred_base: u64,
+    memory: &mut GuestMemory,
+    thread_tls_base: u64,
+    reserved: Option<Range<u64>>,
+) -> Result<(), TlsError> {
     let delta = (loaded_base as i128) - (preferred_base as i128);
     let rebase = |va: u64| -> u64 {
         if va == 0 {
@@ -337,7 +358,9 @@ pub fn setup_tls(
     }
 
     let template_size = (actual_end - actual_start) as usize;
-    let total_size = template_size + (tls.size_of_zero_fill as usize);
+    let total_size = template_size
+        .checked_add(tls.size_of_zero_fill as usize)
+        .ok_or(MemoryError::Overflow)?;
 
     if total_size > 0 {
         let direct = (DIRECT_TEMPLATE_MIN..DIRECT_TEMPLATE_LIMIT).contains(&template_size);
@@ -355,11 +378,21 @@ pub fn setup_tls(
         };
 
         // Allocate the pointer array and the per-thread TLS block.
-        let block_base = thread_tls_base
+        let mut block_base = thread_tls_base
             .checked_add(TLS_ARRAY_SIZE as u64)
             .ok_or(MemoryError::Overflow)?;
         let page_size = 4096;
-        let map_size = (total_size + page_size - 1) & !(page_size - 1);
+        let map_size = total_size
+            .checked_next_multiple_of(page_size)
+            .ok_or(MemoryError::Overflow)?;
+        if let Some(reserved) = reserved {
+            let block_end = block_base
+                .checked_add(map_size as u64)
+                .ok_or(MemoryError::Overflow)?;
+            if block_base < reserved.end && reserved.start < block_end {
+                block_base = reserved.end;
+            }
+        }
         memory.map_region(
             thread_tls_base,
             TLS_ARRAY_SIZE,
