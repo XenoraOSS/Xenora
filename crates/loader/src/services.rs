@@ -733,6 +733,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     crt::register_errno(registry);
     crt::register_conversions(registry);
     crt::register_utilities(registry);
+    crt::register_honest_refusals(registry);
     crt_callbacks::register(registry, &state);
     environment::register(registry, &state);
     errors::register(registry, &state);

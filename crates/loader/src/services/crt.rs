@@ -351,6 +351,32 @@ pub(super) fn register_conversions(registry: &mut ImportRegistry) {
     }
 }
 
+/// The honest refusals of the CRT surface: forms whose semantics the
+/// machine cannot serve, failing loudly rather than corrupting silently.
+/// `_putenv` mutates an environment the machine fixes at start; `_spawnve`
+/// asks for process creation in a single-process machine; `_setjmp` and
+/// `longjmp` are control-flow intrinsics a service boundary cannot honor.
+/// Each fails with ENOSYS exactly as a CRT with no such support would.
+pub(super) fn register_honest_refusals(registry: &mut ImportRegistry) {
+    const ENOSYS: u32 = 40;
+    for module in ["api-ms-win-crt-process-l1-1-0.dll", MSVCRT] {
+        for symbol in ["_putenv", "_spawnve"] {
+            registry.register(module, symbol, move |_, cpu, memory| {
+                set_errno(memory, cpu.gs_base, ENOSYS)?;
+                Ok(u64::MAX)
+            });
+        }
+    }
+    for module in ["api-ms-win-crt-runtime-l1-1-0.dll", MSVCRT] {
+        for symbol in ["_setjmp", "longjmp"] {
+            registry.register(module, symbol, move |_, cpu, memory| {
+                set_errno(memory, cpu.gs_base, ENOSYS)?;
+                Ok(u64::MAX)
+            });
+        }
+    }
+}
+
 pub(super) fn register_errno(registry: &mut ImportRegistry) {
     registry.register(UCRT, "_errno", |_, cpu, memory| {
         memory
