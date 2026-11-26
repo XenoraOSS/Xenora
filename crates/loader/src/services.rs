@@ -46,6 +46,7 @@ mod synch;
 pub mod sysinfo;
 mod task_fixture;
 pub(crate) mod threads;
+mod user32;
 mod winsock;
 
 use crate::runtime::HResult;
@@ -745,6 +746,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     registry::register(registry, &state);
     file_mapping::register(registry, &state);
     advapi::register(registry, &state);
+    user32::register(registry, &state);
     // The legacy CRT's printf family, which the variadic calling convention
     // keeps out of the typed table (#459).
     crt_streams::register_legacy(registry, &state);
