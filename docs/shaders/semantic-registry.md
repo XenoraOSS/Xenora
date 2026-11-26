@@ -198,7 +198,11 @@ shifts declare `source_order = "reversed"` (D = S1 shifted by S0[4:0]), so the
 generator checks the XML's unsigned count format on SRC0, not VSRC1.
 
 VOPC compares (kind `vector_compare`) write `vcc_lo`. The 32-bit rule
-`vopc_vcc` accepts a `vector_source` as for VOP2 and a VGPR. The 16-bit rule
+`vopc_vcc` accepts a `vector_source` as for VOP2 and a VGPR. The binary32 rule
+`vopc_vcc_f32` is the same shape without integer or float inline constants:
+the guide does not say how a float operation reads an integer inline constant
+(the vop1_f32 reading), and float inline constants stay outside the supported
+subset. The 16-bit rule
 `vopc_vcc_half` reads the low half of the same source types and rejects
 literals (guide sections 6.2, 6.2.5 and 6.8). The 64-bit rule
 `vopc_vcc_pair` accepts a VGPR pair, an even normal SGPR pair or an inline

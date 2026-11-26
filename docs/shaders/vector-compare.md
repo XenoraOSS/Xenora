@@ -98,6 +98,48 @@ forms.
 The expectations and the guide readings are in
 `tests/validation/tests/vopc_wide.rs`.
 
+### 2b. Binary32 compares
+
+The decoder, translator and both reference interpreters accept the sixteen
+`_e32` forms `v_cmp_{f,lt,eq,le,gt,lg,ge,o,u,nge,nlg,ngt,nle,neq,nlt,tru}_f32`
+(ENC_VOPC opcodes 0-15), declared in the registry under the operand rule
+`vopc_vcc_f32` (issue #786). The per-lane tests are the IEEE 754 predicates of
+guide 12.9's float per-opcode table over the binary32 values, S0 = SRC0 on the
+left:
+
+| Form | per-lane test |
+| --- | --- |
+| v_cmp_f_f32 / v_cmp_tru_f32 | false / true (offsets 0 and 15) |
+| v_cmp_lt/eq/le/gt/ge_f32 | the ordered comparisons |
+| v_cmp_lg_f32 | ordered inequality: S0 < S1 or S0 > S1 |
+| v_cmp_o_f32 / v_cmp_u_f32 | neither input NaN / either input NaN |
+| v_cmp_nge/nlg/ngt/nle/neq/nlt_f32 | the unordered complements of ge, lg, gt, le, eq, lt: each true when either input is a NaN |
+
+Readings, all from the public guide rather than hardware:
+
+- The ordered relations are false when either input is a NaN; the unordered
+  complement forms are true. U is true when either input is a NaN - the
+  per-opcode table's reading, against the contradictory summary table; the
+  conflict is recorded in `docs/research/rdna2-errata.md`.
+- +0 and -0 compare equal, the infinities order as numbers, and subnormals
+  compare as values.
+- SRC0 accepts a VGPR, a known SGPR, `vcc_lo` or one 32-bit literal. The
+  inline integer selectors (128-208) are rejected: the guide does not say how
+  a float operation reads them, the reading the registry's vop1_f32 rule
+  already records. Inline float constants (240-248) stay outside the
+  supported subset, as for the integer forms.
+- The mask result, EXEC masking, VCCZ and the empty-EXEC rule are those of
+  sections 3 and 5. NaN bit patterns never raise or trap; the signaling NaN
+  inputs compare exactly like quiet ones, which is the guide's quiet
+  comparison model under the translator's precise-floating-point MSL compile
+  options.
+
+The expectations and the guide readings are in
+`tests/validation/tests/vopc_f32.rs` and the LLVM-assembled end-to-end
+coverage in `fixtures/rdna2/vector-compare-f32.s`; the test constants 1.5 and
+0.75 have bit patterns no inline float constant compresses to, so the
+assembler keeps the literal forms the subset supports.
+
 ## 3. Semantics of one supported compare, Wave32
 
 Let E = EXEC_LO before the instruction and A = the set of lanes that exist in
@@ -123,7 +165,7 @@ this wave (all 32 except in a final partial wave, see 7). As an unsigned
 
 - V_CMPX_* (writes EXEC: divergent execution; needs its own contract).
 - VOP3A compares outside the integer subset in section 11.
-- SDWA and DPP forms; float compares; v_cmp_class.
+- SDWA and DPP forms; the binary64 compares (opcodes 32-47), `v_cmpx` float forms (16-31), v_cmp_class; the VOP3A encodings of the binary32 forms.
 - 16-bit compares in the decoder and translator (the reference interpreters
   accept the subset in 2a).
 - SRC0 inline float constants (240-248), SGPRs other than s0-s106, TTMPs,
@@ -279,7 +321,7 @@ reference on Apple M5 Pro. There is no RDNA 2 or Xbox hardware evidence.
 
 ## 10. Limitations
 
-- Wave32 only. No `v_cmpx`, SDWA, DPP or float compares. VOP3 encodings cover the 32-bit compares only.
+- Wave32 only. No `v_cmpx`, SDWA or DPP. Binary32 compares are covered in the VOPC encoding only; their VOP3A encodings, like the CMPX and CLASS forms, wait for their own execution work. VOP3 encodings cover the 32-bit integer compares only.
 - A lane-derived VCC_LO cannot reach EXEC or any scalar instruction, so there
   is no divergent execution. That needs its own contract.
 - The skipped region of a runtime `s_cbranch_vccz` holds only integer vector

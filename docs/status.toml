@@ -1528,6 +1528,198 @@ decoded = true
 llvm = "three-way passed"
 
 [[instruction]]
+form = "v_cmp_f_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (false), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_lt_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (S0 < S1 ordered), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_eq_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (S0 == S1 ordered (signed zeros equal)), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_le_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (S0 <= S1 ordered), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_gt_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (S0 > S1 ordered), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_lg_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (S0 < S1 or S0 > S1, ordered inequality), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_ge_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (S0 >= S1 ordered), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_o_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (neither input a NaN), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_u_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (either input a NaN), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_nge_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (either input a NaN or S0 < S1), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_nlg_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (either input a NaN or S0 == S1), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_ngt_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (either input a NaN or S0 <= S1), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_nle_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (either input a NaN or S0 > S1), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_neq_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (either input a NaN or S0 != S1), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_nlt_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (either input a NaN or S0 >= S1), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_tru_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo or literal SRC0 (integer and float inline constants rejected); VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (true), fully written"
+representation = "`7D020201`"
+lowering = "per-thread Wave32 mask over the dispatch's own 32 lanes, IEEE 754 predicates with precise-floating-point MSL; runtime s_cbranch_vccz as a join select"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
 form = "v_cmp_lt_i32_e32"
 encoding = "VOPC, Wave32; VGPR, normal SGPR (known during translation), vcc_lo, inline integer or literal SRC0; VGPR VSRC1; VCC_LO[n] = EXEC_LO[n] & (signed S0 < S1), fully written"
 representation = "`7D020701`"
