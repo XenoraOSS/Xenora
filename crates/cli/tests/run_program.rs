@@ -145,13 +145,19 @@ fn crt_crtutils(name: &str) -> PathBuf {
 }
 
 fn crt_codepages(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-crt-codepages.sh", "run-program-crt-codepages", &OUT).join(format!("{name}.exe"))
+}
 
 fn crt_locale(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-crt-locale.sh", "run-program-crt-locale", &OUT).join(format!("{name}.exe"))
+}
 
 fn crt_compare(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
     build("build-crt-compare.sh", "run-program-crt-compare", &OUT).join(format!("{name}.exe"))
+}
 
 fn crt_console(name: &str) -> PathBuf {
     static OUT: OnceLock<PathBuf> = OnceLock::new();
