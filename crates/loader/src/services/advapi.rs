@@ -163,6 +163,117 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     );
 }
 
+// The security-token surface of a machine with exactly one identity.
+// There is one user, one logon session, one token: every process token is
+// that token, duplication yields the same identity, and the information
+// classes answer its fixed contents. AccessCheck against a machine with
+// no ACLs is not implementable security theater, so it stays unregistered
+// rather than lying.
+
+const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
+
+pub(super) fn register_tokens(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    let open = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "OpenProcessToken",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            // The process handle must be the current-process pseudo-handle:
+            // there is exactly one process. The token is the machine's one
+            // fixed identity token.
+            if args.rcx != u64::MAX {
+                return open.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+            }
+            memory
+                .write_u64(args.r8, 0x70C0DE)
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(1)
+        },
+    );
+
+    let duplicate = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "DuplicateToken",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            if args.rcx != 0x70C0DE {
+                return duplicate.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+            }
+            memory
+                .write_u64(args.r8, 0x70C0DE)
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(1)
+        },
+    );
+
+    // TokenUser answers the fixed SID of the machine's one user: revision 1,
+    // one sub-authority, the machine user RID, in the classic self-relative
+    // layout.
+    let info = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "GetTokenInformation",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            if args.rcx != 0x70C0DE {
+                return info.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+            }
+            // Only TokenUser (class 1) has a fixed answer on this machine.
+            if args.rdx != 1 {
+                return info.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            // SID: rev 1, one sub-authority, NT authority (5), user RID 1000.
+            let sid: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 5, 0xE8, 0x03, 0, 0];
+            let needed = 8 + sid.len() as u32;
+            memory
+                .write_u32(
+                    args.get(4, memory).map_err(ExitReason::MemoryFault)?,
+                    needed,
+                )
+                .map_err(ExitReason::MemoryFault)?;
+            if args.r9 < u64::from(needed) {
+                return info.fail(cpu.gs_base, ERROR_INSUFFICIENT_BUFFER, 0);
+            }
+            memory
+                .write_u64(args.r8, args.r8 + 8)
+                .map_err(ExitReason::MemoryFault)?;
+            memory
+                .write_bytes(args.r8 + 8, &sid)
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(1)
+        },
+    );
+
+    // EqualSid compares byte-for-byte: on a machine with one identity it is
+    // the honest implementation, not a shortcut.
+    let equal = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "EqualSid",
+        ServiceStatus::Partial,
+        move |args, _cpu, memory| {
+            let _ = &equal;
+            let read_sid = |address: u64| -> Option<Vec<u8>> {
+                let revision = memory.read_u8(address).ok()?;
+                let count = memory.read_u8(address + 1).ok()? as u64;
+                if revision != 1 || count > 15 {
+                    return None;
+                }
+                let length = 8 + count * 4;
+                let mut bytes = vec![0; length as usize];
+                memory.read_bytes(address, &mut bytes).ok()?;
+                Some(bytes)
+            };
+            let (Some(left), Some(right)) = (read_sid(args.rcx), read_sid(args.rdx)) else {
+                return Ok(0);
+            };
+            Ok(u64::from(left == right))
+        },
+    );
+}
+
 #[cfg(test)]
 #[test]
 fn crypto_randomness_is_real_and_the_provider_lifecycle_validates() {
@@ -233,4 +344,85 @@ fn crypto_randomness_is_real_and_the_provider_lifecycle_validates() {
     memory.write_u32(0x1300, 3).unwrap();
     assert_eq!(call(&mut memory, "GetUserNameA", &[0x1400, 0x1300]), 0);
     assert_eq!(memory.read_u32(0x1300).unwrap(), 7);
+}
+
+#[cfg(test)]
+#[test]
+fn the_fixed_identity_token_answers_its_information_classes() {
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::{GuestMemory, MemoryPermissions};
+    use crate::services::MockClock;
+
+    let mut registry = ImportRegistry::new();
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    register(&mut registry, &state);
+    register_tokens(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region(0x1000, 8192, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let call = |memory: &mut GuestMemory, symbol: &str, args: &[u64]| {
+        let mut cpu = CpuState::default();
+        for (reg, &value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args)
+        {
+            cpu.set(reg, value);
+        }
+        cpu.set(Register::Rsp, 0x2000);
+        for (index, &value) in args.iter().enumerate().skip(4) {
+            memory
+                .write_u64(0x2000 + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        let descriptor = registry
+            .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    };
+    // The current process opens its one token; a foreign handle fails.
+    assert_eq!(
+        call(&mut memory, "OpenProcessToken", &[u64::MAX, 0, 0x1100]),
+        1
+    );
+    assert_eq!(memory.read_u64(0x1100).unwrap(), 0x70C0DE);
+    assert_eq!(
+        call(&mut memory, "OpenProcessToken", &[0xDEAD, 0, 0x1100]),
+        0
+    );
+    // Duplication yields the same fixed identity.
+    assert_eq!(
+        call(&mut memory, "DuplicateToken", &[0x70C0DE, 0, 0x1100]),
+        1
+    );
+    // TokenUser answers the fixed SID with its size contract.
+    assert_eq!(
+        call(
+            &mut memory,
+            "GetTokenInformation",
+            &[0x70C0DE, 1, 0x1200, 64, 0x1180]
+        ),
+        1
+    );
+    assert_eq!(memory.read_u32(0x1180).unwrap(), 20);
+    assert_eq!(memory.read_u8(0x1208).unwrap(), 1, "SID revision");
+    // A small buffer reports the needed size.
+    assert_eq!(
+        call(
+            &mut memory,
+            "GetTokenInformation",
+            &[0x70C0DE, 1, 0x1200, 4, 0x1180]
+        ),
+        0
+    );
+    assert_eq!(memory.read_u32(0x1180).unwrap(), 20);
+    // EqualSid compares byte-for-byte.
+    let sid: [u8; 12] = [1, 1, 0, 0, 0, 0, 0, 5, 0xE8, 0x03, 0, 0];
+    memory.write_bytes(0x1300, &sid).unwrap();
+    memory.write_bytes(0x1310, &sid).unwrap();
+    assert_eq!(call(&mut memory, "EqualSid", &[0x1300, 0x1310]), 1);
+    memory.write_u8(0x1318, 0xE9).unwrap();
+    assert_eq!(call(&mut memory, "EqualSid", &[0x1300, 0x1310]), 0);
 }
