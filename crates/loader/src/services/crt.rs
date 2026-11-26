@@ -962,11 +962,234 @@ pub(super) fn register_utilities(registry: &mut ImportRegistry) {
         Ok(args.rcx)
     });
 
+    // The string search family. All of it scans byte strings within the
+    // scan budget, one unit at a time across block boundaries.
+    registry.register(UCRT, "strstr", |args, _, memory| {
+        let needle = string_length(memory, args.rdx, u64::MAX, StringUnit::Byte)?;
+        if needle == 0 {
+            return Ok(args.rcx);
+        }
+        let haystack = string_length(memory, args.rcx, u64::MAX, StringUnit::Byte)?;
+        let first = memory.read_u8(args.rdx).map_err(ExitReason::MemoryFault)?;
+        let mut offset = 0u64;
+        while offset + needle <= haystack {
+            let candidate = memory
+                .read_u8(args.rcx + offset)
+                .map_err(ExitReason::MemoryFault)?;
+            if candidate == first {
+                let mut matched = true;
+                for index in 1..needle {
+                    let a = memory
+                        .read_u8(args.rcx + offset + index)
+                        .map_err(ExitReason::MemoryFault)?;
+                    let b = memory
+                        .read_u8(args.rdx + index)
+                        .map_err(ExitReason::MemoryFault)?;
+                    if a != b {
+                        matched = false;
+                        break;
+                    }
+                }
+                if matched {
+                    return Ok(args.rcx + offset);
+                }
+            }
+            offset += 1;
+        }
+        Ok(0)
+    });
+
+    registry.register(UCRT, "strcspn", |args, _, memory| {
+        let length = string_length(memory, args.rcx, u64::MAX, StringUnit::Byte)?;
+        let reject = string_length(memory, args.rdx, u64::MAX, StringUnit::Byte)?;
+        let mut rejects = [false; 256];
+        for index in 0..reject {
+            let byte = memory
+                .read_u8(args.rdx + index)
+                .map_err(ExitReason::MemoryFault)?;
+            rejects[usize::from(byte)] = true;
+        }
+        for index in 0..length {
+            let byte = memory
+                .read_u8(args.rcx + index)
+                .map_err(ExitReason::MemoryFault)?;
+            if rejects[usize::from(byte)] {
+                return Ok(index);
+            }
+        }
+        Ok(length)
+    });
+
+    registry.register(UCRT, "strspn", |args, _, memory| {
+        let length = string_length(memory, args.rcx, u64::MAX, StringUnit::Byte)?;
+        let accept = string_length(memory, args.rdx, u64::MAX, StringUnit::Byte)?;
+        let mut accepts = [false; 256];
+        for index in 0..accept {
+            let byte = memory
+                .read_u8(args.rdx + index)
+                .map_err(ExitReason::MemoryFault)?;
+            accepts[usize::from(byte)] = true;
+        }
+        for index in 0..length {
+            let byte = memory
+                .read_u8(args.rcx + index)
+                .map_err(ExitReason::MemoryFault)?;
+            if !accepts[usize::from(byte)] {
+                return Ok(index);
+            }
+        }
+        Ok(length)
+    });
+
+    registry.register(UCRT, "strpbrk", |args, _, memory| {
+        let length = string_length(memory, args.rcx, u64::MAX, StringUnit::Byte)?;
+        let accept = string_length(memory, args.rdx, u64::MAX, StringUnit::Byte)?;
+        let mut accepts = [false; 256];
+        for index in 0..accept {
+            let byte = memory
+                .read_u8(args.rdx + index)
+                .map_err(ExitReason::MemoryFault)?;
+            accepts[usize::from(byte)] = true;
+        }
+        for index in 0..length {
+            let byte = memory
+                .read_u8(args.rcx + index)
+                .map_err(ExitReason::MemoryFault)?;
+            if accepts[usize::from(byte)] {
+                return Ok(args.rcx + index);
+            }
+        }
+        Ok(0)
+    });
+
+    // strtok keeps its scan position in CRT state shared by every thread of
+    // the CRT instance - which is exactly why the CRT later grew strtok_s.
+    let position = std::sync::Arc::new(std::sync::Mutex::new(0u64));
+    registry.register(UCRT, "strtok", move |args, _, memory| {
+        let start = if args.rcx != 0 {
+            args.rcx
+        } else {
+            *position.lock().expect("strtok scan position")
+        };
+        if start == 0 {
+            return Ok(0);
+        }
+        let length = string_length(memory, start, u64::MAX, StringUnit::Byte)?;
+        let delimiters = string_length(memory, args.rdx, u64::MAX, StringUnit::Byte)?;
+        let mut delims = [false; 256];
+        for index in 0..delimiters {
+            let byte = memory
+                .read_u8(args.rdx + index)
+                .map_err(ExitReason::MemoryFault)?;
+            delims[usize::from(byte)] = true;
+        }
+        let mut index = 0u64;
+        while index < length {
+            let byte = memory
+                .read_u8(start + index)
+                .map_err(ExitReason::MemoryFault)?;
+            if !delims[usize::from(byte)] {
+                break;
+            }
+            index += 1;
+        }
+        if index >= length {
+            *position.lock().expect("strtok scan position") = 0;
+            return Ok(0);
+        }
+        let token = start + index;
+        while index < length {
+            let byte = memory
+                .read_u8(start + index)
+                .map_err(ExitReason::MemoryFault)?;
+            if delims[usize::from(byte)] {
+                memory
+                    .write_u8(start + index, 0)
+                    .map_err(ExitReason::MemoryFault)?;
+                *position.lock().expect("strtok scan position") = start + index + 1;
+                return Ok(token);
+            }
+            index += 1;
+        }
+        *position.lock().expect("strtok scan position") = 0;
+        Ok(token)
+    });
+
+    // The case-insensitive comparisons fold the ASCII letters; bytes outside
+    // ASCII compare as themselves, which is the invariant the CRT documents
+    // for the POSIX-compatible behavior of these forms.
+    for (symbol, limit) in [("_stricmp", u64::MAX), ("_strnicmp", u64::MAX)] {
+        registry.register(UCRT, symbol, move |args, _, memory| {
+            let bounded = if symbol == "_strnicmp" {
+                args.r8
+            } else {
+                limit
+            };
+            let fold = |byte: u8| -> u8 {
+                if byte.is_ascii_uppercase() {
+                    byte + 32
+                } else {
+                    byte
+                }
+            };
+            let budget = SCAN_BUDGET.min(bounded);
+            for offset in 0..budget {
+                let a = fold(
+                    memory
+                        .read_u8(args.rcx + offset)
+                        .map_err(ExitReason::MemoryFault)?,
+                );
+                let b = fold(
+                    memory
+                        .read_u8(args.rdx + offset)
+                        .map_err(ExitReason::MemoryFault)?,
+                );
+                if a != b || a == 0 {
+                    return Ok(u64::from((i32::from(a) - i32::from(b)) as u32));
+                }
+            }
+            Ok(0)
+        });
+    }
+
     registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strrchr");
     registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strcpy");
     registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strncpy");
     registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strcat");
     registry.alias("api-ms-win-crt-private-l1-1-0.dll", UCRT, "strncat");
+
+    // Legacy binaries link the string surface straight out of msvcrt.dll
+    // rather than the api-ms-win-crt forwarding surface.
+    for symbol in [
+        "strcpy",
+        "strncpy",
+        "strcat",
+        "strncat",
+        "strrchr",
+        "strlen",
+        "strcmp",
+        "strncmp",
+        "strnlen",
+        "strstr",
+        "strtok",
+        "strcspn",
+        "strspn",
+        "strpbrk",
+        "_stricmp",
+        "_strnicmp",
+        "_strdup",
+        "_strlwr",
+        "_strupr",
+        "_strrev",
+        "memcpy",
+        "memmove",
+        "memset",
+        "memcmp",
+        "memchr",
+        "strchr",
+    ] {
+        registry.alias(MSVCRT, UCRT, symbol);
+    }
 
     for (symbol, api) in [
         ("strcpy", CRT_STRING_API),
