@@ -39,6 +39,11 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "SetFileAttributesA"),
     (KERNEL32, "MoveFileExW"),
     (KERNEL32, "GetCompressedFileSizeA"),
+    (KERNEL32, "GetFileAttributesExW"),
+    (KERNEL32, "GetFileAttributesExA"),
+    (KERNEL32, "UnlockFile"),
+    (KERNEL32, "IsDBCSLeadByteEx"),
+    (KERNEL32, "SetFileTime"),
 ];
 
 const WIDE: u64 = SCRATCH;
@@ -319,5 +324,69 @@ fn the_compressed_size_is_the_size() {
     assert_eq!(
         guest.call("GetCompressedFileSizeA", &[NAME6, 0]) & 0xFFFF_FFFF,
         0xFFFF_FFFF
+    );
+}
+
+fn wide_at2(guest: &mut Guest, address: u64, text: &str) {
+    for (index, unit) in text.encode_utf16().chain(std::iter::once(0)).enumerate() {
+        guest
+            .memory
+            .write_u16(address + index as u64 * 2, unit)
+            .unwrap();
+    }
+}
+
+/// The extended attributes pack the attribute word, zero times the drive
+/// does not track, and the size.
+#[test]
+fn the_extended_attributes_pack_attributes_times_and_size() {
+    const NAME7: u64 = SCRATCH;
+    const OUT7: u64 = SCRATCH + 0x400;
+    const DATA7: u64 = SCRATCH + 0x900;
+    const GOT7: u64 = SCRATCH + 0x808;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    let handle = create_file(&mut guest, "sized.bin", GENERIC_WRITE);
+    assert_ne!(handle, INVALID_HANDLE_VALUE);
+    guest.memory.write_bytes(OUT7, b"123456789").unwrap();
+    assert_eq!(guest.call("WriteFile", &[handle, OUT7, 9, GOT7, 0]), 1);
+    // UnlockFile accepts a valid file handle.
+    assert_eq!(guest.call("UnlockFile", &[handle, 0, 0, 9, 0]), 1);
+    assert_eq!(guest.call("CloseHandle", &[handle]), 1);
+    wide_at2(&mut guest, NAME7, "sized.bin");
+    assert_eq!(guest.call("GetFileAttributesExW", &[NAME7, 0, DATA7]), 1);
+    assert_eq!(guest.u32_at(DATA7), 0x80, "FILE_ATTRIBUTE_NORMAL");
+    assert_eq!(
+        guest.u64_at(DATA7 + 4),
+        0,
+        "the drive tracks no creation time"
+    );
+    assert_eq!(
+        guest.u64_at(DATA7 + 20),
+        0,
+        "the drive tracks no write time"
+    );
+    assert_eq!(guest.u32_at(DATA7 + 32), 9, "size low word");
+    assert_eq!(guest.u32_at(DATA7 + 28), 0, "size high word");
+    // An absent file fails.
+    wide_at2(&mut guest, NAME7, "absent.bin");
+    assert_eq!(guest.call("GetFileAttributesExA", &[NAME7, 0, DATA7]), 0);
+    // UnlockFile rejects a bad handle.
+    assert_eq!(guest.call("UnlockFile", &[0xDEAD, 0, 0, 1, 0]), 0);
+}
+
+/// No served code page has DBCS lead bytes, and setting file times is
+/// honestly unsupported rather than a silent no-op.
+#[test]
+fn dbcs_is_always_false_and_file_times_are_unsupported() {
+    let mut guest = Guest::new(IMPORTS, &[]);
+    for byte in [0u64, 0x41, 0x81, 0xFF] {
+        assert_eq!(guest.call("IsDBCSLeadByteEx", &[65001, byte]), 0);
+        assert_eq!(guest.call("IsDBCSLeadByteEx", &[437, byte]), 0);
+    }
+    assert_eq!(guest.call("SetFileTime", &[1, 0, 0, 0]), 0);
+    assert_eq!(
+        guest.call("GetLastError", &[]) & 0xFFFF_FFFF,
+        50,
+        "ERROR_NOT_SUPPORTED"
     );
 }
