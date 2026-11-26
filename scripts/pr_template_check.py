@@ -28,6 +28,37 @@ NO_ISSUE = re.compile(r"^\s*No linked issue:\s*\S", re.I | re.M)
 EMPTY_LINK = re.compile(r"^\s*(?:close|fix|resolve)\w*\s*#\s*$", re.I)
 HEADING = re.compile(r"##[ \t]+(.+?)[ \t]*")
 FENCE = re.compile(r" {0,3}(`{3,}|~{3,})(.*)")
+INLINE_CODE = re.compile(r"(`+)(.*?)\1")
+
+
+def hide_inline_code(line):
+    """Replace inline code spans with spaces, preserving offsets."""
+    return INLINE_CODE.sub(lambda match: " " * len(match.group(0)), line)
+
+
+def strip_fenced_blocks(text):
+    """Return text outside top-level fenced blocks, preserving line breaks."""
+    out = []
+    fence = ""
+    for raw in text.splitlines(keepends=True):
+        line = raw.removesuffix("\n")
+        newline = "\n" if raw.endswith("\n") else ""
+        marker = FENCE.fullmatch(line)
+        if fence:
+            if marker:
+                run, rest = marker.groups()
+                if run.startswith(fence) and not rest.strip(" \t"):
+                    fence = ""
+            out.append(newline)
+            continue
+        if marker:
+            run, rest = marker.groups()
+            if run[0] == "~" or "`" not in rest:
+                fence = run
+                out.append(newline)
+                continue
+        out.append(line + newline)
+    return "".join(out)
 
 
 def strip_comments_outside_fences(body):
@@ -61,9 +92,10 @@ def strip_comments_outside_fences(body):
                     fence = ""
             continue
         cleaned = []
+        search = hide_inline_code(line)
         start = 0
         while True:
-            comment = line.find("<!--", start)
+            comment = search.find("<!--", start)
             if comment == -1:
                 cleaned.append(line[start:])
                 break
@@ -126,7 +158,7 @@ def has_content(name, value):
         prose = [r for r in value.splitlines() if r.strip() and not r.strip().startswith("|")]
         return bool(filled or prose)
     if name == "Checklist":
-        return "- [" in value
+        return "- [" in strip_fenced_blocks(value)
     # A bare "Closes #" left over from the template is not content.
     rest = [l for l in value.splitlines() if l.strip() and not EMPTY_LINK.match(l)]
     return bool(rest)
@@ -145,7 +177,7 @@ def check(body):
             problems.append('Section "## %s" is empty.' % name)
     if not ISSUE_LINK.search(text) and not NO_ISSUE.search(text):
         problems.append('No linked issue: add "Closes #<number>", or a line "No linked issue: <reason>".')
-    checklist = found.get("checklist", "")
+    checklist = strip_fenced_blocks(found.get("checklist", ""))
     for prefix, label in REQUIRED_TICKS:
         item = re.search(r"^\s*[-*]\s*\[( |x|X)\]\s*" + re.escape(prefix), checklist, re.M)
         if not item:

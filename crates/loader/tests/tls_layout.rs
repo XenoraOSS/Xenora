@@ -15,7 +15,11 @@
 //! follow the same steps through guest memory. The directory and template are
 //! original. Nothing here ran on Windows.
 
-use xenora_loader::{GuestMemory, MemoryError, MemoryPermissions as P, TlsDirectory, setup_tls};
+use xenora_loader::startup::{StartupLayout, run_synthetic_startup};
+use xenora_loader::{
+    ExitReason, GuestMemory, ImportRegistry, MemoryError, MemoryPermissions as P, Register,
+    TlsDirectory, setup_tls,
+};
 
 const IMAGE: u64 = 0x1_4000_0000;
 const TEMPLATE: u64 = IMAGE + 0x3000;
@@ -127,4 +131,50 @@ fn an_inverted_template_range_is_rejected_before_anything_is_mapped() {
         memory.read_u64(THREAD_TLS),
         Err(MemoryError::UnmappedAddress(THREAD_TLS))
     );
+}
+
+#[test]
+fn main_thread_can_read_static_tls_on_both_sides_of_the_teb_boundary() {
+    const TEMPLATE_RVA: u64 = 0x3020;
+    const BLOCKS: [(u32, u64); 2] = [(60 * 1024, 0x1000), (60 * 1024 + 1, 0x12000)];
+
+    for (size, block_offset) in BLOCKS {
+        // Extend the repository's original TLS fixture at its preferred base,
+        // so the two new template pointers need no relocations.
+        let mut pe = include_bytes!("../../../fixtures/pe/trusted-runner.exe").to_vec();
+        pe[0x6a0..0x6a8].copy_from_slice(&(IMAGE + TEMPLATE_RVA).to_le_bytes());
+        pe[0x6a8..0x6b0].copy_from_slice(&(IMAGE + TEMPLATE_RVA + 2).to_le_bytes());
+        pe[0x6c0..0x6c4].copy_from_slice(&(size - 2).to_le_bytes());
+        pe[0x820..0x822].copy_from_slice(&[0xa5, 0x5a]);
+        let mut entry = vec![
+            0x65, 0x48, 0x8b, 0x04, 0x25, 0x58, 0, 0, 0, // mov rax, gs:[0x58]
+            0x48, 0x8b, 0x00, // mov rax, [rax] (module index zero)
+            0x0f, 0xb7, 0x08, // movzx ecx, word ptr [rax]
+            0x0f, 0xb6, 0x90, // movzx edx, byte ptr [rax+size-1]
+        ];
+        entry.extend_from_slice(&(size - 1).to_le_bytes());
+        entry.push(0xf4); // hlt
+        pe[0x400..0x400 + entry.len()].copy_from_slice(&entry);
+
+        let mut imports = ImportRegistry::new();
+        imports.register("xenora.dll", "fixture_draw", |_, _, _| Ok(0));
+        let result = run_synthetic_startup(
+            &pe,
+            StartupLayout {
+                image_base: IMAGE,
+                stack_top: 0x2_0001_0000,
+                tls_base: THREAD_TLS,
+            },
+            imports,
+            100,
+        )
+        .unwrap_or_else(|error| panic!("start guest with {size} bytes of static TLS: {error}"));
+        assert_eq!(result.execution.exit_reason, ExitReason::Halt);
+        let cpu = result.execution.final_state;
+        assert_eq!(cpu.gs_base, THREAD_TLS + 0x10000);
+        assert_eq!(cpu.get(Register::Rax), THREAD_TLS + block_offset);
+        assert_eq!(cpu.get(Register::Rcx), 0x5aa5);
+        assert_eq!(cpu.get(Register::Rdx), 0);
+        assert_eq!(result.tls_callbacks, 1);
+    }
 }

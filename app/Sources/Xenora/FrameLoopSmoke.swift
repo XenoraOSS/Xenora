@@ -4,6 +4,13 @@ import CoreGraphics
 import CXenora
 import Foundation
 
+private final class StopGate: Sendable {
+    private let release = DispatchSemaphore(value: 0)
+
+    func wait() -> Bool { release.wait(timeout: .now() + .seconds(3)) == .success }
+    func open() { release.signal() }
+}
+
 /// Scripted failure paths. This never opens a Metal device.
 private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
     enum Operation: String {
@@ -18,6 +25,7 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
     private var calls: [Operation] = []
     private var sentInputs: [(handle: xenora_session, input: xenora_controller_input)] = []
     private var invalidCalls = 0
+    private var nextStopGate: StopGate?
     private var snapshot = (state: UInt32(XENORA_LOOP_FINISHED), completed: UInt32(1), frame: UInt32(0), pixel: UInt8(0))
 
     func report(_ state: Int, completed: UInt32, frame: UInt32, pixel: UInt8) {
@@ -30,6 +38,12 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
 
     func count(_ operation: Operation) -> Int {
         lock.withLock { calls.filter { $0 == operation }.count }
+    }
+
+    func blockNextStop() -> StopGate {
+        let gate = StopGate()
+        lock.withLock { nextStopGate = gate }
+        return gate
     }
 
     var inputs: [xenora_controller_input] { lock.withLock { sentInputs.map(\.input) } }
@@ -80,7 +94,15 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
 
     func pause(_ handle: xenora_session) -> Int32 { lock.withLock { call(.pause, handle) } }
     func resume(_ handle: xenora_session) -> Int32 { lock.withLock { call(.resume, handle) } }
-    func stop(_ handle: xenora_session) -> Int32 { lock.withLock { call(.stop, handle) } }
+    func stop(_ handle: xenora_session) -> Int32 {
+        let (code, gate) = lock.withLock {
+            let gate = nextStopGate
+            nextStopGate = nil
+            return (call(.stop, handle), gate)
+        }
+        if let gate, !gate.wait() { return Int32(XENORA_INTERNAL_ERROR) }
+        return code
+    }
 
     func status(
         _ handle: xenora_session, _ state: inout UInt32, _ completed: inout UInt32,
@@ -156,10 +178,10 @@ func checkFrameLoopFailures() async -> [String] {
     model.sendInput(buttons: UInt32(XENORA_INPUT_LEFT))
     expectError("send controller input", Int(XENORA_INVALID_ARGUMENT))
     api.fail(.stop, Int32(XENORA_INTERNAL_ERROR))
-    model.stop()
+    await model.stop()?.value
     expectError("stop frame loop", Int(XENORA_INTERNAL_ERROR))
 
-    model.stop()
+    await model.stop()?.value
     expect(await waitForLoop { model.canStart } && !model.isRunning, "successful stop did not allow restart")
     let priorPolls = api.count(.status)
     model.startInteractive()
@@ -185,8 +207,99 @@ func checkFrameLoopFailures() async -> [String] {
            "teardown leaked its model or session")
     try? await Task.sleep(for: .milliseconds(35))
     expect(teardownAPI.count(.status) == 0, "poll ran after teardown")
-    return failures + (await checkFramePolling()) + checkControllerComposition()
-        + checkControllerHandoffs() + checkControllerErrorRecovery()
+    return failures + (await checkFramePolling()) + (await checkNonblockingStop())
+        + (await checkFailedStopRecovery())
+        + checkControllerComposition() + checkControllerHandoffs() + (await checkControllerErrorRecovery())
+}
+
+@MainActor
+private func checkNonblockingStop() async -> [String] {
+    var failures: [String] = []
+    func expect(_ condition: Bool, _ message: String) {
+        if !condition { failures.append(message) }
+    }
+
+    let api = ScriptedFrameLoop()
+    let model = FrameLoopModel(
+        api: api, readController: { nil },
+        sleepBeforePoll: { _ in try await Task.sleep(for: .milliseconds(5)) }
+    )
+    model.startInteractive()
+    api.report(XENORA_LOOP_PAUSED, completed: 1, frame: 0, pixel: 0x22)
+    model.pause()
+    let pausedImage = model.image
+    expect(pausedImage != nil, "paused loop did not publish its frame")
+    let priorPolls = api.count(.status)
+    let gate = api.blockNextStop()
+    defer { gate.open() }
+    guard let stop = model.stop() else { return ["paused loop did not start a stop task"] }
+    expect(model.isStopping && !model.canStart && !model.isRunning && !model.isPaused,
+           "stop did not disable controls before the worker join")
+    expect(await waitForLoop { api.count(.stop) == 1 }, "worker did not enter the gated stop")
+
+    let duplicate = model.stop()
+    expect(duplicate == nil, "a duplicate stop started a second task")
+    model.start()
+    model.startInteractive()
+    model.pause()
+    model.resume()
+    model.sendInput(buttons: UInt32(XENORA_INPUT_RIGHT))
+    // A heartbeat has time to run here if the stop forgot to cancel it.
+    try? await Task.sleep(for: .milliseconds(25))
+    expect(model.isStopping && model.completed == 1 && model.frameId == 0
+           && model.image === pausedImage,
+           "main actor could not observe the last frame with the stop still blocked")
+    expect(api.count(.status) == priorPolls && api.count(.stop) == 1 && api.count(.destroy) == 0
+           && api.count(.create) == 1 && api.count(.standard) == 0 && api.count(.interactive) == 1
+           && api.count(.pause) == 1 && api.count(.resume) == 0 && api.count(.sendInput) == 0,
+           "a second native operation reached the handle while stop was blocked")
+
+    api.report(XENORA_LOOP_STOPPED, completed: 2, frame: 1, pixel: 0x77)
+    gate.open()
+    await stop.value
+    await duplicate?.value
+    let count = Int(XENORA_FIXTURE_FRAME_WIDTH * XENORA_FIXTURE_FRAME_HEIGHT * 4)
+    let finalPixels = model.image?.dataProvider?.data.map { $0 as Data }
+    expect(!model.isStopping && model.canStart && model.state == XENORA_LOOP_STOPPED
+           && model.completed == 2 && model.frameId == 1 && model.errorMessage == nil
+           && finalPixels == Data(repeating: 0x77, count: count) && api.count(.status) == priorPolls + 1,
+           "joined stop did not publish its final frame and terminal status")
+
+    model.start()
+    expect(model.isRunning && !model.isInteractive && model.image == nil
+           && api.count(.create) == 2 && api.count(.destroy) == 1 && api.count(.standard) == 1,
+           "completed stop did not allow a clean restart")
+    return failures
+}
+
+@MainActor
+private func checkFailedStopRecovery() async -> [String] {
+    var failures: [String] = []
+    func expect(_ condition: Bool, _ message: String) {
+        if !condition { failures.append(message) }
+    }
+
+    let api = ScriptedFrameLoop()
+    let model = FrameLoopModel(
+        api: api, readController: { nil },
+        sleepBeforePoll: { _ in try await Task.sleep(for: .milliseconds(5)) }
+    )
+    model.startInteractive()
+    api.report(XENORA_LOOP_RUNNING, completed: 1, frame: 0, pixel: 0x33)
+    let priorPolls = api.count(.status)
+    api.fail(.stop, Int32(XENORA_INTERNAL_ERROR))
+    await model.stop()?.value
+    expect(model.errorMessage?.contains("stop frame loop (status \(Int(XENORA_INTERNAL_ERROR)))") == true,
+           "failed stop did not publish its error")
+    expect(!model.isStopping, "failed stop left controls disabled")
+    expect(await waitForLoop { api.count(.status) > priorPolls },
+           "failed stop did not restart polling")
+
+    api.report(XENORA_LOOP_STOPPED, completed: 2, frame: 1, pixel: 0x44)
+    await model.stop()?.value
+    expect(model.canStart && !model.isStopping,
+           "failed-stop recovery did not allow a clean stop")
+    return failures
 }
 
 @MainActor
@@ -256,10 +369,10 @@ private func checkFramePolling() async -> [String] {
            "paused interactive loop did not report the controller disconnect")
 
     api.report(XENORA_LOOP_STOPPED, completed: 3, frame: 1, pixel: 0x77)
-    model.stop()
+    await model.stop()?.value
     expect(model.state == XENORA_LOOP_STOPPED && model.canStart && model.image === second
            && api.count(.status) == 4,
-           "stop did not immediately publish terminal status and retain the last frame")
+           "joined stop did not publish terminal status and retain the last frame")
     return failures
 }
 
@@ -390,7 +503,7 @@ private func checkControllerHandoffs() -> [String] {
 }
 
 @MainActor
-private func checkControllerErrorRecovery() -> [String] {
+private func checkControllerErrorRecovery() async -> [String] {
     let api = ScriptedFrameLoop()
     let model = FrameLoopModel(api: api, readController: { nil })
     let left = UInt32(XENORA_INPUT_LEFT)
@@ -435,7 +548,7 @@ private func checkControllerErrorRecovery() -> [String] {
     api.fail(.sendInput, status)
     model.sendInput(buttons: left)
     api.fail(.stop, Int32(XENORA_INTERNAL_ERROR))
-    model.stop()
+    await model.stop()?.value
     api.fail(.sendInput, status)
     model.sendInput(buttons: left)
     if model.errorMessage != stopError {
@@ -472,7 +585,7 @@ func checkNativeFrameLoop() async -> [String] {
         if !(await waitForLoop({ model.isRunning && model.image != nil })) {
             failures.append("resumed standard fixture did not publish a frame")
         }
-        model.stop()
+        await model.stop()?.value
         if !(await waitForLoop({ model.state == XENORA_LOOP_STOPPED })) {
             failures.append("resumed standard fixture did not stop")
         }
@@ -485,6 +598,28 @@ func checkNativeFrameLoop() async -> [String] {
     if !(await waitForLoop({ model.canStart })) || model.completed != 4
         || model.frameId != 3 || pixels() != expectedPixels(redColumn: 3) || model.errorMessage != nil {
         failures.append("standard fixture restart did not finish with frame 3")
+    }
+
+    model.startInteractive(frameCount: 10_000)
+    if await waitForLoop({ model.isRunning && model.image != nil }) {
+        model.pause()
+        if model.isPaused {
+            let beforeStop = model.completed
+            let stop = model.stop()
+            if stop == nil || !model.isStopping || model.canStart {
+                failures.append("paused interactive fixture did not enter the stopping state")
+            }
+            await stop?.value
+            if model.isStopping || !model.canStart || model.state != XENORA_LOOP_STOPPED
+                || model.completed < beforeStop || model.frameId != 0
+                || pixels() != expectedPixels(redColumn: 0) || model.errorMessage != nil {
+                failures.append("interactive stop did not retain its last native frame")
+            }
+        } else {
+            failures.append("interactive fixture did not pause before stop")
+        }
+    } else {
+        failures.append("interactive fixture did not publish a frame before stop")
     }
 
     model.startInteractive(frameCount: 8)

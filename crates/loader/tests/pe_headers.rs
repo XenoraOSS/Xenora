@@ -10,7 +10,10 @@
 
 use xenora_loader::cpu::{ExitReason, Register};
 use xenora_loader::imports::ImportRegistry;
-use xenora_loader::startup::{StartupLayout, StartupResult, run_synthetic_startup};
+use xenora_loader::startup::{
+    StartupEvent, StartupLayout, StartupResult, run_synthetic_startup,
+    run_synthetic_startup_with_observer,
+};
 use xenora_loader::{MemoryError, ParsedPe, PeError};
 
 const PREFERRED_BASE: u64 = 0x1_4000_0000;
@@ -25,6 +28,7 @@ const TABLE_END: u32 = (OPTIONAL + OPTIONAL_SIZE) as u32 + 40 * SECTIONS as u32;
 
 /// One image: `.text` holding `code` and an uninitialized `.data`.
 struct Image {
+    size_of_image: u32,
     size_of_headers: u32,
     text_rva: u32,
     data_rva: u32,
@@ -39,6 +43,7 @@ struct Image {
 impl Image {
     fn new(code: &[u8]) -> Self {
         Self {
+            size_of_image: 0x4000,
             size_of_headers: 0x400,
             text_rva: 0x2000,
             data_rva: 0x3000,
@@ -76,7 +81,7 @@ impl Image {
         pe[opt + 24..opt + 32].copy_from_slice(&PREFERRED_BASE.to_le_bytes());
         pe[opt + 32..opt + 36].copy_from_slice(&0x1000u32.to_le_bytes());
         pe[opt + 36..opt + 40].copy_from_slice(&0x200u32.to_le_bytes());
-        pe[opt + 56..opt + 60].copy_from_slice(&0x4000u32.to_le_bytes());
+        pe[opt + 56..opt + 60].copy_from_slice(&self.size_of_image.to_le_bytes());
         pe[opt + 60..opt + 64].copy_from_slice(&self.size_of_headers.to_le_bytes());
         pe[opt + 108..opt + 112].copy_from_slice(&16u32.to_le_bytes());
 
@@ -274,6 +279,126 @@ fn an_empty_section_inside_the_header_page_is_not_an_overlap() {
 }
 
 #[test]
+fn declared_image_extent_bounds_the_virtual_section_end() {
+    let mut image = Image::new(&[0xF4]);
+    image.data_size = 0x1000;
+    let bytes = image.build();
+    let pe = ParsedPe::parse(&bytes).unwrap();
+    let loaded = pe.load_into_memory(&bytes).unwrap();
+    assert_eq!(loaded.memory.read_u8(PREFERRED_BASE + 0x3fff), Ok(0));
+    assert_eq!(
+        loaded.memory.read_u8(PREFERRED_BASE + 0x4000),
+        Err(MemoryError::UnmappedAddress(PREFERRED_BASE + 0x4000))
+    );
+
+    image.data_size += 1;
+    let bytes = image.build();
+    let parsed = ParsedPe::parse(&bytes).expect("metadata remains inspectable");
+    assert_eq!(parsed.size_of_image, 0x4000);
+    let expected = PeError::InvalidImageSize {
+        declared: 0x4000,
+        required: 0x4001,
+    };
+    assert_eq!(
+        parsed.load_into_memory(&bytes).err().as_ref(),
+        Some(&expected)
+    );
+
+    let layout = StartupLayout {
+        image_base: OTHER_BASE,
+        stack_top: 0x2_0001_0000,
+        tls_base: 0x3_0000_0000,
+    };
+    let mut events = Vec::new();
+    let result = run_synthetic_startup_with_observer(
+        &bytes,
+        layout,
+        ImportRegistry::new(),
+        1_000,
+        |event| events.push(event),
+    );
+    let error = result.err().expect("startup refused the image");
+    assert_eq!(error.downcast_ref::<PeError>(), Some(&expected));
+    assert!(matches!(&events[..], [StartupEvent::Parsed { .. }]));
+}
+
+#[test]
+fn declared_image_extent_counts_raw_bytes_beyond_virtual_size() {
+    let mut image = Image::new(&[0xF4]);
+    image.size_of_image = 0x21ff;
+    // Put an empty section beyond both candidate ends. It contributes nothing.
+    image.data_size = 0;
+    let mut bytes = image.build();
+    let text = OPTIONAL + OPTIONAL_SIZE;
+    bytes[text + 8..text + 12].copy_from_slice(&1u32.to_le_bytes());
+    let parsed = ParsedPe::parse(&bytes).unwrap();
+    assert_eq!(
+        parsed.load_into_memory(&bytes).err(),
+        Some(PeError::InvalidImageSize {
+            declared: 0x21ff,
+            required: 0x2200,
+        })
+    );
+
+    bytes[OPTIONAL + 56..OPTIONAL + 60].copy_from_slice(&0x2200u32.to_le_bytes());
+    let parsed = ParsedPe::parse(&bytes).unwrap();
+    let loaded = parsed.load_into_memory(&bytes).unwrap();
+    assert_eq!(loaded.memory.read_u8(PREFERRED_BASE + 0x21ff), Ok(0));
+}
+
+#[test]
+fn declared_image_extent_counts_header_page_rounding() {
+    let mut image = Image::new(&[0xF4]);
+    image.size_of_image = 0x0fff;
+    let bytes = image.build();
+    let mut parsed = ParsedPe::parse(&bytes).unwrap();
+    // Isolate the header mapping on the public mapping path.
+    parsed.sections.clear();
+    assert_eq!(
+        parsed.load_into_memory(&bytes).err(),
+        Some(PeError::InvalidImageSize {
+            declared: 0x0fff,
+            required: 0x1000,
+        })
+    );
+}
+
+#[test]
+fn declared_image_extent_allows_gaps_larger_than_the_allocation_budget() {
+    let mut image = Image::new(&[0xF4]);
+    image.data_rva = 0x1000_2000;
+    image.size_of_image = 0x1000_3000;
+    let bytes = image.build();
+    let parsed = ParsedPe::parse(&bytes).unwrap();
+    let loaded = parsed.load_into_memory(&bytes).unwrap();
+    let data = PREFERRED_BASE + u64::from(image.data_rva);
+    assert_eq!(loaded.memory.read_u8(data), Ok(0));
+    assert_eq!(
+        loaded.memory.read_u8(data - 1),
+        Err(MemoryError::UnmappedAddress(data - 1))
+    );
+}
+
+#[test]
+fn declared_image_extent_must_match_the_bytes_being_mapped() {
+    let mut bytes = Image::new(&[0xF4]).build();
+    let parsed = ParsedPe::parse(&bytes).unwrap();
+    let mut altered = parsed.clone();
+    altered.size_of_image = 0x5000;
+    assert_eq!(
+        altered.load_into_memory(&bytes).err(),
+        Some(PeError::InvalidHeaderSize)
+    );
+
+    bytes[OPTIONAL + 56..OPTIONAL + 60].copy_from_slice(&0x5000u32.to_le_bytes());
+    assert_eq!(
+        parsed.load_into_memory(&bytes).err(),
+        Some(PeError::InvalidHeaderSize)
+    );
+    assert!(altered.load_into_memory(&bytes).is_ok());
+}
+
+#[test]
 fn loading_with_bytes_shorter_than_the_headers_is_an_error_not_a_panic() {
     let bytes = Image::new(&[0xF4]).build();
     let pe = ParsedPe::parse(&bytes).unwrap();
@@ -419,6 +544,7 @@ fn headers_over_the_mapping_budget_are_refused() {
     // only the budget stands between this image and a mapping of that size.
     const BUDGET: u32 = 256 * 1024 * 1024;
     let mut image = Image::new(&[0xF4]);
+    image.size_of_image = BUDGET + 0x3000;
     image.size_of_headers = BUDGET + 0x1000;
     image.text_offset = BUDGET + 0x1000;
     image.text_rva = BUDGET + 0x1000;

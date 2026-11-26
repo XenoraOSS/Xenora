@@ -105,14 +105,19 @@ fn audio_pcm_queue_streaming_ordering_and_volume() {
         XENORA_OK
     );
 
-    // Read remaining 200 bytes from first batch
+    // The remaining frames were queued before the volume change. They
+    // still drain first, now at half volume.
     let mut drain = vec![0u8; 200];
     assert_eq!(
         unsafe { xenora_session_audio_read(sess, drain.as_mut_ptr(), 200, &mut bytes_read) },
         XENORA_OK
     );
     assert_eq!(bytes_read, 200);
-    assert_eq!(&drain[..], &pcm[200..]);
+    let expected: Vec<u8> = (50..100i16)
+        .flat_map(|i| [i * 50, -i * 50])
+        .flat_map(i16::to_le_bytes)
+        .collect();
+    assert_eq!(drain, expected);
 
     // Now read the 8 bytes attenuated samples
     let mut attenuated = vec![0u8; 8];

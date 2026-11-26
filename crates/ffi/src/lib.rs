@@ -112,50 +112,53 @@ impl AudioSubsystem {
         self.total_submitted_bytes = self
             .total_submitted_bytes
             .saturating_add(bytes.len() as u64);
-        let processed_bytes: Vec<u8> = if self.format == XENORA_AUDIO_FORMAT_PCM_S16LE {
-            let mut out = bytes.to_vec();
-            for chunk in out.as_chunks_mut::<2>().0 {
-                let sample = i16::from_le_bytes([chunk[0], chunk[1]]);
-                let attenuated = if self.muted {
-                    0i16
-                } else {
-                    let scaled = (sample as f32) * self.volume;
-                    scaled.clamp(-32768.0, 32767.0) as i16
-                };
-                let res_bytes = attenuated.to_le_bytes();
-                chunk[0] = res_bytes[0];
-                chunk[1] = res_bytes[1];
-            }
-            out
-        } else {
-            let mut out = bytes.to_vec();
-            for chunk in out.as_chunks_mut::<4>().0 {
-                let sample = f32::from_le_bytes(*chunk);
-                let scaled = if self.muted || !sample.is_finite() {
-                    0.0
-                } else {
-                    (sample * self.volume).clamp(-1.0, 1.0)
-                };
-                *chunk = scaled.to_le_bytes();
-            }
-            out
-        };
-
-        for b in processed_bytes {
-            if self.queue.len() >= self.max_capacity_bytes {
-                self.queue.pop_front();
-            }
-            self.queue.push_back(b);
-        }
+        // Only the newest bytes can survive in the bounded queue. Skip an
+        // oversized submission's discarded prefix before copying any samples.
+        let retained = &bytes[bytes.len().saturating_sub(self.max_capacity_bytes)..];
+        let available_for_old = self.max_capacity_bytes - retained.len();
+        let discard = self.queue.len().saturating_sub(available_for_old);
+        self.queue.drain(..discard);
+        self.queue.extend(retained.iter().copied());
     }
 
     pub fn read(&mut self, out: &mut [u8]) -> usize {
         let usable = out.len().min(self.queue.len());
         let count = usable - usable % self.frame_bytes();
-        for b in out.iter_mut().take(count) {
-            *b = self.queue.pop_front().unwrap_or(0);
-        }
+        let drained = &mut out[..count];
+        let (first, second) = self.queue.as_slices();
+        let first_count = first.len().min(count);
+        drained[..first_count].copy_from_slice(&first[..first_count]);
+        drained[first_count..].copy_from_slice(&second[..count - first_count]);
+        self.queue.drain(..count);
+        self.apply_playback_controls(drained);
         count
+    }
+
+    fn apply_playback_controls(&self, pcm: &mut [u8]) {
+        if self.muted {
+            pcm.fill(0);
+            return;
+        }
+        if self.format == XENORA_AUDIO_FORMAT_PCM_S16LE {
+            if self.volume == 1.0 {
+                return;
+            }
+            for chunk in pcm.as_chunks_mut::<2>().0 {
+                let sample = i16::from_le_bytes(*chunk);
+                let scaled = f32::from(sample) * self.volume;
+                *chunk = (scaled.clamp(-32768.0, 32767.0) as i16).to_le_bytes();
+            }
+        } else {
+            for chunk in pcm.as_chunks_mut::<4>().0 {
+                let sample = f32::from_le_bytes(*chunk);
+                let scaled = if sample.is_finite() {
+                    (sample * self.volume).clamp(-1.0, 1.0)
+                } else {
+                    0.0
+                };
+                *chunk = scaled.to_le_bytes();
+            }
+        }
     }
 
     fn render(&mut self, out: &mut [u8]) -> usize {
@@ -2605,6 +2608,291 @@ mod tests {
         assert!(split(res_reused).1 > split(res).1);
 
         xenora_session_destroy(session);
+    }
+
+    #[test]
+    fn pcm_queue_keeps_the_newest_complete_frames_after_wrap_and_overflow() {
+        let _guard = serial();
+        let session = create();
+        assert_eq!(
+            xenora_session_audio_init(session, 48_000, 2, XENORA_AUDIO_FORMAT_PCM_S16LE),
+            XENORA_OK
+        );
+        const CAPACITY: usize = 256 * 1024;
+        let source: Vec<u8> = (0..66_000_u32)
+            .flat_map(|frame| [frame as u16, !(frame as u16)])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        let (initial, additional) = source.split_at(CAPACITY);
+
+        let submit = |bytes: &[u8]| {
+            assert_eq!(
+                unsafe { xenora_session_audio_submit(session, bytes.as_ptr(), bytes.len() as u64) },
+                XENORA_OK
+            );
+        };
+        let read = |output: &mut [u8]| {
+            let mut actual = 0;
+            assert_eq!(
+                unsafe {
+                    xenora_session_audio_read(
+                        session,
+                        output.as_mut_ptr(),
+                        output.len() as u64,
+                        &mut actual,
+                    )
+                },
+                XENORA_OK
+            );
+            assert_eq!(actual, output.len() as u64);
+        };
+
+        submit(initial);
+        let mut prefix = [0xaa; 8];
+        read(&mut prefix);
+        assert_eq!(prefix, source[..8]);
+        submit(&additional[..16]);
+        let mut output = vec![0; CAPACITY];
+        read(&mut output);
+        assert_eq!(output, source[16..CAPACITY + 16]);
+
+        // A single oversized submission replaces a preexisting frame, and only
+        // the source suffix survives. Total submitted counts the discarded bytes.
+        submit(&initial[..4]);
+        submit(&source);
+        read(&mut output);
+        assert_eq!(output, source[source.len() - CAPACITY..]);
+
+        let (mut queued, mut underruns, mut total) = (99, 99, 0);
+        assert_eq!(
+            unsafe {
+                xenora_session_audio_status(session, &mut queued, &mut underruns, &mut total)
+            },
+            XENORA_OK
+        );
+        assert_eq!(
+            (queued, underruns, total),
+            (0, 0, (CAPACITY + 20 + source.len()) as u64)
+        );
+        assert_eq!(xenora_session_destroy(session), XENORA_OK);
+    }
+
+    #[test]
+    fn queued_s16_pcm_uses_controls_at_the_next_render() {
+        let _guard = serial();
+        let session = create();
+        assert_eq!(
+            xenora_session_audio_init(session, 48_000, 1, XENORA_AUDIO_FORMAT_PCM_S16LE),
+            XENORA_OK
+        );
+        let pcm = [0xe8, 0x03, 0x18, 0xfc, 0xd0, 0x07]; // 1000, -1000, 2000
+        assert_eq!(
+            unsafe { xenora_session_audio_submit(session, pcm.as_ptr(), pcm.len() as u64) },
+            XENORA_OK
+        );
+
+        let mut output = [0xaa; 2];
+        let mut supplied = 0;
+        for (gain, muted, expected) in [(1.0, 0, 1000i16), (1.0, 1, 0), (0.5, 0, 1000)] {
+            assert_eq!(
+                xenora_session_audio_set_volume(session, gain, muted),
+                XENORA_OK
+            );
+            assert_eq!(
+                unsafe {
+                    xenora_session_audio_render(session, output.as_mut_ptr(), 2, &mut supplied)
+                },
+                XENORA_OK
+            );
+            assert_eq!(supplied, 2);
+            assert_eq!(output, expected.to_le_bytes());
+        }
+
+        let (mut queued, mut underruns, mut total) = (99, 99, 0);
+        assert_eq!(
+            unsafe {
+                xenora_session_audio_status(session, &mut queued, &mut underruns, &mut total)
+            },
+            XENORA_OK
+        );
+        assert_eq!((queued, underruns, total), (0, 0, 6));
+        assert_eq!(xenora_session_destroy(session), XENORA_OK);
+    }
+
+    #[test]
+    fn queued_float_pcm_retains_samples_submitted_while_muted() {
+        let _guard = serial();
+        let session = create();
+        assert_eq!(
+            xenora_session_audio_init(session, 48_000, 2, XENORA_AUDIO_FORMAT_PCM_F32LE),
+            XENORA_OK
+        );
+        assert_eq!(xenora_session_audio_set_volume(session, 1.0, 1), XENORA_OK);
+        let pcm: Vec<u8> = [0.75_f32, -0.5, f32::INFINITY, -4.0]
+            .into_iter()
+            .flat_map(f32::to_le_bytes)
+            .collect();
+        assert_eq!(
+            unsafe { xenora_session_audio_submit(session, pcm.as_ptr(), pcm.len() as u64) },
+            XENORA_OK
+        );
+        assert_eq!(xenora_session_audio_set_volume(session, 0.5, 0), XENORA_OK);
+
+        let mut output = [0xaa; 17];
+        let mut actual = 0;
+        assert_eq!(
+            unsafe { xenora_session_audio_read(session, output.as_mut_ptr(), 17, &mut actual) },
+            XENORA_OK
+        );
+        assert_eq!(actual, 16);
+        for (sample, expected) in output[..16]
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .zip([0.375_f32, -0.25, 0.0, -1.0])
+        {
+            assert_eq!(*sample, expected.to_le_bytes());
+        }
+        assert_eq!(output[16], 0xaa);
+        assert_eq!(xenora_session_destroy(session), XENORA_OK);
+    }
+
+    #[test]
+    fn audio_reinit_clears_queue_and_underruns_but_preserves_controls_and_total() {
+        let _guard = serial();
+        let session = create();
+        assert_eq!(
+            xenora_session_audio_init(session, 48_000, 1, XENORA_AUDIO_FORMAT_PCM_S16LE),
+            XENORA_OK
+        );
+        assert_eq!(xenora_session_audio_set_volume(session, 0.5, 0), XENORA_OK);
+        let pcm = 1000i16.to_le_bytes();
+        assert_eq!(
+            unsafe { xenora_session_audio_submit(session, pcm.as_ptr(), pcm.len() as u64) },
+            XENORA_OK
+        );
+        let mut output = [0xaa; 2];
+        let mut actual = 0;
+        assert_eq!(
+            unsafe { xenora_session_audio_read(session, output.as_mut_ptr(), 2, &mut actual) },
+            XENORA_OK
+        );
+        assert_eq!(actual, 2);
+        assert_eq!(output, 500i16.to_le_bytes());
+
+        let mut padding = [0xaa; 4];
+        let mut supplied = 99;
+        assert_eq!(
+            unsafe { xenora_session_audio_render(session, padding.as_mut_ptr(), 4, &mut supplied) },
+            XENORA_OK
+        );
+        assert_eq!(supplied, 0);
+        let (mut queued, mut underruns, mut total) = (99, 99, 0);
+        assert_eq!(
+            unsafe {
+                xenora_session_audio_status(session, &mut queued, &mut underruns, &mut total)
+            },
+            XENORA_OK
+        );
+        assert_eq!((queued, underruns, total), (0, 1, 2));
+
+        // Reinitializing changes the frame size and clears queue/underruns; the
+        // volume setting and cumulative submitted count survive.
+        assert_eq!(
+            xenora_session_audio_init(session, 48_000, 1, XENORA_AUDIO_FORMAT_PCM_F32LE),
+            XENORA_OK
+        );
+        assert_eq!(
+            unsafe {
+                xenora_session_audio_status(session, &mut queued, &mut underruns, &mut total)
+            },
+            XENORA_OK
+        );
+        assert_eq!((queued, underruns, total), (0, 0, 2));
+        let float = 1.0f32.to_le_bytes();
+        assert_eq!(
+            unsafe { xenora_session_audio_submit(session, float.as_ptr(), float.len() as u64) },
+            XENORA_OK
+        );
+        let mut float_out = [0xaa; 4];
+        assert_eq!(
+            unsafe { xenora_session_audio_read(session, float_out.as_mut_ptr(), 4, &mut actual) },
+            XENORA_OK
+        );
+        assert_eq!(actual, 4);
+        assert_eq!(float_out, 0.5f32.to_le_bytes());
+
+        // A second reinitialization preserves the mute state too.
+        assert_eq!(xenora_session_audio_set_volume(session, 0.5, 1), XENORA_OK);
+        assert_eq!(
+            xenora_session_audio_init(session, 48_000, 1, XENORA_AUDIO_FORMAT_PCM_S16LE),
+            XENORA_OK
+        );
+        assert_eq!(
+            unsafe { xenora_session_audio_submit(session, pcm.as_ptr(), pcm.len() as u64) },
+            XENORA_OK
+        );
+        assert_eq!(
+            unsafe { xenora_session_audio_read(session, output.as_mut_ptr(), 2, &mut actual) },
+            XENORA_OK
+        );
+        assert_eq!(actual, 2);
+        assert_eq!(output, [0, 0]);
+        assert_eq!(
+            unsafe {
+                xenora_session_audio_status(session, &mut queued, &mut underruns, &mut total)
+            },
+            XENORA_OK
+        );
+        assert_eq!((queued, underruns, total), (0, 0, 8));
+        assert_eq!(xenora_session_destroy(session), XENORA_OK);
+    }
+
+    #[test]
+    fn f32_stereo_oversized_submission_keeps_the_newest_whole_frames() {
+        let _guard = serial();
+        let session = create();
+        assert_eq!(
+            xenora_session_audio_init(session, 48_000, 2, XENORA_AUDIO_FORMAT_PCM_F32LE),
+            XENORA_OK
+        );
+        const CAPACITY: usize = 256 * 1024;
+        const FRAME: usize = 8;
+        let source: Vec<u8> = (0..(CAPACITY / FRAME + 1) as u32)
+            .flat_map(|frame| {
+                let sample = frame as f32 / (CAPACITY / FRAME) as f32;
+                [sample, -sample].into_iter().flat_map(f32::to_le_bytes)
+            })
+            .collect();
+        assert_eq!(source.len(), CAPACITY + FRAME);
+        assert_eq!(
+            unsafe { xenora_session_audio_submit(session, source.as_ptr(), source.len() as u64) },
+            XENORA_OK
+        );
+        let mut output = vec![0xaa; CAPACITY];
+        let mut actual = 0;
+        assert_eq!(
+            unsafe {
+                xenora_session_audio_read(
+                    session,
+                    output.as_mut_ptr(),
+                    output.len() as u64,
+                    &mut actual,
+                )
+            },
+            XENORA_OK
+        );
+        assert_eq!(actual, CAPACITY as u64);
+        assert_eq!(output, source[FRAME..]);
+        let (mut queued, mut underruns, mut total) = (99, 99, 0);
+        assert_eq!(
+            unsafe {
+                xenora_session_audio_status(session, &mut queued, &mut underruns, &mut total)
+            },
+            XENORA_OK
+        );
+        assert_eq!((queued, underruns, total), (0, 0, source.len() as u64));
+        assert_eq!(xenora_session_destroy(session), XENORA_OK);
     }
 
     #[test]

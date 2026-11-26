@@ -78,6 +78,14 @@ impl ControllerInput {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u64)]
+enum FrameCommand {
+    Neutral = 0,
+    Right = 1,
+    Left = 2,
+}
+
 #[derive(Default)]
 struct State {
     status: u32,
@@ -90,7 +98,8 @@ struct State {
     input_queue: std::collections::VecDeque<InputState>,
     recorded_frames: Vec<(u32, Vec<u8>)>,
     frame_admitted: bool,
-    frame_input: Option<u64>,
+    frame_input: Option<FrameCommand>,
+    expected_column: u32,
     end_seen: bool,
     latest: Option<(u32, Vec<u8>)>,
 }
@@ -277,6 +286,7 @@ impl FrameLoop {
                 .lock()
                 .frame_input
                 .take()
+                .map(|command| command as u64)
                 .ok_or(ExitReason::ServiceAbiViolation)
         });
         let snapshot = Arc::clone(self);
@@ -340,11 +350,11 @@ impl FrameLoop {
             (state.interactive && !state.stop && state.completed < state.limit).then(|| {
                 let input = state.input_queue.pop_front().unwrap_or(state.input.state);
                 if input.buttons & crate::XENORA_INPUT_RIGHT != 0 {
-                    1
+                    FrameCommand::Right
                 } else if input.buttons & crate::XENORA_INPUT_LEFT != 0 {
-                    2
+                    FrameCommand::Left
                 } else {
-                    0
+                    FrameCommand::Neutral
                 }
             });
         while state.paused && !state.stop && state.completed < state.limit {
@@ -353,6 +363,15 @@ impl FrameLoop {
         if state.stop || state.completed >= state.limit {
             state.end_seen = true;
             return Ok(0);
+        }
+        if let Some(command) = input {
+            let previous = state.latest.as_ref().map_or(0, |(column, _)| *column);
+            let width = WIDTH as u32;
+            state.expected_column = match command {
+                FrameCommand::Neutral => previous,
+                FrameCommand::Right => (previous + 1) % width,
+                FrameCommand::Left => (previous + width - 1) % width,
+            };
         }
         state.frame_admitted = true;
         state.frame_input = input;
@@ -369,7 +388,11 @@ impl FrameLoop {
         native_draws: u32,
     ) -> Result<u64, ExitReason> {
         let mut state = self.lock();
-        let id = if state.interactive { column } else { sequence };
+        let id = if state.interactive {
+            state.expected_column
+        } else {
+            sequence
+        };
         if !state.frame_admitted
             || state.frame_input.is_some()
             || sequence != state.completed
@@ -536,7 +559,55 @@ fn paused_interactive_frame_keeps_its_sampled_command() {
     assert!(session.set_paused(false));
     assert!(matches!(gate.join().unwrap(), Ok(2)));
     assert!(sampled);
-    assert_eq!(session.lock().frame_input, Some(2));
+    let state = session.lock();
+    assert_eq!(state.frame_input, Some(FrameCommand::Left));
+    assert_eq!(state.expected_column, 3);
+}
+
+#[cfg(test)]
+#[test]
+fn interactive_publication_rejects_a_coherent_frame_for_the_wrong_column() {
+    let session = FrameLoop::default();
+    {
+        let mut state = session.lock();
+        state.limit = 2;
+        state.interactive = true;
+    }
+    session.send_input(InputState {
+        buttons: crate::XENORA_INPUT_RIGHT,
+        ..InputState::default()
+    });
+    let backend = GraphicsBackendId::SoftwareReference;
+    let publish = |sequence, column| {
+        let readback: [u8; FRAME_BYTES] = expected(column).try_into().unwrap();
+        let frame = FramePresentation {
+            width: WIDTH,
+            height: HEIGHT,
+            pixels: readback.to_vec(),
+            frame_index: u64::from(sequence) + 1,
+            draw_count: 1,
+            backend: Some(backend),
+        };
+        session.publish_frame(sequence, column, &readback, &frame, backend, 0)
+    };
+
+    assert!(matches!(session.begin_frame(0), Ok(2)));
+    assert_eq!(session.lock().frame_input.take(), Some(FrameCommand::Right));
+    assert!(matches!(publish(0, 1), Ok(1)));
+
+    assert!(matches!(session.begin_frame(1), Ok(2)));
+    assert_eq!(session.lock().frame_input.take(), Some(FrameCommand::Right));
+    assert!(matches!(
+        publish(1, 3),
+        Err(ExitReason::ServiceAbiViolation)
+    ));
+    let snapshot = session.snapshot();
+    assert_eq!(snapshot.completed, 1);
+    assert_eq!(snapshot.latest, Some((1, expected(1))));
+    assert!(session.get_recorded_frame(1).is_none());
+
+    assert!(matches!(publish(1, 2), Ok(1)));
+    assert_eq!(session.get_recorded_frame(1), Some((2, expected(2))));
 }
 
 #[cfg(test)]
