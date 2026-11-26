@@ -144,6 +144,40 @@ fn crt_crtutils(name: &str) -> PathBuf {
     build("build-crt-crtutils.sh", "run-program-crt-crtutils", &OUT).join(format!("{name}.exe"))
 }
 
+fn crt_codepages(name: &str) -> PathBuf {
+    build("build-crt-codepages.sh", "run-program-crt-codepages", &OUT).join(format!("{name}.exe"))
+
+fn crt_locale(name: &str) -> PathBuf {
+    build("build-crt-locale.sh", "run-program-crt-locale", &OUT).join(format!("{name}.exe"))
+
+fn crt_compare(name: &str) -> PathBuf {
+    build("build-crt-compare.sh", "run-program-crt-compare", &OUT).join(format!("{name}.exe"))
+
+fn crt_console(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-console.sh", "run-program-crt-console", &OUT).join(format!("{name}.exe"))
+}
+
+fn crt_winfiles(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-winfiles.sh", "run-program-crt-winfiles", &OUT).join(format!("{name}.exe"))
+}
+
+fn crt_winmemory(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-winmemory.sh", "run-program-crt-winmemory", &OUT).join(format!("{name}.exe"))
+}
+
+fn crt_winsys(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-winsys.sh", "run-program-crt-winsys", &OUT).join(format!("{name}.exe"))
+}
+
+fn crt_crtutils(name: &str) -> PathBuf {
+    static OUT: OnceLock<PathBuf> = OnceLock::new();
+    build("build-crt-crtutils.sh", "run-program-crt-crtutils", &OUT).join(format!("{name}.exe"))
+}
+
 /// The SHA-256 of a file, from the host's `shasum`.
 fn digest(path: &Path) -> String {
     let output = Command::new("shasum")
