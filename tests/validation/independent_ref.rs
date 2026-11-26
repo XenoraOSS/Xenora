@@ -109,6 +109,12 @@ enum Insn {
         src0: CmpSrc,
         src1: u8,
     },
+    /// VOPC binary32 compare (opcodes 0-15), relation the float-table offset.
+    VCmpF {
+        relation: u8,
+        src0: CmpSrc,
+        src1: u8,
+    },
     VAddNc(u8, u8, u8),
     VAnd(u8, u8, u8),
     VOr(u8, u8, u8),
@@ -242,6 +248,31 @@ fn run_wave(program: &[(usize, Insn)], wave: &[u32], buffer: &[u32]) -> Result<V
                     return Err(error);
                 }
                 return Ok(lanes.iter().map(|lane| lane.written.unwrap()).collect());
+            }
+            Insn::VCmpF {
+                relation,
+                src0,
+                src1,
+            } => {
+                // A compare couples lanes; a failed lane has no defined
+                // contribution, so the wave stops with its error.
+                if let Some(error) = first_error(&lanes) {
+                    return Err(error);
+                }
+                compare_f32(
+                    &lanes,
+                    &sgpr,
+                    execution_mask,
+                    (relation, src0, src1),
+                    offset,
+                )
+                .map(|mask| {
+                    sgpr[106] = Some(mask);
+                    // VCC_HI has no known value after a VCC compare (contract 3).
+                    sgpr[107] = None;
+                    vcc_lane_derived = execution_mask != 0;
+                    None
+                })
             }
             Insn::VCmp {
                 dst,
@@ -990,6 +1021,74 @@ fn read_vgpr(lane: &Lane, reg: u8, offset: usize) -> Result<u32, String> {
 }
 
 /// Evaluate one integer vector compare for the whole wave and return its mask.
+/// IEEE binary32 compare, float per-opcode table offsets 0-15. Rust's partial
+/// float comparisons are exactly the IEEE ordered predicates: false when
+/// either input is a NaN. +0 and -0 compare equal.
+fn compare_f32(
+    lanes: &[Lane],
+    sgpr: &[Option<u32>; 128],
+    execution_mask: u32,
+    (relation, src0, src1): (u8, CmpSrc, u8),
+    offset: usize,
+) -> Result<u32, String> {
+    if execution_mask == 0 {
+        return Ok(0);
+    }
+    let scalar_src0 = match src0 {
+        CmpSrc::Sgpr(reg) => {
+            Some(sgpr[reg as usize].ok_or_else(|| format!("{offset:#x}: uninitialized s{reg}"))?)
+        }
+        CmpSrc::Vcc => Some(sgpr[106].ok_or_else(|| format!("{offset:#x}: uninitialized vcc_lo"))?),
+        CmpSrc::Imm(value) => Some(value),
+        CmpSrc::Vgpr(_) => None,
+    };
+    // VGPR readiness is wave-uniform, as for the integer compares.
+    for lane in lanes {
+        if let CmpSrc::Vgpr(reg) = src0 {
+            read_vgpr(lane, reg, offset)?;
+        }
+        read_vgpr(lane, src1, offset)?;
+    }
+    let mut mask = 0u32;
+    for (n, lane) in lanes.iter().enumerate() {
+        if (execution_mask >> n) & 1 == 0 {
+            continue;
+        }
+        let a = match (scalar_src0, src0) {
+            (Some(value), _) => value,
+            (None, CmpSrc::Vgpr(reg)) => read_vgpr(lane, reg, offset)?,
+            (None, _) => unreachable!(),
+        };
+        let b = read_vgpr(lane, src1, offset)?;
+        let (a, b) = (f32::from_bits(a), f32::from_bits(b));
+        let pass = match relation {
+            0 => false,
+            1 => a < b,
+            2 => a == b,
+            3 => a <= b,
+            4 => a > b,
+            // LG: ordered inequality, "less or greater".
+            5 => a < b || a > b,
+            6 => a >= b,
+            // O: ordered; U: unordered (either input is a NaN, per the
+            // per-opcode table, not the contradictory summary table).
+            7 => !a.is_nan() && !b.is_nan(),
+            8 => a.is_nan() || b.is_nan(),
+            9 => !(a >= b),
+            10 => !(a < b || a > b),
+            11 => !(a > b),
+            12 => !(a <= b),
+            13 => !(a == b),
+            14 => !(a < b),
+            _ => true,
+        };
+        if pass {
+            mask |= 1 << n;
+        }
+    }
+    Ok(mask)
+}
+
 fn compare(
     lanes: &[Lane],
     sgpr: &[Option<u32>; 128],
@@ -1634,6 +1733,25 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
     // VOPC: bits 31:25 = 0b0111110, OP 24:17, VSRC1 16:9, SRC0 8:0.
     if first >> 25 == 0b011_1110 {
         let opcode = (first >> 17) & 0xff;
+        // Guide 12.9 float per-opcode table: opcodes 0-15 are the binary32
+        // compares; the relation is the table offset.
+        if opcode <= 15 {
+            let (src0, len) = vector_src0(code, offset, first, "VOPC")?;
+            let src1 = (first >> 9) as u8;
+            // The guide does not say how a float operation reads an integer
+            // inline constant; a literal (length 8) is the constant form.
+            if matches!(src0, CmpSrc::Imm(_)) && len != 8 {
+                return Err(fail("integer inline constant as binary32 compare source"));
+            }
+            return Ok((
+                Insn::VCmpF {
+                    relation: opcode as u8,
+                    src0,
+                    src1,
+                },
+                len,
+            ));
+        }
         // Guide 12.9 Table 61 opcode groups (16-bit groups lack F and T).
         let (signed, bits, relation) = match opcode {
             128..=135 => (true, 32, opcode - 128),

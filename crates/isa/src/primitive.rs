@@ -118,6 +118,99 @@ pub const fn false_b32(_a: u32, _b: u32) -> bool {
     false
 }
 
+// ---- Binary32 (IEEE 754 single) compare tests, guide 12.9 Table 59 float
+// offsets and the per-opcode table on printed pages 151-153. Inputs are the
+// operand bit patterns. Ordered relations are false when either input is a
+// NaN; signed zeros compare equal (+0 == -0), and the infinities order as
+// numbers. Rust's partial float comparisons are exactly the IEEE ordered
+// predicates, so each primitive names its relation in those terms.
+
+/// V_CMP_F_F32: false for every operand pair.
+pub const fn false_f32(_a: u32, _b: u32) -> bool {
+    false
+}
+
+/// V_CMP_TRU_F32: true for every operand pair, NaNs included.
+pub const fn true_f32(_a: u32, _b: u32) -> bool {
+    true
+}
+
+/// V_CMP_LT_F32: ordered S0 < S1 (false when either input is a NaN).
+pub const fn lt_f32(a: u32, b: u32) -> bool {
+    f32::from_bits(a) < f32::from_bits(b)
+}
+
+/// V_CMP_EQ_F32: ordered S0 == S1; +0 and -0 are equal.
+pub const fn eq_f32(a: u32, b: u32) -> bool {
+    f32::from_bits(a) == f32::from_bits(b)
+}
+
+/// V_CMP_LE_F32: ordered S0 <= S1.
+pub const fn le_f32(a: u32, b: u32) -> bool {
+    f32::from_bits(a) <= f32::from_bits(b)
+}
+
+/// V_CMP_GT_F32: ordered S0 > S1.
+pub const fn gt_f32(a: u32, b: u32) -> bool {
+    f32::from_bits(a) > f32::from_bits(b)
+}
+
+/// V_CMP_LG_F32: ordered inequality, "less or greater" - true exactly when the
+/// inputs are ordered and different; false when either is a NaN and when they
+/// are equal (signed zeros included).
+pub const fn lg_f32(a: u32, b: u32) -> bool {
+    let (a, b) = (f32::from_bits(a), f32::from_bits(b));
+    a < b || a > b
+}
+
+/// V_CMP_GE_F32: ordered S0 >= S1.
+pub const fn ge_f32(a: u32, b: u32) -> bool {
+    f32::from_bits(a) >= f32::from_bits(b)
+}
+
+/// V_CMP_O_F32: ordered - neither input is a NaN.
+pub const fn ordered_f32(a: u32, b: u32) -> bool {
+    !f32::from_bits(a).is_nan() && !f32::from_bits(b).is_nan()
+}
+
+/// V_CMP_U_F32: unordered - either input is a NaN. The per-opcode table's
+/// reading; the contradictory summary-table complement is recorded in
+/// docs/research/rdna2-errata.md.
+pub const fn unordered_f32(a: u32, b: u32) -> bool {
+    f32::from_bits(a).is_nan() || f32::from_bits(b).is_nan()
+}
+
+/// V_CMP_NGE_F32: not (ordered greater-or-equal) - either NaN or S0 < S1.
+pub const fn nge_f32(a: u32, b: u32) -> bool {
+    !(f32::from_bits(a) >= f32::from_bits(b))
+}
+
+/// V_CMP_NLG_F32: not (ordered less-or-greater) - either NaN or S0 == S1.
+pub const fn nlg_f32(a: u32, b: u32) -> bool {
+    let (a, b) = (f32::from_bits(a), f32::from_bits(b));
+    !(a < b || a > b)
+}
+
+/// V_CMP_NGT_F32: not (ordered greater) - either NaN or S0 <= S1.
+pub const fn ngt_f32(a: u32, b: u32) -> bool {
+    !(f32::from_bits(a) > f32::from_bits(b))
+}
+
+/// V_CMP_NLE_F32: not (ordered less-or-equal) - either NaN or S0 > S1.
+pub const fn nle_f32(a: u32, b: u32) -> bool {
+    !(f32::from_bits(a) <= f32::from_bits(b))
+}
+
+/// V_CMP_NEQ_F32: unordered inequality - either NaN or S0 != S1.
+pub const fn neq_f32(a: u32, b: u32) -> bool {
+    !(f32::from_bits(a) == f32::from_bits(b))
+}
+
+/// V_CMP_NLT_F32: not (ordered less) - either NaN or S0 >= S1.
+pub const fn nlt_f32(a: u32, b: u32) -> bool {
+    !(f32::from_bits(a) < f32::from_bits(b))
+}
+
 /// The VOPC T test: true for every operand pair.
 pub const fn true_b32(_a: u32, _b: u32) -> bool {
     true

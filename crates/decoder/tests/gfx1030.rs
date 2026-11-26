@@ -466,6 +466,7 @@ fn reference_comparison(op: VectorCompareOp) -> Comparison {
             CompareRelation::GreaterOrEqual => 6,
             CompareRelation::False => 0,
             CompareRelation::True => 7,
+            _ => unreachable!("float-only relation never reaches the integer comparison helper"),
         },
         signed: op.signed(),
     }
@@ -756,12 +757,20 @@ fn reference_op(instruction: Instruction) -> Op {
         }
 
         Instruction::VectorCompare { op, src0, src1 } => {
-            let comparison = reference_comparison(op);
             let src0 = match src0 {
                 VectorSource::Register(reg) => CompareSource::Vector(reg),
                 VectorSource::Scalar(reg) => CompareSource::Scalar(reg),
                 VectorSource::Immediate(bits) => CompareSource::Immediate(bits),
             };
+            if op.semantics().signedness == xenora_isa::semantics::Signedness::Float {
+                return Op::FloatCompare(
+                    xenora_ref::FloatComparison::from_opcode(op.semantics().opcode as u16)
+                        .expect("float compare opcodes 0-15"),
+                    src0,
+                    src1,
+                );
+            }
+            let comparison = reference_comparison(op);
             match op.semantics().width {
                 16 => Op::WideCompare(comparison, CompareWidth::Half, src0, src1),
                 32 => Op::Compare(comparison, src0, src1),

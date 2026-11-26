@@ -66,6 +66,8 @@ pub enum Op {
     MoveScalar(u8, u8),
     /// VOPC 32-bit integer compare writing the Wave32 mask to `vcc_lo`.
     Compare(Comparison, CompareSource, u8),
+    /// VOPC binary32 compare writing the Wave32 mask to `vcc_lo`.
+    FloatCompare(FloatComparison, CompareSource, u8),
     /// VOP3A integer compare writing a Wave32 mask to SDST.
     CompareVop3(u8, Comparison, CompareSource, u8),
     /// VOPC 16- or 64-bit integer compare writing the Wave32 mask to
@@ -189,6 +191,61 @@ impl CompareWidth {
         };
         let offset = (opcode - base) as u8;
         Some((Comparison { offset, signed }, width))
+    }
+}
+
+/// Relation of a VOPC binary32 compare, guide 12.9 float per-opcode table
+/// (printed pages 151-153): opcodes 0-15 in the order F, LT, EQ, LE, GT, LG,
+/// GE, O, U, NGE, NLG, NGT, NLE, NEQ, NLT, TRU. The per-opcode table is
+/// authoritative where the summary tables contradict it (rdna2-errata.md).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct FloatComparison {
+    /// Opcode offset 0-15 within the float compare table.
+    pub offset: u8,
+}
+
+impl FloatComparison {
+    /// Guide Table 59 float half: opcodes 0-15 accept every offset. Public so
+    /// the cross-crate test matrices can build the same expectation.
+    pub fn from_opcode(opcode: u16) -> Option<Self> {
+        match opcode {
+            0..=15 => Some(Self {
+                offset: opcode as u8,
+            }),
+            _ => None,
+        }
+    }
+
+    /// The per-lane result for binary32 operand bit patterns. Ordered
+    /// relations are false when either input is a NaN; +0 and -0 compare
+    /// equal and the infinities order as numbers. Rust's partial float
+    /// comparisons are exactly the IEEE ordered predicates.
+    fn holds_f32(self, s0: u32, s1: u32) -> bool {
+        let (a, b) = (f32::from_bits(s0), f32::from_bits(s1));
+        match self.offset {
+            // V_CMP_F_F32: `D[threadId] = 0`.
+            0 => false,
+            1 => a < b,
+            2 => a == b,
+            3 => a <= b,
+            4 => a > b,
+            // V_CMP_LG_F32: ordered inequality, "less or greater".
+            5 => a < b || a > b,
+            6 => a >= b,
+            // V_CMP_O_F32: ordered - neither input is a NaN.
+            7 => !a.is_nan() && !b.is_nan(),
+            // V_CMP_U_F32: unordered - either input is a NaN.
+            8 => a.is_nan() || b.is_nan(),
+            // The N forms are the unordered complements of the ordered tests.
+            9 => !(a >= b),
+            10 => !(a < b || a > b),
+            11 => !(a > b),
+            12 => !(a <= b),
+            13 => !(a == b),
+            14 => !(a < b),
+            // V_CMP_TRU_F32: `D[threadId] = 1`.
+            _ => true,
+        }
     }
 }
 
@@ -1285,38 +1342,50 @@ pub fn decode(code: &[u8]) -> Result<Vec<DecodedInstruction>, ReferenceError> {
             }
             // VOPC (bits 31-25 = 0b0111110): SRC0 bits 0-8, VSRC1 bits 9-16, OP bits 17-24.
             [lo, packed, upper, tag @ 0x7c..=0x7d, tail @ ..]
-                if CompareWidth::from_opcode(
-                    (u16::from(*tag & 1) << 7) | u16::from(*upper >> 1),
-                )
-                .is_some() =>
+                if {
+                    let opcode = (u16::from(*tag & 1) << 7) | u16::from(*upper >> 1);
+                    CompareWidth::from_opcode(opcode).is_some()
+                        || FloatComparison::from_opcode(opcode).is_some()
+                } =>
             {
                 let opcode = (u16::from(*tag & 1) << 7) | u16::from(*upper >> 1);
-                let (comparison, width) = CompareWidth::from_opcode(opcode).unwrap();
+                let float = FloatComparison::from_opcode(opcode);
+                let integer = CompareWidth::from_opcode(opcode);
+                let (comparison, width) = integer.unzip();
                 let vsrc1 = (packed >> 1) | ((upper & 1) << 7);
                 let selector = u16::from(*lo) | (u16::from(packed & 1) << 8);
                 // docs/shaders/vector-compare.md subset: no literal for 16-bit;
                 // 64-bit takes v[n:n+1] (n <= 254), s[2k:2k+1] (k <= 52) or
-                // an inline integer, with VSRC1 v[m:m+1] (m <= 254).
-                let accepted = match width {
-                    CompareWidth::Half => selector != 255,
-                    CompareWidth::Word => true,
-                    CompareWidth::Double => {
+                // an inline integer, with VSRC1 v[m:m+1] (m <= 254). Float
+                // compares reject inline integer constants, as the guide does
+                // not say how a float operation reads one (the vop1_f32 rule).
+                let accepted = match (float, width) {
+                    (Some(_), _) => !(128..=208).contains(&selector),
+                    (None, Some(CompareWidth::Half)) => selector != 255,
+                    (None, Some(CompareWidth::Word)) => true,
+                    (None, Some(CompareWidth::Double)) => {
                         vsrc1 != 255
                             && matches!(selector, 0..=104 | 128..=208 | 256..=510)
                             && (selector >= 128 || selector % 2 == 0)
                     }
+                    _ => unreachable!("the guard accepts only float or integer compares"),
                 };
                 if !accepted {
                     return Err(error(offset, "unsupported VOPC source"));
                 }
                 let (src0, length) =
                     decode_vector_source(*lo, *packed, tail, offset, "unsupported VOPC source")?;
-                let op = if width == CompareWidth::Word {
-                    Op::Compare(comparison, src0, vsrc1)
+                if let Some(float) = float {
+                    (Op::FloatCompare(float, src0, vsrc1), length)
                 } else {
-                    Op::WideCompare(comparison, width, src0, vsrc1)
-                };
-                (op, length)
+                    let (comparison, width) = (comparison.unwrap(), width.unwrap());
+                    let op = if width == CompareWidth::Word {
+                        Op::Compare(comparison, src0, vsrc1)
+                    } else {
+                        Op::WideCompare(comparison, width, src0, vsrc1)
+                    };
+                    (op, length)
+                }
             }
             // VOP2 binary32 forms (bit 31 = 0), same fields as the integer forms.
             [lo, packed, upper, tag @ 0x00..=0x7b, tail @ ..]
@@ -2109,6 +2178,36 @@ fn execute_wave(
                 }
             }
             // RDNA 2 ISA section 3.9: VCC[n] = EXEC[n] & test(n), fully written.
+            // The float compare reads word operands; the integer widths join pairs.
+            Op::FloatCompare(comparison, src0, src1) => {
+                let mut mask = 0u32;
+                if exec != 0 {
+                    if let CompareSource::Vector(register) = src0 {
+                        (0..lanes).try_for_each(|lane| read(lane, register).map(|_| ()))?;
+                    }
+                    if let CompareSource::Scalar(register) = src0 {
+                        read_scalar(Source::Register(register))?;
+                    }
+                    (0..lanes).try_for_each(|lane| read(lane, src1).map(|_| ()))?;
+                    for lane in (0..lanes).filter(|&lane| executes(lane)) {
+                        let s0 = match src0 {
+                            CompareSource::Vector(register) => read(lane, register)?,
+                            CompareSource::Scalar(register) => {
+                                read_scalar(Source::Register(register))?
+                            }
+                            CompareSource::Immediate(bits) => bits,
+                        };
+                        if comparison.holds_f32(s0, read(lane, src1)?) {
+                            mask |= 1 << lane;
+                        }
+                    }
+                }
+                // VCC is fully written, including the lanes that did not pass;
+                // in wave32 VCC_HI has no known value after the write.
+                scalars[VCC_LO] = Some(mask);
+                scalars[VCC_HI] = None;
+                lane_derived_vcc = exec != 0;
+            }
             Op::Compare(..) | Op::WideCompare(..) | Op::CompareVop3(..) => {
                 let (dst, comparison, width, src0, src1) = match op {
                     Op::Compare(comparison, src0, src1) => {

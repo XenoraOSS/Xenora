@@ -22,6 +22,182 @@ unsupported = [
 
 # Opcodes come from the pinned XML's default ENC_VOP3 records.
 [[encoding_variant]]
+of = "V_CMP_F_F32"
+family = "VOP3"
+opcode = 0
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_LT_F32"
+family = "VOP3"
+opcode = 1
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_EQ_F32"
+family = "VOP3"
+opcode = 2
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_LE_F32"
+family = "VOP3"
+opcode = 3
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_GT_F32"
+family = "VOP3"
+opcode = 4
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_LG_F32"
+family = "VOP3"
+opcode = 5
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_GE_F32"
+family = "VOP3"
+opcode = 6
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_O_F32"
+family = "VOP3"
+opcode = 7
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_U_F32"
+family = "VOP3"
+opcode = 8
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_NGE_F32"
+family = "VOP3"
+opcode = 9
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_NLG_F32"
+family = "VOP3"
+opcode = 10
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_NGT_F32"
+family = "VOP3"
+opcode = 11
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_NLE_F32"
+family = "VOP3"
+opcode = 12
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_NEQ_F32"
+family = "VOP3"
+opcode = 13
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_NLT_F32"
+family = "VOP3"
+opcode = 14
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_TRU_F32"
+family = "VOP3"
+opcode = 15
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
 of = "V_CMP_LT_I32"
 family = "VOP3"
 opcode = 129

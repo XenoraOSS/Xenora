@@ -378,6 +378,16 @@ fn relation_symbol(relation: CompareRelation) -> Option<&'static str> {
         CompareRelation::NotEqual => "!=",
         CompareRelation::GreaterOrEqual => ">=",
         CompareRelation::False | CompareRelation::True => return None,
+        // Float-only relations are handled by float_compare_expression before
+        // any caller here sees them; scalar compares are integer-only.
+        CompareRelation::Ordered
+        | CompareRelation::Unordered
+        | CompareRelation::NotGreaterOrEqual
+        | CompareRelation::NotLessOrGreater
+        | CompareRelation::NotGreater
+        | CompareRelation::NotLessOrEqual
+        | CompareRelation::NotEqualUnordered
+        | CompareRelation::NotLess => unreachable!("float-only compare relation"),
     })
 }
 
@@ -392,7 +402,41 @@ fn relation_expression(relation: CompareRelation, signed: bool, left: &str, righ
     }
 }
 
+/// IEEE binary32 compare relation as an MSL boolean expression over the
+/// operand bit patterns. The libraries compile with safe math and precise
+/// floating-point functions (crates/metal compile_options), so MSL float
+/// comparisons are the IEEE ordered predicates: false when either input is a
+/// NaN. The unordered forms spell the NaN case out with `isnan`, and the N
+/// forms negate the ordered test, exactly as the per-opcode table defines
+/// them; ordered inequality (LG) is `(l < r) || (l > r)` because IEEE `!=`
+/// is true on a NaN input where LG is false.
+fn float_compare_expression(relation: CompareRelation, left: &str, right: &str) -> String {
+    let l = format!("as_type<float>({left})");
+    let r = format!("as_type<float>({right})");
+    match relation {
+        CompareRelation::False => "false".to_string(),
+        CompareRelation::True => "true".to_string(),
+        CompareRelation::Less => format!("{l} < {r}"),
+        CompareRelation::Equal => format!("{l} == {r}"),
+        CompareRelation::LessOrEqual => format!("{l} <= {r}"),
+        CompareRelation::Greater => format!("{l} > {r}"),
+        CompareRelation::NotEqual => format!("({l} < {r}) || ({l} > {r})"),
+        CompareRelation::GreaterOrEqual => format!("{l} >= {r}"),
+        CompareRelation::Ordered => format!("!isnan({l}) && !isnan({r})"),
+        CompareRelation::Unordered => format!("isnan({l}) || isnan({r})"),
+        CompareRelation::NotGreaterOrEqual => format!("!({l} >= {r})"),
+        CompareRelation::NotLessOrGreater => format!("!(({l} < {r}) || ({l} > {r}))"),
+        CompareRelation::NotGreater => format!("!({l} > {r})"),
+        CompareRelation::NotLessOrEqual => format!("!({l} <= {r})"),
+        CompareRelation::NotEqualUnordered => format!("!({l} == {r})"),
+        CompareRelation::NotLess => format!("!({l} < {r})"),
+    }
+}
+
 fn compare_expression(op: VectorCompareOp, left: &str, right: &str) -> String {
+    if op.semantics().signedness == Signedness::Float {
+        return float_compare_expression(op.relation(), left, right);
+    }
     let Some(symbol) = relation_symbol(op.relation()) else {
         return (op.relation() == CompareRelation::True).to_string();
     };

@@ -341,6 +341,9 @@ pub enum OperandRule {
     /// s0-s105, `vcc_lo`, an inline integer -16..64 or a literal word; VSRC1 is a
     /// VGPR. Everything else is rejected as unsupported.
     VopcVcc,
+    /// VOPC binary32 compare: as `VopcVcc` without integer or float inline
+    /// constants; SRC0 is a VGPR, s0-s105, `vcc_lo` or one literal word.
+    VopcVccF32,
     /// Wave32 VOPC with a VGPR pair, even normal SGPR pair or inline integer
     /// as SRC0 and a VGPR pair as VSRC1. The destination is `vcc_lo`.
     VopcVccPair,

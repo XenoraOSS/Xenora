@@ -202,8 +202,61 @@ fn vector_compare_dispatch_selects_exactly_the_registry_vopc_forms() {
             64 => OPERANDS64,
             _ => OPERANDS32,
         };
-        for src0 in operands {
-            for src1 in operands {
+        // Binary32 rows also face the special values: infinities, a quiet and
+        // a signaling NaN, subnormals and the finite maximum.
+        let float_operands: Vec<u64> = operands
+            .iter()
+            .copied()
+            .chain(
+                [
+                    0x7f80_0000u64,
+                    0xff80_0000,
+                    0x7fc0_0000,
+                    0x7f80_0001,
+                    0x0000_0001,
+                    0x7f7f_ffff,
+                ]
+                .into_iter(),
+            )
+            .collect();
+        let operands: &[u64] = if row.signedness == Signedness::Float {
+            &float_operands
+        } else {
+            &operands
+        };
+        for src0 in operands.iter().copied() {
+            for src1 in operands.iter().copied() {
+                if row.signedness == Signedness::Float {
+                    // The float relations are the IEEE 754 predicates of the
+                    // per-opcode table over binary32 bit patterns, with the
+                    // unordered complement forms true on any NaN input.
+                    let (a, b) = (f32::from_bits(src0 as u32), f32::from_bits(src1 as u32));
+                    let expected = match op.relation() {
+                        CompareRelation::False => false,
+                        CompareRelation::Less => a < b,
+                        CompareRelation::Equal => a == b,
+                        CompareRelation::LessOrEqual => a <= b,
+                        CompareRelation::Greater => a > b,
+                        CompareRelation::NotEqual => a < b || a > b,
+                        CompareRelation::GreaterOrEqual => a >= b,
+                        CompareRelation::Ordered => !a.is_nan() && !b.is_nan(),
+                        CompareRelation::Unordered => a.is_nan() || b.is_nan(),
+                        CompareRelation::NotGreaterOrEqual => !(a >= b),
+                        CompareRelation::NotLessOrGreater => !(a < b || a > b),
+                        CompareRelation::NotGreater => !(a > b),
+                        CompareRelation::NotLessOrEqual => !(a <= b),
+                        CompareRelation::NotEqualUnordered => !(a == b),
+                        CompareRelation::NotLess => !(a < b),
+                        CompareRelation::True => true,
+                    };
+                    assert_eq!(
+                        op.test_bits(src0, src1),
+                        expected,
+                        "{} {src0:#x} {src1:#x}",
+                        row.name
+                    );
+                    continue;
+                }
                 let ordering = if row.width == 16 {
                     if op.signed() {
                         (src0 as i16).cmp(&(src1 as i16))
@@ -226,6 +279,7 @@ fn vector_compare_dispatch_selects_exactly_the_registry_vopc_forms() {
                     CompareRelation::GreaterOrEqual => ordering.is_ge(),
                     CompareRelation::False => false,
                     CompareRelation::True => true,
+                    _ => unreachable!("float-only relation on a non-float compare"),
                 };
                 assert_eq!(
                     op.test_bits(src0, src1),
@@ -236,7 +290,7 @@ fn vector_compare_dispatch_selects_exactly_the_registry_vopc_forms() {
             }
         }
     }
-    // v_cmpx and the float compares must not be dispatched.
+    // v_cmpx must not be dispatched; the float compares now are.
     dispatch_selects_exactly(EncodingFamily::Vopc, |word| {
         VectorCompareOp::from_word(word).map(|op| op.semantics().name)
     });

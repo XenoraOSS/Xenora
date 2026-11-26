@@ -18,6 +18,387 @@ unsupported = [
   "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_float_inline", "src_special",
 ]
 
+# Binary32 compares: like the vop1_f32 rounding forms, SRC0 is a VGPR, a known
+# SGPR, vcc_lo or one literal; the guide does not say how a float operation
+# reads an inline constant, so inline integers and floats stay rejected.
+[operand_rules.vopc_vcc_f32]
+family = "VOPC"
+src = [
+  { field = "SRC0", class = "vector_source" },
+  { field = "VSRC1", class = "vgpr" },
+]
+max_literals = 1
+unsupported = [
+  "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline", "src_float_inline", "src_special",
+]
+
+
+# ---- VOPC Wave32 binary32 compares (#786) ----
+# The float half of Table 59 (opcodes 0-15), per the per-opcode tables on
+# printed pages 151-153: the summary tables contradict them and the errata
+# record rules the per-opcode tables authoritative. Ordered relations are
+# false when either input is a NaN; the N forms and U are true then. +0 and
+# -0 compare equal, the infinities order as numbers, and VCC_LO collects the
+# lanes where EXEC and the relation hold, exactly as the integer compares do.
+# SRC0 is a VGPR, a known SGPR, vcc_lo or one 32-bit literal: as with the
+# rounding forms, the guide does not say how a float operation reads an
+# inline constant, so inline integers and floats stay rejected.
+
+[[form]]
+name = "V_CMP_F_F32"
+family = "VOPC"
+opcode = 0
+variant = "CmpFF32"
+operation = "compare"
+relation = "f"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_LT_F32"
+family = "VOPC"
+opcode = 1
+variant = "CmpLtF32"
+operation = "compare"
+relation = "lt"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_EQ_F32"
+family = "VOPC"
+opcode = 2
+variant = "CmpEqF32"
+operation = "compare"
+relation = "eq"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_LE_F32"
+family = "VOPC"
+opcode = 3
+variant = "CmpLeF32"
+operation = "compare"
+relation = "le"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_GT_F32"
+family = "VOPC"
+opcode = 4
+variant = "CmpGtF32"
+operation = "compare"
+relation = "gt"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_LG_F32"
+family = "VOPC"
+opcode = 5
+variant = "CmpLgF32"
+operation = "compare"
+relation = "lg"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_GE_F32"
+family = "VOPC"
+opcode = 6
+variant = "CmpGeF32"
+operation = "compare"
+relation = "ge"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_O_F32"
+family = "VOPC"
+opcode = 7
+variant = "CmpOF32"
+operation = "compare"
+relation = "o"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+# The summary table's complement definition of U is a guide defect;
+# the per-opcode table (either input is a NaN) is authoritative, as
+# docs/research/rdna2-errata.md records.
+[[form]]
+name = "V_CMP_U_F32"
+family = "VOPC"
+opcode = 8
+variant = "CmpUF32"
+operation = "compare"
+relation = "u"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_NGE_F32"
+family = "VOPC"
+opcode = 9
+variant = "CmpNgeF32"
+operation = "compare"
+relation = "nge"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_NLG_F32"
+family = "VOPC"
+opcode = 10
+variant = "CmpNlgF32"
+operation = "compare"
+relation = "nlg"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_NGT_F32"
+family = "VOPC"
+opcode = 11
+variant = "CmpNgtF32"
+operation = "compare"
+relation = "ngt"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_NLE_F32"
+family = "VOPC"
+opcode = 12
+variant = "CmpNleF32"
+operation = "compare"
+relation = "nle"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_NEQ_F32"
+family = "VOPC"
+opcode = 13
+variant = "CmpNeqF32"
+operation = "compare"
+relation = "neq"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_NLT_F32"
+family = "VOPC"
+opcode = 14
+variant = "CmpNltF32"
+operation = "compare"
+relation = "nlt"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CMP_TRU_F32"
+family = "VOPC"
+opcode = 15
+variant = "CmpTruF32"
+operation = "compare"
+relation = "tru"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "lane_mask"
+exec = "unchanged"
+wave = "wave32"
+operands = "vopc_vcc_f32"
+spec = [
+  { document = "guide", section = "12.9", page = 150 },
+  { document = "guide", section = "12.9", page = 151 },
+  { document = "guide", section = "3.9", page = 19 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
 [[form]]
 name = "V_CMP_LT_I32"
 family = "VOPC"

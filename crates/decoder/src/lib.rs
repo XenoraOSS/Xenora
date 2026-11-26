@@ -777,6 +777,14 @@ fn vector_compare(
     if op.semantics().width == 16 && first & 0x1ff == 255 {
         return Err(unsupported(mnemonic, "literal in 16-bit compare"));
     }
+    // The guide does not say how a float operation reads an integer inline
+    // constant (the vop1_f32 registry rule); the float compares reject them.
+    if op.semantics().signedness == Signedness::Float && (128..=208).contains(&(first & 0x1ff)) {
+        return Err(unsupported(
+            mnemonic,
+            "integer inline constant as binary32 compare source",
+        ));
+    }
     let (src0, len) = vector_src0(first, bytes, mnemonic)?;
     Ok((Instruction::VectorCompare { op, src0, src1 }, len))
 }

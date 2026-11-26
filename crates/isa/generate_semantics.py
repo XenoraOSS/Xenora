@@ -107,9 +107,19 @@ RELATION_KEY = "relation"
 RELATIONS = {
     "eq": "Equal", "lg": "NotEqual", "gt": "Greater", "ge": "GreaterOrEqual",
     "lt": "Less", "le": "LessOrEqual", "f": "False", "t": "True",
+    # Float-only relations of the VOPC float table (guide 12.9, per-opcode
+    # pages 151-153); "tru" shares the True variant of the integer T.
+    "o": "Ordered", "u": "Unordered", "nge": "NotGreaterOrEqual",
+    "nlg": "NotLessOrGreater", "ngt": "NotGreater", "nle": "NotLessOrEqual",
+    "neq": "NotEqualUnordered", "nlt": "NotLess", "tru": "True",
 }
-# F and T exist only as VOPC compares (guide Table 59 offsets 0 and 7).
-VECTOR_ONLY_RELATIONS = {"f", "t"}
+# F and T exist only as VOPC compares (guide Table 59 offsets 0 and 7), as do
+# every float-only relation of the float compare table.
+VECTOR_ONLY_RELATIONS = {"f", "t", "o", "u", "nge", "nlg", "ngt", "nle", "neq", "nlt", "tru"}
+# Float relations of the VOPC float compare table; the integer relations lt,
+# eq, le, gt, lg, ge and f keep their meaning (ordered in the IEEE sense for
+# floats) but sit at float opcodes 0-6, and tru closes the table at 15.
+FLOAT_RELATIONS = {"f", "lt", "eq", "le", "gt", "lg", "ge", "o", "u", "nge", "nlg", "ngt", "nle", "neq", "nlt", "tru"}
 # Guide 12.9 Tables 59 and 61: integer VOPC opcodes are the group base
 # for the operand width and signedness plus the relation offset.
 VOPC_INTEGER_BASES = {
@@ -118,6 +128,14 @@ VOPC_INTEGER_BASES = {
     64: {"signed": 160, "unsigned": 224},
 }
 VOPC_RELATION_OFFSETS = {"f": 0, "lt": 1, "eq": 2, "le": 3, "gt": 4, "lg": 5, "ge": 6, "t": 7}
+# Guide Table 59 float half and the per-opcode table (printed pages 151-153):
+# the binary32 compare opcodes are 0-15, in this order. The summary tables are
+# contradictory; the per-opcode table is authoritative (rdna2-errata.md).
+VOPC_FLOAT_BASE = 0
+VOPC_FLOAT_RELATION_OFFSETS = {
+    "f": 0, "lt": 1, "eq": 2, "le": 3, "gt": 4, "lg": 5, "ge": 6, "o": 7,
+    "u": 8, "nge": 9, "nlg": 10, "ngt": 11, "nle": 12, "neq": 13, "nlt": 14, "tru": 15,
+}
 # (relation, signedness) -> primitive. Equality does not depend on signedness,
 # so both declared signednesses of EQ and LG share one primitive.
 COMPARE_PRIMITIVES = {
@@ -129,6 +147,14 @@ COMPARE_PRIMITIVES = {
     ("le", "signed"): "le_i32", ("le", "unsigned"): "le_u32",
     ("f", "signed"): "false_b32", ("f", "unsigned"): "false_b32",
     ("t", "signed"): "true_b32", ("t", "unsigned"): "true_b32",
+    ("f", "float"): "false_f32", ("tru", "float"): "true_f32",
+    ("lt", "float"): "lt_f32", ("eq", "float"): "eq_f32",
+    ("le", "float"): "le_f32", ("gt", "float"): "gt_f32",
+    ("lg", "float"): "lg_f32", ("ge", "float"): "ge_f32",
+    ("o", "float"): "ordered_f32", ("u", "float"): "unordered_f32",
+    ("nge", "float"): "nge_f32", ("nlg", "float"): "nlg_f32",
+    ("ngt", "float"): "ngt_f32", ("nle", "float"): "nle_f32",
+    ("neq", "float"): "neq_f32", ("nlt", "float"): "nlt_f32",
 }
 # Logical operations take untyped bits; arithmetic ones never do. Shifts take
 # the signedness their primitive names, and their S1 is an unsigned count.
@@ -559,6 +585,27 @@ OPERAND_RULES = {
         },
         "kind": "vector_compare",
         "width": 64,
+    },
+    # Binary32 compares: as with the vop1_f32 rounding forms, the guide does
+    # not say how a float operation reads an integer or float inline constant,
+    # so SRC0 is a VGPR, a known SGPR, vcc_lo or one literal. NaN inputs are
+    # part of the contract: every relation defines them exactly.
+    "vopc_vcc_f32": {
+        "rust": "VopcVccF32",
+        "enum": "VectorCompareOp",
+        "shape": {
+            "family": "VOPC",
+            "src": [
+                {"field": "SRC0", "class": "vector_source"},
+                {"field": "VSRC1", "class": "vgpr"},
+            ],
+            "max_literals": 1,
+        },
+        "unsupported": {
+            "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+            "src_float_inline", "src_special",
+        },
+        "kind": "vector_compare",
     },
     "vop3_vgpr2": {
         "rust": "Vop3Vgpr2",
@@ -1127,8 +1174,9 @@ def validate(registry, snapshot):
                 (form["operation"] in LOGICAL and form["signedness"] != "bitwise")
                 or (form["operation"] in ARITHMETIC and form["signedness"] == "bitwise")
                 or (form["operation"] in FLOAT_ROUNDING and form["signedness"] != "float")
-                # #784: float signedness also admits the VOP2 binary32 arithmetic.
-                or (form["signedness"] == "float" and form["operation"] not in FLOAT_OPERATIONS)
+                # #784: float signedness also admits the VOP2 binary32
+                # arithmetic, and #786 the VOPC binary32 compares.
+                or (form["signedness"] == "float" and form["operation"] not in FLOAT_OPERATIONS | {"compare"})
             )
         ):
             errors.append(
@@ -1182,12 +1230,24 @@ def validate(registry, snapshot):
                         f"{expected} (guide 13.1.2), not {form['opcode']}"
                     )
             elif _rule_kind(form) == "vector_compare":
-                base = VOPC_INTEGER_BASES.get(expected_width, {}).get(form["signedness"])
-                expected = None if base is None else base + VOPC_RELATION_OFFSETS[relation]
-                if form["opcode"] != expected:
+                if form["signedness"] == "float":
+                    if relation not in FLOAT_RELATIONS:
+                        errors.append(f"{label}: relation {relation} has no float compare form")
+                        expected = None
+                    elif form["width"] != 32:
+                        errors.append(f"{label}: float compares are binary32, declared width {form['width']}")
+                        expected = None
+                    else:
+                        expected = VOPC_FLOAT_BASE + VOPC_FLOAT_RELATION_OFFSETS[relation]
+                    table = "the float per-opcode table"
+                else:
+                    base = VOPC_INTEGER_BASES.get(expected_width, {}).get(form["signedness"])
+                    expected = None if base is None else base + VOPC_RELATION_OFFSETS[relation]
+                    table = "guide Table 59"
+                if expected is not None and form["opcode"] != expected:
                     errors.append(
                         f"{label}: relation {relation}/{form['signedness']} has VOPC opcode "
-                        f"{expected} (guide Table 59), not {form['opcode']}"
+                        f"{expected} ({table}), not {form['opcode']}"
                     )
             # SOPC compares write SCC; VOPC compares write VCC and leave SCC.
             scc = "unchanged" if _rule_kind(form) == "vector_compare" else "relation"

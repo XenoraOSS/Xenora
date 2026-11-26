@@ -127,8 +127,26 @@ pub enum CompareRelation {
     GreaterOrEqual,
     /// Never holds (VOPC F, offset 0).
     False,
-    /// Always holds (VOPC T, offset 7).
+    /// Always holds (VOPC T in the integer tables, TRU at float offset 15).
     True,
+    /// Neither input is a NaN (VOPC float O, offset 7 of the float table).
+    Ordered,
+    /// Either input is a NaN (VOPC float U, offset 8); the per-opcode table's
+    /// reading, per docs/research/rdna2-errata.md.
+    Unordered,
+    /// Either input is a NaN or S0 < S1 (VOPC float NGE, offset 9).
+    NotGreaterOrEqual,
+    /// Either input is a NaN or S0 == S1 (VOPC float NLG, offset 10).
+    NotLessOrGreater,
+    /// Either input is a NaN or S0 <= S1 (VOPC float NGT, offset 11).
+    NotGreater,
+    /// Either input is a NaN or S0 > S1 (VOPC float NLE, offset 12).
+    NotLessOrEqual,
+    /// Either input is a NaN or S0 != S1 (VOPC float NEQ, offset 13) - the
+    /// unordered inequality, where NotEqual (LG) is the ordered one.
+    NotEqualUnordered,
+    /// Either input is a NaN or S0 >= S1 (VOPC float NLT, offset 14).
+    NotLess,
 }
 
 /// Output targeted by a supported uncompressed four-component export.
