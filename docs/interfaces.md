@@ -802,6 +802,61 @@ fixed console devices: a redirected handle that is no console fails with
 the capture behavior yet. `ReadConsoleA` hands one input line back with CR
 LF restored. Nothing was compared with Windows.
 
+### The narrow file services
+
+The narrow forms of the directory, move, copy and find services read UTF-8
+paths, coherent with the process code page, and share one implementation
+and one drive with the wide forms: a file written through one width is the
+file read through the other. `CopyFile` onto itself is a sharing violation,
+`GetFullPathName` resolves relative names against the synthetic root -
+there is no current directory yet - `SetFileAttributes` accepts only the
+normal and archive bits because the drive keeps no attribute state, and
+`GetTempFileName` answers unique names within a run. Nothing was compared
+with Windows.
+
+### The legacy memory services
+
+`GlobalAlloc` and `LocalAlloc` are thin wrappers over the process heap, as
+on every 32- or 64-bit Windows: memory is always fixed, the handle is the
+pointer itself, and the moveable bit and the discardable hints of the
+16-bit memory manager are accepted and inert. Freeing the null handle is
+a no-op success; freeing a non-allocation answers the handle itself with
+the invalid-handle error. Flags outside the documented mask are an invalid
+parameter. Nothing was compared with Windows.
+
+### Error reporting
+
+`FormatMessage` reads the system table for the error codes the synthetic
+services produce, in en-US, with the trailing newline real messages carry.
+Insert sequences expand string and numeric specifiers; the arguments are
+read as a flat array of machine words, so floating point inserts are not
+formatted. The allocate form allocates from the process heap and the memory
+is released with `LocalFree`, as documented. Unknown identifiers fail with
+the missing-message error; module tables do not exist yet and
+`FORMAT_MESSAGE_FROM_HMODULE` is refused as unsupported. `SetErrorMode`
+stores and exchanges the mode even though no error dialogs exist. Nothing
+was compared with Windows.
+
+### The environment block
+
+The environment is empty, so expansion is the identity - the documented
+result when no variable is defined. `ExpandEnvironmentStrings` counts the
+terminator in both its success return and its required-size answer.
+`GetEnvironmentStringsW` hands each caller its own copy of the empty block
+from the process heap, because the documentation requires the caller to
+free it.
+
+### The simulated machine
+
+`GetVersionEx` reports a Windows 10 era NT workstation, coherent with the
+GDK-era programs the runtime hosts; it is simulated, not measured.
+`GetWindowsDirectory` and `GetSystemDirectory` answer the synthetic drive's
+layout, the computer name is XENORA, and the processor topology is one core
+in one package in one group, coherent with the count `GetSystemInfo`
+reports. Numa, cache and group relationships are not modeled yet:
+enumerating them alone answers zero entries. Nothing was compared with
+Windows.
+
 ### Guest modules
 
 The program's module handle is the base address its image was loaded at.
