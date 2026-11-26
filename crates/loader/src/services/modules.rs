@@ -334,6 +334,36 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         });
     }
 
+    // The Ex forms add flags. hFile must be null as documented, and the
+    // flags do not alter built-in resolution: the catalog is not a search
+    // path, there are no DLL references to defer, and a data-file load of a
+    // built-in module is the same module. That is documented in the module
+    // rather than hidden.
+    for (symbol, wide) in [("LoadLibraryExA", false), ("LoadLibraryExW", true)] {
+        let state = Arc::clone(state);
+        let modules = catalog(&modules);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            if args.rdx != 0 {
+                return state.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let modules = modules.get().expect("built-in module catalog");
+            let handle = match args.rcx {
+                0 => None,
+                name => modules
+                    .named(memory, name, wide)
+                    .map_err(ExitReason::MemoryFault)?,
+            };
+            let Some(handle) = handle else {
+                return state.fail(cpu.gs_base, MODULE_NOT_FOUND, 0);
+            };
+            let mut references = modules.references.lock().expect("module references");
+            if !references.add(handle) {
+                return state.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, 0);
+            }
+            Ok(handle)
+        });
+    }
+
     let release = catalog(&modules);
     let release_state = Arc::clone(state);
     let release_trampolines = registry.dynamic_trampolines();
@@ -444,7 +474,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         }
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
-    for symbol in ["LoadLibraryA", "LoadLibraryW"] {
+    for symbol in [
+        "LoadLibraryA",
+        "LoadLibraryW",
+        "LoadLibraryExA",
+        "LoadLibraryExW",
+    ] {
         for module in LOAD_LIBRARY_APIS {
             registry.alias(module, KERNEL32, symbol);
         }
