@@ -1690,6 +1690,104 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         Ok(1)
     });
 
+    // GetFileAttributesEx packs the attributes with the times and size.
+    // The drive tracks no times: they are zero, the 1601 epoch, documented
+    // rather than invented.
+    for (symbol, narrow) in [
+        ("GetFileAttributesExW", false),
+        ("GetFileAttributesExA", true),
+    ] {
+        let attributes_ex = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            // Only GetFileExInfoStandard (0) exists.
+            if args.rdx != 0 {
+                return attributes_ex.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let reader = if narrow {
+                read_guest_path_a
+            } else {
+                read_guest_path
+            };
+            let Some(path) = reader(memory, args.rcx).map_err(ExitReason::MemoryFault)? else {
+                return attributes_ex.fail(cpu.gs_base, INVALID_NAME, 0);
+            };
+            if !path.split('\\').all(valid_component) {
+                return attributes_ex.fail(cpu.gs_base, INVALID_NAME, 0);
+            }
+            if args.r8 == 0 {
+                return attributes_ex.fail(cpu.gs_base, ERROR_NOACCESS, 0);
+            }
+            let objects = attributes_ex.objects.lock().expect("guest object state");
+            let (attributes, size) = if objects.directories.contains(&path) {
+                (0x10u32, 0u64)
+            } else if let Some(content) = objects.files.get(&path) {
+                (0x80u32, content.len() as u64)
+            } else {
+                let parent = parent(&path);
+                let error = if parent.is_empty() || objects.directories.contains(parent) {
+                    FILE_NOT_FOUND
+                } else {
+                    PATH_NOT_FOUND
+                };
+                return attributes_ex.fail(cpu.gs_base, error, 0);
+            };
+            memory
+                .write_u32(args.r8, attributes)
+                .map_err(ExitReason::MemoryFault)?;
+            // Three zero FILETIMEs: creation, access, write.
+            for offset in [4u64, 12, 20] {
+                memory
+                    .write_u64(args.r8 + offset, 0)
+                    .map_err(ExitReason::MemoryFault)?;
+            }
+            memory
+                .write_u32(args.r8 + 28, (size >> 32) as u32)
+                .map_err(ExitReason::MemoryFault)?;
+            memory
+                .write_u32(args.r8 + 32, size as u32)
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(1)
+        });
+    }
+
+    // UnlockFile is the plain form of the byte-range unlock: the drive does
+    // not track ranges, and a valid file handle accepts, as LockFileEx does.
+    let unlock = Arc::clone(state);
+    registry.register(KERNEL32, "UnlockFile", move |args, cpu, memory| {
+        let _ = memory;
+        let objects = unlock.objects.lock().expect("guest object state");
+        if matches!(objects.handles.get(&args.rcx), Some(GuestObject::File(_))) {
+            Ok(1)
+        } else {
+            unlock.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0)
+        }
+    });
+
+    // IsDBCSLeadByteEx: every code page the machine serves - UTF-8 and the
+    // documented Western pages 1252/437 - is either single-byte or UTF-8,
+    // neither of which has DBCS lead bytes. False is the correct answer for
+    // every byte, not a stub.
+    let lead_byte = Arc::clone(state);
+    registry.register(KERNEL32, "IsDBCSLeadByteEx", move |args, cpu, memory| {
+        let _ = memory;
+        let _ = args;
+        let _ = cpu;
+        let _ = &lead_byte;
+        Ok(0)
+    });
+
+    // SetFileTime would write times the drive does not track: accepting
+    // would be a silent no-op, so it is honestly unsupported. SetSystemTime
+    // would move the injected clock for the one process, machinery the
+    // machine does not have.
+    for symbol in ["SetFileTime", "SetSystemTime"] {
+        let times = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            let _ = (args, memory);
+            times.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0)
+        });
+    }
+
     for symbol in [
         "CreateFileW",
         "GetFileSizeEx",
@@ -1732,6 +1830,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "GetVolumeNameForVolumeMountPointA",
         "GetVolumePathNamesForVolumeNameW",
         "GetVolumePathNamesForVolumeNameA",
+        "GetFileAttributesExW",
+        "GetFileAttributesExA",
+        "UnlockFile",
+        "IsDBCSLeadByteEx",
+        "SetFileTime",
+        "SetSystemTime",
     ] {
         registry.alias(FILE_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
