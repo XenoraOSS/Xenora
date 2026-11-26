@@ -44,6 +44,10 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "UnlockFile"),
     (KERNEL32, "IsDBCSLeadByteEx"),
     (KERNEL32, "SetFileTime"),
+    (KERNEL32, "DeviceIoControl"),
+    (KERNEL32, "LoadLibraryExA"),
+    (KERNEL32, "SetEnvironmentVariableA"),
+    (KERNEL32, "SetEnvironmentVariableW"),
 ];
 
 const WIDE: u64 = SCRATCH;
@@ -389,4 +393,46 @@ fn dbcs_is_always_false_and_file_times_are_unsupported() {
         50,
         "ERROR_NOT_SUPPORTED"
     );
+}
+
+/// DeviceIoControl validates the handle and honestly refuses every control
+/// code, the Ex library form resolves built-ins, and the environment is
+/// honestly immutable.
+#[test]
+fn device_control_library_ex_and_the_fixed_environment() {
+    const MODNAME: u64 = SCRATCH + 0x200;
+    const VAR: u64 = SCRATCH + 0x280;
+    const VALUE: u64 = SCRATCH + 0x2C0;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    // A bad handle is a bad handle; a valid one is honestly unsupported.
+    assert_eq!(
+        guest.call("DeviceIoControl", &[0xDEAD, 0, 0, 0, 0, 0, 0, 0]),
+        0
+    );
+    assert_eq!(
+        guest.call("GetLastError", &[]) & 0xFFFF_FFFF,
+        6,
+        "ERROR_INVALID_HANDLE"
+    );
+    let handle = create_file(&mut guest, "ioctl.bin", GENERIC_WRITE);
+    assert_eq!(
+        guest.call("DeviceIoControl", &[handle, 0, 0, 0, 0, 0, 0, 0]),
+        0
+    );
+    assert_eq!(
+        guest.call("GetLastError", &[]) & 0xFFFF_FFFF,
+        50,
+        "ERROR_NOT_SUPPORTED"
+    );
+    assert_eq!(guest.call("CloseHandle", &[handle]), 1);
+    // LoadLibraryExA resolves a built-in module with a null file parameter.
+    narrow_at(&mut guest, MODNAME, "kernel32.dll");
+    let module = guest.call("LoadLibraryExA", &[MODNAME, 0, 0]);
+    assert_ne!(module, 0);
+    // The fixed environment refuses mutation honestly.
+    narrow_at(&mut guest, VAR, "PATH");
+    narrow_at(&mut guest, VALUE, "C:\\x");
+    assert_eq!(guest.call("SetEnvironmentVariableA", &[VAR, VALUE]), 0);
+    assert_eq!(guest.call("SetEnvironmentVariableW", &[VAR, VALUE]), 0);
+    assert_eq!(guest.call("GetLastError", &[]) & 0xFFFF_FFFF, 50);
 }
