@@ -5,9 +5,10 @@
 //! The only process the guest can name is its own, through the
 //! current-process pseudo-handle. No service here reaches a host process.
 
+const INVALID_HANDLE: u64 = u64::MAX;
 use super::{
     CURRENT_PROCESS, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOACCESS,
-    ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, KERNEL32, ServicesState,
+    ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, GuestObject, KERNEL32, ServicesState,
 };
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
@@ -30,7 +31,82 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     registry.register(KERNEL32, "ExitProcess", move |args, _, _| {
         // The status is a UINT, the low half of the first argument.
         Err(ExitReason::ProcessExit(s.exit_process(args.rcx as u32)))
+    }); // OpenProcess answers a real handle when asked for the machine's one
+    // process, and no such process otherwise: the machine has exactly one.
+    let open_process = Arc::clone(state);
+    registry.register(KERNEL32, "OpenProcess", move |args, cpu, memory| {
+        let _ = memory;
+        if args.r8 as u32 != 0x4100 {
+            // The machine has one process; any other id does not exist.
+            return open_process.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+        }
+        let mut objects = open_process.objects.lock().expect("guest object state");
+        let Some(handle) = objects.next_handle() else {
+            return open_process.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, 0);
+        };
+        objects.insert_handle(handle, GuestObject::Process);
+        Ok(handle)
     });
+
+    // ReadProcessMemory on the machine's one process is the guest memory
+    // itself: the copy is exact and bounded by the guest address space.
+    let read_process = Arc::clone(state);
+    registry.register(KERNEL32, "ReadProcessMemory", move |args, cpu, memory| {
+        {
+            let objects = read_process.objects.lock().expect("guest object state");
+            if !matches!(objects.handles.get(&args.rcx), Some(GuestObject::Process)) {
+                return read_process.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+            }
+        }
+        let count = args.get(4, memory).map_err(ExitReason::MemoryFault)?;
+        let mut bytes = Vec::new();
+        for index in 0..args.r9 {
+            let byte = memory
+                .read_u8(args.rdx + index)
+                .map_err(ExitReason::MemoryFault)?;
+            bytes.push(byte);
+        }
+        if args.r8 == 0 {
+            return read_process.fail(cpu.gs_base, ERROR_NOACCESS, 0);
+        }
+        memory
+            .write_bytes(args.r8, &bytes)
+            .map_err(ExitReason::MemoryFault)?;
+        if count != 0 {
+            memory
+                .write_u64(count, args.r9)
+                .map_err(ExitReason::MemoryFault)?;
+        }
+        Ok(1)
+    });
+
+    // Cross-process machinery does not exist on a machine with one process:
+    // a remote thread in another process has no target, directory watching
+    // has no watcher machinery, and a named pipe's cross-process meaning is
+    // empty. Each is honestly unsupported rather than a silent no-op.
+    for symbol in [
+        "CreateRemoteThread",
+        "ReadDirectoryChangesW",
+        "CreateNamedPipeA",
+    ] {
+        let unsupported = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            let _ = (args, memory);
+            unsupported.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, INVALID_HANDLE)
+        });
+    }
+
+    for symbol in [
+        "OpenProcess",
+        "ReadProcessMemory",
+        "CreateRemoteThread",
+        "ReadDirectoryChangesW",
+        "CreateNamedPipeA",
+    ] {
+        registry.alias(PROCESS_THREADS_API, KERNEL32, symbol);
+        registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
+    }
+
     registry.alias(PROCESS_THREADS_API, KERNEL32, "ExitProcess");
     registry.set_status(KERNEL32, "ExitProcess", ServiceStatus::Partial);
 

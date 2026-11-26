@@ -193,6 +193,8 @@ enum GuestObject {
     /// enumeration reads the live state.
     Snapshot,
     ConsoleBuffer(Arc<Mutex<console::ScreenBuffer>>),
+    /// A handle to the machine's one process, opened through OpenProcess.
+    Process,
 }
 
 #[derive(Default)]
@@ -662,6 +664,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
         } else {
             match thread.handles.get(&source) {
                 Some(GuestObject::Thread(rights)) => (*rights, GuestObject::Thread(*rights)),
+                Some(GuestObject::Process) => (0, GuestObject::Process),
                 Some(GuestObject::Waitable { state, access }) => (
                     *access,
                     GuestObject::Waitable {
@@ -712,9 +715,8 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
             GuestObject::Search(_)
             | GuestObject::FileMapping { .. }
             | GuestObject::Snapshot
-            | GuestObject::ConsoleBuffer(_) => {
-                unreachable!("these handles cannot be duplicated")
-            }
+            | GuestObject::ConsoleBuffer(_)
+            | GuestObject::Process => unreachable!("these handles cannot be duplicated"),
         }
         thread.insert_handle(handle, object);
         Ok(1)
