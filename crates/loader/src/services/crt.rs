@@ -7,6 +7,10 @@ use crate::imports::{ImportRegistry, ServiceStatus, Win64Args};
 use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
 use crate::runtime::ServiceContext;
 
+use std::sync::Arc;
+
+use super::ServicesState;
+
 use super::crt_files;
 use super::crt_streams::{Failed, Outcome};
 
@@ -1297,4 +1301,131 @@ fn format_integer(
         .write_bytes(buffer, &digits)
         .map_err(ExitReason::MemoryFault)?;
     Ok(buffer)
+}
+
+// The CRT directory surface. The process working directory is a path in
+// the virtual filesystem: it starts at the volume root, `_chdir` validates
+// against the directory set, `_fullpath` resolves lexically without an
+// existence check - exactly the split the CRT documents. All paths resolve
+// case-insensitively on the single machine drive, matching how the file
+// surface stores them.
+fn resolve_directory(cwd: &str, input: &str) -> String {
+    let mut path = input.trim().to_lowercase().replace('/', "\\");
+    if path.len() >= 2 && path.as_bytes()[1] == b':' {
+        path = path.split_off(2);
+    }
+    let absolute = path.starts_with('\\');
+    let mut segments: Vec<String> = if absolute {
+        Vec::new()
+    } else {
+        cwd.split('\\')
+            .filter(|part| !part.is_empty())
+            .map(str::to_owned)
+            .collect()
+    };
+    for part in path.split('\\') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                segments.pop();
+            }
+            other => segments.push(other.to_owned()),
+        }
+    }
+    segments.join("\\")
+}
+
+fn windows_form(vfs_path: &str) -> String {
+    if vfs_path.is_empty() {
+        "C:\\".to_owned()
+    } else {
+        format!("C:\\{vfs_path}")
+    }
+}
+
+const ENOENT: u32 = 2;
+
+fn read_crt_string(memory: &GuestMemory, address: u64, limit: u64) -> Result<String, MemoryError> {
+    let mut bytes = Vec::new();
+    for index in 0..limit {
+        let slot = address.checked_add(index).ok_or(MemoryError::Overflow)?;
+        let byte = memory.read_u8(slot)?;
+        if byte == 0 {
+            break;
+        }
+        bytes.push(byte);
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+pub(super) fn register_directories(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    let getcwd = Arc::clone(state);
+    registry.register(UCRT, "_getcwd", move |args, cpu, memory| {
+        if args.rcx == 0 {
+            set_errno(memory, cpu.gs_base, EINVAL)?;
+            return Ok(0);
+        }
+        let cwd = getcwd.crt_directory.lock().expect("CRT working directory");
+        let form = windows_form(&cwd);
+        drop(cwd);
+        if args.rdx < form.len() as u64 + 1 {
+            set_errno(memory, cpu.gs_base, ERANGE)?;
+            return Ok(0);
+        }
+        memory
+            .write_bytes(args.rcx, form.as_bytes())
+            .map_err(ExitReason::MemoryFault)?;
+        memory
+            .write_u8(args.rcx + form.len() as u64, 0)
+            .map_err(ExitReason::MemoryFault)?;
+        Ok(args.rcx)
+    });
+
+    let chdir = Arc::clone(state);
+    registry.register(UCRT, "_chdir", move |args, cpu, memory| {
+        let input = read_crt_string(memory, args.rcx, 260).map_err(ExitReason::MemoryFault)?;
+        let mut cwd = chdir.crt_directory.lock().expect("CRT working directory");
+        let resolved = resolve_directory(&cwd, &input);
+        let exists = resolved.is_empty() || {
+            let objects = chdir.objects.lock().expect("guest object state");
+            objects.directories.contains(&resolved)
+        };
+        if !exists {
+            set_errno(memory, cpu.gs_base, ENOENT)?;
+            return Ok(u64::from(u32::MAX));
+        }
+        *cwd = resolved;
+        Ok(0)
+    });
+
+    let fullpath = Arc::clone(state);
+    registry.register(UCRT, "_fullpath", move |args, cpu, memory| {
+        if args.rcx == 0 || args.rdx == 0 {
+            set_errno(memory, cpu.gs_base, EINVAL)?;
+            return Ok(0);
+        }
+        let input = read_crt_string(memory, args.rdx, 260).map_err(ExitReason::MemoryFault)?;
+        let cwd = fullpath
+            .crt_directory
+            .lock()
+            .expect("CRT working directory");
+        let form = windows_form(&resolve_directory(&cwd, &input));
+        drop(cwd);
+        if args.r8 != 0 && args.r8 < form.len() as u64 + 1 {
+            set_errno(memory, cpu.gs_base, ERANGE)?;
+            return Ok(0);
+        }
+        memory
+            .write_bytes(args.rcx, form.as_bytes())
+            .map_err(ExitReason::MemoryFault)?;
+        memory
+            .write_u8(args.rcx + form.len() as u64, 0)
+            .map_err(ExitReason::MemoryFault)?;
+        Ok(args.rcx)
+    });
+
+    // msvcrt.dll aliases for the legacy binaries that link them there.
+    for symbol in ["_getcwd", "_chdir", "_fullpath"] {
+        registry.alias(MSVCRT, UCRT, symbol);
+    }
 }
