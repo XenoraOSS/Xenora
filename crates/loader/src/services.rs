@@ -251,6 +251,7 @@ pub struct ServicesState {
     synch: Mutex<synch::Synch>,
     crt_streams: Mutex<crt_streams::StandardStreams>,
     crt_clock: Mutex<crt_clock::ClockServices>,
+    crt_directory: Mutex<String>,
     pub(crate) threads: Mutex<threads::ThreadTable>,
     pub(crate) hooks: Arc<threads::SchedulerHooks>,
     /// Functions registered with `atexit`, run in reverse order by `_cexit`.
@@ -329,6 +330,7 @@ impl ServicesState {
             synch: Mutex::default(),
             crt_streams: Mutex::default(),
             crt_clock: Mutex::default(),
+            crt_directory: Mutex::new(String::new()),
             console: Mutex::default(),
             threads: Mutex::default(),
             hooks: Arc::default(),
@@ -735,6 +737,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     crt::register_errno(registry);
     crt::register_conversions(registry);
     crt::register_utilities(registry);
+    crt::register_directories(registry, &state);
     crt_callbacks::register(registry, &state);
     environment::register(registry, &state);
     errors::register(registry, &state);
