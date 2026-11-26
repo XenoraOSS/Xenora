@@ -245,6 +245,9 @@ pub(super) fn register(registry: &mut ImportRegistry) {
             Err(UNSUPPORTED)
         });
     }
+    registry.register_with_status(UCRT, "rand_s", ServiceStatus::Stub, |_, _, _| {
+        Err(UNSUPPORTED)
+    });
     for (module, symbol) in [
     for (api_set, symbol) in [
     for (module, symbol) in [
