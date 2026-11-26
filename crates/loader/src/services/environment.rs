@@ -8,7 +8,7 @@
 //! keep running instead of stopping at a missing import, and the size
 //! semantics are the documented ones.
 
-use super::{ERROR_INVALID_PARAMETER, KERNEL32, ServicesState};
+use super::{ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, KERNEL32, ServicesState};
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
 use crate::memory::PROCESS_HEAP;
@@ -69,6 +69,18 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     // terminator - two null units. Each call hands the caller its own copy
     // from the process heap, because the documentation requires the caller
     // to free it with FreeEnvironmentStringsW.
+    // The process environment is the fixed capture the machine was started
+    // with: there is no parent process to inherit mutations from and no
+    // child to pass them to. Setting a variable is honestly unsupported
+    // rather than a write nothing reads back.
+    for symbol in ["SetEnvironmentVariableA", "SetEnvironmentVariableW"] {
+        let unsupported = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            let _ = (args, memory);
+            unsupported.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0)
+        });
+    }
+
     registry.register(KERNEL32, "GetEnvironmentStringsW", |_, _, memory| {
         // Fresh heap memory is zero-filled, so four zero bytes are the two
         // null wide units of the empty block.
@@ -94,6 +106,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "ExpandEnvironmentStringsW",
         "FreeEnvironmentStringsW",
         "GetEnvironmentStringsW",
+        "SetEnvironmentVariableA",
+        "SetEnvironmentVariableW",
     ] {
         registry.alias(PROCESSENV_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
