@@ -7468,7 +7468,6 @@ fn filbuf_and_flsbuf_move_single_bytes() {
     assert_eq!(guest.call("fclose", &[file]) & 0xFFFF_FFFF, 0);
 }
 
-
 #[test]
 fn an_assertion_prints_and_ends_the_process() {
     let (mut guest, _) = stdio_guest();
@@ -7482,7 +7481,6 @@ fn an_assertion_prints_and_ends_the_process() {
         b"Assertion failed: x == 42, file sqlite3.c, line 1337\r\n"
     );
 }
-
 
 #[test]
 fn beginthreadex_starts_a_thread_like_createthread() {
@@ -7507,7 +7505,6 @@ fn beginthreadex_starts_a_thread_like_createthread() {
     // with _beginthreadex writes the shared memory the main thread reads
     // after waiting on its handle.
 }
-
 
 #[test]
 fn the_wide_file_operations_follow_the_drive() {
