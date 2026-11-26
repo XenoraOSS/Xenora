@@ -41,6 +41,14 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "SetFileAttributesA"),
     (KERNEL32, "MoveFileExW"),
     (KERNEL32, "GetCompressedFileSizeA"),
+    ("msvcrt.dll", "strstr"),
+    ("msvcrt.dll", "strtok"),
+    ("msvcrt.dll", "strcspn"),
+    ("msvcrt.dll", "strspn"),
+    ("msvcrt.dll", "strpbrk"),
+    ("msvcrt.dll", "_stricmp"),
+    ("msvcrt.dll", "_strnicmp"),
+    ("msvcrt.dll", "strcpy"),
 ];
 
 const WIDE: u64 = SCRATCH;
@@ -389,4 +397,67 @@ fn the_compressed_size_is_the_size() {
         guest.call("GetCompressedFileSizeA", &[NAME6, 0]) & 0xFFFF_FFFF,
         0xFFFF_FFFF
     );
+}
+
+/// The string search family: substring scans, span counts, the stateful
+/// tokenizer and case-insensitive comparison, reached through the legacy
+/// msvcrt.dll aliases.
+#[test]
+fn string_search_and_tokenizing_through_the_legacy_aliases() {
+    const TEXT: u64 = SCRATCH + 0x300;
+    const NEEDLE: u64 = SCRATCH + 0x380;
+    const DELIMS: u64 = SCRATCH + 0x3C0;
+    const OTHER: u64 = SCRATCH + 0x400;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    narrow_at(&mut guest, TEXT, "the quick brown fox jumps");
+    narrow_at(&mut guest, NEEDLE, "brown");
+    // strstr finds the substring at its byte offset.
+    let found = guest.call("strstr", &[TEXT, NEEDLE]);
+    assert_eq!(found, TEXT + 10);
+    narrow_at(&mut guest, NEEDLE, "zebra");
+    assert_eq!(guest.call("strstr", &[TEXT, NEEDLE]), 0);
+    // strcspn/strspn count the spans.
+    narrow_at(&mut guest, DELIMS, "aeiou");
+    assert_eq!(
+        guest.call("strcspn", &[TEXT, DELIMS]),
+        2,
+        "first vowel at index 2"
+    );
+    narrow_at(&mut guest, DELIMS, "theq ");
+    assert_eq!(guest.call("strspn", &[TEXT, DELIMS]), 5, "theq+space run");
+    // strpbrk returns the pointer of the first matching byte.
+    narrow_at(&mut guest, DELIMS, "xyz");
+    let hit = guest.call("strpbrk", &[TEXT, DELIMS]);
+    assert_eq!(hit, TEXT + 18, "the x in fox");
+    // strtok tokenizes in place with CRT scan state.
+    narrow_at(&mut guest, TEXT, "alpha,beta gamma");
+    narrow_at(&mut guest, DELIMS, ", ");
+    let first = guest.call("strtok", &[TEXT, DELIMS]);
+    assert_eq!(first, TEXT);
+    let second = guest.call("strtok", &[0, DELIMS]);
+    assert_eq!(second, TEXT + 6);
+    let third = guest.call("strtok", &[0, DELIMS]);
+    assert_eq!(third, TEXT + 11);
+    assert_eq!(guest.call("strtok", &[0, DELIMS]), 0);
+    // Case-insensitive comparison folds ASCII letters.
+    narrow_at(&mut guest, TEXT, "Hello");
+    narrow_at(&mut guest, OTHER, "hELLO");
+    assert_eq!(guest.call("_stricmp", &[TEXT, OTHER]) as u32 as i32, 0);
+    narrow_at(&mut guest, OTHER, "hELLo");
+    assert_eq!(guest.call("_stricmp", &[TEXT, OTHER]) as u32 as i32, 0);
+    narrow_at(&mut guest, OTHER, "hep");
+    let diff = guest.call("_stricmp", &[TEXT, OTHER]) as u32 as i32;
+    assert!(diff < 0);
+    // _strnicmp bounds the scan.
+    narrow_at(&mut guest, TEXT, "abcdef");
+    narrow_at(&mut guest, OTHER, "ABCxyz");
+    assert_eq!(guest.call("_strnicmp", &[TEXT, OTHER, 3]) as u32 as i32, 0);
+    assert!(guest.call("_strnicmp", &[TEXT, OTHER, 6]) as u32 as i32 != 0);
+    // strcpy through the legacy alias copies and returns the destination.
+    narrow_at(&mut guest, TEXT, "copied");
+    let destination = guest.call("strcpy", &[OTHER, TEXT]);
+    assert_eq!(destination, OTHER);
+    let mut verify = [0u8; 8];
+    guest.memory.read_bytes(OTHER, &mut verify).unwrap();
+    assert_eq!(&verify[..7], b"copied\0");
 }

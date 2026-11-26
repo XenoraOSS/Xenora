@@ -168,6 +168,21 @@ fn register_saves(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(1)
     });
 
+    // GetFixtureSaveSize(slot: u32) -> u64 returns the payload byte count
+    // without reading into guest memory or changing the save. Saves are
+    // nonempty, so zero denotes failure with the same errors as ReadFixtureSave.
+    let size = Arc::clone(state);
+    registry.register(MODULE, "GetFixtureSaveSize", move |args, cpu, _| {
+        let platform = size.platform_fixture.lock().expect("fixture platform");
+        if !platform.active {
+            return size.fail(cpu.gs_base, ERROR_INVALID_STATE, 0);
+        }
+        let Some(contents) = platform.saves.get(&(args.rcx as u32)) else {
+            return size.fail(cpu.gs_base, ERROR_NOT_FOUND, 0);
+        };
+        Ok(contents.len() as u64)
+    });
+
     let load = Arc::clone(state);
     registry.register(MODULE, "ReadFixtureSave", move |args, cpu, memory| {
         let platform = load.platform_fixture.lock().expect("fixture platform");

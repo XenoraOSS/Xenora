@@ -4,6 +4,7 @@
 //! The caller supplies monotonic time, allowing deterministic dispatch in tests.
 
 use std::collections::VecDeque;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
@@ -188,6 +189,7 @@ impl<T, E> TaskQueue<T, E> {
     }
 
     /// Run one queued operation. An expired operation completes without running.
+    /// Unwinding work completes as `WorkerPanicked`, like background work.
     pub fn dispatch_work(&mut self, now: Duration) -> bool {
         self.observe_worker_deadline(now);
         if self.worker.is_some() {
@@ -199,7 +201,11 @@ impl<T, E> TaskQueue<T, E> {
         let result = if task.is_expired(now) {
             TaskResult::TimedOut
         } else {
-            TaskResult::Finished((task.work)())
+            // The operation is consumed and won't be retried after a panic.
+            match catch_unwind(AssertUnwindSafe(task.work)) {
+                Ok(result) => TaskResult::Finished(result),
+                Err(_) => TaskResult::WorkerPanicked,
+            }
         };
         self.completions.push_back(Completion {
             id: task.id,
@@ -576,6 +582,58 @@ fn either_work_port_retires_only_one_expired_task_per_dispatch() {
             assert!(!queue.dispatch_completion());
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+fn synchronous_work_panic_keeps_its_completion_slot_and_order() {
+    use std::sync::mpsc::channel;
+
+    let mut queue = TaskQueue::<u32, u32>::new(2);
+    let (sender, receiver) = channel();
+    let callback = || {
+        let sender = sender.clone();
+        move |id, result| sender.send((id, result)).unwrap()
+    };
+    let panicked = queue
+        .submit(None, || panic!("work failed"), callback())
+        .unwrap();
+    let succeeded = queue.submit(None, || Ok(7), callback()).unwrap();
+    assert!(queue.dispatch_work(Duration::ZERO));
+    assert!(queue.dispatch_work(Duration::ZERO));
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(
+        queue.submit(None, || Ok(0), callback()),
+        Err(SubmitError::Full)
+    );
+
+    assert!(queue.dispatch_completion());
+    assert_eq!(
+        receiver.try_recv().unwrap(),
+        (panicked, TaskResult::WorkerPanicked)
+    );
+    let next = queue.submit(None, || Ok(8), callback()).unwrap();
+    assert!(queue.dispatch_work(Duration::ZERO));
+    for (id, value) in [(succeeded, 7), (next, 8)] {
+        assert!(queue.dispatch_completion());
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            (id, TaskResult::Finished(Ok(value)))
+        );
+    }
+    assert!(!queue.dispatch_completion());
+}
+
+#[cfg(test)]
+#[test]
+fn completion_callback_panics_still_unwind_on_the_callers_thread() {
+    let mut queue = TaskQueue::<u32, u32>::new(1);
+    queue
+        .submit(None, || Ok(7), |_, _| panic!("callback failed"))
+        .unwrap();
+    assert!(queue.dispatch_work(Duration::ZERO));
+    assert!(catch_unwind(AssertUnwindSafe(|| queue.dispatch_completion())).is_err());
+    assert!(!queue.dispatch_completion());
 }
 
 #[cfg(test)]
