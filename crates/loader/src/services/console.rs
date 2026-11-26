@@ -390,6 +390,162 @@ pub(super) fn register(registry: &mut crate::imports::ImportRegistry, state: &Ar
         },
     );
 
+    // WriteConsoleOutput copies a rectangle of CHAR_INFO cells - a UTF-16
+    // unit and its attributes packed in four bytes whatever the width form -
+    // from the caller's row-major buffer into the grid, clipped to the grid,
+    // and reports the rectangle actually written.
+    for (symbol, narrow) in [
+        ("WriteConsoleOutputW", false),
+        ("WriteConsoleOutputA", true),
+    ] {
+        let output = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            let _ = narrow;
+            let buffer = {
+                let objects = output.objects.lock().expect("guest object state");
+                match objects.handles.get(&args.rcx) {
+                    Some(GuestObject::ConsoleBuffer(buffer)) => Arc::clone(buffer),
+                    _ => return output.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0),
+                }
+            };
+            let region_out = args.get(4, memory).map_err(ExitReason::MemoryFault)?;
+            if args.rdx == 0 || region_out == 0 {
+                return output.fail(cpu.gs_base, ERROR_NOACCESS, 0);
+            }
+            let buf_width = (args.r8 & 0xFFFF) as i64;
+            let buf_height = ((args.r8 >> 16) & 0xFFFF) as i64;
+            let buf_x = (args.r9 & 0xFFFF) as i64;
+            let buf_y = ((args.r9 >> 16) & 0xFFFF) as i64;
+            let left = memory
+                .read_u16(region_out)
+                .map_err(ExitReason::MemoryFault)? as i16 as i64;
+            let top = memory
+                .read_u16(region_out + 2)
+                .map_err(ExitReason::MemoryFault)? as i16 as i64;
+            let right = memory
+                .read_u16(region_out + 4)
+                .map_err(ExitReason::MemoryFault)? as i16 as i64;
+            let bottom = memory
+                .read_u16(region_out + 6)
+                .map_err(ExitReason::MemoryFault)? as i16 as i64;
+            let mut buffer = buffer.lock().expect("screen buffer");
+            let gw = i64::from(buffer.width);
+            let gh = i64::from(buffer.height);
+            let clip_left = left.max(0);
+            let clip_top = top.max(0);
+            let clip_right = right.min(gw - 1);
+            let clip_bottom = bottom.min(gh - 1);
+            for row in clip_top..=clip_bottom {
+                for column in clip_left..=clip_right {
+                    // The source coordinate runs parallel to the region.
+                    let sx = buf_x + (column - left);
+                    let sy = buf_y + (row - top);
+                    if sx < 0 || sy < 0 || sx >= buf_width || sy >= buf_height {
+                        continue;
+                    }
+                    let source = args.rdx + ((sy * buf_width + sx) * 4) as u64;
+                    let ch = memory.read_u16(source).map_err(ExitReason::MemoryFault)?;
+                    let attr = memory
+                        .read_u16(source + 2)
+                        .map_err(ExitReason::MemoryFault)?;
+                    let cell = (row * gw + column) as usize;
+                    buffer.cells[cell].ch = ch;
+                    buffer.cells[cell].attr = attr;
+                }
+            }
+            if clip_right >= clip_left && clip_bottom >= clip_top {
+                memory
+                    .write_u16(region_out, clip_left as u16)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_u16(region_out + 2, clip_top as u16)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_u16(region_out + 4, clip_right as u16)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_u16(region_out + 6, clip_bottom as u16)
+                    .map_err(ExitReason::MemoryFault)?;
+            }
+            Ok(1)
+        });
+    }
+
+    // ReadConsoleOutput is the exact mirror of the write: the grid cells
+    // copy into the caller's buffer, same clipping, same reported rectangle.
+    for (symbol, narrow) in [("ReadConsoleOutputW", false), ("ReadConsoleOutputA", true)] {
+        let input = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
+            let _ = narrow;
+            let buffer = {
+                let objects = input.objects.lock().expect("guest object state");
+                match objects.handles.get(&args.rcx) {
+                    Some(GuestObject::ConsoleBuffer(buffer)) => Arc::clone(buffer),
+                    _ => return input.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0),
+                }
+            };
+            let region_out = args.get(4, memory).map_err(ExitReason::MemoryFault)?;
+            if args.rdx == 0 || region_out == 0 {
+                return input.fail(cpu.gs_base, ERROR_NOACCESS, 0);
+            }
+            let buf_width = (args.r8 & 0xFFFF) as i64;
+            let buf_height = ((args.r8 >> 16) & 0xFFFF) as i64;
+            let buf_x = (args.r9 & 0xFFFF) as i64;
+            let buf_y = ((args.r9 >> 16) & 0xFFFF) as i64;
+            let left = memory
+                .read_u16(region_out)
+                .map_err(ExitReason::MemoryFault)? as i16 as i64;
+            let top = memory
+                .read_u16(region_out + 2)
+                .map_err(ExitReason::MemoryFault)? as i16 as i64;
+            let right = memory
+                .read_u16(region_out + 4)
+                .map_err(ExitReason::MemoryFault)? as i16 as i64;
+            let bottom = memory
+                .read_u16(region_out + 6)
+                .map_err(ExitReason::MemoryFault)? as i16 as i64;
+            let buffer = buffer.lock().expect("screen buffer");
+            let gw = i64::from(buffer.width);
+            let gh = i64::from(buffer.height);
+            let clip_left = left.max(0);
+            let clip_top = top.max(0);
+            let clip_right = right.min(gw - 1);
+            let clip_bottom = bottom.min(gh - 1);
+            for row in clip_top..=clip_bottom {
+                for column in clip_left..=clip_right {
+                    let sx = buf_x + (column - left);
+                    let sy = buf_y + (row - top);
+                    if sx < 0 || sy < 0 || sx >= buf_width || sy >= buf_height {
+                        continue;
+                    }
+                    let cell = (row * gw + column) as usize;
+                    let target = args.rdx + ((sy * buf_width + sx) * 4) as u64;
+                    memory
+                        .write_u16(target, buffer.cells[cell].ch)
+                        .map_err(ExitReason::MemoryFault)?;
+                    memory
+                        .write_u16(target + 2, buffer.cells[cell].attr)
+                        .map_err(ExitReason::MemoryFault)?;
+                }
+            }
+            if clip_right >= clip_left && clip_bottom >= clip_top {
+                memory
+                    .write_u16(region_out, clip_left as u16)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_u16(region_out + 2, clip_top as u16)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_u16(region_out + 4, clip_right as u16)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_u16(region_out + 6, clip_bottom as u16)
+                    .map_err(ExitReason::MemoryFault)?;
+            }
+            Ok(1)
+        });
+    }
+
     for symbol in [
         "CreateConsoleScreenBuffer",
         "GetConsoleScreenBufferInfo",
@@ -400,6 +556,10 @@ pub(super) fn register(registry: &mut crate::imports::ImportRegistry, state: &Ar
         "FillConsoleOutputCharacterA",
         "FillConsoleOutputCharacterW",
         "FillConsoleOutputAttribute",
+        "WriteConsoleOutputA",
+        "WriteConsoleOutputW",
+        "ReadConsoleOutputA",
+        "ReadConsoleOutputW",
         "GetNumberOfConsoleInputEvents",
         "PeekConsoleInputA",
         "PeekConsoleInputW",
