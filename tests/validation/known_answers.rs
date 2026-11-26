@@ -1595,6 +1595,8 @@ mod review {
 
     const COMPARE_FIXTURE: &[u8] = include_bytes!("../../fixtures/rdna2/vector-compare.bin");
     const COMPARE_FT_FIXTURE: &[u8] = include_bytes!("../../fixtures/rdna2/vector-compare-ft.bin");
+    const COMPARE_F32_FIXTURE: &[u8] =
+        include_bytes!("../../fixtures/rdna2/vector-compare-f32.bin");
 
     /// fixtures/rdna2/vector-compare-ft.s, from its listing and guide 12.9
     /// Table 61 (F: D = 0, T: D = 1) with VCC_LO[n] = EXEC_LO[n] & test: every
@@ -1711,6 +1713,148 @@ mod review {
             16,
         ]);
         input
+    }
+
+    /// fixtures/rdna2/vector-compare-f32.s, from its listing, guide 12.9's
+    /// float per-opcode table and the errata record: the ordered relations are
+    /// false on any NaN input, U is true when either input is a NaN, the N
+    /// forms are the unordered complements, and +0 == -0. The lane input is
+    /// the binary32 bit pattern in v1; s8 is 1.5 and the literal 0.75 (neither bit pattern is one an inline float constant compresses to, so the assembler keeps the literal form).
+    fn compare_f32_expected(input: &[u32]) -> Vec<u32> {
+        const THREE_QUARTERS: u32 = 0x3f40_0000;
+        let mut output = Vec::new();
+        for wave in input.chunks(32) {
+            let full = u32::MAX;
+            let nan = |x: u32| f32::from_bits(x).is_nan();
+            let ordered = |x: u32| !nan(x);
+            let masks: [&dyn Fn(u32) -> bool; 6] = [
+                // lt: 1.5 < x, ordered - false on NaN lanes
+                &move |x| ordered(x) && 1.5f32 < f32::from_bits(x),
+                // eq: x == x - false exactly on the NaN lanes
+                &move |x| ordered(x),
+                // u: unordered - true exactly on the NaN lanes
+                &move |x| nan(x),
+                // o: ordered - the complement
+                &move |x| ordered(x),
+                // lg: 0.75 != x ordered - false on NaN lanes and at x == 0.75
+                &move |x| ordered(x) && f32::from_bits(x) != f32::from_bits(THREE_QUARTERS),
+                // ngt: unordered complement of 1.5 > x - NaN or 1.5 <= x
+                &move |x| nan(x) || 1.5f32 <= f32::from_bits(x),
+            ];
+            let mut folded = masks
+                .iter()
+                .fold(0u32, |acc, test| (acc << 1) ^ wave_mask(wave, full, test));
+            // le, gt, ge, nge, nlg, nle in listing order: le and nlg are
+            // lane-reflexive, gt/ge/nge/nle face 1.5 in either operand order.
+            let more: [&dyn Fn(u32) -> bool; 6] = [
+                // le: x <= x - false exactly on the NaN lanes
+                &move |x| ordered(x),
+                // gt: 1.5 > x ordered
+                &move |x| ordered(x) && 1.5f32 > f32::from_bits(x),
+                // ge: x >= 1.5 ordered
+                &move |x| ordered(x) && f32::from_bits(x) >= 1.5f32,
+                // nge: unordered complement of 1.5 >= x - NaN or 1.5 < x
+                &move |x| nan(x) || 1.5f32 < f32::from_bits(x),
+                // nlg: NaN or x == x - every lane passes
+                &move |_| true,
+                // nle: unordered complement of x <= 1.5 - NaN or x > 1.5
+                &move |x| nan(x) || f32::from_bits(x) > 1.5f32,
+            ];
+            folded = more
+                .iter()
+                .fold(folded, |acc, test| (acc << 1) ^ wave_mask(wave, full, test));
+            // neq under EXEC 0x0f0f0f0f: unordered inequality, so the NaN
+            // lanes pass wherever they are active.
+            let partial = wave_mask(wave, 0x0f0f_0f0f, |x| nan(x) || 1.5f32 != f32::from_bits(x));
+            folded = (folded << 1) ^ partial;
+            // nlt reads the mask as a float: unordered-true complement of
+            // mask < x - NaN in either input, or mask >= x. The small mask
+            // bit patterns are positive subnormals, never NaNs.
+            let mask_float = f32::from_bits(partial);
+            let nlt = wave_mask(wave, full, |x| nan(x) || mask_float >= f32::from_bits(x));
+            folded = (folded << 1) ^ nlt;
+            // tru covers every EXEC lane, so the branch is never taken and
+            // v2 ^= v1 runs; f is the zero mask, so the second branch is
+            // always taken and the reset never runs.
+            let exists = wave_mask(wave, full, |_| true);
+            for &x in wave {
+                let mut v2 = folded;
+                if exists != 0 {
+                    v2 ^= x;
+                }
+                output.push(v2);
+            }
+        }
+        output
+    }
+
+    /// Binary32-interesting lane inputs: both zeros, normals, the infinities,
+    /// quiet and signaling NaNs, subnormals and the finite extrema.
+    fn compare_f32_fixture_input() -> Vec<u32> {
+        vec![
+            0x0000_0000, // +0.0
+            0x8000_0000, // -0.0
+            0x3f80_0000, // 1.0
+            0xbf80_0000, // -1.0
+            0x3f00_0000, // 0.5
+            0x4000_0000, // 2.0
+            0x7f80_0000, // +inf
+            0xff80_0000, // -inf
+            0x7fc0_0000, // quiet NaN
+            0xffc0_0000, // negative quiet NaN
+            0x7f80_0001, // signaling NaN
+            0x0000_0001, // smallest subnormal
+            0x007f_ffff, // largest subnormal
+            0x7f7f_ffff, // largest finite
+            0xff7f_ffff, // most negative finite
+            0x3f80_0001, // just above 1.0
+            0x3f7f_ffff, // just below 1.0
+            0xbf00_0000, // -0.5
+            0xc000_0000, // -2.0
+            0x4b00_0000, // 8388608.0
+            0x0080_0000, // smallest normal
+            0x8080_0000, // negative smallest normal
+            0x7e97_8942, // large positive
+            0xfe97_8942, // large negative
+            0x0000_0000, // +0.0 again
+            0x7fc0_0001, // another quiet NaN payload
+            0x3eaa_aaab, // 1/3
+            0xbeaa_aaab, // -1/3
+            0x42f6_e979, // 123.456
+            0xc2f6_e979, // -123.456
+            0x3f00_0001, // just above 0.5
+            0x3eff_ffff, // just below 0.5
+        ]
+    }
+
+    #[test]
+    fn compare_f32_fixture_matches_exact_definitions() {
+        // A full wave of 32 binary32-interesting lanes and a partial wave of 7.
+        let mut input = compare_f32_fixture_input();
+        input.extend([
+            0x3f80_0000,
+            0x7fc0_0000,
+            0x8000_0000,
+            0xff80_0000,
+            0x0000_0001,
+            0x4000_0000,
+            0xbf80_0000,
+        ]);
+        let expected = compare_f32_expected(&input);
+        verify(COMPARE_F32_FIXTURE, &input, Some(&expected));
+        let compiled = compile(Architecture::Gfx1030, COMPARE_F32_FIXTURE).unwrap();
+        assert_eq!(
+            compiled.ir.matches("wave.mask").count(),
+            16,
+            "{}",
+            compiled.ir
+        );
+        assert_eq!(
+            compiled.ir.matches("join.vccz").count(),
+            2,
+            "{}",
+            compiled.ir
+        );
     }
 
     #[test]
@@ -2220,6 +2364,10 @@ mod review {
         let mut input = compare_fixture_input()[..32].to_vec();
         input.extend([0, 1, u32::MAX, 0x8000_0000, 0x7fff_ffff, 64, 0x1234_5678]);
         assert_eq!(run(COMPARE_FT_FIXTURE, &input), compare_ft_expected(&input));
+        assert_eq!(
+            run(COMPARE_F32_FIXTURE, &input),
+            compare_f32_expected(&input)
+        );
         programs += 1;
         eprintln!("{programs} VOPC programs matched on native Metal");
     }

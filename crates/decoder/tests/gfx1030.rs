@@ -953,6 +953,7 @@ fn compares_fixture_instructions_against_llvm() {
         include_bytes!("../../../fixtures/rdna2/vector-vcc.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-compare.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-compare-ft.bin"),
+        include_bytes!("../../../fixtures/rdna2/vector-compare-f32.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-unary.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-round.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-f32.bin"),

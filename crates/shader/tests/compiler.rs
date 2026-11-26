@@ -1689,6 +1689,7 @@ fn cse_leaves_every_golden_fixture_unchanged() {
     golden!("scalar-unary");
     golden!("vector-compare");
     golden!("vector-compare-ft");
+    golden!("vector-compare-f32");
     golden!("vector-integer");
     golden!("vector-unary");
     golden!("vector-round");

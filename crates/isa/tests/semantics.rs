@@ -321,7 +321,10 @@ fn vop3_variant_dispatch_selects_exactly_the_registry_vop3_rows() {
         let mut variants = VectorCompareVop3Op::ALL
             .into_iter()
             .filter(|op| op.base() == base_op);
-        if base.width != 32 {
+        if base.width != 32 || base.signedness == Signedness::Float {
+            // Widths outside 32 bits have no VOP3A encoding; the binary32
+            // forms have one in the XML but, like the CMPX and CLASS forms,
+            // they are outside the executed subset and not yet declared.
             assert_eq!(variants.next(), None, "{}", base.name);
             continue;
         }
