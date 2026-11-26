@@ -4343,8 +4343,18 @@ const LEGACY_DATA_SYMBOLS: [&str; 7] = [
 /// Legacy-linked binaries import these services from `msvcrt.dll`, where the
 /// compatibility mapping resolves them to the same handlers as the modern
 /// runtime.
-const LEGACY_FUNCTION_SYMBOLS: [&str; 8] = [
-    "strlen", "memcpy", "malloc", "free", "strcmp", "memchr", "strchr", "getenv",
+const LEGACY_FUNCTION_SYMBOLS: [&str; 11] = [
+    "strlen",
+    "memcpy",
+    "malloc",
+    "free",
+    "strcmp",
+    "memchr",
+    "strchr",
+    "getenv",
+    "sprintf",
+    "_vsnprintf",
+    "_vscprintf",
 ];
 
 const JUNK: u64 = 0xFFFF_FFFF_0000_0000;
@@ -6436,4 +6446,42 @@ fn legacy_function_imports_run_the_same_services() {
     // `getenv` misses every name in the empty environment.
     guest.memory.write_bytes(SCRATCH + 0x60, b"PATH\0").unwrap();
     assert_eq!(guest.call("getenv", &[SCRATCH + 0x60]), 0);
+}
+
+#[test]
+fn legacy_printf_forms_format_and_count() {
+    let mut guest = Guest::new();
+    // The work area is a heap allocation, larger than the fixture scratch.
+    let work = guest.call("malloc", &[0x200]);
+    assert_ne!(work, 0);
+    // `sprintf` reads its variadic arguments from the calling convention and
+    // terminates the text it writes.
+    guest.memory.write_bytes(SCRATCH, b"%d-%s\0").unwrap();
+    guest.memory.write_bytes(work + 0x40, b"fin\0").unwrap();
+    let len = guest.call("sprintf", &[work + 0x80, SCRATCH, 42, work + 0x40]);
+    assert_eq!(len, 6);
+    let mut text = [0u8; 7];
+    guest.memory.read_bytes(work + 0x80, &mut text).unwrap();
+    assert_eq!(&text, b"42-fin\0");
+    // `_vscprintf` counts the same text through the va_list form: the slots
+    // sit contiguously in memory.
+    guest.memory.write_u64(work + 0x100, 42).unwrap();
+    guest.memory.write_u64(work + 0x108, work + 0x40).unwrap();
+    assert_eq!(guest.call("_vscprintf", &[SCRATCH, work + 0x100]), 6);
+    // `_vsnprintf` fills what fits and answers -1 when the text does not.
+    assert_eq!(
+        guest.call("_vsnprintf", &[work + 0x180, 4, SCRATCH, work + 0x100]),
+        u64::from(u32::MAX)
+    );
+    let mut short = [0u8; 4];
+    guest.memory.read_bytes(work + 0x180, &mut short).unwrap();
+    assert_eq!(&short, b"42-f");
+    // Room for the terminator: the text fits and the answer is its length.
+    assert_eq!(
+        guest.call("_vsnprintf", &[work + 0x180, 7, SCRATCH, work + 0x100]),
+        6
+    );
+    let mut whole = [0u8; 7];
+    guest.memory.read_bytes(work + 0x180, &mut whole).unwrap();
+    assert_eq!(&whole, b"42-fin\0");
 }

@@ -24,6 +24,10 @@ use super::crt_files::{self, EACCES, EBADF, EINVAL, ENOENT, ERANGE, FileStreams}
 use super::crt_format::{self, Floats, FormatError, Source};
 use super::files::DriveEntry;
 use crate::cpu::ExitReason;
+
+/// The legacy CRT module that pre-UCRT mingw binaries import directly.
+const MSVCRT: &str = "msvcrt.dll";
+use crate::imports::{ImportRegistry, Win64Args};
 use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
 
 /// The exit for a request the runtime does not model.
@@ -253,6 +257,24 @@ fn formatted(
     arguments: u64,
     buffer_options: bool,
 ) -> Result<Formatted, ExitReason> {
+    let mut source = VaList {
+        memory,
+        next: arguments,
+    };
+    format_with(memory, options, format, locale, &mut source, buffer_options)
+}
+
+/// [`formatted`] with the argument source the caller supplies: the legacy
+/// variadic forms read their arguments from the calling convention rather
+/// than a `va_list` in memory.
+fn format_with(
+    memory: &GuestMemory,
+    options: u64,
+    format: u64,
+    locale: u64,
+    source: &mut dyn Source,
+    buffer_options: bool,
+) -> Result<Formatted, ExitReason> {
     // The behaviour bits belong to the buffer forms; passing them to a
     // stream form stops the guest, as an unknown bit does.
     let known = if buffer_options {
@@ -267,15 +289,11 @@ fn formatted(
     if template.len() as u64 > MAX_TRANSFER {
         return Err(RUNTIME_LIMIT);
     }
-    let mut source = VaList {
-        memory,
-        next: arguments,
-    };
     let floats = Floats {
         three_digit_exponents: options & LEGACY_THREE_DIGIT_EXPONENTS != 0,
         standard_rounding: options & STANDARD_ROUNDING != 0,
     };
-    match crt_format::format(&template, &mut source, floats) {
+    match crt_format::format(&template, source, floats) {
         Ok(text) => Ok(Formatted::Text(text)),
         Err(FormatError::Invalid) => Ok(Formatted::Invalid),
         Err(FormatError::Unsupported | FormatError::TooLong) => Err(RUNTIME_LIMIT),
@@ -1647,4 +1665,106 @@ impl StandardStreams {
         text.push(b'\n');
         self.write(drive, Stream::Error, &text).map(|_| ())
     }
+}
+
+/// The option bits the legacy CRT's printf family behaves with: the legacy
+/// wide meaning of `%S` and `%C`, three-digit exponents, and the legacy
+/// termination rules. The legacy rounding of floating-point conversions is
+/// not modelled, so they are refused, as they are for the modern forms
+/// without the rounding bit.
+const LEGACY_PRINTF_OPTIONS: u64 =
+    LEGACY_WIDE_SPECIFIERS | LEGACY_THREE_DIGIT_EXPONENTS | LEGACY_VSPRINTF_NULL_TERMINATION;
+
+/// Arguments of a legacy variadic form, read from the calling convention:
+/// the positions after the fixed ones, registers first and then the stack,
+/// as `Win64Args` extracts them. A floating-point variadic argument reaches
+/// its integer slot as well, which is where this reads it.
+struct VariadicArguments<'a> {
+    args: &'a Win64Args,
+    memory: &'a GuestMemory,
+    next: usize,
+}
+
+impl Source for VariadicArguments<'_> {
+    fn argument(&mut self) -> Result<u64, MemoryError> {
+        let value = self.args.get(self.next, self.memory)?;
+        self.next += 1;
+        Ok(value)
+    }
+
+    fn string(&mut self, address: u64, limit: usize) -> Result<Vec<u8>, MemoryError> {
+        c_string(self.memory, address, limit as u64)
+    }
+}
+
+/// The registry answer of a legacy printf form: the value, with `errno` set
+/// when the form failed.
+fn printf_answer(
+    memory: &mut GuestMemory,
+    teb: u64,
+    outcome: Outcome<i32>,
+) -> Result<u64, ExitReason> {
+    match outcome? {
+        Ok(value) => Ok(value as u32 as u64),
+        Err(Failed(value, errno)) => {
+            super::crt::set_errno(memory, teb, errno)?;
+            Ok(value as u32 as u64)
+        }
+    }
+}
+
+/// The legacy CRT's printf buffer forms (`msvcrt.dll`). `_vsnprintf`
+/// terminates only when the text fits with room, as the legacy contract
+/// says, and `_vscprintf` is the size query. `sprintf` is uncounted: the
+/// terminator always follows the text, and a short buffer is the guest's
+/// own overrun, exactly as on Windows.
+pub(super) fn register_legacy(registry: &mut ImportRegistry) {
+    registry.register(MSVCRT, "_vsnprintf", |args, cpu, memory| {
+        let outcome = print_to_buffer(
+            memory,
+            LEGACY_PRINTF_OPTIONS,
+            args.rcx,
+            args.rdx,
+            args.r8,
+            0,
+            args.r9,
+        );
+        printf_answer(memory, cpu.gs_base, outcome)
+    });
+    registry.register(MSVCRT, "_vscprintf", |args, cpu, memory| {
+        let outcome = print_to_buffer(memory, LEGACY_PRINTF_OPTIONS, 0, 0, args.rcx, 0, args.rdx);
+        printf_answer(memory, cpu.gs_base, outcome)
+    });
+    registry.register(MSVCRT, "sprintf", |args, cpu, memory| {
+        if args.rcx == 0 || args.rdx == 0 {
+            super::crt::set_errno(memory, cpu.gs_base, EINVAL)?;
+            return Ok(u64::from(u32::MAX));
+        }
+        let formatted = {
+            let mut source = VariadicArguments {
+                args,
+                memory,
+                next: 2,
+            };
+            format_with(
+                memory,
+                LEGACY_PRINTF_OPTIONS,
+                args.rdx,
+                0,
+                &mut source,
+                true,
+            )?
+        };
+        let mut text = match formatted {
+            Formatted::Invalid => {
+                super::crt::set_errno(memory, cpu.gs_base, EINVAL)?;
+                return Ok(u64::from(u32::MAX));
+            }
+            Formatted::Text(text) => text,
+        };
+        let len = text.len() as u32;
+        text.push(0);
+        memory.write_bytes(args.rcx, &text).map_err(fault)?;
+        Ok(u64::from(len))
+    });
 }
