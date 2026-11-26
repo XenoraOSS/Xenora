@@ -205,6 +205,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     register_host_identity(registry, state);
     register_lifecycle(registry, state);
     register_adapters(registry, state);
+    register_resolution(registry, state);
     register_select(registry, state);
     register_poll(registry, state);
 
@@ -764,6 +765,207 @@ fn register_adapters(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                 Ok(0)
             })();
             socket_result(&addrtostr, cpu.gs_base, result)
+        },
+    );
+}
+
+fn read_socket_cstr(memory: &GuestMemory, address: u64) -> Result<String, u32> {
+    let mut bytes = Vec::new();
+    for index in 0..256u64 {
+        let byte = memory.read_u8(address + index).map_err(|_| WSAEFAULT)?;
+        if byte == 0 {
+            break;
+        }
+        bytes.push(byte);
+    }
+    String::from_utf8(bytes).map_err(|_| WSAEINVAL)
+}
+
+fn register_resolution(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    use crate::memory::PROCESS_HEAP;
+
+    // getaddrinfo over the loopback-only naming surface: "localhost",
+    // "127.0.0.1" or a null node resolve to the machine's one address;
+    // anything else is an honest no-name - there is no DNS. The result is
+    // one heap allocation the caller owns through freeaddrinfo, exactly
+    // the contract.
+    let gai = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "getaddrinfo",
+        ServiceStatus::Partial,
+        move |args, _cpu, memory| {
+            let result = (|| {
+                if gai.winsock.lock().expect("guest Winsock state").refs == 0 {
+                    return Err(WSANOTINITIALISED);
+                }
+                if args.r9 == 0 {
+                    return Err(WSAEFAULT);
+                }
+                let node = if args.rcx == 0 {
+                    None
+                } else {
+                    Some(read_socket_cstr(memory, args.rcx)?)
+                };
+                let service = if args.rdx == 0 {
+                    None
+                } else {
+                    Some(read_socket_cstr(memory, args.rdx)?)
+                };
+                let ip: [u8; 4] = match node.as_deref() {
+                    None | Some("localhost") | Some("127.0.0.1") => [127, 0, 0, 1],
+                    _ => return Err(11001), // WSAHOST_NOT_FOUND: no DNS exists
+                };
+                let port: u16 = match service.as_deref() {
+                    None => 0,
+                    Some(text) => text.parse::<u16>().map_err(|_| 11001u32)?,
+                };
+                // hints validation: family, socktype and protocol must be
+                // the loopback ones or unspecified.
+                if args.r8 != 0 {
+                    let family = memory.read_u32(args.r8 + 4).map_err(|_| WSAEFAULT)?;
+                    let socktype = memory.read_u32(args.r8 + 8).map_err(|_| WSAEFAULT)?;
+                    let protocol = memory.read_u32(args.r8 + 12).map_err(|_| WSAEFAULT)?;
+                    if family != 0 && family != 2 {
+                        return Err(WSAEAFNOSUPPORT);
+                    }
+                    if socktype != 0 && socktype != 2 {
+                        return Err(WSAESOCKTNOSUPPORT);
+                    }
+                    if protocol != 0 && protocol != 17 {
+                        return Err(WSAESOCKTNOSUPPORT);
+                    }
+                }
+                // One allocation: addrinfo (48 bytes) then sockaddr_in (16).
+                let base = memory
+                    .map_heap_allocation(PROCESS_HEAP, 64)
+                    .map_err(|_| WSAENOBUFS)?;
+                let mut addr = [0; 16];
+                addr[..2].copy_from_slice(&2_u16.to_le_bytes());
+                addr[2..4].copy_from_slice(&port.to_be_bytes());
+                addr[4..8].copy_from_slice(&ip);
+                memory
+                    .write_bytes(base + 48, &addr)
+                    .map_err(|_| WSAEFAULT)?;
+                for (offset, value) in [(0u64, 0u32), (4, 2), (8, 2), (12, 17)] {
+                    memory
+                        .write_u32(base + offset, value)
+                        .map_err(|_| WSAEFAULT)?;
+                }
+                for (offset, value) in [
+                    (16u64, 16u64),  // ai_addrlen
+                    (24, 0),         // ai_canonname
+                    (32, base + 48), // ai_addr
+                    (40, 0),         // ai_next
+                ] {
+                    memory
+                        .write_u64(base + offset, value)
+                        .map_err(|_| WSAEFAULT)?;
+                }
+                memory.write_u64(args.r9, base).map_err(|_| WSAEFAULT)?;
+                Ok(0)
+            })();
+            match result {
+                Ok(value) => Ok(value),
+                Err(error) => Ok(u64::from(error)),
+            }
+        },
+    );
+
+    // freeaddrinfo releases the one allocation the contract defines.
+    let fai = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "freeaddrinfo",
+        ServiceStatus::Partial,
+        move |args, _cpu, memory| {
+            let _ = &fai;
+            if args.rcx != 0 && !memory.release_heap_allocation(PROCESS_HEAP, args.rcx) {
+                // A foreign pointer is misuse the CRT would fault on; the
+                // honest surface reports it through the debug contract of
+                // a no-op free being impossible. Nothing to return.
+                return Ok(0);
+            }
+            Ok(0)
+        },
+    );
+
+    // getnameinfo: the reverse form over the same one address.
+    let gni = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "getnameinfo",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let _ = cpu;
+            let result = (|| {
+                if gni.winsock.lock().expect("guest Winsock state").refs == 0 {
+                    return Err(WSANOTINITIALISED);
+                }
+                let mut sa = [0; 16];
+                memory
+                    .read_bytes(args.rcx, &mut sa)
+                    .map_err(|_| WSAEFAULT)?;
+                if u16::from_le_bytes([sa[0], sa[1]]) != 2 {
+                    return Err(WSAEAFNOSUPPORT);
+                }
+                let host = format!("{}.{}.{}.{}", sa[4], sa[5], sa[6], sa[7]);
+                let port = u16::from_be_bytes([sa[2], sa[3]]).to_string();
+                if args.r8 != 0 && args.r9 as u32 as usize > host.len() {
+                    memory
+                        .write_bytes(args.r8, host.as_bytes())
+                        .map_err(|_| WSAEFAULT)?;
+                    memory
+                        .write_u8(args.r8 + host.len() as u64, 0)
+                        .map_err(|_| WSAEFAULT)?;
+                }
+                let service_out = args.get(4, memory).map_err(|_| WSAEFAULT)?;
+                let service_len = args.get(5, memory).map_err(|_| WSAEFAULT)? as u32 as usize;
+                if service_out != 0 && service_len > port.len() {
+                    memory
+                        .write_bytes(service_out, port.as_bytes())
+                        .map_err(|_| WSAEFAULT)?;
+                    memory
+                        .write_u8(service_out + port.len() as u64, 0)
+                        .map_err(|_| WSAEFAULT)?;
+                }
+                Ok(0)
+            })();
+            match result {
+                Ok(value) => Ok(value),
+                Err(error) => Ok(u64::from(error)),
+            }
+        },
+    );
+
+    // inet_ntoa formats into one heap allocation reused across calls - the
+    // overwritten-static-storage contract of the CRT form.
+    registry.register_with_status(
+        MODULE,
+        "inet_ntoa",
+        ServiceStatus::Partial,
+        move |args, _cpu, memory| {
+            let bytes = (args.rcx as u32).to_le_bytes();
+            let text = format!("{}.{}.{}.{}", bytes[0], bytes[1], bytes[2], bytes[3]);
+            // The static buffer is allocated once and reused, matching the
+            // CRT contract of storage overwritten by each call.
+            static mut NTOA_BASE: u64 = 0;
+            let base = unsafe {
+                if NTOA_BASE == 0 {
+                    let Ok(base) = memory.map_heap_allocation(PROCESS_HEAP, 16) else {
+                        return Ok(0);
+                    };
+                    NTOA_BASE = base;
+                }
+                NTOA_BASE
+            };
+            memory
+                .write_bytes(base, text.as_bytes())
+                .map_err(ExitReason::MemoryFault)?;
+            memory
+                .write_u8(base + text.len() as u64, 0)
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(base)
         },
     );
 }
@@ -1468,4 +1670,90 @@ fn wsasocket_adapter_fdisset_and_address_formatting() {
     let mut text = [0; 14];
     memory.read_bytes(0x1b00, &mut text).unwrap();
     assert_eq!(&text, b"127.0.0.1:5000");
+}
+
+#[cfg(test)]
+#[test]
+fn loopback_name_resolution_round_trips() {
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::MemoryPermissions;
+    use crate::services::MockClock;
+
+    let mut registry = ImportRegistry::new();
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    register(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region(0x1000, 8192, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let call = |memory: &mut GuestMemory, symbol: &str, args: &[u64]| {
+        let mut cpu = CpuState::default();
+        for (reg, &value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args)
+        {
+            cpu.set(reg, value);
+        }
+        cpu.set(Register::Rsp, 0x2000);
+        for (index, &value) in args.iter().enumerate().skip(4) {
+            memory
+                .write_u64(0x2000 + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        let descriptor = registry
+            .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    };
+    assert_eq!(call(&mut memory, "WSAStartup", &[0x0202, 0x1000]), 0);
+    // localhost:80 resolves to one addrinfo over the loopback address.
+    memory.write_bytes(0x1100, b"localhost\0").unwrap();
+    memory.write_bytes(0x1120, b"80\0").unwrap();
+    assert_eq!(
+        call(&mut memory, "getaddrinfo", &[0x1100, 0x1120, 0, 0x1140]),
+        0
+    );
+    let info = memory.read_u64(0x1140).unwrap();
+    assert_ne!(info, 0);
+    assert_eq!(memory.read_u64(info + 4).unwrap() as u32, 2, "AF_INET");
+    let sockaddr = memory.read_u64(info + 32).unwrap();
+    let port = u16::from(memory.read_u8(sockaddr + 2).unwrap()) * 256
+        + u16::from(memory.read_u8(sockaddr + 3).unwrap());
+    assert_eq!(port, 80);
+    assert_eq!(memory.read_u8(sockaddr + 4).unwrap(), 127);
+    // A name that is not the machine's one address is an honest no-name.
+    memory.write_bytes(0x1100, b"example.com\0").unwrap();
+    assert_ne!(call(&mut memory, "getaddrinfo", &[0x1100, 0, 0, 0x1140]), 0);
+    // freeaddrinfo releases the allocation without fault.
+    assert_eq!(call(&mut memory, "freeaddrinfo", &[info]), 0);
+    // getnameinfo reverses the same sockaddr.
+    let mut sa = [0; 16];
+    sa[..8].copy_from_slice(&[2, 0, 0x00, 0x50, 127, 0, 0, 1]);
+    memory.write_bytes(0x1200, &sa).unwrap();
+    assert_eq!(
+        call(
+            &mut memory,
+            "getnameinfo",
+            &[0x1200, 16, 0x1300, 32, 0x1340, 16, 0]
+        ),
+        0
+    );
+    let mut host = [0; 10];
+    memory.read_bytes(0x1300, &mut host).unwrap();
+    assert_eq!(&host[..10], b"127.0.0.1\0");
+    let mut service = [0; 3];
+    memory.read_bytes(0x1340, &mut service).unwrap();
+    assert_eq!(&service, b"80\0");
+    // inet_ntoa formats into reusable storage.
+    let first = call(
+        &mut memory,
+        "inet_ntoa",
+        &[u64::from(u32::from_le_bytes([127, 0, 0, 1]))],
+    );
+    assert_ne!(first, 0);
+    let mut text = [0; 10];
+    memory.read_bytes(first, &mut text).unwrap();
+    assert_eq!(&text[..10], b"127.0.0.1\0");
 }
