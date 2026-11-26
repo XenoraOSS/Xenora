@@ -32,6 +32,7 @@ const WSAEPROTONOSUPPORT: u32 = 10043;
 const WSAESOCKTNOSUPPORT: u32 = 10044;
 const WSAEOPNOTSUPP: u32 = 10045;
 const WSAENOPROTOOPT: u32 = 10042;
+const WSAESHUTDOWN: u32 = 10058;
 const WSAEAFNOSUPPORT: u32 = 10047;
 const WSASYSNOTREADY: u32 = 10091;
 const WSAVERNOTSUPPORTED: u32 = 10092;
@@ -51,6 +52,10 @@ struct Socket {
     port: Option<u16>,
     peer: Option<u16>,
     pending: VecDeque<(u16, Vec<u8>)>,
+    shutdown_receive: bool,
+    shutdown_send: bool,
+    reuse_address: bool,
+    broadcast: bool,
 }
 
 impl Winsock {
@@ -198,6 +203,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     register_socket_options(registry, state);
     register_datagrams(registry, state);
     register_host_identity(registry, state);
+    register_lifecycle(registry, state);
+    register_select(registry, state);
     register_poll(registry, state);
 
     let get = Arc::clone(state);
@@ -342,6 +349,9 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
             let mut net = send.winsock.lock().expect("guest Winsock state");
             let result = (|| {
                 let socket = net.socket(args.rcx)?;
+                if socket.shutdown_send {
+                    return Err(WSAESHUTDOWN);
+                }
                 let peer = socket.peer.ok_or(WSAENOTCONN)?;
                 let source = socket.port.expect("connected socket is bound");
                 let length = args.r8 as i32;
@@ -383,6 +393,9 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
             let result = (|| {
                 if net.socket(args.rcx)?.port.is_none() {
                     return Err(WSAEINVAL);
+                }
+                if net.socket(args.rcx)?.shutdown_receive {
+                    return Err(WSAESHUTDOWN);
                 }
                 let length = args.r8 as i32;
                 if length < 0 || args.r9 as u32 != 0 {
@@ -576,6 +589,219 @@ fn register_host_identity(registry: &mut ImportRegistry, state: &Arc<ServicesSta
                 Some(ip) => Ok(u64::from(u32::from_le_bytes(ip.octets()))),
                 None => Ok(u64::from(u32::MAX)),
             }
+        },
+    );
+}
+
+fn register_lifecycle(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    let shutdown = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "shutdown",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let _ = memory;
+            let result = (|| {
+                let mut net = shutdown.winsock.lock().expect("guest Winsock state");
+                if net.socket(args.rcx)?.peer.is_none() {
+                    return Err(WSAENOTCONN);
+                }
+                let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                match args.rdx as i32 {
+                    0 => socket.shutdown_receive = true,
+                    1 => socket.shutdown_send = true,
+                    2 => {
+                        socket.shutdown_receive = true;
+                        socket.shutdown_send = true;
+                    }
+                    _ => return Err(WSAEINVAL),
+                }
+                shutdown.winsock_changed.notify_all();
+                Ok(0)
+            })();
+            socket_result(&shutdown, cpu.gs_base, result)
+        },
+    );
+
+    // The options the loopback model stores. They are vacuous - loopback
+    // datagrams have no broadcast domain to permit and no port sharing to
+    // relax - but they are stored honestly rather than silently dropped,
+    // and getsockopt can grow to report them.
+    let setsockopt = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "setsockopt",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            const SO_REUSEADDR: u32 = 0x0004;
+            const SO_BROADCAST: u32 = 0x0020;
+            let result = (|| {
+                let mut net = setsockopt.winsock.lock().expect("guest Winsock state");
+                net.socket(args.rcx)?;
+                if args.rdx as u32 != 0xffff {
+                    return Err(WSAENOPROTOOPT);
+                }
+                let length = args.get(4, memory).map_err(|_| WSAEFAULT)? as i32;
+                if args.r9 == 0 || length < 4 {
+                    return Err(WSAEFAULT);
+                }
+                let value = memory.read_u32(args.r9).map_err(|_| WSAEFAULT)? != 0;
+                let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                match args.r8 as u32 {
+                    SO_REUSEADDR => socket.reuse_address = value,
+                    SO_BROADCAST => socket.broadcast = value,
+                    _ => return Err(WSAENOPROTOOPT),
+                }
+                Ok(0)
+            })();
+            socket_result(&setsockopt, cpu.gs_base, result)
+        },
+    );
+}
+
+// select uses the Winsock fd_set layout: a u32 count followed by the socket
+// handles at offset 8, filtered in place. Readiness mirrors WSAPoll.
+fn register_select(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    const MAX_SELECT_MS: u64 = 1_000;
+    const FD_SETSIZE: usize = 64;
+
+    let select_state = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "select",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let result = (|| {
+                let mut net = select_state.winsock.lock().expect("guest Winsock state");
+                if net.refs == 0 {
+                    return Err(WSANOTINITIALISED);
+                }
+                let read_set = args.rdx;
+                let write_set = args.r8;
+                if read_set == 0 && write_set == 0 {
+                    return Err(WSAEINVAL);
+                }
+                // The timeout is seconds and microseconds, null meaning
+                // infinite - which the single-executor machine caps like
+                // WSAPoll does rather than deadlocking the guest.
+                let mut timeout_ms = MAX_SELECT_MS;
+                let timeout_address = args.get(4, memory).map_err(|_| WSAEFAULT)?;
+                if timeout_address != 0 {
+                    let seconds = memory.read_u64(timeout_address).map_err(|_| WSAEFAULT)?;
+                    let micros = memory
+                        .read_u64(timeout_address + 8)
+                        .map_err(|_| WSAEFAULT)?;
+                    timeout_ms = (seconds * 1_000 + micros / 1_000).min(MAX_SELECT_MS);
+                }
+                let read_handles = |memory: &GuestMemory| -> Result<Vec<u64>, u32> {
+                    if read_set == 0 {
+                        return Ok(Vec::new());
+                    }
+                    let count = memory.read_u32(read_set).map_err(|_| WSAEFAULT)? as usize;
+                    if count > FD_SETSIZE {
+                        return Err(WSAEINVAL);
+                    }
+                    let mut handles = Vec::with_capacity(count);
+                    for index in 0..count {
+                        handles.push(
+                            memory
+                                .read_u64(read_set + 8 + index as u64 * 8)
+                                .map_err(|_| WSAEFAULT)?,
+                        );
+                    }
+                    Ok(handles)
+                };
+                let write_handles = |memory: &GuestMemory| -> Result<Vec<u64>, u32> {
+                    if write_set == 0 {
+                        return Ok(Vec::new());
+                    }
+                    let count = memory.read_u32(write_set).map_err(|_| WSAEFAULT)? as usize;
+                    if count > FD_SETSIZE {
+                        return Err(WSAEINVAL);
+                    }
+                    let mut handles = Vec::with_capacity(count);
+                    for index in 0..count {
+                        handles.push(
+                            memory
+                                .read_u64(write_set + 8 + index as u64 * 8)
+                                .map_err(|_| WSAEFAULT)?,
+                        );
+                    }
+                    Ok(handles)
+                };
+                let reads = read_handles(memory)?;
+                let writes = write_handles(memory)?;
+                if read_set != 0 {
+                    memory
+                        .check_write(read_set, 8 + reads.len() * 8)
+                        .map_err(|_| WSAEFAULT)?;
+                }
+                if write_set != 0 {
+                    memory
+                        .check_write(write_set, 8 + writes.len() * 8)
+                        .map_err(|_| WSAEFAULT)?;
+                }
+                let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+                let (ready_reads, ready_writes) = loop {
+                    let readable = |net: &Winsock, handle: u64| {
+                        net.sockets.get(&handle).is_some_and(|socket| {
+                            !socket.pending.is_empty() && !socket.shutdown_receive
+                        })
+                    };
+                    let writable = |net: &Winsock, handle: u64| {
+                        net.sockets.get(&handle).is_some_and(|socket| {
+                            !socket.shutdown_send
+                                && socket.peer.is_none_or(|peer| {
+                                    !net.sockets.values().any(|target| {
+                                        target.port == Some(peer)
+                                            && target.pending.len() == MAX_PENDING_DATAGRAMS
+                                    })
+                                })
+                        })
+                    };
+                    let ready_reads: Vec<u64> = reads
+                        .iter()
+                        .copied()
+                        .filter(|&h| readable(&net, h))
+                        .collect();
+                    let ready_writes: Vec<u64> = writes
+                        .iter()
+                        .copied()
+                        .filter(|&h| writable(&net, h))
+                        .collect();
+                    let remaining = deadline.saturating_duration_since(Instant::now());
+                    if !ready_reads.is_empty() || !ready_writes.is_empty() || remaining.is_zero() {
+                        break (ready_reads, ready_writes);
+                    }
+                    (net, _) = select_state
+                        .winsock_changed
+                        .wait_timeout(net, remaining)
+                        .expect("guest Winsock state");
+                };
+                // Each set reports only its ready sockets, in place.
+                if read_set != 0 {
+                    memory
+                        .write_u32(read_set, ready_reads.len() as u32)
+                        .map_err(|_| WSAEFAULT)?;
+                    for (index, handle) in ready_reads.iter().enumerate() {
+                        memory
+                            .write_u64(read_set + 8 + index as u64 * 8, *handle)
+                            .map_err(|_| WSAEFAULT)?;
+                    }
+                }
+                if write_set != 0 {
+                    memory
+                        .write_u32(write_set, ready_writes.len() as u32)
+                        .map_err(|_| WSAEFAULT)?;
+                    for (index, handle) in ready_writes.iter().enumerate() {
+                        memory
+                            .write_u64(write_set + 8 + index as u64 * 8, *handle)
+                            .map_err(|_| WSAEFAULT)?;
+                    }
+                }
+                Ok((ready_reads.len() + ready_writes.len()) as u64)
+            })();
+            socket_result(&select_state, cpu.gs_base, result)
         },
     );
 }
@@ -957,5 +1183,113 @@ fn sendto_recvfrom_hostname_and_inet_addr() {
     assert_eq!(
         call(&mut memory, "inet_addr", &[0x1800]),
         u64::from(u32::MAX)
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn select_readiness_shutdown_and_socket_options() {
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::MemoryPermissions;
+    use crate::services::MockClock;
+
+    let mut registry = ImportRegistry::new();
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    register(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region(0x1000, 8192, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let call = |memory: &mut GuestMemory, symbol: &str, args: &[u64]| {
+        let mut cpu = CpuState::default();
+        for (reg, &value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args)
+        {
+            cpu.set(reg, value);
+        }
+        cpu.set(Register::Rsp, 0x2000);
+        for (index, &value) in args.iter().enumerate().skip(4) {
+            memory
+                .write_u64(0x2000 + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        let descriptor = registry
+            .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    };
+    assert_eq!(call(&mut memory, "WSAStartup", &[0x0202, 0x1000]), 0);
+    let server = call(&mut memory, "socket", &[2, 2, 17]);
+    let client = call(&mut memory, "socket", &[2, 2, 17]);
+    let mut address = [0; 16];
+    address[..8].copy_from_slice(&[2, 0, 0x13, 0x88, 127, 0, 0, 1]);
+    memory.write_bytes(0x1200, &address).unwrap();
+    assert_eq!(call(&mut memory, "bind", &[server, 0x1200, 16]), 0);
+    // select on an idle socket times out to zero ready within the cap.
+    memory.write_bytes(0x1800, b"go").unwrap();
+    // The read set: count 1, then the server handle at offset 8.
+    memory.write_u32(0x1900, 1).unwrap();
+    memory.write_u64(0x1908, server).unwrap();
+    memory.write_u64(0x1a00, 0).unwrap(); // timeout: 0 sec 0 usec = poll once
+    memory.write_u64(0x1a08, 0).unwrap();
+    assert_eq!(call(&mut memory, "select", &[0, 0x1900, 0, 0, 0x1a00]), 0);
+    // A datagram arriving makes the server readable.
+    assert_eq!(
+        call(&mut memory, "sendto", &[client, 0x1800, 2, 0, 0x1200, 16]),
+        2
+    );
+    memory.write_u32(0x1900, 1).unwrap();
+    memory.write_u64(0x1908, server).unwrap();
+    assert_eq!(call(&mut memory, "select", &[0, 0x1900, 0, 0, 0x1a00]), 1);
+    assert_eq!(
+        memory.read_u32(0x1900).unwrap(),
+        1,
+        "one ready handle reported"
+    );
+    assert_eq!(memory.read_u64(0x1908).unwrap(), server);
+    // shutdown requires a connected socket.
+    assert_eq!(call(&mut memory, "shutdown", &[server, 2]), SOCKET_ERROR);
+    assert_eq!(
+        call(&mut memory, "WSAGetLastError", &[]),
+        u64::from(WSAENOTCONN)
+    );
+    // Connect the client, then shutdown both directions.
+    memory.write_u8(0x1202, 0x13).unwrap();
+    memory.write_u8(0x1203, 0x88).unwrap();
+    assert_eq!(call(&mut memory, "connect", &[client, 0x1200, 16]), 0);
+    assert_eq!(call(&mut memory, "shutdown", &[client, 1]), 0);
+    memory.write_bytes(0x1800, b"xx").unwrap();
+    assert_eq!(
+        call(&mut memory, "send", &[client, 0x1800, 2, 0]),
+        SOCKET_ERROR
+    );
+    assert_eq!(
+        call(&mut memory, "WSAGetLastError", &[]),
+        u64::from(WSAESHUTDOWN)
+    );
+    // setsockopt stores the vacuous options and refuses the rest.
+    memory.write_u32(0x1b00, 1).unwrap();
+    assert_eq!(
+        call(
+            &mut memory,
+            "setsockopt",
+            &[client, 0xffff, 0x20, 0x1b00, 4]
+        ),
+        0
+    );
+    assert_eq!(
+        call(
+            &mut memory,
+            "setsockopt",
+            &[client, 0xffff, 0x9999, 0x1b00, 4]
+        ),
+        SOCKET_ERROR
+    );
+    assert_eq!(
+        call(&mut memory, "WSAGetLastError", &[]),
+        u64::from(WSAENOPROTOOPT)
     );
 }
