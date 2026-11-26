@@ -261,4 +261,9 @@ pub(super) fn register(registry: &mut ImportRegistry) {
     ] {
         registry.alias(api_set, UCRT, symbol);
     }
+    // The legacy CRT exports the same memory, string and environment forms
+    // under the same names, as it does for the forms crt.rs serves.
+    for symbol in ["memchr", "strchr", "getenv"] {
+        registry.alias("msvcrt.dll", UCRT, symbol);
+    }
 }
