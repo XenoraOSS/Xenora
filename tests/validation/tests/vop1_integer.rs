@@ -829,12 +829,15 @@ fn swap_scalar_sources_fail_to_decode() {
 #[test]
 fn other_vop1_opcodes_stay_unsupported() {
     // Every VOP1 opcode (0-255) except V_MOV_B32 (1, supported before this
-    // set), the binary32 rounding forms (33-36, tests/vop1_float_rounding.rs)
-    // and these six must be refused at the ALU word. VDST and SRC0 are
+    // set), the integer to binary32 conversions (5, 6 and 17-20,
+    // tests/vop1_int_to_float.rs), the binary32 rounding forms (33-36,
+    // tests/vop1_float_rounding.rs) and these six must be refused at the ALU word. VDST and SRC0 are
     // initialized, so a form that reads only those cannot fail on them; other
     // prerequisites (M0 for the relative moves) are not set up, and the offset
     // alone does not say why a form was refused.
-    let supported = [1, 33, 34, 35, 36, 55, 56, 57, 58, 59, SWAP];
+    let supported = [
+        1, 5, 6, 17, 18, 19, 20, 33, 34, 35, 36, 55, 56, 57, 58, 59, SWAP,
+    ];
     let mut setup = vmov(3, 7).to_vec();
     setup.extend(vmov(2, 5));
     for op in (0..=255).filter(|op| !supported.contains(op)) {

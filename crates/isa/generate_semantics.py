@@ -61,6 +61,14 @@ CONTROL_OPERATIONS = {
     "wait_load": ("WaitLoad", "sopp_wait", None),
 }
 
+# VOP1 integer to binary32 conversions (guide 12.8, pages 138-139; #785).
+# The source is a signed or unsigned integer, or one unsigned byte of it.
+CONVERSIONS = {
+    "cvt_f32": "ConvertToF32",
+    "cvt_f32_ubyte0": "ConvertByte0ToF32", "cvt_f32_ubyte1": "ConvertByte1ToF32",
+    "cvt_f32_ubyte2": "ConvertByte2ToF32", "cvt_f32_ubyte3": "ConvertByte3ToF32",
+}
+
 OPERATIONS = {
     **{name: variant for name, (variant, _, _) in CONTROL_OPERATIONS.items()},
     "add": "Add", "sub": "Sub", "and": "And", "or": "Or", "xor": "Xor",
@@ -82,6 +90,8 @@ OPERATIONS = {
     # and MSL lowering implement.
     "image_sample_lz": "ImageSampleLz",
     "image_sample_l": "ImageSampleL",
+    # VOP1 integer to binary32 conversions (#785, coordination note on #215).
+    **CONVERSIONS,
 }
 # MIMG image operations. Their operand rule has kind "image"; behaviour comes
 # from the MIMG contract (docs/shaders/mimg.md), not from a primitive function.
@@ -90,6 +100,7 @@ IMAGE_OPERATIONS = {"image_sample_lz", "image_sample_l"}
 UNARY = {
     "not", "brev", "bcnt0", "bcnt1", "ff0", "ff1", "flbit", "sext", "abs",
     "trunc", "ceil", "rndne", "floor",
+    *CONVERSIONS,
 }
 # Binary32 rounding to an integral value (guide 12.8). They take float operands only.
 FLOAT_ROUNDING = {"trunc", "ceil", "rndne", "floor"}
@@ -374,6 +385,13 @@ VECTOR_UNARY_PRIMITIVES = {
     ("ceil", "float"): "CeilingF32",
     ("rndne", "float"): "RoundNearestEvenF32",
     ("floor", "float"): "FloorF32",
+    # Integer to binary32 conversions (#785).
+    ("cvt_f32", "signed"): "ConvertI32ToF32",
+    ("cvt_f32", "unsigned"): "ConvertU32ToF32",
+    ("cvt_f32_ubyte0", "unsigned"): "ConvertUbyte0ToF32",
+    ("cvt_f32_ubyte1", "unsigned"): "ConvertUbyte1ToF32",
+    ("cvt_f32_ubyte2", "unsigned"): "ConvertUbyte2ToF32",
+    ("cvt_f32_ubyte3", "unsigned"): "ConvertUbyte3ToF32",
 }
 
 OPERAND_RULES = {

@@ -287,6 +287,12 @@ impl Op {
                     | VectorUnary::CeilingF32
                     | VectorUnary::RoundNearestEvenF32
                     | VectorUnary::FloorF32 => float_rounding_expression(op, &src),
+                    VectorUnary::ConvertI32ToF32
+                    | VectorUnary::ConvertU32ToF32
+                    | VectorUnary::ConvertUbyte0ToF32
+                    | VectorUnary::ConvertUbyte1ToF32
+                    | VectorUnary::ConvertUbyte2ToF32
+                    | VectorUnary::ConvertUbyte3ToF32 => int_to_f32_expression(op, &src),
                 }
             }
             Self::Binary(operator, left, right) => {
@@ -778,6 +784,12 @@ pub fn compile_with(
                     VectorUnary::CeilingF32 => "ceil.f32",
                     VectorUnary::RoundNearestEvenF32 => "rndne.f32",
                     VectorUnary::FloorF32 => "floor.f32",
+                    VectorUnary::ConvertI32ToF32 => "cvt.f32.i32",
+                    VectorUnary::ConvertU32ToF32 => "cvt.f32.u32",
+                    VectorUnary::ConvertUbyte0ToF32 => "cvt.f32.ubyte0",
+                    VectorUnary::ConvertUbyte1ToF32 => "cvt.f32.ubyte1",
+                    VectorUnary::ConvertUbyte2ToF32 => "cvt.f32.ubyte2",
+                    VectorUnary::ConvertUbyte3ToF32 => "cvt.f32.ubyte3",
                 };
                 (
                     format!("{dest} = {mnemonic} {source}"),
@@ -2571,6 +2583,55 @@ fn float_rounding_expression(op: VectorUnary, src: &str) -> String {
     )
 }
 
+/// MSL for an integer to binary32 conversion, on the register bits only, as
+/// for the rounding forms: no Metal float conversion runs, so its rounding
+/// mode and fast math cannot change a result. For a nonzero magnitude `m`
+/// with its highest set bit `e`, below 2^24 the value is exact: the exponent
+/// field `e + 126` plus `m` shifted so bit `e` lands on bit 23 (the implicit
+/// one carries the exponent to `e + 127`). From 2^24 the `s = e - 23` low bits
+/// are dropped and the kept part rounds to nearest, ties to even
+/// (MODE.FP_ROUND[1:0] = 0, the pinned mode); a carry out of 24 bits moves
+/// into the next binade. A signed source converts its magnitude (`0 - S0`
+/// for a negative S0, which is also right for INT_MIN) and keeps the sign.
+fn int_to_f32_expression(op: VectorUnary, src: &str) -> String {
+    let (sign, magnitude) = match op {
+        VectorUnary::ConvertI32ToF32 => (
+            Some(format!("({src} & 0x80000000u)")),
+            format!("(({src} & 0x80000000u) != 0u ? 0u - {src} : {src})"),
+        ),
+        VectorUnary::ConvertU32ToF32 => (None, src.to_owned()),
+        VectorUnary::ConvertUbyte0ToF32 => (None, format!("({src} & 0xffu)")),
+        VectorUnary::ConvertUbyte1ToF32 => (None, format!("(({src} >> 8u) & 0xffu)")),
+        VectorUnary::ConvertUbyte2ToF32 => (None, format!("(({src} >> 16u) & 0xffu)")),
+        VectorUnary::ConvertUbyte3ToF32 => (None, format!("({src} >> 24u)")),
+        _ => unreachable!("not an integer to binary32 conversion"),
+    };
+    let m = magnitude;
+    let e = format!("(31u - clz({m}))");
+    let exponent = format!("(({e} + 126u) << 23u)");
+    let exact = format!("({exponent} + ({m} << ((23u - {e}) & 31u)))");
+    let converted = if matches!(
+        op,
+        VectorUnary::ConvertI32ToF32 | VectorUnary::ConvertU32ToF32
+    ) {
+        let s = format!("(({e} - 23u) & 31u)");
+        let kept = format!("({m} >> {s})");
+        let dropped = format!("({m} & ((1u << {s}) - 1u))");
+        let half = format!("(1u << (({s} - 1u) & 31u))");
+        let rounded = format!(
+            "({exponent} + {kept} + (({dropped} > {half} || ({dropped} == {half} && ({kept} & 1u) != 0u)) ? 1u : 0u))"
+        );
+        format!("({m} == 0u ? 0u : {m} < 0x01000000u ? {exact} : {rounded})")
+    } else {
+        // A byte is below 2^8, so every result is exact.
+        format!("({m} == 0u ? 0u : {exact})")
+    };
+    match sign {
+        Some(sign) => format!("{sign} | {converted}"),
+        None => converted,
+    }
+}
+
 fn eval_unary(operator: VectorUnary, source: u32) -> Option<u32> {
     Some(match operator {
         // Not folded: constant sources still run the MSL above, so the
@@ -2578,7 +2639,13 @@ fn eval_unary(operator: VectorUnary, source: u32) -> Option<u32> {
         VectorUnary::TruncateF32
         | VectorUnary::CeilingF32
         | VectorUnary::RoundNearestEvenF32
-        | VectorUnary::FloorF32 => return None,
+        | VectorUnary::FloorF32
+        | VectorUnary::ConvertI32ToF32
+        | VectorUnary::ConvertU32ToF32
+        | VectorUnary::ConvertUbyte0ToF32
+        | VectorUnary::ConvertUbyte1ToF32
+        | VectorUnary::ConvertUbyte2ToF32
+        | VectorUnary::ConvertUbyte3ToF32 => return None,
         VectorUnary::Not => !source,
         VectorUnary::ReverseBits => source.reverse_bits(),
         VectorUnary::FindHighUnsigned => {
@@ -2790,6 +2857,19 @@ mod tests {
             let expression = Op::Unary(operation, Value(0)).expression(&|v| v.to_string(), "", "");
             assert!(!expression.contains("as_type"), "float op in {operation:?}");
             assert!(eval_unary(operation, 0x3fc0_0000).is_none());
+        }
+        for operation in [
+            VectorUnary::ConvertI32ToF32,
+            VectorUnary::ConvertU32ToF32,
+            VectorUnary::ConvertUbyte0ToF32,
+            VectorUnary::ConvertUbyte1ToF32,
+            VectorUnary::ConvertUbyte2ToF32,
+            VectorUnary::ConvertUbyte3ToF32,
+        ] {
+            let expression = Op::Unary(operation, Value(0)).expression(&|v| v.to_string(), "", "");
+            assert!(!expression.contains("as_type"), "float op in {operation:?}");
+            assert!(!expression.contains("float"), "float op in {operation:?}");
+            assert!(eval_unary(operation, 0x0100_0001).is_none());
         }
     }
 

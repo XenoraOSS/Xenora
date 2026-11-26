@@ -2427,6 +2427,78 @@ decoded = true
 llvm = "three-way passed"
 
 [[instruction]]
+form = "v_cvt_f32_i32_e32"
+encoding = "VOP1, Wave32; VGPR VDST with VGPR, normal SGPR, vcc_lo, inline integer or literal SRC0; D = (float)S0.i, rounded to nearest even above 2^24 (MODE.FP_ROUND pinned to nearest even)"
+representation = "`7E040B01`"
+lowering = "per-thread integer bit operations producing the binary32 bits, with a lane merge under partial EXEC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cvt_f32_u32_e32"
+encoding = "VOP1, Wave32; VGPR VDST with VGPR, normal SGPR, vcc_lo, inline integer or literal SRC0; D = (float)S0.u, rounded to nearest even above 2^24 (MODE.FP_ROUND pinned to nearest even)"
+representation = "`7E040D01`"
+lowering = "per-thread integer bit operations producing the binary32 bits, with a lane merge under partial EXEC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cvt_f32_ubyte0_e32"
+encoding = "VOP1, Wave32; VGPR VDST with VGPR, normal SGPR, vcc_lo, inline integer or literal SRC0; D = (float)S0.u[7:0], exact"
+representation = "`7E042301`"
+lowering = "per-thread integer bit operations producing the binary32 bits, with a lane merge under partial EXEC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cvt_f32_ubyte1_e32"
+encoding = "VOP1, Wave32; VGPR VDST with VGPR, normal SGPR, vcc_lo, inline integer or literal SRC0; D = (float)S0.u[15:8], exact"
+representation = "`7E042501`"
+lowering = "per-thread integer bit operations producing the binary32 bits, with a lane merge under partial EXEC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cvt_f32_ubyte2_e32"
+encoding = "VOP1, Wave32; VGPR VDST with VGPR, normal SGPR, vcc_lo, inline integer or literal SRC0; D = (float)S0.u[23:16], exact"
+representation = "`7E042701`"
+lowering = "per-thread integer bit operations producing the binary32 bits, with a lane merge under partial EXEC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cvt_f32_ubyte3_e32"
+encoding = "VOP1, Wave32; VGPR VDST with VGPR, normal SGPR, vcc_lo, inline integer or literal SRC0; D = (float)S0.u[31:24], exact"
+representation = "`7E042901`"
+lowering = "per-thread integer bit operations producing the binary32 bits, with a lane merge under partial EXEC"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
 form = "v_cmp_f_f32_e32"
 encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = 0, fully written"
 representation = "`7C000702`"

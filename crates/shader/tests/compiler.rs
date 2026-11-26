@@ -587,6 +587,22 @@ fn vopc_f32_fixture_compares_binary32_bits_without_float_operations() {
     assert!(!compiled.msl.contains("as_type<float>") && !compiled.msl.contains("isnan"));
 }
 
+#[test]
+fn vop1_int_to_f32_fixture_lowers_to_integer_bit_operations() {
+    let code = include_bytes!("../../../fixtures/rdna2/vector-convert.bin");
+    let compiled = compile(Architecture::Gfx1030, code).unwrap();
+    assert_eq!(
+        compiled.ir,
+        include_str!("../../../fixtures/golden/vector-convert.ir")
+    );
+    assert_eq!(
+        compiled.msl,
+        include_str!("../../../fixtures/golden/vector-convert.metal")
+    );
+    // No Metal float conversion: its rounding mode and fast math cannot apply.
+    assert!(!compiled.msl.contains("as_type") && !compiled.msl.contains("float"));
+}
+
 // --- Opt-in constant folding: hand-computed known-answer fixtures -------------
 // Instruction words are built by hand to match the existing RDNA2 fixture shape
 // (load, wait, mov literals, op, store). Expected constants are derived from the
@@ -1710,6 +1726,7 @@ fn cse_leaves_every_golden_fixture_unchanged() {
     golden!("vector-integer");
     golden!("vector-unary");
     golden!("vector-round");
+    golden!("vector-convert");
 }
 
 /// 1 + 2 = 3, and the same add twice, then and the load with each sum.
