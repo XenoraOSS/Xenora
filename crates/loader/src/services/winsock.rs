@@ -225,6 +225,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     register_loopback(registry, state);
     register_socket_names(registry, state);
     register_socket_options(registry, state);
+    register_ioctl_and_reverse(registry, state);
     register_streams(registry, state);
     register_datagrams(registry, state);
     register_host_identity(registry, state);
@@ -545,6 +546,120 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                 Ok(copied as u64)
             })();
             socket_result(&recv, cpu.gs_base, result)
+        },
+    );
+}
+
+fn register_ioctl_and_reverse(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    // WSAIoctl serves the queries with real answers in this model: FIONREAD
+    // reports the bytes a recv could return now - the stream fifo length or
+    // the first pending datagram's size. FIONBIO is vacuous: every socket
+    // of the machine is already nonblocking, so enabling is success and
+    // disabling is honestly impossible. Everything else refuses.
+    let ioctl = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WSAIoctl",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            const FIONREAD: u32 = 0x4004_667F;
+            const FIONBIO: u32 = 0x8004_667E;
+            let result = (|| {
+                let net = ioctl.winsock.lock().expect("guest Winsock state");
+                let socket = net.socket(args.rcx)?;
+                match args.rdx as u32 {
+                    FIONREAD => {
+                        if args.get(4, memory).map_err(|_| WSAEFAULT)? == 0 {
+                            return Err(WSAEFAULT);
+                        }
+                        let bytes = if socket.stream {
+                            socket.stream_read.len() as u32
+                        } else {
+                            socket
+                                .pending
+                                .front()
+                                .map_or(0, |(_, data)| data.len() as u32)
+                        };
+                        memory
+                            .write_u32(args.get(4, memory).map_err(|_| WSAEFAULT)?, bytes)
+                            .map_err(|_| WSAEFAULT)?;
+                        Ok(0)
+                    }
+                    FIONBIO => {
+                        if args.r8 == 0 {
+                            return Err(WSAEFAULT);
+                        }
+                        let enable = memory.read_u32(args.r8).map_err(|_| WSAEFAULT)? != 0;
+                        // Every socket of the machine is nonblocking by
+                        // construction: enabling is the truth, disabling
+                        // cannot be served.
+                        if enable { Ok(0) } else { Err(WSAEINVAL) }
+                    }
+                    _ => Err(WSAEINVAL),
+                }
+            })();
+            socket_result(&ioctl, cpu.gs_base, result)
+        },
+    );
+
+    // gethostbyaddr reverses the loopback address into the machine's one
+    // name, in heap-owned storage reused across calls - the static-storage
+    // contract of the legacy form. Anything but the loopback is an honest
+    // no-host.
+    let reverse = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "gethostbyaddr",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            use crate::memory::PROCESS_HEAP;
+            let result = (|| {
+                if reverse.winsock.lock().expect("guest Winsock state").refs == 0 {
+                    return Err(WSANOTINITIALISED);
+                }
+                if args.rcx == 0 || args.rdx != 4 || args.r8 as u32 != 2 {
+                    return Err(WSAEFAULT);
+                }
+                let mut ip = [0; 4];
+                memory
+                    .read_bytes(args.rcx, &mut ip)
+                    .map_err(|_| WSAEFAULT)?;
+                if ip != [127, 0, 0, 1] {
+                    return Err(11001); // WSAHOST_NOT_FOUND
+                }
+                // hostent: name ptr, aliases, addrtype, length, addr_list.
+                // One reused allocation: struct, name, address, list.
+                let needs = 64;
+                let base = memory
+                    .map_heap_allocation(PROCESS_HEAP, needs)
+                    .map_err(|_| WSAENOBUFS)?;
+                let name = b"XENORA\0";
+                memory.write_bytes(base + 32, name).map_err(|_| WSAEFAULT)?;
+                memory
+                    .write_bytes(base + 40, &[127, 0, 0, 1])
+                    .map_err(|_| WSAEFAULT)?;
+                // addr_list: pointer at base+48 then null at base+56.
+                memory
+                    .write_u64(base + 48, base + 40)
+                    .map_err(|_| WSAEFAULT)?;
+                memory.write_u64(base + 56, 0).map_err(|_| WSAEFAULT)?;
+                memory.write_u64(base, base + 32).map_err(|_| WSAEFAULT)?; // h_name
+                memory
+                    .write_u64(base + 8, base + 56)
+                    .map_err(|_| WSAEFAULT)?; // aliases: null list
+                memory.write_u64(base + 16, 2).map_err(|_| WSAEFAULT)?; // addrtype AF_INET (+length packed)
+                memory
+                    .write_u64(base + 24, base + 48)
+                    .map_err(|_| WSAEFAULT)?; // h_addr_list
+                Ok(base)
+            })();
+            match result {
+                Ok(value) => Ok(value),
+                Err(error) => {
+                    let _ = reverse.fail(cpu.gs_base, error, 0);
+                    Ok(0)
+                }
+            }
         },
     );
 }
@@ -2058,4 +2173,95 @@ fn loopback_streams_connect_accept_exchange_and_close() {
         call(&mut memory, "WSAGetLastError", &[]),
         u64::from(WSAECONNREFUSED)
     );
+}
+
+#[cfg(test)]
+#[test]
+fn wsioctl_fionread_and_reverse_lookup() {
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::MemoryPermissions;
+    use crate::services::MockClock;
+
+    let mut registry = ImportRegistry::new();
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    register(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region(0x1000, 8192, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let call = |memory: &mut GuestMemory, symbol: &str, args: &[u64]| {
+        let mut cpu = CpuState::default();
+        for (reg, &value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args)
+        {
+            cpu.set(reg, value);
+        }
+        cpu.set(Register::Rsp, 0x2000);
+        for (index, &value) in args.iter().enumerate().skip(4) {
+            memory
+                .write_u64(0x2000 + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        let descriptor = registry
+            .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    };
+    assert_eq!(call(&mut memory, "WSAStartup", &[0x0202, 0x1000]), 0);
+    // FIONREAD reports the stream fifo length.
+    let listener = call(&mut memory, "socket", &[2, 1, 6]);
+    let client = call(&mut memory, "socket", &[2, 1, 6]);
+    let mut address = [0; 16];
+    address[..8].copy_from_slice(&[2, 0, 0x1F, 0x92, 127, 0, 0, 1]);
+    memory.write_bytes(0x1200, &address).unwrap();
+    assert_eq!(call(&mut memory, "bind", &[listener, 0x1200, 16]), 0);
+    assert_eq!(call(&mut memory, "listen", &[listener, 4]), 0);
+    assert_eq!(call(&mut memory, "connect", &[client, 0x1200, 16]), 0);
+    let server = call(&mut memory, "accept", &[listener, 0, 0]);
+    memory.write_bytes(0x1500, b"12345").unwrap();
+    assert_eq!(call(&mut memory, "send", &[client, 0x1500, 5, 0]), 5);
+    const FIONREAD: u64 = 0x4004_667F;
+    assert_eq!(
+        call(
+            &mut memory,
+            "WSAIoctl",
+            &[server, FIONREAD, 0, 0, 0x1700, 4, 0x1710, 0, 0]
+        ),
+        0
+    );
+    assert_eq!(memory.read_u32(0x1700).unwrap(), 5, "fifo length reported");
+    // FIONBIO enabling is the truth; disabling is honest refusal.
+    const FIONBIO: u64 = 0x8004_667E;
+    memory.write_u32(0x1710, 1).unwrap();
+    assert_eq!(
+        call(
+            &mut memory,
+            "WSAIoctl",
+            &[server, FIONBIO, 0x1710, 4, 0x1720, 4, 0x1730, 0, 0]
+        ),
+        0
+    );
+    memory.write_u32(0x1710, 0).unwrap();
+    assert_eq!(
+        call(
+            &mut memory,
+            "WSAIoctl",
+            &[server, FIONBIO, 0x1710, 4, 0x1720, 4, 0x1730, 0, 0]
+        ),
+        SOCKET_ERROR
+    );
+    // The loopback reverses into the machine's one name.
+    memory.write_bytes(0x1800, &[127, 0, 0, 1]).unwrap();
+    let hostent = call(&mut memory, "gethostbyaddr", &[0x1800, 4, 2]);
+    assert_ne!(hostent, 0);
+    let name_ptr = memory.read_u64(hostent).unwrap();
+    let mut name = [0; 7];
+    memory.read_bytes(name_ptr, &mut name).unwrap();
+    assert_eq!(&name, b"XENORA\0");
+    // A foreign address is an honest no-host.
+    memory.write_bytes(0x1800, &[8, 8, 8, 8]).unwrap();
+    assert_eq!(call(&mut memory, "gethostbyaddr", &[0x1800, 4, 2]), 0);
 }
