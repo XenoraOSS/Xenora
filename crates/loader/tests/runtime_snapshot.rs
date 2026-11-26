@@ -24,6 +24,9 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "IsWow64Process"),
     (KERNEL32, "GetCurrentProcessId"),
     (KERNEL32, "GetProcessTimes"),
+    (KERNEL32, "OpenProcess"),
+    (KERNEL32, "ReadProcessMemory"),
+    (KERNEL32, "CreateRemoteThread"),
 ];
 
 const ENTRY: u64 = SCRATCH;
@@ -109,4 +112,47 @@ fn the_process_times_of_the_one_process() {
         guest.call("GetProcessTimes", &[0xDEAD, CREATION, EXIT, KERNEL, USER]),
         0
     );
+}
+
+/// OpenProcess serves the machine's one process and no other, and
+/// ReadProcessMemory copies the guest memory exactly.
+#[test]
+fn open_process_and_read_process_memory_see_the_one_process() {
+    const SOURCE: u64 = SCRATCH + 0x900;
+    const TARGET: u64 = SCRATCH + 0xA00;
+    const COUNT: u64 = SCRATCH + 0xB00;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    // The machine's one process answers a real handle.
+    let process = guest.call("OpenProcess", &[0x1F0FFF, 0, 0x4100]);
+    assert_ne!(process, 0);
+    assert_ne!(process, u64::MAX);
+    // Any other id does not exist.
+    assert_eq!(guest.call("OpenProcess", &[0x1F0FFF, 0, 0x9999]), 0);
+    // Read the memory back exactly.
+    guest
+        .memory
+        .write_bytes(SOURCE, b"process-memory-check")
+        .unwrap();
+    assert_eq!(
+        guest.call("ReadProcessMemory", &[process, SOURCE, TARGET, 20, COUNT]),
+        1
+    );
+    assert_eq!(guest.u64_at(COUNT), 20);
+    let mut got = Vec::new();
+    for index in 0..20u64 {
+        got.push(guest.memory.read_u8(TARGET + index).unwrap());
+    }
+    assert_eq!(got, b"process-memory-check");
+    // A closed handle stops reading.
+    assert_eq!(guest.call("CloseHandle", &[process]), 1);
+    assert_eq!(
+        guest.call("ReadProcessMemory", &[process, SOURCE, TARGET, 4, COUNT]),
+        0
+    );
+    // The cross-process forms are honestly unsupported.
+    assert_eq!(
+        guest.call("CreateRemoteThread", &[process, 0, 0, 0, 0, 0, 0]),
+        u64::MAX
+    );
+    assert_eq!(guest.call("GetLastError", &[]) & 0xFFFF_FFFF, 50);
 }
