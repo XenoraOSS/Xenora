@@ -204,6 +204,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     register_datagrams(registry, state);
     register_host_identity(registry, state);
     register_lifecycle(registry, state);
+    register_adapters(registry, state);
     register_select(registry, state);
     register_poll(registry, state);
 
@@ -655,6 +656,114 @@ fn register_lifecycle(registry: &mut ImportRegistry, state: &Arc<ServicesState>)
                 Ok(0)
             })();
             socket_result(&setsockopt, cpu.gs_base, result)
+        },
+    );
+}
+
+fn register_adapters(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    // WSASocketA is the overlapped-capable creation form. The machine has
+    // no completion machinery, so the flags must be zero - anything else is
+    // honest refusal - and a zero-flag creation is exactly socket().
+    let wsasocket = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WSASocketA",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let result = (|| {
+                if args.get(3, memory).map_err(|_| WSAEFAULT)? != 0
+                    || args.get(4, memory).map_err(|_| WSAEFAULT)? != 0
+                    || args.get(5, memory).map_err(|_| WSAEFAULT)? != 0
+                {
+                    return Err(WSAEINVAL);
+                }
+                let mut net = wsasocket.winsock.lock().expect("guest Winsock state");
+                if net.refs == 0 {
+                    return Err(WSANOTINITIALISED);
+                }
+                if args.rcx as u32 != 2 {
+                    return Err(WSAEAFNOSUPPORT);
+                }
+                if args.rdx as u32 != 2 || args.r8 as u32 != 17 {
+                    return Err(WSAESOCKTNOSUPPORT);
+                }
+                if net.sockets.len() >= MAX_SOCKETS {
+                    return Err(WSAEMFILE);
+                }
+                net.serial += 4;
+                let handle = 0x5000_0000 + u64::from(net.serial);
+                net.sockets.insert(handle, Socket::default());
+                Ok(handle)
+            })();
+            match result {
+                Ok(value) => Ok(value),
+                Err(error) => wsasocket.fail(cpu.gs_base, error, INVALID_SOCKET),
+            }
+        },
+    );
+
+    // __WSAFDIsSet is the fd_set membership test the FD_SET macro expands
+    // to: linear scan of the count-prefixed handle array.
+    registry.register_with_status(
+        MODULE,
+        "__WSAFDIsSet",
+        ServiceStatus::Partial,
+        |args, _, memory| {
+            let count = memory.read_u32(args.rdx).map_err(ExitReason::MemoryFault)?;
+            for index in 0..count.min(64) {
+                if memory
+                    .read_u64(args.rdx + 8 + u64::from(index) * 8)
+                    .map_err(ExitReason::MemoryFault)?
+                    == args.rcx
+                {
+                    return Ok(1);
+                }
+            }
+            Ok(0)
+        },
+    );
+
+    // WSAAddressToStringA formats the loopback sockaddr_in in dotted
+    // decimal with its port - the one family the machine serves.
+    let addrtostr = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WSAAddressToStringA",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let result = (|| {
+                let mut data = [0; 16];
+                memory
+                    .read_bytes(args.rcx, &mut data)
+                    .map_err(|_| WSAEFAULT)?;
+                if u16::from_le_bytes([data[0], data[1]]) != 2 {
+                    return Err(WSAEAFNOSUPPORT);
+                }
+                let port = u16::from_be_bytes([data[2], data[3]]);
+                let text = format!("{}.{}.{}.{}:{}", data[4], data[5], data[6], data[7], port);
+                let length = args.get(4, memory).map_err(|_| WSAEFAULT)?;
+                if length == 0 {
+                    return Err(WSAEFAULT);
+                }
+                let capacity = memory.read_u32(length).map_err(|_| WSAEFAULT)? as usize;
+                if capacity < text.len() + 1 {
+                    memory
+                        .write_u32(length, text.len() as u32 + 1)
+                        .map_err(|_| WSAEFAULT)?;
+                    return Err(WSAEFAULT);
+                }
+                memory
+                    .write_bytes(args.r9, text.as_bytes())
+                    .map_err(|_| WSAEFAULT)?;
+                memory
+                    .write_u8(args.r9 + text.len() as u64, 0)
+                    .map_err(|_| WSAEFAULT)?;
+                memory
+                    .write_u32(length, text.len() as u32 + 1)
+                    .map_err(|_| WSAEFAULT)?;
+                Ok(0)
+            })();
+            socket_result(&addrtostr, cpu.gs_base, result)
         },
     );
 }
@@ -1292,4 +1401,71 @@ fn select_readiness_shutdown_and_socket_options() {
         call(&mut memory, "WSAGetLastError", &[]),
         u64::from(WSAENOPROTOOPT)
     );
+}
+
+#[cfg(test)]
+#[test]
+fn wsasocket_adapter_fdisset_and_address_formatting() {
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::MemoryPermissions;
+    use crate::services::MockClock;
+
+    let mut registry = ImportRegistry::new();
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    register(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region(0x1000, 8192, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let call = |memory: &mut GuestMemory, symbol: &str, args: &[u64]| {
+        let mut cpu = CpuState::default();
+        for (reg, &value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args)
+        {
+            cpu.set(reg, value);
+        }
+        cpu.set(Register::Rsp, 0x2000);
+        for (index, &value) in args.iter().enumerate().skip(4) {
+            memory
+                .write_u64(0x2000 + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        let descriptor = registry
+            .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    };
+    assert_eq!(call(&mut memory, "WSAStartup", &[0x0202, 0x1000]), 0);
+    // WSASocketA with zero flags creates; nonzero refuses honestly.
+    let handle = call(&mut memory, "WSASocketA", &[2, 2, 17, 0, 0, 0]);
+    assert!(handle != INVALID_SOCKET && handle != 0);
+    assert_eq!(
+        call(&mut memory, "WSASocketA", &[2, 2, 17, 1, 0, 0]),
+        INVALID_SOCKET
+    );
+    // __WSAFDIsSet scans the count-prefixed array.
+    memory.write_u32(0x1900, 2).unwrap();
+    memory.write_u64(0x1908, 111).unwrap();
+    memory.write_u64(0x1910, handle).unwrap();
+    assert_eq!(call(&mut memory, "__WSAFDIsSet", &[handle, 0x1900]), 1);
+    assert_eq!(call(&mut memory, "__WSAFDIsSet", &[222, 0x1900]), 0);
+    // WSAAddressToStringA formats family, dotted decimal and port.
+    let mut address = [0; 16];
+    address[..8].copy_from_slice(&[2, 0, 0x13, 0x88, 127, 0, 0, 1]);
+    memory.write_bytes(0x1200, &address).unwrap();
+    memory.write_u32(0x1a00, 64).unwrap();
+    assert_eq!(
+        call(
+            &mut memory,
+            "WSAAddressToStringA",
+            &[0x1200, 16, 0, 0x1b00, 0x1a00]
+        ),
+        0
+    );
+    let mut text = [0; 14];
+    memory.read_bytes(0x1b00, &mut text).unwrap();
+    assert_eq!(&text, b"127.0.0.1:5000");
 }
