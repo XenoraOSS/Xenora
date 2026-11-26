@@ -33,6 +33,7 @@ const WSAESOCKTNOSUPPORT: u32 = 10044;
 const WSAEOPNOTSUPP: u32 = 10045;
 const WSAENOPROTOOPT: u32 = 10042;
 const WSAESHUTDOWN: u32 = 10058;
+const WSAECONNREFUSED: u32 = 10061;
 const WSAEAFNOSUPPORT: u32 = 10047;
 const WSASYSNOTREADY: u32 = 10091;
 const WSAVERNOTSUPPORTED: u32 = 10092;
@@ -56,6 +57,17 @@ struct Socket {
     shutdown_send: bool,
     reuse_address: bool,
     broadcast: bool,
+    /// True for a byte-stream (TCP) socket rather than a datagram one.
+    stream: bool,
+    /// Backlog limit while listening, and the server-side handles waiting
+    /// for accept - in connect order, exactly the queue semantics.
+    listening: Option<usize>,
+    backlog: VecDeque<u64>,
+    /// The paired endpoint of a connected stream, its byte fifo, and the
+    /// orderly-shutdown flag the peer's close or shutdown raises.
+    stream_peer: Option<u64>,
+    stream_read: VecDeque<u8>,
+    stream_eof: bool,
 }
 
 impl Winsock {
@@ -166,12 +178,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         if args.rcx as u32 != 2 {
             return fail(WSAEAFNOSUPPORT);
         }
-        if args.rdx as u32 != 2 {
-            return fail(WSAESOCKTNOSUPPORT);
-        }
-        if !matches!(args.r8 as u32, 0 | 17) {
-            return fail(WSAEPROTONOSUPPORT);
-        }
+        let stream = match (args.rdx as u32, args.r8 as u32) {
+            (2, 0 | 17) => false,
+            (1, 0 | 6) => true,
+            (1, _) | (2, _) => return fail(WSAEPROTONOSUPPORT),
+            _ => return fail(WSAESOCKTNOSUPPORT),
+        };
         if net.sockets.len() >= MAX_SOCKETS {
             return fail(WSAEMFILE);
         }
@@ -180,7 +192,13 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         };
         net.serial = next;
         let socket = 0x5300_0000_0000_0000 | u64::from(next);
-        net.sockets.insert(socket, Socket::default());
+        net.sockets.insert(
+            socket,
+            Socket {
+                stream,
+                ..Socket::default()
+            },
+        );
         Ok(socket)
     });
 
@@ -190,8 +208,14 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         if net.refs == 0 {
             return close.fail(cpu.gs_base, WSANOTINITIALISED, SOCKET_ERROR);
         }
-        if net.sockets.remove(&args.rcx).is_none() {
+        let Some(removed) = net.sockets.remove(&args.rcx) else {
             return close.fail(cpu.gs_base, WSAENOTSOCK, SOCKET_ERROR);
+        };
+        if let Some(peer) = removed.stream_peer
+            && let Some(endpoint) = net.sockets.get_mut(&peer)
+        {
+            endpoint.stream_eof = true;
+            endpoint.stream_peer = None;
         }
         close.winsock_changed.notify_all();
         Ok(0)
@@ -201,6 +225,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     register_loopback(registry, state);
     register_socket_names(registry, state);
     register_socket_options(registry, state);
+    register_streams(registry, state);
     register_datagrams(registry, state);
     register_host_identity(registry, state);
     register_lifecycle(registry, state);
@@ -318,8 +343,66 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                 let mut net = state.winsock.lock().expect("guest Winsock state");
                 let result = (|| {
                     let socket = net.socket(args.rcx)?;
+                    let is_stream = socket.stream;
                     let existing = socket.port;
                     let requested = loopback_port(memory, args.rdx, args.r8 as u32)?;
+                    if connect && is_stream {
+                        // The loopback handshake: a listener at the target
+                        // port with backlog room accepts the connection into
+                        // its queue as a paired server endpoint.
+                        if socket.stream_peer.is_some() {
+                            return Err(WSAEINVAL);
+                        }
+                        let listener = net
+                            .sockets
+                            .values()
+                            .find(|socket| {
+                                socket.listening.is_some() && socket.port == Some(requested)
+                            })
+                            .is_some_and(|_| true);
+                        if !listener {
+                            return Err(WSAECONNREFUSED);
+                        }
+                        let backlog_full = net.sockets.values().any(|socket| {
+                            socket.listening.is_some()
+                                && socket.port == Some(requested)
+                                && socket.backlog.len() >= socket.listening.unwrap_or(1)
+                        });
+                        if backlog_full {
+                            return Err(WSAECONNREFUSED);
+                        }
+                        if net.sockets.len() + 1 >= MAX_SOCKETS {
+                            return Err(WSAEMFILE);
+                        }
+                        let local = match existing {
+                            Some(port) => port,
+                            None => net.port(0)?,
+                        };
+                        net.serial += 1;
+                        let server = 0x5300_0000_0000_0000 | u64::from(net.serial);
+                        net.sockets.insert(
+                            server,
+                            Socket {
+                                stream: true,
+                                port: Some(requested),
+                                stream_peer: Some(args.rcx),
+                                ..Socket::default()
+                            },
+                        );
+                        let client = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                        client.port = Some(local);
+                        client.stream_peer = Some(server);
+                        if let Some(listening) = net.sockets.values_mut().find(|socket| {
+                            socket.listening.is_some() && socket.port == Some(requested)
+                        }) {
+                            listening.backlog.push_back(server);
+                        }
+                        state.winsock_changed.notify_all();
+                        return Ok(0);
+                    }
+                    if connect && !is_stream && socket.stream_peer.is_some() {
+                        return Err(WSAEINVAL);
+                    }
                     if connect && requested == 0 || !connect && existing.is_some() {
                         return Err(WSAEINVAL);
                     }
@@ -353,6 +436,31 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                 let socket = net.socket(args.rcx)?;
                 if socket.shutdown_send {
                     return Err(WSAESHUTDOWN);
+                }
+                if socket.stream {
+                    // Byte stream: bytes append to the paired endpoint's
+                    // fifo within the flow-control window, no boundaries.
+                    let peer_handle = socket.stream_peer.ok_or(WSAENOTCONN)?;
+                    let length = args.r8 as i32;
+                    if length < 0 || args.r9 as u32 != 0 {
+                        return Err(WSAEINVAL);
+                    }
+                    let length = length as usize;
+                    let mut data = vec![0; length];
+                    if length != 0 {
+                        memory
+                            .read_bytes(args.rdx, &mut data)
+                            .map_err(|_| WSAEFAULT)?;
+                    }
+                    let Some(target) = net.sockets.get_mut(&peer_handle) else {
+                        return Err(WSAECONNREFUSED);
+                    };
+                    const STREAM_WINDOW: usize = 65_536;
+                    let room = STREAM_WINDOW.saturating_sub(target.stream_read.len());
+                    let accepted = room.min(length);
+                    target.stream_read.extend(data[..accepted].iter().copied());
+                    send.winsock_changed.notify_all();
+                    return Ok(accepted as u64);
                 }
                 let peer = socket.peer.ok_or(WSAENOTCONN)?;
                 let source = socket.port.expect("connected socket is bound");
@@ -403,6 +511,23 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                 if length < 0 || args.r9 as u32 != 0 {
                     return Err(WSAEINVAL);
                 }
+                if net.socket(args.rcx)?.stream {
+                    let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                    if socket.stream_read.is_empty() {
+                        if socket.stream_eof {
+                            // Orderly shutdown: zero bytes is the eof.
+                            return Ok(0);
+                        }
+                        return Err(WSAEWOULDBLOCK);
+                    }
+                    let copied = (length as usize).min(socket.stream_read.len());
+                    let data: Vec<u8> = socket.stream_read.drain(..copied).collect();
+                    if copied != 0 {
+                        memory.write_bytes(args.rdx, &data).map_err(|_| WSAEFAULT)?;
+                    }
+                    recv.winsock_changed.notify_all();
+                    return Ok(copied as u64);
+                }
                 let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
                 let (_, data) = socket.pending.front().ok_or(WSAEWOULDBLOCK)?;
                 let copied = (length as usize).min(data.len());
@@ -420,6 +545,87 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                 Ok(copied as u64)
             })();
             socket_result(&recv, cpu.gs_base, result)
+        },
+    );
+}
+
+fn register_streams(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    // listen marks a bound stream socket with its backlog limit. The queue
+    // is real: connect enqueues, accept dequeues, in order.
+    let listen = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "listen",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let _ = memory;
+            let result = (|| {
+                let mut net = listen.winsock.lock().expect("guest Winsock state");
+                let socket = net.socket(args.rcx)?;
+                if !socket.stream {
+                    return Err(WSAEOPNOTSUPP);
+                }
+                if socket.port.is_none() {
+                    return Err(WSAEINVAL);
+                }
+                if socket.stream_peer.is_some() {
+                    return Err(WSAEINVAL);
+                }
+                let backlog = (args.rdx as i32).clamp(1, 16) as usize;
+                let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                socket.listening = Some(backlog);
+                listen.winsock_changed.notify_all();
+                Ok(0)
+            })();
+            socket_result(&listen, cpu.gs_base, result)
+        },
+    );
+
+    // accept dequeues the oldest pending server endpoint, reporting the
+    // client address when asked.
+    let accept = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "accept",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let result = (|| {
+                let mut net = accept.winsock.lock().expect("guest Winsock state");
+                if net.socket(args.rcx)?.listening.is_none() {
+                    return Err(WSAEINVAL);
+                }
+                let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                let server = socket.backlog.pop_front().ok_or(WSAEWOULDBLOCK)?;
+                accept.winsock_changed.notify_all();
+                if args.rdx != 0 && args.r8 != 0 {
+                    // The client endpoint is the peer of the server socket;
+                    // report its loopback address.
+                    let client_port = net
+                        .sockets
+                        .get(&server)
+                        .and_then(|endpoint| endpoint.stream_peer)
+                        .and_then(|client| net.sockets.get(&client))
+                        .and_then(|client| client.port)
+                        .unwrap_or(0);
+                    let capacity = memory.read_u32(args.r8).map_err(|_| WSAEFAULT)? as i32;
+                    if capacity < 16 {
+                        return Err(WSAEFAULT);
+                    }
+                    let mut address = [0; 16];
+                    address[..2].copy_from_slice(&2_u16.to_le_bytes());
+                    address[2..4].copy_from_slice(&client_port.to_be_bytes());
+                    address[4..8].copy_from_slice(&[127, 0, 0, 1]);
+                    memory
+                        .write_bytes(args.rdx, &address)
+                        .map_err(|_| WSAEFAULT)?;
+                    memory.write_u32(args.r8, 16).map_err(|_| WSAEFAULT)?;
+                }
+                Ok(server)
+            })();
+            match result {
+                Ok(value) => Ok(value),
+                Err(error) => accept.fail(cpu.gs_base, error, INVALID_SOCKET),
+            }
         },
     );
 }
@@ -1756,4 +1962,100 @@ fn loopback_name_resolution_round_trips() {
     let mut text = [0; 10];
     memory.read_bytes(first, &mut text).unwrap();
     assert_eq!(&text[..10], b"127.0.0.1\0");
+}
+
+#[cfg(test)]
+#[test]
+fn loopback_streams_connect_accept_exchange_and_close() {
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::MemoryPermissions;
+    use crate::services::MockClock;
+
+    let mut registry = ImportRegistry::new();
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    register(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region(0x1000, 8192, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let call = |memory: &mut GuestMemory, symbol: &str, args: &[u64]| {
+        let mut cpu = CpuState::default();
+        for (reg, &value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args)
+        {
+            cpu.set(reg, value);
+        }
+        cpu.set(Register::Rsp, 0x2000);
+        for (index, &value) in args.iter().enumerate().skip(4) {
+            memory
+                .write_u64(0x2000 + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        let descriptor = registry
+            .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    };
+    assert_eq!(call(&mut memory, "WSAStartup", &[0x0202, 0x1000]), 0);
+    // Stream sockets create; the listener binds and listens.
+    let listener = call(&mut memory, "socket", &[2, 1, 6]);
+    assert!(listener != INVALID_SOCKET && listener != 0);
+    let client = call(&mut memory, "socket", &[2, 1, 6]);
+    let mut address = [0; 16];
+    address[..8].copy_from_slice(&[2, 0, 0x1F, 0x90, 127, 0, 0, 1]); // port 8080
+    memory.write_bytes(0x1200, &address).unwrap();
+    assert_eq!(call(&mut memory, "bind", &[listener, 0x1200, 16]), 0);
+    assert_eq!(call(&mut memory, "listen", &[listener, 4]), 0);
+    // connect before listen was impossible; now it pairs and queues.
+    assert_eq!(call(&mut memory, "connect", &[client, 0x1200, 16]), 0);
+    // accept dequeues the server endpoint and reports the client.
+    memory.write_u32(0x1300, 16).unwrap();
+    let server = call(&mut memory, "accept", &[listener, 0x1400, 0x1300]);
+    assert!(server != INVALID_SOCKET && server != 0 && server != client);
+    let mut peer = [0; 8];
+    memory.read_bytes(0x1400, &mut peer).unwrap();
+    assert_eq!(&peer[4..8], &[127, 0, 0, 1]);
+    // A second accept on the empty queue is would-block.
+    assert_eq!(
+        call(&mut memory, "accept", &[listener, 0, 0]),
+        INVALID_SOCKET
+    );
+    // Byte streams flow both ways without datagram boundaries.
+    memory.write_bytes(0x1500, b"hello ").unwrap();
+    assert_eq!(call(&mut memory, "send", &[client, 0x1500, 6, 0]), 6);
+    memory.write_bytes(0x1500, b"stream").unwrap();
+    assert_eq!(call(&mut memory, "send", &[client, 0x1500, 6, 0]), 6);
+    // Two sends merge into one byte fifo: a 12-byte read gets both.
+    assert_eq!(call(&mut memory, "recv", &[server, 0x1600, 12, 0]), 12);
+    let mut received = [0; 12];
+    memory.read_bytes(0x1600, &mut received).unwrap();
+    assert_eq!(&received, b"hello stream");
+    // A partial read consumes only what it reads.
+    memory.write_bytes(0x1500, b"partial!").unwrap();
+    assert_eq!(call(&mut memory, "send", &[client, 0x1500, 8, 0]), 8);
+    assert_eq!(call(&mut memory, "recv", &[server, 0x1600, 3, 0]), 3);
+    assert_eq!(call(&mut memory, "recv", &[server, 0x1600, 5, 0]), 5);
+    // Server-to-client works symmetrically.
+    memory.write_bytes(0x1500, b"reply").unwrap();
+    assert_eq!(call(&mut memory, "send", &[server, 0x1500, 5, 0]), 5);
+    assert_eq!(call(&mut memory, "recv", &[client, 0x1600, 5, 0]), 5);
+    // Closing the client signals eof: the server's recv returns zero.
+    assert_eq!(call(&mut memory, "closesocket", &[client]), 0);
+    assert_eq!(call(&mut memory, "recv", &[server, 0x1600, 5, 0]), 0);
+    // Connecting where nothing listens is refused.
+    memory.write_bytes(0x1200, &address).unwrap();
+    memory.write_u8(0x1202, 0x1F).unwrap();
+    memory.write_u8(0x1203, 0x91).unwrap(); // port 8081
+    let orphan = call(&mut memory, "socket", &[2, 1, 6]);
+    assert_eq!(
+        call(&mut memory, "connect", &[orphan, 0x1200, 16]),
+        SOCKET_ERROR
+    );
+    assert_eq!(
+        call(&mut memory, "WSAGetLastError", &[]),
+        u64::from(WSAECONNREFUSED)
+    );
 }
