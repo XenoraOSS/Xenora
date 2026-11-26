@@ -9,6 +9,7 @@
 //! - Virtual memory: `VirtualAlloc`, `VirtualFree`
 //! - Xbox physical memory: `XMemAlloc`, `XMemFree`
 
+mod advapi;
 mod codepages;
 mod compare;
 mod console;
@@ -743,6 +744,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     errors::register(registry, &state);
     registry::register(registry, &state);
     file_mapping::register(registry, &state);
+    advapi::register(registry, &state);
     // The legacy CRT's printf family, which the variadic calling convention
     // keeps out of the typed table (#459).
     crt_streams::register_legacy(registry, &state);
