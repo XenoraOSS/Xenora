@@ -68,6 +68,44 @@ struct Socket {
     stream_peer: Option<u64>,
     stream_read: VecDeque<u8>,
     stream_eof: bool,
+    /// WSAEventSelect association: the event handle and its mask, plus
+    /// the occurred-event bits EnumNetworkEvents reports and clears.
+    event_select: Option<(u64, u32)>,
+    events_occurred: u32,
+}
+
+pub(super) const FD_READ: u32 = 0x01;
+pub(super) const FD_WRITE: u32 = 0x02;
+pub(super) const FD_ACCEPT: u32 = 0x08;
+pub(super) const FD_CONNECT: u32 = 0x10;
+pub(super) const FD_CLOSE: u32 = 0x20;
+
+/// Record an occurred network event on the socket and signal the
+/// associated event object - the edge the guest waits on.
+fn fire_event(state: &Arc<ServicesState>, net: &mut Winsock, socket: u64, bit: u32) {
+    use super::GuestObject;
+    use super::events::Waitable;
+    let Some(endpoint) = net.sockets.get_mut(&socket) else {
+        return;
+    };
+    let Some((event, mask)) = endpoint.event_select else {
+        return;
+    };
+    if mask & bit == 0 {
+        return;
+    }
+    endpoint.events_occurred |= bit;
+    let objects = state.objects.lock().expect("guest object state");
+    if let Some(GuestObject::Waitable {
+        state: waitable, ..
+    }) = objects.handles.get(&event)
+        && let Ok(mut inner) = waitable.lock()
+        && let Waitable::Event { signaled, .. } = &mut *inner
+    {
+        *signaled = true;
+    }
+    drop(objects);
+    state.hooks.signal();
 }
 
 impl Winsock {
@@ -217,6 +255,9 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             endpoint.stream_eof = true;
             endpoint.stream_peer = None;
         }
+        if let Some(peer) = removed.stream_peer {
+            fire_event(&close, &mut net, peer, FD_CLOSE);
+        }
         close.winsock_changed.notify_all();
         Ok(0)
     });
@@ -225,6 +266,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     register_loopback(registry, state);
     register_socket_names(registry, state);
     register_socket_options(registry, state);
+    register_event_select(registry, state);
     register_ioctl_and_reverse(registry, state);
     register_streams(registry, state);
     register_datagrams(registry, state);
@@ -393,11 +435,19 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                         let client = net.sockets.get_mut(&args.rcx).expect("validated socket");
                         client.port = Some(local);
                         client.stream_peer = Some(server);
+                        let listener_handle = net.sockets.iter().find_map(|(handle, socket)| {
+                            (socket.listening.is_some() && socket.port == Some(requested))
+                                .then_some(*handle)
+                        });
                         if let Some(listening) = net.sockets.values_mut().find(|socket| {
                             socket.listening.is_some() && socket.port == Some(requested)
                         }) {
                             listening.backlog.push_back(server);
                         }
+                        if let Some(handle) = listener_handle {
+                            fire_event(&state, &mut net, handle, FD_ACCEPT);
+                        }
+                        fire_event(&state, &mut net, args.rcx, FD_CONNECT | FD_WRITE);
                         state.winsock_changed.notify_all();
                         return Ok(0);
                     }
@@ -460,6 +510,7 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                     let room = STREAM_WINDOW.saturating_sub(target.stream_read.len());
                     let accepted = room.min(length);
                     target.stream_read.extend(data[..accepted].iter().copied());
+                    fire_event(&send, &mut net, peer_handle, FD_READ);
                     send.winsock_changed.notify_all();
                     return Ok(accepted as u64);
                 }
@@ -479,13 +530,17 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                         .read_bytes(args.rdx, &mut data)
                         .map_err(|_| WSAEFAULT)?;
                 }
-                if let Some(target) = net.sockets.values_mut().find(|socket| {
-                    socket.port == Some(peer) && socket.peer.is_none_or(|port| port == source)
-                }) {
+                let target_handle = net.sockets.iter().find_map(|(handle, socket)| {
+                    (socket.port == Some(peer) && socket.peer.is_none_or(|port| port == source))
+                        .then_some(*handle)
+                });
+                if let Some(handle) = target_handle {
+                    let target = net.sockets.get_mut(&handle).expect("target socket");
                     if target.pending.len() == MAX_PENDING_DATAGRAMS {
                         return Err(WSAENOBUFS);
                     }
                     target.pending.push_back((source, data));
+                    fire_event(&send, &mut net, handle, FD_READ);
                     send.winsock_changed.notify_all();
                 }
                 Ok(length as u64)
@@ -546,6 +601,125 @@ fn register_loopback(registry: &mut ImportRegistry, state: &Arc<ServicesState>) 
                 Ok(copied as u64)
             })();
             socket_result(&recv, cpu.gs_base, result)
+        },
+    );
+}
+
+fn register_event_select(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    use super::GuestObject;
+    use super::events::Waitable;
+
+    // WSAEventSelect associates a socket with an event object and a mask.
+    // Registering re-evaluates the current state - a connected stream is
+    // writable now, pending bytes are readable now - posting those events
+    // immediately, exactly the level the guest's first wait observes.
+    let select = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WSAEventSelect",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let result = (|| {
+                let _ = memory;
+                let mut net = select.winsock.lock().expect("guest Winsock state");
+                if net.socket(args.rcx).is_err() {
+                    return Err(WSAENOTSOCK);
+                }
+                let known = FD_READ | FD_WRITE | FD_ACCEPT | FD_CONNECT | FD_CLOSE;
+                let mask = args.r8 as u32;
+                if mask & !known != 0 {
+                    return Err(WSAEINVAL);
+                }
+                if mask == 0 {
+                    // Zero mask cancels the association.
+                    let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                    socket.event_select = None;
+                    return Ok(0);
+                }
+                {
+                    let objects = select.objects.lock().expect("guest object state");
+                    let valid = matches!(
+                        objects.handles.get(&args.rdx),
+                        Some(GuestObject::Waitable { state: waitable, .. })
+                            if matches!(*waitable.lock().expect("waitable"), Waitable::Event { .. })
+                    );
+                    if !valid {
+                        return Err(WSAENOTSOCK);
+                    }
+                }
+                let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                socket.event_select = Some((args.rdx, mask));
+                socket.events_occurred = 0;
+                // Level evaluation at registration: post what is already true.
+                let mut post = 0;
+                if !socket.stream_read.is_empty() || !socket.pending.is_empty() {
+                    post |= FD_READ;
+                }
+                if socket.stream_peer.is_some() {
+                    post |= FD_WRITE;
+                }
+                if !socket.backlog.is_empty() {
+                    post |= FD_ACCEPT;
+                }
+                if socket.stream_eof {
+                    post |= FD_CLOSE;
+                }
+                let bits: Vec<u32> = [FD_READ, FD_WRITE, FD_ACCEPT, FD_CLOSE]
+                    .into_iter()
+                    .filter(|bit| post & bit != 0)
+                    .collect();
+                for bit in bits {
+                    fire_event(&select, &mut net, args.rcx, bit);
+                }
+                Ok(0)
+            })();
+            socket_result(&select, cpu.gs_base, result)
+        },
+    );
+
+    // WSAEnumNetworkEvents reports the occurred bits through the network
+    // events structure, clears them, and resets the event object - the
+    // report-and-drain contract of the form.
+    let enumerate = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WSAEnumNetworkEvents",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let result = (|| {
+                let mut net = enumerate.winsock.lock().expect("guest Winsock state");
+                if net.socket(args.rcx).is_err() {
+                    return Err(WSAENOTSOCK);
+                }
+                if args.r8 == 0 {
+                    return Err(WSAEFAULT);
+                }
+                let socket = net.sockets.get_mut(&args.rcx).expect("validated socket");
+                let occurred = socket.events_occurred;
+                socket.events_occurred = 0;
+                // Structure: i32 events bitmask then ten i32 error codes.
+                memory.write_u32(args.r8, occurred).map_err(|_| WSAEFAULT)?;
+                for index in 0..10 {
+                    memory
+                        .write_u32(args.r8 + 4 + index * 4, 0)
+                        .map_err(|_| WSAEFAULT)?;
+                }
+                // The form resets the event object it reports against.
+                if args.rdx != 0 {
+                    let objects = enumerate.objects.lock().expect("guest object state");
+                    if let Some(GuestObject::Waitable {
+                        state: waitable, ..
+                    }) = objects.handles.get(&args.rdx)
+                        && let Ok(mut inner) = waitable.lock()
+                        && let Waitable::Event { signaled, .. } = &mut *inner
+                    {
+                        *signaled = false;
+                    }
+                }
+                enumerate.winsock_changed.notify_all();
+                Ok(0)
+            })();
+            socket_result(&enumerate, cpu.gs_base, result)
         },
     );
 }
@@ -789,13 +963,17 @@ fn register_datagrams(registry: &mut ImportRegistry, state: &Arc<ServicesState>)
                         .read_bytes(args.rdx, &mut data)
                         .map_err(|_| WSAEFAULT)?;
                 }
-                if let Some(target) = net.sockets.values_mut().find(|socket| {
-                    socket.port == Some(peer) && socket.peer.is_none_or(|port| port == source)
-                }) {
+                let target_handle = net.sockets.iter().find_map(|(handle, socket)| {
+                    (socket.port == Some(peer) && socket.peer.is_none_or(|port| port == source))
+                        .then_some(*handle)
+                });
+                if let Some(handle) = target_handle {
+                    let target = net.sockets.get_mut(&handle).expect("target socket");
                     if target.pending.len() == MAX_PENDING_DATAGRAMS {
                         return Err(WSAENOBUFS);
                     }
                     target.pending.push_back((source, data));
+                    fire_event(&sendto, &mut net, handle, FD_READ);
                     sendto.winsock_changed.notify_all();
                 }
                 Ok(length as u64)
@@ -2264,4 +2442,151 @@ fn wsioctl_fionread_and_reverse_lookup() {
     // A foreign address is an honest no-host.
     memory.write_bytes(0x1800, &[8, 8, 8, 8]).unwrap();
     assert_eq!(call(&mut memory, "gethostbyaddr", &[0x1800, 4, 2]), 0);
+}
+
+#[cfg(test)]
+#[test]
+fn event_select_posts_and_enumeration_drains() {
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::MemoryPermissions;
+    use crate::services::MockClock;
+
+    let mut registry = ImportRegistry::new();
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    register(&mut registry, &state);
+    super::events::register(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region(0x1000, 8192, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let call = |memory: &mut GuestMemory, module: &str, symbol: &str, args: &[u64]| {
+        let mut cpu = CpuState::default();
+        for (reg, &value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args)
+        {
+            cpu.set(reg, value);
+        }
+        cpu.set(Register::Rsp, 0x2000);
+        for (index, &value) in args.iter().enumerate().skip(4) {
+            memory
+                .write_u64(0x2000 + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        let descriptor = registry
+            .resolve(module, &ImportName::Name(symbol.to_owned()))
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    };
+    assert_eq!(
+        call(&mut memory, MODULE, "WSAStartup", &[0x0202, 0x1000]),
+        0
+    );
+    // Manual-reset event for the client socket.
+    let event = call(&mut memory, "kernel32.dll", "CreateEventA", &[0, 1, 0, 0]);
+    assert_ne!(event, 0);
+    // A listener, a client with event selection covering connect.
+    let listener = call(&mut memory, MODULE, "socket", &[2, 1, 6]);
+    let client = call(&mut memory, MODULE, "socket", &[2, 1, 6]);
+    let mut address = [0; 16];
+    address[..8].copy_from_slice(&[2, 0, 0x1F, 0x94, 127, 0, 0, 1]);
+    memory.write_bytes(0x1200, &address).unwrap();
+    assert_eq!(
+        call(&mut memory, MODULE, "bind", &[listener, 0x1200, 16]),
+        0
+    );
+    assert_eq!(call(&mut memory, MODULE, "listen", &[listener, 4]), 0);
+    assert_eq!(
+        call(
+            &mut memory,
+            MODULE,
+            "WSAEventSelect",
+            &[
+                client,
+                event,
+                FD_CONNECT as u64 | FD_WRITE as u64 | FD_READ as u64
+            ]
+        ),
+        0
+    );
+    assert_eq!(
+        call(&mut memory, MODULE, "connect", &[client, 0x1200, 16]),
+        0
+    );
+    // The connect completion posted FD_CONNECT|FD_WRITE and signaled.
+    let server = call(&mut memory, MODULE, "accept", &[listener, 0, 0]);
+    assert!(server != INVALID_SOCKET);
+    assert_eq!(
+        call(
+            &mut memory,
+            MODULE,
+            "WSAEnumNetworkEvents",
+            &[client, event, 0x1300]
+        ),
+        0
+    );
+    let occurred = memory.read_u32(0x1300).unwrap();
+    assert_eq!(
+        occurred & (FD_CONNECT | FD_WRITE),
+        FD_CONNECT | FD_WRITE,
+        "connect posted its events"
+    );
+    // Drained: a second enumeration reports nothing.
+    assert_eq!(
+        call(
+            &mut memory,
+            MODULE,
+            "WSAEnumNetworkEvents",
+            &[client, event, 0x1300]
+        ),
+        0
+    );
+    assert_eq!(
+        memory.read_u32(0x1300).unwrap() & (FD_CONNECT | FD_WRITE),
+        0
+    );
+    // Inbound bytes post FD_READ on the receiving endpoint.
+    assert_eq!(
+        call(
+            &mut memory,
+            MODULE,
+            "WSAEventSelect",
+            &[server, event, FD_READ as u64 | FD_CLOSE as u64]
+        ),
+        0
+    );
+    memory.write_bytes(0x1500, b"wake").unwrap();
+    assert_eq!(
+        call(&mut memory, MODULE, "send", &[client, 0x1500, 4, 0]),
+        4
+    );
+    assert_eq!(
+        call(
+            &mut memory,
+            MODULE,
+            "WSAEnumNetworkEvents",
+            &[server, event, 0x1300]
+        ),
+        0
+    );
+    assert_ne!(
+        memory.read_u32(0x1300).unwrap() & FD_READ,
+        0,
+        "bytes posted read"
+    );
+    // Closing the client posts FD_CLOSE on the server.
+    assert_eq!(call(&mut memory, MODULE, "closesocket", &[client]), 0);
+    assert_eq!(
+        call(
+            &mut memory,
+            MODULE,
+            "WSAEnumNetworkEvents",
+            &[server, event, 0x1300]
+        ),
+        0
+    );
+    let final_bits = memory.read_u32(0x1300).unwrap();
+    assert_ne!(final_bits & FD_CLOSE, 0, "close posted");
 }
