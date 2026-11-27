@@ -786,4 +786,68 @@ mod tests {
         assert_eq!(memory.read_u32(BASE + u64::from(RVA_INDEX)), Ok(0));
         assert_eq!(memory.read_u64(THREAD), Ok(TLS_STORAGE));
     }
+    #[test]
+    fn stale_plan_is_rejected_before_any_initializer_runs() {
+        let fixture = fixture(1);
+        let (package, images, graph, reservations, tls, plan) = plan_parts(&fixture);
+        let stale =
+            plan_module_initialization(&package, &images, &graph, &reservations, None).unwrap();
+        assert_ne!(stale, plan);
+        let mut cpu = CpuState::default();
+        let mut memory = fixture.memory.clone();
+        let error = execute_module_initialization(
+            &package,
+            &images,
+            &graph,
+            &reservations,
+            &tls,
+            &stale,
+            THREAD,
+            STACK_TOP,
+            1000,
+            2000,
+            &mut cpu,
+            &mut memory,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ModuleInitializationExecutionError::StalePlan
+        ));
+        assert_eq!(memory.read_u32(SCRATCH), Ok(0));
+        assert_eq!(memory.read_u32(SCRATCH + 4), Ok(0));
+    }
+
+    #[test]
+    fn damaged_tls_array_state_is_rejected_before_any_initializer_runs() {
+        let fixture = fixture(1);
+        let (package, images, graph, reservations, tls, plan) = plan_parts(&fixture);
+        let mut cpu = CpuState::default();
+        let mut memory = fixture.memory.clone();
+        memory.write_u64(THREAD, 0).unwrap();
+        let error = execute_module_initialization(
+            &package,
+            &images,
+            &graph,
+            &reservations,
+            &tls,
+            &plan,
+            THREAD,
+            STACK_TOP,
+            1000,
+            2000,
+            &mut cpu,
+            &mut memory,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error,
+            ModuleInitializationExecutionError::TlsStateMismatch {
+                image_index: 0,
+                field: "thread array slot"
+            }
+        ));
+        assert_eq!(memory.read_u32(SCRATCH), Ok(0));
+        assert_eq!(memory.read_u32(SCRATCH + 4), Ok(0));
+    }
 }
