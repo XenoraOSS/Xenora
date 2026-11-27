@@ -206,6 +206,17 @@ def classify_unsupported(
         name for name, rule in registry.get("operand_rules", {}).items()
         if isinstance(rule, dict) and rule.get("variant_only") is True
     }
+    # A rule used by only one direct form is evidence for that form, not for a
+    # reusable family layout. This matters for narrow rules such as MED3's
+    # three binary32 sources: treating it as a general VOP3 layout would make
+    # unrelated integer and floating-point forms look implementation-ready.
+    direct_rule_uses = defaultdict(int)
+    for form in registry.get("form", []):
+        if isinstance(form, dict) and isinstance(form.get("operands"), str):
+            direct_rule_uses[form["operands"]] += 1
+    form_specific_rules = {
+        name for name, uses in direct_rule_uses.items() if uses < 2
+    }
     family_widths: dict[str, set[int]] = defaultdict(set)
     family_types: dict[str, set[str]] = defaultdict(set)
     for form in registry.get("form", []):
@@ -228,7 +239,8 @@ def classify_unsupported(
         opcode = identified[(family, name)]
         reusable = sorted(op for op in ops if op)
         family_rule_names = [
-            n for n, (fam, _) in rules.items() if fam == family and n not in variant_only_rules
+            n for n, (fam, _) in rules.items()
+            if fam == family and n not in variant_only_rules and n not in form_specific_rules
         ]
         missing_rules = []
         if not family_rule_names:
