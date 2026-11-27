@@ -13,8 +13,9 @@ use crate::imports::{ImportRegistry, ServiceStatus};
 use crate::memory::GuestMemory;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
-use std::sync::{Arc, Mutex};
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::sync::{Arc, Mutex, mpsc};
+use std::thread;
 use std::time::Duration;
 
 const MODULE: &str = "winhttp.dll";
@@ -23,6 +24,7 @@ const MAX_WIDE_UNITS: usize = 512;
 const MAX_ACCEPT_TYPES: usize = 32;
 const ERROR_OUTOFMEMORY: u32 = 14;
 const ERROR_WINHTTP_INVALID_URL: u32 = 12005;
+const ERROR_WINHTTP_INVALID_OPTION: u32 = 12009;
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 const ERROR_WINHTTP_TIMEOUT: u32 = 12002;
 const ERROR_WINHTTP_NAME_NOT_RESOLVED: u32 = 12007;
@@ -38,6 +40,10 @@ const WINHTTP_QUERY_STATUS_CODE: u32 = 19;
 const WINHTTP_QUERY_STATUS_TEXT: u32 = 20;
 const WINHTTP_QUERY_SERVER: u32 = 37;
 const WINHTTP_QUERY_FLAG_NUMBER: u32 = 0x2000_0000;
+const WINHTTP_OPTION_RESOLVE_TIMEOUT: u32 = 2;
+const WINHTTP_OPTION_CONNECT_TIMEOUT: u32 = 3;
+const WINHTTP_OPTION_SEND_TIMEOUT: u32 = 5;
+const WINHTTP_OPTION_RECEIVE_TIMEOUT: u32 = 6;
 const ERROR_WINHTTP_HEADER_NOT_FOUND: u32 = 12150;
 const MAX_ADDITIONAL_HEADER_UNITS: usize = 4096;
 const MAX_HEADER_LINE_BYTES: usize = 8192;
@@ -51,14 +57,39 @@ const WINHTTP_FLAG_ASYNC: u32 = 0x1000_0000;
 const WINHTTP_FLAG_SECURE: u32 = 0x0080_0000;
 const DOCUMENTED_REQUEST_FLAGS: u32 = 0x0000_01cc | WINHTTP_FLAG_SECURE;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TimeoutSettings {
+    resolve: i32,
+    connect: i32,
+    send: i32,
+    receive: i32,
+}
+
+impl Default for TimeoutSettings {
+    fn default() -> Self {
+        Self {
+            resolve: 0,
+            connect: 60_000,
+            send: 30_000,
+            receive: 30_000,
+        }
+    }
+}
+
+fn timeout_duration(timeout: i32) -> Option<Duration> {
+    (timeout > 0).then(|| Duration::from_millis(timeout as u64))
+}
+
 enum HandleKind {
     Session {
         agent: Option<String>,
+        timeouts: Arc<Mutex<TimeoutSettings>>,
     },
     Connection {
         agent: Option<String>,
         server: String,
         port: u32,
+        session_timeouts: Arc<Mutex<TimeoutSettings>>,
     },
     Request {
         agent: Option<String>,
@@ -70,6 +101,7 @@ enum HandleKind {
         referrer: Option<String>,
         accept_types: Vec<String>,
         secure: bool,
+        timeouts: Arc<Mutex<TimeoutSettings>>,
         transport: Arc<Mutex<TransportState>>,
     },
 }
@@ -84,6 +116,7 @@ struct RequestSnapshot {
     referrer: Option<String>,
     accept_types: Vec<String>,
     secure: bool,
+    timeouts: TimeoutSettings,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -443,6 +476,7 @@ fn request_parts(
             referrer,
             accept_types,
             secure,
+            timeouts,
             transport,
             ..
         }) => Ok((
@@ -456,6 +490,7 @@ fn request_parts(
                 referrer: referrer.clone(),
                 accept_types: accept_types.clone(),
                 secure: *secure,
+                timeouts: *timeouts.lock().expect("WinHTTP timeouts"),
             },
             Arc::clone(transport),
         )),
@@ -475,21 +510,57 @@ fn request_transport(
     }
 }
 
-fn connect_tcp(server: &str, port: u16) -> Result<TcpStream, u32> {
-    let addresses = (server, port)
-        .to_socket_addrs()
-        .map_err(|_| ERROR_WINHTTP_NAME_NOT_RESOLVED)?;
+fn resolve_addresses(server: &str, port: u16, timeout: i32) -> Result<Vec<SocketAddr>, u32> {
+    let Some(duration) = timeout_duration(timeout) else {
+        return (server, port)
+            .to_socket_addrs()
+            .map(|addresses| addresses.collect())
+            .map_err(|_| ERROR_WINHTTP_NAME_NOT_RESOLVED);
+    };
+
+    // Rust's blocking resolver cannot be cancelled once entered. A finite
+    // WinHTTP resolution timeout therefore gets the documented helper-thread
+    // shape: the caller is bounded, while a late resolver thread is detached
+    // and cannot mutate the request after timeout.
+    let (sender, receiver) = mpsc::channel();
+    let host = server.to_owned();
+    if thread::Builder::new()
+        .name("xenora-winhttp-resolve".to_owned())
+        .spawn(move || {
+            let result = (host.as_str(), port)
+                .to_socket_addrs()
+                .map(|addresses| addresses.collect::<Vec<_>>());
+            let _ = sender.send(result);
+        })
+        .is_err()
+    {
+        return Err(ERROR_OUTOFMEMORY);
+    }
+    match receiver.recv_timeout(duration) {
+        Ok(Ok(addresses)) => Ok(addresses),
+        Ok(Err(_)) => Err(ERROR_WINHTTP_NAME_NOT_RESOLVED),
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(ERROR_WINHTTP_TIMEOUT),
+        Err(mpsc::RecvTimeoutError::Disconnected) => Err(ERROR_WINHTTP_CONNECTION_ERROR),
+    }
+}
+
+fn connect_tcp(server: &str, port: u16, timeouts: TimeoutSettings) -> Result<TcpStream, u32> {
+    let addresses = resolve_addresses(server, port, timeouts.resolve)?;
     let mut saw_timeout = false;
     let mut saw_address = false;
     for address in addresses {
         saw_address = true;
-        match TcpStream::connect_timeout(&address, Duration::from_secs(60)) {
+        let result = match timeout_duration(timeouts.connect) {
+            Some(duration) => TcpStream::connect_timeout(&address, duration),
+            None => TcpStream::connect(address),
+        };
+        match result {
             Ok(stream) => {
                 stream
-                    .set_read_timeout(Some(Duration::from_secs(30)))
+                    .set_read_timeout(timeout_duration(timeouts.receive))
                     .map_err(io_winhttp_error)?;
                 stream
-                    .set_write_timeout(Some(Duration::from_secs(30)))
+                    .set_write_timeout(timeout_duration(timeouts.send))
                     .map_err(io_winhttp_error)?;
                 return Ok(stream);
             }
@@ -768,7 +839,10 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 return open.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
             let mut handles = open.winhttp.lock().expect("WinHTTP handle table");
-            match handles.insert(HandleKind::Session { agent }) {
+            match handles.insert(HandleKind::Session {
+                agent,
+                timeouts: Arc::new(Mutex::new(TimeoutSettings::default())),
+            }) {
                 Ok(handle) => Ok(handle),
                 Err(error) => open.fail(cpu.gs_base, error, 0),
             }
@@ -794,8 +868,10 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             // sixteen bits of the register carry the argument.
             let port = u32::from(args.r8 as u16);
             let mut handles = connect.winhttp.lock().expect("WinHTTP handle table");
-            let agent = match handles.kind(args.rcx) {
-                Some(HandleKind::Session { agent, .. }) => agent.clone(),
+            let (agent, session_timeouts) = match handles.kind(args.rcx) {
+                Some(HandleKind::Session { agent, timeouts }) => {
+                    (agent.clone(), Arc::clone(timeouts))
+                }
                 Some(_) => {
                     return connect.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_TYPE, 0);
                 }
@@ -805,6 +881,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 agent,
                 server,
                 port,
+                session_timeouts,
             }) {
                 Ok(handle) => Ok(handle),
                 Err(error) => connect.fail(cpu.gs_base, error, 0),
@@ -878,13 +955,18 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 return request.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
             }
             let mut handles = request.winhttp.lock().expect("WinHTTP handle table");
-            let (agent, server, port) = match handles.kind(args.rcx) {
+            let (agent, server, port, session_timeouts) = match handles.kind(args.rcx) {
                 Some(HandleKind::Connection {
                     agent,
                     server,
                     port,
-                    ..
-                }) => (agent.clone(), server.clone(), *port),
+                    session_timeouts,
+                }) => (
+                    agent.clone(),
+                    server.clone(),
+                    *port,
+                    Arc::clone(session_timeouts),
+                ),
                 Some(_) => {
                     return request.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_TYPE, 0);
                 }
@@ -900,10 +982,58 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 referrer,
                 accept_types,
                 secure: flags & WINHTTP_FLAG_SECURE != 0,
+                timeouts: Arc::new(Mutex::new(
+                    *session_timeouts.lock().expect("WinHTTP timeouts"),
+                )),
                 transport: Arc::new(Mutex::new(TransportState::new())),
             }) {
                 Ok(handle) => Ok(handle),
                 Err(error) => request.fail(cpu.gs_base, error, 0),
+            }
+        },
+    );
+
+    let set_timeouts = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WinHttpSetTimeouts",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let values = TimeoutSettings {
+                resolve: args.rdx as i32,
+                connect: args.r8 as i32,
+                send: args.r9 as i32,
+                receive: args.get(4, memory).map_err(memory_fault)? as i32,
+            };
+            if [values.resolve, values.connect, values.send, values.receive]
+                .iter()
+                .any(|timeout| *timeout < -1)
+            {
+                return set_timeouts.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let handles = set_timeouts.winhttp.lock().expect("WinHTTP handle table");
+            match handles.kind(args.rcx) {
+                Some(HandleKind::Session { timeouts, .. }) => {
+                    *timeouts.lock().expect("WinHTTP timeouts") = values;
+                    Ok(1)
+                }
+                Some(HandleKind::Request {
+                    timeouts,
+                    transport,
+                    ..
+                }) => {
+                    if transport.lock().expect("WinHTTP transport").phase != TransportPhase::New {
+                        return set_timeouts.fail(
+                            cpu.gs_base,
+                            ERROR_WINHTTP_INCORRECT_HANDLE_STATE,
+                            0,
+                        );
+                    }
+                    *timeouts.lock().expect("WinHTTP timeouts") = values;
+                    Ok(1)
+                }
+                Some(_) => set_timeouts.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_TYPE, 0),
+                None => set_timeouts.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0),
             }
         },
     );
@@ -961,10 +1091,11 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 transport_guard.phase = TransportPhase::Busy;
             }
             let port = effective_port(snapshot.port, snapshot.secure);
-            let result = connect_tcp(&snapshot.server, port).and_then(|mut stream| {
-                stream.write_all(&wire).map_err(io_winhttp_error)?;
-                Ok(stream)
-            });
+            let result =
+                connect_tcp(&snapshot.server, port, snapshot.timeouts).and_then(|mut stream| {
+                    stream.write_all(&wire).map_err(io_winhttp_error)?;
+                    Ok(stream)
+                });
             match result {
                 Ok(stream) => {
                     let mut transport_guard = transport.lock().expect("WinHTTP transport");
@@ -1303,6 +1434,50 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         },
     );
 
+    let query_option = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WinHttpQueryOption",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            if args.r9 == 0 {
+                return query_option.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let length_ptr = args.r9;
+            let capacity = memory.read_u32(length_ptr).map_err(memory_fault)?;
+            let timeouts = {
+                let handles = query_option.winhttp.lock().expect("WinHTTP handle table");
+                match handles.kind(args.rcx) {
+                    Some(HandleKind::Session { timeouts, .. })
+                    | Some(HandleKind::Request { timeouts, .. }) => {
+                        *timeouts.lock().expect("WinHTTP timeouts")
+                    }
+                    Some(_) => {
+                        return query_option.fail(
+                            cpu.gs_base,
+                            ERROR_WINHTTP_INCORRECT_HANDLE_TYPE,
+                            0,
+                        );
+                    }
+                    None => return query_option.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0),
+                }
+            };
+            let value = match args.rdx as u32 {
+                WINHTTP_OPTION_RESOLVE_TIMEOUT => timeouts.resolve,
+                WINHTTP_OPTION_CONNECT_TIMEOUT => timeouts.connect,
+                WINHTTP_OPTION_SEND_TIMEOUT => timeouts.send,
+                WINHTTP_OPTION_RECEIVE_TIMEOUT => timeouts.receive,
+                _ => return query_option.fail(cpu.gs_base, ERROR_WINHTTP_INVALID_OPTION, 0),
+            } as u32;
+            memory.write_u32(length_ptr, 4).map_err(memory_fault)?;
+            if args.r8 == 0 || capacity < 4 {
+                return query_option.fail(cpu.gs_base, ERROR_INSUFFICIENT_BUFFER, 0);
+            }
+            memory.write_u32(args.r8, value).map_err(memory_fault)?;
+            Ok(1)
+        },
+    );
+
     let close = Arc::clone(state);
     registry.register_with_status(
         MODULE,
@@ -1541,6 +1716,222 @@ mod tests {
                 ..
             }) if server == "example.test"
         ));
+    }
+
+    #[test]
+    fn timeout_defaults_and_request_inheritance_are_explicit() {
+        let mut fixture = Fixture::new();
+        let session = fixture.open_session();
+        assert_ne!(session, 0);
+        {
+            let handles = fixture.state.winhttp.lock().unwrap();
+            let Some(HandleKind::Session { timeouts, .. }) = handles.kind(session) else {
+                panic!("session handle missing");
+            };
+            assert_eq!(*timeouts.lock().unwrap(), TimeoutSettings::default());
+        }
+
+        assert_eq!(
+            fixture.call("WinHttpSetTimeouts", &[session, 0, 1_111, 2_222, 3_333]),
+            1
+        );
+        let connection = fixture.call("WinHttpConnect", &[session, 0x2100, 80, 0]);
+        assert_ne!(connection, 0);
+        assert_eq!(
+            fixture.call("WinHttpSetTimeouts", &[session, 0, 4_444, 5_555, 6_666]),
+            1
+        );
+        let request = fixture.call("WinHttpOpenRequest", &[connection, 0, 0, 0, 0, 0, 0]);
+        assert_ne!(request, 0);
+        assert_eq!(
+            fixture.call("WinHttpSetTimeouts", &[session, 0, 7_777, 8_888, 9_999]),
+            1
+        );
+        {
+            let handles = fixture.state.winhttp.lock().unwrap();
+            let Some(HandleKind::Request { timeouts, .. }) = handles.kind(request) else {
+                panic!("request handle missing");
+            };
+            assert_eq!(
+                *timeouts.lock().unwrap(),
+                TimeoutSettings {
+                    resolve: 0,
+                    connect: 4_444,
+                    send: 5_555,
+                    receive: 6_666,
+                }
+            );
+        }
+
+        assert_eq!(
+            fixture.call(
+                "WinHttpSetTimeouts",
+                &[request, u64::from(u32::MAX), 1, 2, 3]
+            ),
+            1
+        );
+        let handles = fixture.state.winhttp.lock().unwrap();
+        let Some(HandleKind::Request { timeouts, .. }) = handles.kind(request) else {
+            panic!("request handle missing");
+        };
+        assert_eq!(
+            *timeouts.lock().unwrap(),
+            TimeoutSettings {
+                resolve: -1,
+                connect: 1,
+                send: 2,
+                receive: 3,
+            }
+        );
+    }
+
+    #[test]
+    fn timeout_options_can_be_queried_from_sessions_and_requests() {
+        let mut fixture = Fixture::new();
+        let session = fixture.open_session();
+        fixture.memory.write_u32(0x2900, 4).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[session, 3, 0x2910, 0x2900]),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x2900).unwrap(), 4);
+        assert_eq!(fixture.memory.read_u32(0x2910).unwrap(), 60_000);
+
+        assert_eq!(
+            fixture.call("WinHttpSetTimeouts", &[session, 0, 1_111, 2_222, 3_333]),
+            1
+        );
+        let connection = fixture.call("WinHttpConnect", &[session, 0x2100, 80, 0]);
+        assert_eq!(
+            fixture.call("WinHttpSetTimeouts", &[session, 0, 4_444, 5_555, 6_666]),
+            1
+        );
+        let request = fixture.call("WinHttpOpenRequest", &[connection, 0, 0, 0, 0, 0, 0]);
+        assert_ne!(request, 0);
+        for (option, expected) in [(2, 0), (3, 4_444), (5, 5_555), (6, 6_666)] {
+            fixture.memory.write_u32(0x2900, 4).unwrap();
+            assert_eq!(
+                fixture.call("WinHttpQueryOption", &[request, option, 0x2910, 0x2900]),
+                1
+            );
+            assert_eq!(fixture.memory.read_u32(0x2910).unwrap(), expected);
+        }
+        assert_eq!(
+            fixture.call(
+                "WinHttpSetTimeouts",
+                &[request, u64::from(u32::MAX), 1, 2, 3]
+            ),
+            1
+        );
+        fixture.memory.write_u32(0x2900, 4).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[request, 2, 0x2910, 0x2900]),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x2910).unwrap(), u32::MAX);
+    }
+
+    #[test]
+    fn timeout_option_queries_report_required_size_and_bad_inputs() {
+        let mut fixture = Fixture::new();
+        let (session, connection) = fixture.open_connection();
+        fixture.memory.write_u32(0x2900, 0).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[session, 3, 0, 0x2900]),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+        assert_eq!(fixture.memory.read_u32(0x2900).unwrap(), 4);
+        fixture.memory.write_u32(0x2900, 3).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[session, 3, 0x2910, 0x2900]),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+        assert_eq!(fixture.memory.read_u32(0x2900).unwrap(), 4);
+
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[session, 4, 0x2910, 0x2900]),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_WINHTTP_INVALID_OPTION);
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[connection, 3, 0x2910, 0x2900]),
+            0
+        );
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_TYPE
+        );
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[9999, 3, 0x2910, 0x2900]),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_INVALID_HANDLE);
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[session, 3, 0x2910, 0]),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
+    }
+
+    #[test]
+    fn invalid_timeout_handles_and_values_fail_honestly() {
+        let mut fixture = Fixture::new();
+        let (session, connection) = fixture.open_connection();
+        assert_eq!(
+            fixture.call(
+                "WinHttpSetTimeouts",
+                &[session, u64::from(u32::MAX - 1), 1, 1, 1]
+            ),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
+        assert_eq!(
+            fixture.call("WinHttpSetTimeouts", &[connection, 0, 1, 1, 1]),
+            0
+        );
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_TYPE
+        );
+        assert_eq!(fixture.call("WinHttpSetTimeouts", &[9999, 0, 1, 1, 1]), 0);
+        assert_eq!(fixture.state.last_error(0), ERROR_INVALID_HANDLE);
+    }
+
+    #[test]
+    fn receive_timeout_is_applied_to_a_silent_server() {
+        use std::sync::mpsc;
+
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (stop_sender, stop_receiver) = mpsc::channel::<()>();
+        let server = std::thread::spawn(move || {
+            let (_stream, _) = listener.accept().unwrap();
+            let _ = stop_receiver.recv_timeout(Duration::from_secs(5));
+        });
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSetTimeouts", &[request, 5_000, 1_000, 1_000, 50]),
+            1
+        );
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(
+            fixture.call("WinHttpSetTimeouts", &[request, 0, 1_000, 1_000, 50]),
+            0
+        );
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_STATE
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 0);
+        assert_eq!(fixture.state.last_error(0), ERROR_WINHTTP_TIMEOUT);
+        drop(stop_sender);
+        server.join().unwrap();
     }
 
     fn serve_once(

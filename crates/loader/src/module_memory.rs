@@ -40,11 +40,13 @@
 
 use std::fmt;
 
-use crate::memory::GuestMemory;
+use crate::memory::{GuestMemory, MemoryError};
 use crate::module_layout::{
-    AddressInterval, ImageLayoutOutcome, ImagePlacement, ModuleImageDescriptor, ModuleLayoutPlan,
+    AddressInterval, IMAGE_BASE_ALIGNMENT, ImageLayoutOutcome, ImagePlacement,
+    ModuleImageDescriptor, ModuleLayoutPlan,
 };
 use crate::pe::{ParsedPe, PeError};
+use crate::reloc::{RelocationError, RelocationReport, apply_relocations};
 
 /// One explicit in-memory module image in batch input order.
 ///
@@ -159,6 +161,294 @@ impl std::error::Error for ModuleMemoryError {
             _ => None,
         }
     }
+}
+
+/// Why one reservation cannot describe the image with the same input index.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ModuleReservationError {
+    /// Planned module bases are required to be 64 KiB aligned.
+    UnalignedBase { base: u64 },
+    /// `base + SizeOfImage` is not representable as a guest address.
+    EndOverflow { base: u64, size_of_image: u32 },
+    /// The half-open reservation must exactly cover the parsed `SizeOfImage`.
+    WrongEnd {
+        base: u64,
+        end: u64,
+        expected_end: u64,
+    },
+    /// The entry point must be the reserved base plus the nonzero entry RVA,
+    /// or absent when the image has no entry point.
+    WrongEntryPoint {
+        entry_point: Option<u64>,
+        expected_entry_point: Option<u64>,
+    },
+}
+
+impl fmt::Display for ModuleReservationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::UnalignedBase { base } => {
+                write!(
+                    f,
+                    "reservation base {base:#x} is not {IMAGE_BASE_ALIGNMENT}-byte aligned"
+                )
+            }
+            Self::EndOverflow {
+                base,
+                size_of_image,
+            } => write!(
+                f,
+                "reservation base {base:#x} plus image size {size_of_image:#x} overflows"
+            ),
+            Self::WrongEnd {
+                base,
+                end,
+                expected_end,
+            } => write!(
+                f,
+                "reservation [{base:#x}, {end:#x}) does not end at the image extent {expected_end:#x}"
+            ),
+            Self::WrongEntryPoint {
+                entry_point,
+                expected_entry_point,
+            } => write!(
+                f,
+                "reservation entry {entry_point:?} does not match image entry {expected_entry_point:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ModuleReservationError {}
+
+/// Errors that prevent transactional relocation of an explicit module batch.
+#[derive(Debug, PartialEq, Eq)]
+pub enum ModuleRelocationError {
+    /// The reservation slice does not have exactly one record per input image.
+    ReservationInputMismatch {
+        reservations: usize,
+        module_images: usize,
+    },
+    /// A reservation index is outside the input batch or repeats an earlier one.
+    InvalidReservationIndex { position: usize, image_index: usize },
+    /// A reservation does not match the parsed image with the same input index.
+    InvalidReservation {
+        image_index: usize,
+        source: ModuleReservationError,
+    },
+    /// The original bytes and parsed headers no longer agree on the image-base
+    /// field location. The batch was not mutated.
+    ValidationFailed { image_index: usize, source: PeError },
+    /// Applying one image's relocation directory failed. The complete prior
+    /// address space was restored before this error was returned.
+    RelocationFailed {
+        image_index: usize,
+        source: RelocationError,
+    },
+    /// Writing the mapped image-base field failed after relocation. The
+    /// complete prior address space was restored before this error was returned.
+    ImageBaseWriteFailed {
+        image_index: usize,
+        source: MemoryError,
+    },
+}
+
+impl fmt::Display for ModuleRelocationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ReservationInputMismatch {
+                reservations,
+                module_images,
+            } => write!(
+                f,
+                "{reservations} reservations do not describe {module_images} module images exactly once"
+            ),
+            Self::InvalidReservationIndex {
+                position,
+                image_index,
+            } => write!(
+                f,
+                "reservation {position} has missing, repeated or out-of-batch image index {image_index}"
+            ),
+            Self::InvalidReservation {
+                image_index,
+                source,
+            } => {
+                write!(
+                    f,
+                    "reservation for image {image_index} is inconsistent: {source}"
+                )
+            }
+            Self::ValidationFailed {
+                image_index,
+                source,
+            } => {
+                write!(
+                    f,
+                    "image {image_index} relocation validation failed: {source}"
+                )
+            }
+            Self::RelocationFailed {
+                image_index,
+                source,
+            } => {
+                write!(f, "image {image_index} relocation failed: {source}")
+            }
+            Self::ImageBaseWriteFailed {
+                image_index,
+                source,
+            } => {
+                write!(
+                    f,
+                    "image {image_index} image-base field write failed: {source}"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for ModuleRelocationError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidReservation { source, .. } => Some(source),
+            Self::ValidationFailed { source, .. } => Some(source),
+            Self::RelocationFailed { source, .. } => Some(source),
+            Self::ImageBaseWriteFailed { source, .. } => Some(source),
+            _ => None,
+        }
+    }
+}
+
+/// Apply every explicit module image's base relocations as one transaction.
+///
+/// The reservation shape, image extents, alignment, entry metadata and mapped
+/// image-base field locations are validated before mutation. Relocation then
+/// runs in input order through the existing PE32+ DIR64 engine. Because that
+/// engine is intentionally small and can discover malformed later entries only
+/// after earlier writes, this batch layer snapshots the whole address space
+/// once; any failure assigns that snapshot back before returning. The rollback
+/// cost and peak host-memory use therefore scale with the existing address
+/// space, and this is not the final memory-ownership design.
+///
+/// After each image's relocation succeeds, its mapped optional-header image
+/// base is written to the reserved base, matching startup's ordering. Reports
+/// are returned in input order. No import/IAT write, delayed import, exception
+/// registration, TLS callback, entry execution or ownership reservation is
+/// performed.
+pub fn relocate_module_batch(
+    images: &[ExplicitModuleImage<'_>],
+    reservations: &[ModuleReservation],
+    memory: &mut GuestMemory,
+) -> Result<Vec<RelocationReport>, ModuleRelocationError> {
+    let ordered = validate_reservations(images, reservations)?;
+    let mut image_base_fields = Vec::with_capacity(images.len());
+    for (image_index, image) in images.iter().enumerate() {
+        let reservation = ordered[image_index];
+        let base = reservation.base;
+        let source = image
+            .pe
+            .image_base_field_address(image.bytes, base)
+            .map_err(|source| ModuleRelocationError::ValidationFailed {
+                image_index,
+                source,
+            })?;
+        image_base_fields.push(source);
+    }
+
+    let before = memory.clone();
+    let mut reports = Vec::with_capacity(images.len());
+    for (image_index, image) in images.iter().enumerate() {
+        let base = ordered[image_index].base;
+        let report = match apply_relocations(image.pe, image.bytes, base, memory) {
+            Ok(report) => report,
+            Err(source) => {
+                *memory = before;
+                return Err(ModuleRelocationError::RelocationFailed {
+                    image_index,
+                    source,
+                });
+            }
+        };
+        if let Err(source) = memory.write_u64_bypass(image_base_fields[image_index], base) {
+            *memory = before;
+            return Err(ModuleRelocationError::ImageBaseWriteFailed {
+                image_index,
+                source,
+            });
+        }
+        reports.push(report);
+    }
+    Ok(reports)
+}
+
+fn validate_reservations(
+    images: &[ExplicitModuleImage<'_>],
+    reservations: &[ModuleReservation],
+) -> Result<Vec<ModuleReservation>, ModuleRelocationError> {
+    if reservations.len() != images.len() {
+        return Err(ModuleRelocationError::ReservationInputMismatch {
+            reservations: reservations.len(),
+            module_images: images.len(),
+        });
+    }
+    let mut positions = vec![None; images.len()];
+    for (position, reservation) in reservations.iter().enumerate() {
+        if reservation.image_index >= images.len() || positions[reservation.image_index].is_some() {
+            return Err(ModuleRelocationError::InvalidReservationIndex {
+                position,
+                image_index: reservation.image_index,
+            });
+        }
+        positions[reservation.image_index] = Some(position);
+    }
+
+    let mut ordered = Vec::with_capacity(images.len());
+    for (image_index, image) in images.iter().enumerate() {
+        let position = positions[image_index].expect("the exact-one index check passed");
+        let reservation = reservations[position];
+        validate_reservation(image_index, *image, reservation)?;
+        ordered.push(reservation);
+    }
+    Ok(ordered)
+}
+
+fn validate_reservation(
+    image_index: usize,
+    image: ExplicitModuleImage<'_>,
+    reservation: ModuleReservation,
+) -> Result<(), ModuleRelocationError> {
+    let inconsistent = |source| ModuleRelocationError::InvalidReservation {
+        image_index,
+        source,
+    };
+    if !reservation.base.is_multiple_of(IMAGE_BASE_ALIGNMENT) {
+        return Err(inconsistent(ModuleReservationError::UnalignedBase {
+            base: reservation.base,
+        }));
+    }
+    let expected_end = reservation
+        .base
+        .checked_add(u64::from(image.pe.size_of_image))
+        .ok_or(inconsistent(ModuleReservationError::EndOverflow {
+            base: reservation.base,
+            size_of_image: image.pe.size_of_image,
+        }))?;
+    if reservation.end != expected_end {
+        return Err(inconsistent(ModuleReservationError::WrongEnd {
+            base: reservation.base,
+            end: reservation.end,
+            expected_end,
+        }));
+    }
+    let expected_entry_point = (image.pe.entry_point_rva != 0)
+        .then_some(reservation.base + u64::from(image.pe.entry_point_rva));
+    if reservation.entry_point != expected_entry_point {
+        return Err(inconsistent(ModuleReservationError::WrongEntryPoint {
+            entry_point: reservation.entry_point,
+            expected_entry_point,
+        }));
+    }
+    Ok(())
 }
 
 /// Map a complete explicit module batch into `memory` as one transaction.

@@ -56,7 +56,8 @@ pub use imports::{ImportError, ImportRegistry, ServiceDescriptor, ServiceHandler
 pub use jit::{JitError, JitMemory};
 pub use memory::{GuestMemory, MemoryError, MemoryPermissions};
 pub use module_memory::{
-    ExplicitModuleImage, ModuleMemoryError, ModuleReservation, map_module_batch,
+    ExplicitModuleImage, ModuleMemoryError, ModuleRelocationError, ModuleReservation,
+    ModuleReservationError, map_module_batch, relocate_module_batch,
 };
 pub use pe::{LoadedImage, ParsedPe, PeError, PeSection};
 pub use probe::{

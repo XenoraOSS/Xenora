@@ -534,6 +534,10 @@ impl ParsedPe {
         })
     }
 
+    pub(crate) fn image_base_field_address(&self, bytes: &[u8], base: u64) -> Result<u64, PeError> {
+        Ok(self.mapping_plan(bytes, base)?.image_base_field)
+    }
+
     /// Map this parsed image into an existing guest address space at `base`.
     ///
     /// Only the image headers and sections are mapped. Relocations, import

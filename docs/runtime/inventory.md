@@ -41,7 +41,7 @@ independent acceptance or compatibility claims.
 | <code>psapi.dll</code> | <code>windows-system</code> | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
 | <code>ucrtbase.dll</code> | <code>c-runtime</code> | 280 | 189 | 91 | 0 | 87 | 192 | 1 | 10 |
 | <code>user32.dll</code> | <code>other</code> | 6 | 0 | 6 | 0 | 0 | 6 | 0 | 0 |
-| <code>winhttp.dll</code> | <code>other</code> | 9 | 0 | 9 | 0 | 0 | 9 | 0 | 0 |
+| <code>winhttp.dll</code> | <code>other</code> | 11 | 0 | 11 | 0 | 0 | 11 | 0 | 0 |
 | <code>ws2_32.dll</code> | <code>windows-networking</code> | 41 | 0 | 41 | 0 | 6 | 35 | 0 | 6 |
 | <code>xenora_fixture.dll</code> | <code>xenora-fixture</code> | 22 | 0 | 22 | 0 | 22 | 0 | 0 | 20 |
 | <code>xenora_graphics.dll</code> | <code>xenora-fixture</code> | 34 | 0 | 34 | 0 | 34 | 0 | 0 | 0 |

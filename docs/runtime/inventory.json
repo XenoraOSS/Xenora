@@ -15706,6 +15706,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "WinHttpQueryOption"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "winhttp.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "WinHttpReadData"
     },
     {
@@ -15727,6 +15737,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "WinHttpSendRequest"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "winhttp.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "WinHttpSetTimeouts"
     },
     {
       "data_import": false,

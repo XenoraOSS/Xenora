@@ -12,14 +12,14 @@ mod module_memory {
     };
     use xenora_loader::module_memory::ExplicitModuleImage;
     use xenora_loader::{
-        GuestMemory, MemoryError, MemoryPermissions, ModuleMemoryError, ParsedPe, PeError,
-        map_module_batch,
+        GuestMemory, MemoryError, MemoryPermissions, ModuleMemoryError, ModuleRelocationError,
+        ParsedPe, PeError, RelocationError, map_module_batch, relocate_module_batch,
     };
 
     const E_LFANEW: usize = 0x80;
     const COFF: usize = E_LFANEW + 4;
     const OPTIONAL: usize = COFF + 20;
-    const OPTIONAL_SIZE: usize = 112;
+    const OPTIONAL_SIZE: usize = 240;
     const SECTION_TABLE: usize = OPTIONAL + OPTIONAL_SIZE;
     const SECTION_LEN: usize = 0x100;
     const TEXT_FILE: usize = 0x200;
@@ -36,6 +36,7 @@ mod module_memory {
     const FIRST_BASE: u64 = 0x1_4000_0000;
     const SECOND_BASE: u64 = 0x1_8000_0000;
     const SCRATCH: u64 = 0x1_A000_0000;
+    const IMAGE_BASE_FIELD_OFFSET: u64 = 0xB0;
 
     struct ImageSpec {
         characteristics: u16,
@@ -43,6 +44,7 @@ mod module_memory {
         preferred_base: u64,
         text_byte: u8,
         data_byte: u8,
+        relocation_table: Option<Vec<u8>>,
     }
 
     impl ImageSpec {
@@ -53,7 +55,13 @@ mod module_memory {
                 preferred_base,
                 text_byte,
                 data_byte,
+                relocation_table: None,
             }
+        }
+
+        fn relocated(mut self, table: Vec<u8>) -> Self {
+            self.relocation_table = Some(table);
+            self
         }
 
         fn build(&self) -> Vec<u8> {
@@ -72,6 +80,7 @@ mod module_memory {
             pe[OPTIONAL + 36..OPTIONAL + 40].copy_from_slice(&0x200u32.to_le_bytes());
             pe[OPTIONAL + 56..OPTIONAL + 60].copy_from_slice(&SIZE_OF_IMAGE.to_le_bytes());
             pe[OPTIONAL + 60..OPTIONAL + 64].copy_from_slice(&SIZE_OF_HEADERS.to_le_bytes());
+            pe[OPTIONAL + 108..OPTIONAL + 112].copy_from_slice(&16u32.to_le_bytes());
             write_section(
                 &mut pe,
                 0,
@@ -90,6 +99,13 @@ mod module_memory {
             );
             pe[TEXT_FILE..TEXT_FILE + SECTION_LEN].fill(self.text_byte);
             pe[DATA_FILE..DATA_FILE + SECTION_LEN].fill(self.data_byte);
+            if let Some(table) = &self.relocation_table {
+                let rva = DATA_RVA + 0x80;
+                pe[OPTIONAL + 152..OPTIONAL + 156].copy_from_slice(&rva.to_le_bytes());
+                pe[OPTIONAL + 156..OPTIONAL + 160]
+                    .copy_from_slice(&(table.len() as u32).to_le_bytes());
+                pe[DATA_FILE + 0x80..DATA_FILE + 0x80 + table.len()].copy_from_slice(table);
+            }
             pe
         }
     }
@@ -181,6 +197,62 @@ mod module_memory {
                 );
             }
         }
+    }
+
+    fn relocation_block(page_rva: u32, entries: &[u16]) -> Vec<u8> {
+        let mut table = page_rva.to_le_bytes().to_vec();
+        table.extend_from_slice(&(8 + 2 * entries.len() as u32).to_le_bytes());
+        for entry in entries {
+            table.extend_from_slice(&entry.to_le_bytes());
+        }
+        table
+    }
+
+    fn standard_relocation_table() -> Vec<u8> {
+        relocation_block(DATA_RVA, &[0xA000, 0xA008, 0x0000])
+    }
+
+    fn relocation_image(spec: ImageSpec) -> (Vec<u8>, ParsedPe) {
+        let mut bytes = spec.build();
+        let preferred = spec.preferred_base;
+        bytes[DATA_FILE..DATA_FILE + 8]
+            .copy_from_slice(&(preferred + u64::from(DATA_RVA) + 0x20).to_le_bytes());
+        bytes[DATA_FILE + 8..DATA_FILE + 16]
+            .copy_from_slice(&(preferred + u64::from(TEXT_RVA)).to_le_bytes());
+        let pe = ParsedPe::parse(&bytes).expect("synthetic relocation image parses");
+        (bytes, pe)
+    }
+
+    fn relocation_pair() -> (Vec<u8>, ParsedPe, Vec<u8>, ParsedPe) {
+        let first_spec =
+            ImageSpec::dll(0, FIRST_BASE, 0x11, 0x51).relocated(standard_relocation_table());
+        let second_spec = ImageSpec::dll(TEXT_RVA, SECOND_BASE, 0x22, 0x62)
+            .relocated(standard_relocation_table());
+        let (first_bytes, first_pe) = relocation_image(first_spec);
+        let (second_bytes, second_pe) = relocation_image(second_spec);
+        (first_bytes, first_pe, second_bytes, second_pe)
+    }
+
+    fn occupied_preferred_bases() -> [AddressInterval; 2] {
+        [
+            AddressInterval::new(FIRST_BASE, FIRST_BASE + 0x4000),
+            AddressInterval::new(SECOND_BASE, SECOND_BASE + 0x4000),
+        ]
+    }
+
+    fn assert_relocated_image(memory: &GuestMemory, base: u64) {
+        assert_eq!(
+            memory.read_u64_bypass(base + u64::from(DATA_RVA)),
+            Ok(base + u64::from(DATA_RVA) + 0x20)
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + u64::from(DATA_RVA) + 8),
+            Ok(base + u64::from(TEXT_RVA))
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + IMAGE_BASE_FIELD_OFFSET),
+            Ok(base)
+        );
     }
 
     #[test]
@@ -396,5 +468,162 @@ mod module_memory {
         assert_eq!(retained, [0x55; 0x80]);
         memory.write_bytes(blocker, &[0x56]).unwrap();
         assert_eq!(memory.read_u8(blocker), Ok(0x56));
+    }
+
+    #[test]
+    fn fallback_batch_relocations_rebase_each_image_transactionally() {
+        let (first_bytes, first_pe, second_bytes, second_pe) = relocation_pair();
+        let occupied = occupied_preferred_bases();
+        let layout = plan(&[&first_pe, &second_pe], &occupied).unwrap();
+        let images = [
+            explicit(&first_bytes, &first_pe),
+            explicit(&second_bytes, &second_pe),
+        ];
+        let mut memory = scratch_memory();
+        let reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
+        assert!(
+            reservations
+                .iter()
+                .all(|reservation| !reservation.used_preferred_base)
+        );
+
+        let reports = relocate_module_batch(&images, &reservations, &mut memory).unwrap();
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|report| report.applied_dir64 == 2));
+        assert!(reports.iter().all(|report| report.skipped_absolute == 1));
+        assert!(reports.iter().all(|report| report.delta != 0));
+        for reservation in reservations {
+            assert_relocated_image(&memory, reservation.base);
+        }
+        assert_eq!(memory.read_u8(SCRATCH), Ok(0x77));
+    }
+
+    #[test]
+    fn preferred_base_batch_is_zero_delta_and_still_validates_metadata() {
+        let (bytes, pe) = relocation_image(
+            ImageSpec::dll(TEXT_RVA, FIRST_BASE, 0x33, 0x63).relocated(standard_relocation_table()),
+        );
+        let layout = plan(&[&pe], &[]).unwrap();
+        let images = [explicit(&bytes, &pe)];
+        let mut memory = GuestMemory::new();
+        let reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
+
+        let reports = relocate_module_batch(&images, &reservations, &mut memory).unwrap();
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].delta, 0);
+        assert_eq!(reports[0].applied_dir64, 0);
+        assert_eq!(
+            memory.read_u64_bypass(FIRST_BASE + u64::from(DATA_RVA)),
+            Ok(FIRST_BASE + u64::from(DATA_RVA) + 0x20)
+        );
+        assert_eq!(
+            memory.read_u64_bypass(FIRST_BASE + IMAGE_BASE_FIELD_OFFSET),
+            Ok(FIRST_BASE)
+        );
+    }
+
+    #[test]
+    fn later_relocation_failure_rolls_back_every_image() {
+        let first_spec =
+            ImageSpec::dll(0, FIRST_BASE, 0x11, 0x51).relocated(standard_relocation_table());
+        let second_spec = ImageSpec::dll(TEXT_RVA, SECOND_BASE, 0x22, 0x62)
+            .relocated(relocation_block(DATA_RVA, &[0x3000]));
+        let (first_bytes, first_pe) = relocation_image(first_spec);
+        let (second_bytes, second_pe) = relocation_image(second_spec);
+        let occupied = occupied_preferred_bases();
+        let layout = plan(&[&first_pe, &second_pe], &occupied).unwrap();
+        let images = [
+            explicit(&first_bytes, &first_pe),
+            explicit(&second_bytes, &second_pe),
+        ];
+        let mut memory = scratch_memory();
+        let reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
+        let first_base = reservations[0].base;
+        let first_original = memory
+            .read_u64_bypass(first_base + u64::from(DATA_RVA))
+            .unwrap();
+
+        let error = relocate_module_batch(&images, &reservations, &mut memory).unwrap_err();
+        assert_eq!(
+            error,
+            ModuleRelocationError::RelocationFailed {
+                image_index: 1,
+                source: RelocationError::UnsupportedRelocationType(3),
+            }
+        );
+        assert_eq!(
+            memory.read_u64_bypass(first_base + u64::from(DATA_RVA)),
+            Ok(first_original)
+        );
+        assert_eq!(
+            memory.read_u64_bypass(first_base + IMAGE_BASE_FIELD_OFFSET),
+            Ok(FIRST_BASE)
+        );
+        assert_eq!(memory.read_u8(SCRATCH), Ok(0x77));
+    }
+
+    #[test]
+    fn invalid_reservations_are_rejected_before_relocation_mutation() {
+        let (first_bytes, first_pe, second_bytes, second_pe) = relocation_pair();
+        let occupied = occupied_preferred_bases();
+        let layout = plan(&[&first_pe, &second_pe], &occupied).unwrap();
+        let images = [
+            explicit(&first_bytes, &first_pe),
+            explicit(&second_bytes, &second_pe),
+        ];
+        let mut memory = GuestMemory::new();
+        let mut reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
+        let first_base = reservations[0].base;
+        let first_original = memory
+            .read_u64_bypass(first_base + u64::from(DATA_RVA))
+            .unwrap();
+        reservations[1].image_index = 0;
+
+        assert_eq!(
+            relocate_module_batch(&images, &reservations, &mut memory),
+            Err(ModuleRelocationError::InvalidReservationIndex {
+                position: 1,
+                image_index: 0,
+            })
+        );
+        assert_eq!(
+            memory.read_u64_bypass(first_base + u64::from(DATA_RVA)),
+            Ok(first_original)
+        );
+    }
+
+    #[test]
+    fn reservation_shape_is_validated_before_relocation_mutation() {
+        let (bytes, pe) = relocation_image(
+            ImageSpec::dll(TEXT_RVA, FIRST_BASE, 0x33, 0x63).relocated(standard_relocation_table()),
+        );
+        let occupied = [AddressInterval::new(FIRST_BASE, FIRST_BASE + 0x4000)];
+        let layout = plan(&[&pe], &occupied).unwrap();
+        let images = [explicit(&bytes, &pe)];
+
+        for corrupt in [
+            (|reservation: &mut xenora_loader::ModuleReservation| reservation.base += 0x1000)
+                as fn(&mut xenora_loader::ModuleReservation),
+            |reservation| reservation.end += 0x1000,
+            |reservation| reservation.entry_point = None,
+        ] {
+            let mut memory = GuestMemory::new();
+            let mut reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
+            let base = reservations[0].base;
+            let original = memory.read_u64_bypass(base + u64::from(DATA_RVA)).unwrap();
+            corrupt(&mut reservations[0]);
+            let error = relocate_module_batch(&images, &reservations, &mut memory).unwrap_err();
+            assert!(
+                matches!(
+                    error,
+                    ModuleRelocationError::InvalidReservation { image_index: 0, .. }
+                ),
+                "unexpected error: {error:?}"
+            );
+            assert_eq!(
+                memory.read_u64_bypass(base + u64::from(DATA_RVA)),
+                Ok(original)
+            );
+        }
     }
 }
