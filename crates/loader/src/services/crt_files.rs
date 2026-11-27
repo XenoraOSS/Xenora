@@ -20,7 +20,7 @@
 
 use super::GuestObject;
 use super::ObjectState;
-use super::files::DriveEntry;
+use super::files::{DriveEntry, is_nul_path};
 use crate::memory::{GuestMemory, PROCESS_HEAP};
 use std::collections::BTreeMap;
 
@@ -370,6 +370,12 @@ impl FileStreams {
     /// The write itself, the orientation already taken care of.
     fn write_bytes(&mut self, drive: &mut ObjectState, file: u64, bytes: &[u8]) -> Result<(), u32> {
         let stream = self.open.get_mut(&file).ok_or(EBADF)?;
+        if is_nul_path(&stream.path) {
+            // The NUL device discards and reports the write exactly as a file
+            // would, position advancing with nothing stored.
+            stream.position += bytes.len() as u64;
+            return Ok(());
+        }
         let stored: Vec<u8> = if stream.text {
             let mut stored = Vec::with_capacity(bytes.len());
             for &byte in bytes {
@@ -559,7 +565,14 @@ impl FileStreams {
         if !stream.readable {
             return Err(EBADF);
         }
-        let data = drive.drive_file(&stream.path).ok_or(EBADF)?;
+        // The NUL device reads end of file from an empty backing, after any
+        // pushed-back bytes exactly as a file does.
+        let device = is_nul_path(&stream.path);
+        let data = if device {
+            &[][..]
+        } else {
+            drive.drive_file(&stream.path).ok_or(EBADF)?
+        };
         let mut at = usize::try_from(stream.position).map_or(data.len(), |at| at.min(data.len()));
         let start = at;
         let mut bytes = Vec::new();
@@ -948,27 +961,34 @@ impl FileStreams {
         if !writable && truncate {
             return Err(EINVAL);
         }
-        let create = match drive.drive_entry(&path) {
-            DriveEntry::Directory => return Err(EACCES),
-            DriveEntry::File => {
-                if create && exclusive {
-                    return Err(EEXIST);
+        // The NUL device is no drive entry: it exists under every open,
+        // creates nothing and truncates nothing.
+        let device = is_nul_path(&path);
+        let create = if device {
+            false
+        } else {
+            match drive.drive_entry(&path) {
+                DriveEntry::Directory => return Err(EACCES),
+                DriveEntry::File => {
+                    if create && exclusive {
+                        return Err(EEXIST);
+                    }
+                    false
                 }
-                false
+                DriveEntry::Missing { .. } if !create => return Err(ENOENT),
+                DriveEntry::Missing { parent: false } => return Err(ENOENT),
+                DriveEntry::Missing { parent: true } => true,
             }
-            DriveEntry::Missing { .. } if !create => return Err(ENOENT),
-            DriveEntry::Missing { parent: false } => return Err(ENOENT),
-            DriveEntry::Missing { parent: true } => true,
         };
         // A full table fails before anything is created or truncated: the
         // EMFILE of the CRT leaves the file as it was.
         if !self.has_descriptor_room() {
             return Err(EMFILE);
         }
-        if create && !drive.drive_create(&path) {
+        if create && !device && !drive.drive_create(&path) {
             return Err(ENOSPC);
         }
-        if truncate {
+        if truncate && !device {
             drive.drive_truncate(&path);
         }
         let mut stream = FileStream {
@@ -1012,7 +1032,11 @@ impl FileStreams {
             return Err(EBADF);
         }
         let position_path = stream.path.clone();
-        let data = drive.drive_file(&position_path).ok_or(EBADF)?;
+        let data = if is_nul_path(&position_path) {
+            &[][..]
+        } else {
+            drive.drive_file(&position_path).ok_or(EBADF)?
+        };
         let mut at = usize::try_from(stream.position).map_or(data.len(), |at| at.min(data.len()));
         let start = at;
         let mut bytes = Vec::new();
@@ -1054,6 +1078,12 @@ impl FileStreams {
         let stream = self.descriptor_stream(fd)?;
         if !stream.writable {
             return Err(EBADF);
+        }
+        if is_nul_path(&path) {
+            // The NUL device discards and reports the write exactly as a
+            // file would, position advancing with nothing stored.
+            stream.position += bytes.len() as u64;
+            return Ok(());
         }
         let mut stored: Vec<u8> = Vec::new();
         if stream.text {
