@@ -3,9 +3,11 @@
 //! Handle ownership for the documented manual GDK task queue subset.
 
 use super::ServicesState;
+use super::events::{INFINITE, TICKS_PER_MILLI};
+use super::threads::Pending;
 use super::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED};
 use crate::cpu::ExitReason;
-use crate::imports::{GuestCallback, ImportRegistry, ServiceStatus};
+use crate::imports::{GuestCallback, ImportRegistry, ServiceStatus, Win64Args};
 use crate::memory::GuestMemory;
 use crate::runtime::HResult;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -14,7 +16,6 @@ use std::time::{Duration, Instant};
 
 const MODULE: &str = "xgameruntime.dll";
 const MAX_HANDLES: usize = 64;
-const MAX_DISPATCH_WAIT_MS: u32 = 1_000;
 const MAX_CALLBACKS_PER_PORT: usize = 32;
 const ERROR_OUTOFMEMORY: u32 = 14;
 const MANUAL: u32 = 0;
@@ -37,6 +38,7 @@ struct Queue {
 struct ScheduledCallback {
     owner: u64,
     ready_at: Instant,
+    ready_ticks: Option<u64>,
     callback: GuestCallback,
 }
 
@@ -116,9 +118,224 @@ impl QueueHandles {
         if queue.len() >= MAX_CALLBACKS_PER_PORT {
             return Err(ERROR_OUTOFMEMORY);
         }
-        let index = queue.partition_point(|item| item.ready_at <= callback.ready_at);
+        let index = queue.partition_point(|item| match (item.ready_ticks, callback.ready_ticks) {
+            (Some(item), Some(callback)) => item <= callback,
+            _ => item.ready_at <= callback.ready_at,
+        });
         queue.insert(index, callback);
         Ok(())
+    }
+}
+
+enum DispatchPoll {
+    Ready(GuestCallback),
+    Wait {
+        wake_at: Option<Instant>,
+        wake_ticks: Option<u64>,
+    },
+    Done,
+}
+
+/// Poll one manual queue port. Termination does not skip the queue's own
+/// cancelled callbacks; those are delivered before the dispatch reports false.
+fn poll_dispatch(
+    queues: &mut QueueHandles,
+    handle: u64,
+    selector: u32,
+    memory: &GuestMemory,
+    clock_ticks: Option<u64>,
+) -> Result<DispatchPoll, ExitReason> {
+    let Some(&queue) = queues.queues.get(&handle) else {
+        return Ok(DispatchPoll::Done);
+    };
+    let Some(&port) = queue.ports.get(selector as usize) else {
+        return Ok(DispatchPoll::Done);
+    };
+    let terminated = queues.terminated.contains(&queue.id);
+    let now = Instant::now();
+    let mut wake_at = None;
+    let mut wake_ticks = None;
+    if let Some(pending) = queues.pending.get_mut(&port)
+        && let Some((index, item)) = pending
+            .iter()
+            .enumerate()
+            .find(|(_, item)| !terminated || item.owner == queue.id)
+    {
+        let ready = match (clock_ticks, item.ready_ticks) {
+            (Some(now), Some(ready)) => ready <= now,
+            _ => item.ready_at <= now,
+        };
+        if ready {
+            memory
+                .fetch_instruction_byte(item.callback.entry)
+                .map_err(ExitReason::MemoryFault)?;
+            let callback = pending.remove(index).expect("polled callback").callback;
+            return Ok(DispatchPoll::Ready(callback));
+        }
+        wake_at = Some(item.ready_at);
+        wake_ticks = item.ready_ticks;
+    }
+    if terminated {
+        Ok(DispatchPoll::Done)
+    } else {
+        Ok(DispatchPoll::Wait {
+            wake_at,
+            wake_ticks,
+        })
+    }
+}
+
+fn clear_task_wait(state: &ServicesState, teb: u64) {
+    let mut table = state.threads.lock().expect("guest thread table");
+    if matches!(table.waits.get(&teb), Some(Pending::TaskQueue { .. })) {
+        table.waits.remove(&teb);
+    }
+}
+
+fn existing_task_wait(state: &ServicesState, teb: u64) -> Option<Option<u64>> {
+    let table = state.threads.lock().expect("guest thread table");
+    match table.waits.get(&teb) {
+        Some(Pending::TaskQueue {
+            timeout_deadline, ..
+        }) => Some(*timeout_deadline),
+        _ => None,
+    }
+}
+
+fn initial_timeout_deadline(state: &ServicesState, timeout: u32) -> Option<u64> {
+    (timeout != INFINITE).then(|| {
+        state
+            .clock
+            .performance_count()
+            .saturating_add(u64::from(timeout).saturating_mul(TICKS_PER_MILLI))
+    })
+}
+
+fn update_task_wait(
+    state: &ServicesState,
+    teb: u64,
+    timeout_deadline: Option<u64>,
+    callback_deadline: Option<u64>,
+) {
+    let deadline = match (timeout_deadline, callback_deadline) {
+        (Some(timeout), Some(callback)) => Some(timeout.min(callback)),
+        (timeout, None) => timeout,
+        (None, callback) => callback,
+    };
+    state
+        .threads
+        .lock()
+        .expect("guest thread table")
+        .waits
+        .insert(
+            teb,
+            Pending::TaskQueue {
+                timeout_deadline,
+                deadline,
+            },
+        );
+}
+
+/// Scheduler-backed dispatch: the service call stays blocked on its trampoline,
+/// so other guest threads continue to run and can submit work or terminate the
+/// queue. The queue is polled again on every scheduler retry.
+fn dispatch_scheduled(
+    state: &ServicesState,
+    args: &Win64Args,
+    teb: u64,
+    timeout: u32,
+    memory: &GuestMemory,
+) -> Result<Option<GuestCallback>, ExitReason> {
+    // A retry whose deadline has passed is over before the queue is polled:
+    // work submitted after that deadline stays queued, matching the scheduler's
+    // timed-wait ordering rule.
+    let prior_wait = existing_task_wait(state, teb);
+    if prior_wait.is_some_and(|deadline| {
+        deadline.is_some_and(|deadline| state.clock.performance_count() >= deadline)
+    }) {
+        clear_task_wait(state, teb);
+        return Ok(None);
+    }
+    let poll = {
+        let mut queues = state.gdk_queues.lock().expect("GDK queue handle table");
+        poll_dispatch(
+            &mut queues,
+            args.rcx,
+            args.rdx as u32,
+            memory,
+            Some(state.clock.performance_count()),
+        )?
+    };
+    match poll {
+        DispatchPoll::Ready(callback) => {
+            clear_task_wait(state, teb);
+            Ok(Some(callback))
+        }
+        DispatchPoll::Done => {
+            clear_task_wait(state, teb);
+            Ok(None)
+        }
+        DispatchPoll::Wait { .. } if timeout == 0 => Ok(None),
+        DispatchPoll::Wait { wake_ticks, .. } => {
+            let timeout_deadline =
+                prior_wait.unwrap_or_else(|| initial_timeout_deadline(state, timeout));
+            update_task_wait(state, teb, timeout_deadline, wake_ticks);
+            Err(ExitReason::GuestBlocked)
+        }
+    }
+}
+
+/// Direct service call without a scheduler. This is the only place a host wait
+/// is appropriate: there are no other guest threads that a host sleep could
+/// starve. INFINITE waits for a queue change, with timed-out delayed callbacks
+/// as the only finite self-wake.
+fn dispatch_host(
+    state: &ServicesState,
+    args: &Win64Args,
+    timeout: u32,
+    memory: &GuestMemory,
+) -> Result<Option<GuestCallback>, ExitReason> {
+    let deadline = if timeout == INFINITE {
+        None
+    } else {
+        Instant::now().checked_add(Duration::from_millis(u64::from(timeout)))
+    };
+    let mut queues = state.gdk_queues.lock().expect("GDK queue handle table");
+    loop {
+        let poll = poll_dispatch(&mut queues, args.rcx, args.rdx as u32, memory, None)?;
+        match poll {
+            DispatchPoll::Ready(callback) => return Ok(Some(callback)),
+            DispatchPoll::Done => return Ok(None),
+            DispatchPoll::Wait { wake_at, .. } => {
+                if timeout == 0 {
+                    return Ok(None);
+                }
+                let now = Instant::now();
+                if deadline.is_some_and(|deadline| now >= deadline) {
+                    return Ok(None);
+                }
+                let wake_at = match (deadline, wake_at) {
+                    (Some(deadline), Some(callback)) => Some(deadline.min(callback)),
+                    (Some(deadline), None) => Some(deadline),
+                    (None, callback) => callback,
+                };
+                if let Some(wake_at) = wake_at {
+                    let remaining = wake_at.saturating_duration_since(now);
+                    if remaining.is_zero() {
+                        continue;
+                    }
+                    (queues, _) = state
+                        .gdk_queue_changed
+                        .wait_timeout(queues, remaining)
+                        .expect("GDK queue handle table");
+                } else {
+                    queues = state
+                        .gdk_queue_changed
+                        .wait(queues)
+                        .expect("GDK queue handle table");
+                }
+            }
+        }
     }
 }
 
@@ -255,9 +472,16 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 {
                     return Ok(E_ABORT);
                 }
+                let ready_ticks = submit.hooks.is_attached().then(|| {
+                    submit
+                        .clock
+                        .performance_count()
+                        .saturating_add(u64::from(delay).saturating_mul(TICKS_PER_MILLI))
+                });
                 let callback = ScheduledCallback {
                     owner: 0,
                     ready_at: Instant::now() + Duration::from_millis(u64::from(delay)),
+                    ready_ticks,
                     callback: GuestCallback {
                         entry,
                         context,
@@ -287,9 +511,16 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             };
             if queues.terminated.insert(queue.id) {
                 let now = Instant::now();
+                let now_ticks = terminate
+                    .hooks
+                    .is_attached()
+                    .then(|| terminate.clock.performance_count());
                 for pending in queues.pending.values_mut() {
                     for item in pending.iter_mut().filter(|item| item.owner == queue.id) {
                         item.ready_at = item.ready_at.min(now);
+                        if let (Some(ready), Some(now)) = (item.ready_ticks, now_ticks) {
+                            item.ready_ticks = Some(ready.min(now));
+                        }
                         item.callback.cancelled = true;
                     }
                     pending.make_contiguous().sort_by_key(|item| item.ready_at);
@@ -300,48 +531,18 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         },
     );
     let dispatch = Arc::clone(state);
-    registry.register_callback_dispatch(MODULE, "XTaskQueueDispatch", move |args, memory| {
+    registry.register_callback_dispatch(MODULE, "XTaskQueueDispatch", move |args, teb, memory| {
         let timeout = args.r8 as u32;
-        if timeout > MAX_DISPATCH_WAIT_MS {
-            return Ok(None);
-        }
-        let deadline = Instant::now() + Duration::from_millis(u64::from(timeout));
-        let mut queues = dispatch.gdk_queues.lock().expect("GDK queue handle table");
-        loop {
-            let Some(&queue) = queues.queues.get(&args.rcx) else {
-                return Ok(None);
-            };
-            let Some(&port) = queue.ports.get(args.rdx as u32 as usize) else {
-                return Ok(None);
-            };
-            let terminated = queues.terminated.contains(&queue.id);
-            let now = Instant::now();
-            let mut wake_at = deadline;
-            if let Some(pending) = queues.pending.get_mut(&port)
-                && let Some((index, item)) = pending
-                    .iter()
-                    .enumerate()
-                    .find(|(_, item)| !terminated || item.owner == queue.id)
-            {
-                if item.ready_at <= now {
-                    memory
-                        .fetch_instruction_byte(item.callback.entry)
-                        .map_err(ExitReason::MemoryFault)?;
-                    return Ok(pending.remove(index).map(|item| item.callback));
-                }
-                wake_at = wake_at.min(item.ready_at);
-            }
-            if terminated {
-                return Ok(None);
-            }
-            let remaining = wake_at.saturating_duration_since(now);
-            if remaining.is_zero() {
-                return Ok(None);
-            }
-            (queues, _) = dispatch
-                .gdk_queue_changed
-                .wait_timeout(queues, remaining)
-                .expect("GDK queue handle table");
+        let scheduled = dispatch
+            .threads
+            .lock()
+            .expect("guest thread table")
+            .id_of(teb)
+            .is_some();
+        if scheduled {
+            dispatch_scheduled(&dispatch, args, teb, timeout, memory)
+        } else {
+            dispatch_host(&dispatch, args, timeout, memory)
         }
     });
 }

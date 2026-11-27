@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Compile the guest thread programs with clang and list their code.
 
-  generate [program|fls]  write the selected listing (default: program)
-  --check [program|fls]   recompile and fail if the selected listing differs
+  generate [program|fls|taskqueue]  write the selected listing (default: program)
+  --check [program|fls|taskqueue]   recompile and fail if the selected listing differs
 
 Each listing holds one line per item: `code <hex>`, `entry <name> <offset>` and
 `import <name> <offset>` for each 32-bit RIP-relative reference to an import
@@ -77,10 +77,10 @@ def listing(source):
 
 def main(argv):
     if not 2 <= len(argv) <= 3 or argv[1] not in ("generate", "--check"):
-        sys.exit("usage: compile.py generate|--check [program|fls]")
+        sys.exit("usage: compile.py generate|--check [program|fls|taskqueue]")
     fixture = argv[2] if len(argv) == 3 else "program"
-    if fixture not in ("program", "fls"):
-        sys.exit("usage: compile.py generate|--check [program|fls]")
+    if fixture not in ("program", "fls", "taskqueue"):
+        sys.exit("usage: compile.py generate|--check [program|fls|taskqueue]")
     output = HERE / f"{fixture}.txt"
     text = listing(HERE / f"{fixture}.c")
     if argv[1] == "generate":
