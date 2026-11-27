@@ -73,6 +73,7 @@ const FILE_TYPE_UNKNOWN: u64 = 0;
 const GENERIC_READ: u64 = 0x8000_0000;
 const GENERIC_WRITE: u64 = 0x4000_0000;
 const CREATE_ALWAYS: u64 = 2;
+const OPEN_EXISTING: u64 = 3;
 const INVALID_HANDLE_VALUE: u64 = u64::MAX;
 const ERROR_INVALID_HANDLE: u64 = 6;
 const ERROR_ACCESS_DENIED: u64 = 5;
@@ -157,6 +158,66 @@ fn flush_file_buffers_accepts_a_written_file_and_refuses_the_rest() {
     // An unknown handle is refused with ERROR_INVALID_HANDLE.
     assert_eq!(guest.call("FlushFileBuffers", &[0xDEAD]), 0);
     assert_eq!(last_error(&mut guest), ERROR_INVALID_HANDLE);
+}
+
+/// CreateFile opens a directory only through the backup-semantics flag, as
+/// the documentation demands: the flag is no attribute, the open answers a
+/// handle the close accepts, the type stays FILE_TYPE_DISK because a
+/// directory lives on the disk volume, and a read or write through the
+/// handle fails with ERROR_ACCESS_DENIED exactly as it does on Windows.
+/// Without the flag the directory open is refused, and so is any create or
+/// truncate disposition, because CreateFile cannot create directories.
+#[test]
+fn create_file_opens_directories_only_with_backup_semantics() {
+    const BACKUP_SEMANTICS: u64 = 0x0200_0000;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    narrow_at(&mut guest, SCRATCH + 0x40, "C:\\srcdir");
+    assert_eq!(guest.call("CreateDirectoryA", &[SCRATCH + 0x40, 0]), 1);
+    let open_dir = |guest: &mut Guest, flags: u64, disposition: u64| {
+        let name = wide(guest, "C:\\srcdir");
+        guest.call(
+            "CreateFileW",
+            &[name, GENERIC_READ, 3, 0, disposition, flags, 0],
+        )
+    };
+    // Without the flag the directory is refused whatever the disposition.
+    for disposition in [OPEN_EXISTING, CREATE_ALWAYS] {
+        assert_eq!(open_dir(&mut guest, 0, disposition), INVALID_HANDLE_VALUE);
+        assert_eq!(last_error(&mut guest), ERROR_ACCESS_DENIED);
+    }
+    // A create or truncate disposition cannot apply to a directory even
+    // with the flag: CreateFile never creates or truncates directories.
+    for disposition in [CREATE_ALWAYS, 5u64] {
+        assert_eq!(
+            open_dir(&mut guest, BACKUP_SEMANTICS, disposition),
+            INVALID_HANDLE_VALUE
+        );
+    }
+    // OPEN_EXISTING with the flag answers a directory handle.
+    let directory = open_dir(&mut guest, BACKUP_SEMANTICS, OPEN_EXISTING);
+    assert_ne!(directory, INVALID_HANDLE_VALUE);
+    // The type is the disk type: a directory is no pipe or console object.
+    assert_eq!(guest.call("GetFileType", &[directory]), 1);
+    // Reads and writes fail as they do on Windows.
+    const IOOUT: u64 = SCRATCH + 0x200;
+    for symbol in ["ReadFile", "WriteFile"] {
+        assert_eq!(guest.call(symbol, &[directory, IOOUT, 4, IOOUT + 8, 0]), 0);
+        assert_eq!(last_error(&mut guest), ERROR_ACCESS_DENIED, "{symbol}");
+    }
+    // The handle closes.
+    assert_eq!(guest.call("CloseHandle", &[directory]), 1);
+    // A plain file path with the flag opens as it always did: the flag
+    // changes nothing for files.
+    let file = create_file(&mut guest, "plain.bin", GENERIC_WRITE);
+    assert_ne!(file, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[file]), 1);
+    let name = wide(&mut guest, "plain.bin");
+    let reopened = guest.call(
+        "CreateFileW",
+        &[name, GENERIC_READ, 3, 0, OPEN_EXISTING, BACKUP_SEMANTICS, 0],
+    );
+    assert_ne!(reopened, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[reopened]), 1);
 }
 
 /// The hosted machine has one fixed disk, letter C: bit 2 of the drive mask,

@@ -45,6 +45,11 @@ pub(super) struct OpenFile {
     open_access: u32,
     pub(super) access: u32,
     share: u32,
+    // A directory opens only through the backup-semantics flag and supports
+    // no read or write: the handle exists so callers can prove the entry is
+    // a directory and close it again, which is all the win32 opendir chain
+    // of a real binary needs before it enumerates by path.
+    pub(super) directory: bool,
 }
 
 impl OpenFile {
@@ -639,13 +644,16 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         let disposition = args.get(4, memory).map_err(ExitReason::MemoryFault)? as u32;
         let flags = args.get(5, memory).map_err(ExitReason::MemoryFault)? as u32;
         let template = args.get(6, memory).map_err(ExitReason::MemoryFault)?;
+        // FILE_FLAG_BACKUP_SEMANTICS is a flag, no attribute: it is the only
+        // flag bit the machine models, and it matters only for directories.
+        let backup_semantics = flags & 0x0200_0000 != 0;
         if args.r9 != 0
             // BACKUP_SEMANTICS is accepted beside the zero and normal
             // attribute flags: on a file it is a no-op on Windows itself, the
             // machine models no backup privilege, and directories refuse on
             // their own path below.
             || template != 0
-            || !matches!(flags & !(0x0200_0000), 0 | 0x80)
+            || !matches!(flags & !0x0200_0000, 0 | 0x80)
             || access & !(READ | WRITE | WRITE_ATTRIBUTES) != 0
             || share & !3 != 0
         {
@@ -676,6 +684,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     open_access: access,
                     access,
                     share,
+                    directory: false,
                 }),
             );
             return Ok(handle);
@@ -685,7 +694,28 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             return open.fail(cpu.gs_base, PATH_NOT_FOUND, INVALID_HANDLE);
         }
         if objects.directories.contains(&path) {
-            return open.fail(cpu.gs_base, ERROR_ACCESS_DENIED, INVALID_HANDLE);
+            // CreateFile never creates or truncates a directory, so only the
+            // plain open of an existing one is meaningful, and the
+            // documentation gates even that behind the backup-semantics
+            // flag.
+            if !backup_semantics || disposition != 3 {
+                return open.fail(cpu.gs_base, ERROR_ACCESS_DENIED, INVALID_HANDLE);
+            }
+            let Some(handle) = objects.next_handle() else {
+                return open.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, INVALID_HANDLE);
+            };
+            objects.insert_handle(
+                handle,
+                GuestObject::File(OpenFile {
+                    path,
+                    position: Arc::new(AtomicU64::new(0)),
+                    open_access: access,
+                    access,
+                    share,
+                    directory: true,
+                }),
+            );
+            return Ok(handle);
         }
         let exists = objects.files.contains_key(&path);
         if exists && disposition == 1 {
@@ -727,6 +757,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 open_access: access,
                 access,
                 share,
+                directory: false,
             }),
         );
         Ok(handle)
@@ -739,9 +770,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         let disposition = args.get(4, memory).map_err(ExitReason::MemoryFault)? as u32;
         let flags = args.get(5, memory).map_err(ExitReason::MemoryFault)? as u32;
         let template = args.get(6, memory).map_err(ExitReason::MemoryFault)?;
+        // FILE_FLAG_BACKUP_SEMANTICS is a flag, no attribute: it is the only
+        // flag bit the machine models, and it matters only for directories.
+        let backup_semantics = flags & 0x0200_0000 != 0;
         if args.r9 != 0
             || template != 0
-            || !matches!(flags & !(0x0200_0000), 0 | 0x80)
+            || !matches!(flags & !0x0200_0000, 0 | 0x80)
             || access & !(READ | WRITE | WRITE_ATTRIBUTES) != 0
             || share & !3 != 0
         {
@@ -772,6 +806,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     open_access: access,
                     access,
                     share,
+                    directory: false,
                 }),
             );
             return Ok(handle);
@@ -781,7 +816,24 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             return open_a.fail(cpu.gs_base, PATH_NOT_FOUND, INVALID_HANDLE);
         }
         if objects.directories.contains(&path) {
-            return open_a.fail(cpu.gs_base, ERROR_ACCESS_DENIED, INVALID_HANDLE);
+            if !backup_semantics || disposition != 3 {
+                return open_a.fail(cpu.gs_base, ERROR_ACCESS_DENIED, INVALID_HANDLE);
+            }
+            let Some(handle) = objects.next_handle() else {
+                return open_a.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, INVALID_HANDLE);
+            };
+            objects.insert_handle(
+                handle,
+                GuestObject::File(OpenFile {
+                    path,
+                    position: Arc::new(AtomicU64::new(0)),
+                    open_access: access,
+                    access,
+                    share,
+                    directory: true,
+                }),
+            );
+            return Ok(handle);
         }
         let exists = objects.files.contains_key(&path);
         if exists && disposition == 1 {
@@ -823,6 +875,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 open_access: access,
                 access,
                 share,
+                directory: false,
             }),
         );
         Ok(handle)
@@ -1756,6 +1809,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             };
             let required = if writing { WRITE } else { READ };
             if file.access & required == 0 {
+                return state.fail(cpu.gs_base, ERROR_ACCESS_DENIED, 0);
+            }
+            if file.directory {
+                // A directory handle supports no transfer, exactly as on
+                // Windows: the open exists to prove the entry and to close
+                // again, never to read or write through.
                 return state.fail(cpu.gs_base, ERROR_ACCESS_DENIED, 0);
             }
             if args.r9 == 0 || memory.check_write(args.r9, 4).is_err() {
