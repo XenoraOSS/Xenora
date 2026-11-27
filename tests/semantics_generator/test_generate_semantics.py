@@ -1254,10 +1254,10 @@ class Validate(unittest.TestCase):
                 form(reg, "S_ADD_U32")[key] = value
                 self.rejects(reg, f"S_ADD_U32: unknown {key} {value!r}")
 
-    def test_rejects_float_signedness_for_integer_add(self):
+    def test_rejects_float_signedness_without_a_scalar_add_primitive(self):
         reg = registry()
         form(reg, "S_ADD_U32")["signedness"] = "float"
-        self.rejects(reg, "S_ADD_U32: signedness float contradicts operation add")
+        self.rejects(reg, "S_ADD_U32: no primitive implements add/float")
 
     def test_rejects_unsigned_signedness_for_float_rounding(self):
         reg = gen.load_registry()

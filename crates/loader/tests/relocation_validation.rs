@@ -266,6 +266,47 @@ fn malformed_block_sizes_are_rejected() {
 }
 
 #[test]
+fn misaligned_initial_block_start_is_rejected_before_fixups() {
+    let table = standard_table();
+    let mut bytes = build(16, &[], table.len() as u32);
+    bytes[RELOC_DIRECTORY_RVA..RELOC_DIRECTORY_RVA + 4].copy_from_slice(&0x2002u32.to_le_bytes());
+    bytes[RELOC_FILE + 2..RELOC_FILE + 2 + table.len()].copy_from_slice(&table);
+
+    let base = PREFERRED + 0x1000;
+    let (result, memory) = relocate(&bytes, base);
+    assert_eq!(
+        result.unwrap_err(),
+        RelocationError::MalformedBlockHeader {
+            offset: RELOC_FILE + 2
+        }
+    );
+    assert_eq!(
+        memory.read_u64_bypass(base + 0x1010).unwrap(),
+        PREFERRED + 0x1100
+    );
+}
+
+#[test]
+fn short_first_block_leaving_misaligned_next_start_is_rejected() {
+    let mut table = block(0x1000, &[0x0000]);
+    table.extend(block(0x1000, &[0xA018, 0x0000]));
+    let bytes = build(16, &table, table.len() as u32);
+
+    let base = PREFERRED + 0x1000;
+    let (result, memory) = relocate(&bytes, base);
+    assert_eq!(
+        result.unwrap_err(),
+        RelocationError::MalformedBlockHeader {
+            offset: RELOC_FILE + 10
+        }
+    );
+    assert_eq!(
+        memory.read_u64_bypass(base + 0x1018).unwrap(),
+        PREFERRED + 0x2000
+    );
+}
+
+#[test]
 fn block_larger_than_directory_is_rejected() {
     let table = standard_table(); // 14 bytes
     let bytes = build(16, &table, 12);
@@ -345,11 +386,10 @@ fn directory_entering_unbacked_virtual_space_is_rejected_before_fixups() {
     }
 }
 
-#[test]
-fn split_block_uses_each_sections_raw_offset() {
-    const CONTINUATION_RVA: u32 = 0x3000;
-    const CONTINUATION_FILE: usize = 0x1800;
-    let table = block(0x1000, &[0xA010, 0x0000, 0xA018, 0x0000]);
+const CONTINUATION_RVA: u32 = 0x3000;
+const CONTINUATION_FILE: usize = 0x1800;
+
+fn split_directory(table: &[u8], split_at: usize) -> Vec<u8> {
     let mut bytes = build(16, &[], table.len() as u32);
     bytes.resize(CONTINUATION_FILE + 0x200, 0);
     bytes[0x46..0x48].copy_from_slice(&3u16.to_le_bytes());
@@ -369,18 +409,24 @@ fn split_block_uses_each_sections_raw_offset() {
             .copy_from_slice(&value.to_le_bytes());
     }
 
+    let rva = CONTINUATION_RVA - split_at as u32;
+    bytes[RELOC_DIRECTORY_RVA..RELOC_DIRECTORY_RVA + 4].copy_from_slice(&rva.to_le_bytes());
+    let (prefix, suffix) = table.split_at(split_at);
+    let section_end = RELOC_FILE + 0x1000;
+    bytes[section_end - prefix.len()..section_end].copy_from_slice(prefix);
+    bytes[CONTINUATION_FILE..CONTINUATION_FILE + suffix.len()].copy_from_slice(suffix);
+    bytes
+}
+
+#[test]
+fn split_block_uses_each_sections_raw_offset() {
+    let table = block(0x1000, &[0xA010, 0x0000, 0xA018, 0x0000]);
+
     // Split either the header or the entries across two virtual sections
     // whose bytes are separated by a gap in the file.
     for split_at in [4usize, 12] {
-        let mut bytes = bytes.clone();
-        let rva = CONTINUATION_RVA - split_at as u32;
-        bytes[RELOC_DIRECTORY_RVA..RELOC_DIRECTORY_RVA + 4].copy_from_slice(&rva.to_le_bytes());
-        let (prefix, suffix) = table.split_at(split_at);
-        let section_end = RELOC_FILE + 0x1000;
-        bytes[section_end - prefix.len()..section_end].copy_from_slice(prefix);
-        let next_block_offset = CONTINUATION_FILE + suffix.len();
-        bytes[CONTINUATION_FILE..next_block_offset].copy_from_slice(suffix);
-
+        let mut bytes = split_directory(&table, split_at);
+        let next_block_offset = CONTINUATION_FILE + table.len() - split_at;
         let base = PREFERRED + 0x1000;
         let (result, memory) = relocate(&bytes, base);
         let report = result.expect("relocate split directory");
@@ -414,6 +460,44 @@ fn split_block_uses_each_sections_raw_offset() {
 }
 
 #[test]
+fn misaligned_later_block_start_is_rejected_across_raw_sections() {
+    let mut table = block(0x1000, &[0xA010, 0, 0]);
+    let first_size = table.len() as u32;
+    table.extend(block(0x1000, &[0xA018, 0]));
+    let base = PREFERRED + 0x1000;
+
+    for (split_at, offset) in [(12, CONTINUATION_FILE + 2), (16, RELOC_FILE + 0xffe)] {
+        let mut bytes = split_directory(&table, split_at);
+        let (result, memory) = relocate(&bytes, base);
+        assert_eq!(
+            result.unwrap_err(),
+            RelocationError::MalformedBlockHeader { offset }
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + 0x1010).unwrap(),
+            base + 0x1100
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + 0x1018).unwrap(),
+            PREFERRED + 0x2000
+        );
+
+        bytes[RELOC_DIRECTORY_RVA + 4..RELOC_DIRECTORY_RVA + 8]
+            .copy_from_slice(&first_size.to_le_bytes());
+        let (result, memory) = relocate(&bytes, base);
+        assert_eq!(result.unwrap().applied_dir64, 1);
+        assert_eq!(
+            memory.read_u64_bypass(base + 0x1010).unwrap(),
+            base + 0x1100
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + 0x1018).unwrap(),
+            PREFERRED + 0x2000
+        );
+    }
+}
+
+#[test]
 fn target_outside_image_is_rejected_even_if_mapped() {
     // SizeOfImage is 0x3000; RVA 0x3000 is past the image but mapped by another region.
     let table = block(0x3000, &[0xA000, 0x0000]);
@@ -433,6 +517,93 @@ fn target_outside_image_is_rejected_even_if_mapped() {
         }
     );
     assert_eq!(memory.read_u64_bypass(base + 0x3000).unwrap(), 0x55);
+}
+
+#[test]
+fn target_in_an_image_hole_is_rejected_even_if_memory_was_reused() {
+    // .text ends at RVA 0x1200 and .reloc begins at 0x2000. RVA 0x1800 is
+    // inside SizeOfImage but is a hole rather than image-owned backing.
+    let table = block(0x1000, &[0xA800, 0x0000]);
+    let bytes = build(16, &table, table.len() as u32);
+    let base = PREFERRED + 0x1000;
+    let (pe, mut memory) = load(&bytes, base);
+    memory
+        .map_region(
+            base + 0x1800,
+            0x100,
+            xenora_loader::MemoryPermissions::READ_WRITE,
+        )
+        .expect("unrelated hole mapping");
+    memory.write_u64_bypass(base + 0x1800, 0x55).unwrap();
+
+    let result = apply_relocations(&pe, &bytes, base, &mut memory);
+
+    assert_eq!(
+        result.unwrap_err(),
+        RelocationError::TargetNotImageBacked {
+            target_rva: 0x1800,
+            target_va: base + 0x1800,
+        }
+    );
+    assert_eq!(memory.read_u64_bypass(base + 0x1800).unwrap(), 0x55);
+}
+
+#[test]
+fn header_target_is_image_backed() {
+    let table = block(0, &[0xA1F0, 0x0000]);
+    let bytes = build(16, &table, table.len() as u32);
+    let base = PREFERRED + 0x1000;
+    let pe = ParsedPe::parse(&bytes).expect("parse");
+    let mut memory = GuestMemory::new();
+    pe.map_into_memory(&bytes, &mut memory, base).expect("map");
+    let target = base + 0x1F0;
+    let original = memory.read_u64_bypass(target).unwrap();
+
+    let report = apply_relocations(&pe, &bytes, base, &mut memory).expect("relocate");
+
+    assert_eq!(report.applied_dir64, 1);
+    assert_eq!(
+        memory.read_u64_bypass(target).unwrap(),
+        original.wrapping_add(report.delta as u64)
+    );
+}
+
+#[test]
+fn target_crossing_adjacent_header_and_section_backing_is_accepted() {
+    let table = block(0, &[0xAFFC, 0x0000]);
+    let bytes = build(16, &table, table.len() as u32);
+    let base = PREFERRED + 0x1000;
+    let pe = ParsedPe::parse(&bytes).expect("parse");
+    let mut memory = GuestMemory::new();
+    pe.map_into_memory(&bytes, &mut memory, base).expect("map");
+    let target = base + 0xFFC;
+    let original = memory.read_u64_bypass(target).unwrap();
+
+    let report = apply_relocations(&pe, &bytes, base, &mut memory).expect("relocate");
+
+    assert_eq!(report.applied_dir64, 1);
+    assert_eq!(
+        memory.read_u64_bypass(target).unwrap(),
+        original.wrapping_add(report.delta as u64)
+    );
+}
+
+#[test]
+fn virtual_zero_fill_target_is_image_backed() {
+    // `.reloc` has 0x200 bytes of file data and a 0x1000-byte virtual extent.
+    // RVA 0x2800 is zero-filled section backing rather than a hole.
+    let table = block(0x2000, &[0xA800, 0x0000]);
+    let bytes = build(16, &table, table.len() as u32);
+    let base = PREFERRED + 0x1000;
+    let pe = ParsedPe::parse(&bytes).expect("parse");
+    let mut memory = GuestMemory::new();
+    pe.map_into_memory(&bytes, &mut memory, base).expect("map");
+    assert_eq!(memory.read_u64_bypass(base + 0x2800).unwrap(), 0);
+
+    let report = apply_relocations(&pe, &bytes, base, &mut memory).expect("relocate");
+
+    assert_eq!(report.applied_dir64, 1);
+    assert_eq!(memory.read_u64_bypass(base + 0x2800).unwrap(), 0x1000);
 }
 
 #[test]

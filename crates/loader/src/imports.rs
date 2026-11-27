@@ -179,6 +179,21 @@ pub struct ServiceDescriptor {
     pub data_import: bool,
 }
 
+impl ServiceDescriptor {
+    /// Reconstruct the exact typed canonical import key for this descriptor.
+    pub fn import_name(&self) -> ImportName {
+        match self.kind {
+            ImportKind::Name => ImportName::Name(self.symbol.clone()),
+            ImportKind::Ordinal => ImportName::Ordinal(
+                self.symbol
+                    .strip_prefix("Ordinal#")
+                    .and_then(|digits| digits.parse::<u16>().ok())
+                    .expect("ordinal descriptor symbol"),
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub(crate) struct DynamicTrampolines(Arc<RwLock<HashMap<u64, usize>>>);
 
@@ -417,6 +432,13 @@ impl ImportRegistry {
         self.service_index(module, symbol).is_some()
     }
 
+    /// Check whether an exact typed import key has a binding. Unlike
+    /// [`Self::has_binding`], this preserves the distinction between an ordinal
+    /// and a named export that happens to be spelled like an ordinal.
+    pub fn has_binding_key(&self, module: &str, name: &ImportName) -> bool {
+        self.index(module, name).is_some()
+    }
+
     /// Register a host-provided guest service under a name or an ordinal.
     /// The caller passes a status explicitly, so it is marked as such.
     pub fn try_register(
@@ -504,6 +526,11 @@ impl ImportRegistry {
     pub fn binding(&self, module: &str, symbol: &str) -> Option<&ServiceDescriptor> {
         self.service_index(module, symbol)
             .map(|index| &self.handlers[index])
+    }
+
+    /// Resolve an exact typed import key to its service descriptor.
+    pub fn binding_key(&self, module: &str, name: &ImportName) -> Option<&ServiceDescriptor> {
+        self.index(module, name).map(|index| &self.handlers[index])
     }
 
     /// Iterate all canonical registered (module, symbol, status) tuples.

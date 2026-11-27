@@ -11,6 +11,9 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::thread::JoinHandle;
 
 use xenora_loader::graphics::{FramePresentation, GraphicsBackendId, GraphicsError};
+use xenora_loader::services::{
+    XInputBatteryChargeState, XInputBatteryState, XInputControllerState,
+};
 use xenora_loader::startup::{StartupLayout, run_synthetic_startup};
 use xenora_loader::{
     ExitReason, ImportRegistry, MockClock, ServicesState, register_standard_services,
@@ -79,6 +82,109 @@ impl ControllerInput {
     }
 }
 
+/// A full controller snapshot in XInput units. Unlike the legacy fixture input
+/// above, triggers already use the public XInput range 0 through 255 and both
+/// thumbsticks are represented. `connected` must be 0 or 1, only defined
+/// feature bits are accepted and reserved bytes must be zero.
+#[derive(Default, Copy, Clone)]
+#[repr(C)]
+pub struct XInputSnapshot {
+    pub buttons: u16,
+    pub left_trigger: u8,
+    pub right_trigger: u8,
+    pub left_x: i16,
+    pub left_y: i16,
+    pub right_x: i16,
+    pub right_y: i16,
+    pub connected: u8,
+    pub features: u8,
+    pub reserved: [u8; 2],
+}
+
+/// Latest vibration command accepted by the guest for one XInput slot. When
+/// `connected` is zero the sequence and motor values are zero. `enabled` is
+/// the XInput reporting state: when zero the host must stop output even though
+/// the stored motor values remain registered for a later re-enable. Reserved
+/// bytes are always zero in output written by this library.
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct XInputVibration {
+    pub sequence: u32,
+    pub left_motor: u16,
+    pub right_motor: u16,
+    pub connected: u8,
+    pub enabled: u8,
+    pub reserved: [u8; 2],
+}
+
+pub const XINPUT_FEATURE_VIBRATION: u8 = 0x01;
+
+pub const XINPUT_BATTERY_STATE_UNKNOWN: u8 = 0;
+pub const XINPUT_BATTERY_STATE_DISCHARGING: u8 = 1;
+pub const XINPUT_BATTERY_STATE_CHARGING: u8 = 2;
+pub const XINPUT_BATTERY_STATE_FULL: u8 = 3;
+pub const XINPUT_BATTERY_LEVEL_UNKNOWN: u8 = u8::MAX;
+
+/// Host battery evidence for one XInput controller. `present=0` means the host
+/// exposed no battery object and requires the canonical zero state/level. For
+/// a present object, level is 0 through 100 or XINPUT_BATTERY_LEVEL_UNKNOWN.
+/// Charging state is evidence for host/internal use only; it is never treated
+/// as battery chemistry.
+#[derive(Default, Copy, Clone, Debug, PartialEq, Eq)]
+#[repr(C)]
+pub struct XInputBattery {
+    pub present: u8,
+    pub state: u8,
+    pub level: u8,
+    pub reserved: u8,
+}
+
+impl XInputBattery {
+    pub(crate) fn valid_wire_shape(self) -> bool {
+        self.present <= 1
+            && self.state <= XINPUT_BATTERY_STATE_FULL
+            && self.reserved == 0
+            && (self.level <= 100 || self.level == XINPUT_BATTERY_LEVEL_UNKNOWN)
+            && (self.present != 0 || (self.state == 0 && self.level == 0))
+    }
+
+    fn battery_state(self) -> Option<XInputBatteryState> {
+        if self.present == 0 {
+            return None;
+        }
+        let charge_state = match self.state {
+            XINPUT_BATTERY_STATE_DISCHARGING => XInputBatteryChargeState::Discharging,
+            XINPUT_BATTERY_STATE_CHARGING => XInputBatteryChargeState::Charging,
+            XINPUT_BATTERY_STATE_FULL => XInputBatteryChargeState::Full,
+            _ => XInputBatteryChargeState::Unknown,
+        };
+        Some(XInputBatteryState {
+            charge_state,
+            level_percent: (self.level != XINPUT_BATTERY_LEVEL_UNKNOWN).then_some(self.level),
+        })
+    }
+}
+
+impl XInputSnapshot {
+    fn controller_state(self) -> Option<XInputControllerState> {
+        (self.connected != 0).then_some(XInputControllerState {
+            buttons: self.buttons,
+            left_trigger: self.left_trigger,
+            right_trigger: self.right_trigger,
+            left_x: self.left_x,
+            left_y: self.left_y,
+            right_x: self.right_x,
+            right_y: self.right_y,
+        })
+    }
+
+    pub(crate) fn valid_wire_shape(self) -> bool {
+        self.connected <= 1
+            && self.features & !XINPUT_FEATURE_VIBRATION == 0
+            && self.reserved == [0; 2]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(u64)]
 enum FrameCommand {
@@ -108,11 +214,22 @@ struct State {
     latest: Option<(u32, Vec<u8>)>,
 }
 
-#[derive(Default)]
 pub struct FrameLoop {
     state: Mutex<State>,
     wake: Condvar,
     thread: Mutex<Option<JoinHandle<()>>>,
+    services: Arc<ServicesState>,
+}
+
+impl Default for FrameLoop {
+    fn default() -> Self {
+        Self {
+            state: Mutex::default(),
+            wake: Condvar::new(),
+            thread: Mutex::default(),
+            services: Arc::new(ServicesState::new(Arc::new(MockClock::new(0)))),
+        }
+    }
 }
 
 pub struct Snapshot {
@@ -184,6 +301,60 @@ impl FrameLoop {
         state.input = input;
     }
 
+    /// Install or remove one explicit XInput controller snapshot in the
+    /// session's runtime services. Returns false for a malformed wire shape or
+    /// a user index outside the documented XInput range.
+    pub fn send_xinput(&self, user_index: u32, input: XInputSnapshot) -> bool {
+        let vibration_supported =
+            input.connected != 0 && input.features & XINPUT_FEATURE_VIBRATION != 0;
+        input.valid_wire_shape()
+            && self.services.set_xinput_controller_with_vibration(
+                user_index,
+                input.controller_state(),
+                vibration_supported,
+            )
+    }
+
+    /// Atomically install a controller snapshot and its latest battery
+    /// evidence. The two inputs are validated before the slot lock is taken.
+    pub fn send_xinput_with_battery(
+        &self,
+        user_index: u32,
+        input: XInputSnapshot,
+        battery: XInputBattery,
+    ) -> bool {
+        let vibration_supported =
+            input.connected != 0 && input.features & XINPUT_FEATURE_VIBRATION != 0;
+        input.valid_wire_shape()
+            && battery.valid_wire_shape()
+            && self.services.set_xinput_controller_with_details(
+                user_index,
+                input.controller_state(),
+                vibration_supported,
+                battery.battery_state(),
+            )
+    }
+
+    /// Read the latest vibration command without consuming it. Disconnected
+    /// slots report a neutral zeroed command so hosts can stop actuators.
+    pub fn xinput_vibration(&self, user_index: u32) -> Option<XInputVibration> {
+        if user_index >= 4 {
+            return None;
+        }
+        let output = match self.services.xinput_vibration(user_index) {
+            Some((sequence, left_motor, right_motor, enabled)) => XInputVibration {
+                sequence,
+                left_motor,
+                right_motor,
+                connected: 1,
+                enabled: u8::from(enabled),
+                reserved: [0; 2],
+            },
+            None => XInputVibration::default(),
+        };
+        Some(output)
+    }
+
     pub fn queue_input(&self, input: InputState) {
         let mut state = self.lock();
         state.input_queue.push_back(input);
@@ -235,7 +406,7 @@ impl FrameLoop {
         .map_err(|e| format!("shader translation: {e}"))?
         .msl;
         let gpu = shared_gpu()?;
-        let services = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+        let services = Arc::clone(&self.services);
         let native_draws = Arc::new(AtomicU32::new(0));
         let draws = Arc::clone(&native_draws);
         services
@@ -256,15 +427,15 @@ impl FrameLoop {
                 draws.fetch_add(1, Ordering::Relaxed);
                 Ok(pixels)
             });
-        self.execute_guest(&services, GraphicsBackendId::MetalNative, &native_draws)
+        self.execute_guest(GraphicsBackendId::MetalNative, &native_draws)
     }
 
     fn execute_guest(
         self: &Arc<Self>,
-        services: &Arc<ServicesState>,
         backend: GraphicsBackendId,
         native_draws: &Arc<AtomicU32>,
     ) -> Result<Arc<[u8]>, String> {
+        let services = &self.services;
         let last_presentation = services
             .graphics
             .lock()
@@ -532,10 +703,8 @@ fn embedded_guest_renders_standard_and_queued_interactive_frames() {
                 ..InputState::default()
             });
         }
-        let services = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
         let journal = session
             .execute_guest(
-                &services,
                 GraphicsBackendId::SoftwareReference,
                 &Arc::new(AtomicU32::new(0)),
             )
@@ -566,7 +735,7 @@ fn embedded_guest_renders_standard_and_queued_interactive_frames() {
                 check_pixels(column as usize, pixels);
             }
         }
-        assert_eq!(services.open_handle_count(), 0);
+        assert_eq!(session.services.open_handle_count(), 0);
     }
 }
 
@@ -576,10 +745,8 @@ fn guest_journal_crosses_readback_chunk_boundary_and_isolates_sessions() {
     let run = |limit| {
         let session = Arc::new(FrameLoop::default());
         session.lock().limit = limit;
-        let services = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
         let journal = session
             .execute_guest(
-                &services,
                 GraphicsBackendId::SoftwareReference,
                 &Arc::new(AtomicU32::new(0)),
             )
@@ -616,12 +783,9 @@ fn embedded_guest_releases_resources_on_stop_before_first_draw() {
         state.status = PAUSED;
     }
     session.queue_input(InputState::default());
-    let services = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
     let worker_session = Arc::clone(&session);
-    let worker_services = Arc::clone(&services);
     let worker = std::thread::spawn(move || {
         worker_session.execute_guest(
-            &worker_services,
             GraphicsBackendId::SoftwareReference,
             &Arc::new(AtomicU32::new(0)),
         )
@@ -635,8 +799,8 @@ fn embedded_guest_releases_resources_on_stop_before_first_draw() {
         std::thread::sleep(Duration::from_millis(1));
     }
     let reached_gate = session.lock().input_queue.is_empty();
-    let open_handles = services.open_handle_count();
-    let file = services.file_contents(FRAME_JOURNAL);
+    let open_handles = session.services.open_handle_count();
+    let file = session.services.file_contents(FRAME_JOURNAL);
     let exposed = session.verified_journal();
     session.stop();
     let journal = worker.join().unwrap().unwrap();
@@ -650,7 +814,7 @@ fn embedded_guest_releases_resources_on_stop_before_first_draw() {
     assert_eq!(session.snapshot().completed, 0);
     assert!(session.snapshot().latest.is_none());
     assert_eq!(session.verified_journal().as_deref(), Some(&[][..]));
-    assert_eq!(services.open_handle_count(), 0);
+    assert_eq!(session.services.open_handle_count(), 0);
 }
 
 #[cfg(test)]
@@ -789,6 +953,168 @@ fn publication_requires_fresh_presentation_and_actual_native_draw() {
     assert!(matches!(publish(&frame, &readback, 1), Ok(1)));
     assert!(publish(&frame, &readback, 1).is_err());
     assert_eq!(session.snapshot().completed, 1);
+}
+
+#[cfg(test)]
+#[test]
+fn xinput_snapshots_reach_the_runtime_state_service() {
+    let session = FrameLoop::default();
+    let snapshot = XInputSnapshot {
+        buttons: 0x9011,
+        left_trigger: 17,
+        right_trigger: 240,
+        left_x: -32768,
+        left_y: 32767,
+        right_x: -1234,
+        right_y: 4321,
+        connected: 1,
+        features: XINPUT_FEATURE_VIBRATION,
+        reserved: [0; 2],
+    };
+    assert_eq!(std::mem::size_of::<XInputSnapshot>(), 16);
+    assert!(session.send_xinput(2, snapshot));
+
+    let mut registry = ImportRegistry::new();
+    register_standard_services(&mut registry, Arc::clone(&session.services));
+    let mut memory = xenora_loader::GuestMemory::new();
+    memory
+        .map_region(0x1000, 0x1000, xenora_loader::MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let mut cpu = xenora_loader::CpuState::default();
+    cpu.set(xenora_loader::Register::Rcx, 2);
+    cpu.set(xenora_loader::Register::Rdx, 0x1200);
+    let descriptor = registry
+        .resolve(
+            "xinput1_4.dll",
+            &xenora_loader::import_table::ImportName::Name("XInputGetState".to_owned()),
+        )
+        .unwrap();
+    let result =
+        (descriptor.handler)(&xenora_loader::Win64Args::new(&cpu), &mut cpu, &mut memory).unwrap();
+    assert_eq!(result, 0);
+    let mut output = [0; 16];
+    memory.read_bytes(0x1200, &mut output).unwrap();
+    assert_eq!(
+        output,
+        [
+            1, 0, 0, 0, 0x11, 0x90, 17, 240, 0, 0x80, 0xff, 0x7f, 0x2e, 0xfb, 0xe1, 0x10,
+        ]
+    );
+
+    let mut cpu = xenora_loader::CpuState::default();
+    cpu.set(xenora_loader::Register::Rcx, 2);
+    cpu.set(xenora_loader::Register::Rdx, 0);
+    cpu.set(xenora_loader::Register::R8, 0x1220);
+    let descriptor = registry
+        .resolve(
+            "xinput1_4.dll",
+            &xenora_loader::import_table::ImportName::Name("XInputGetCapabilities".to_owned()),
+        )
+        .unwrap();
+    assert_eq!(
+        (descriptor.handler)(&xenora_loader::Win64Args::new(&cpu), &mut cpu, &mut memory).unwrap(),
+        0
+    );
+    let mut capabilities = [0; 20];
+    memory.read_bytes(0x1220, &mut capabilities).unwrap();
+    assert_eq!(capabilities[2..4], [1, 0]);
+    assert_eq!(capabilities[16..20], [0xff; 4]);
+
+    assert_eq!(
+        session.xinput_vibration(2),
+        Some(XInputVibration {
+            connected: 1,
+            enabled: 1,
+            ..XInputVibration::default()
+        })
+    );
+    memory.write_u32(0x1210, 0x8001_4002).unwrap();
+    let mut cpu = xenora_loader::CpuState::default();
+    cpu.set(xenora_loader::Register::Rcx, 2);
+    cpu.set(xenora_loader::Register::Rdx, 0x1210);
+    let descriptor = registry
+        .resolve(
+            "xinput1_4.dll",
+            &xenora_loader::import_table::ImportName::Name("XInputSetState".to_owned()),
+        )
+        .unwrap();
+    assert_eq!(
+        (descriptor.handler)(&xenora_loader::Win64Args::new(&cpu), &mut cpu, &mut memory).unwrap(),
+        0
+    );
+    assert_eq!(
+        session.xinput_vibration(2),
+        Some(XInputVibration {
+            sequence: 1,
+            left_motor: 0x4002,
+            right_motor: 0x8001,
+            connected: 1,
+            enabled: 1,
+            reserved: [0; 2],
+        })
+    );
+    let mut cpu = xenora_loader::CpuState::default();
+    cpu.set(xenora_loader::Register::Rcx, 0);
+    let descriptor = registry
+        .resolve(
+            "xinput1_4.dll",
+            &xenora_loader::import_table::ImportName::Name("XInputEnable".to_owned()),
+        )
+        .unwrap();
+    assert_eq!(
+        (descriptor.handler)(&xenora_loader::Win64Args::new(&cpu), &mut cpu, &mut memory).unwrap(),
+        0
+    );
+    assert_eq!(
+        session.xinput_vibration(2),
+        Some(XInputVibration {
+            sequence: 1,
+            left_motor: 0x4002,
+            right_motor: 0x8001,
+            connected: 1,
+            enabled: 0,
+            reserved: [0; 2],
+        })
+    );
+    cpu.set(xenora_loader::Register::Rcx, 1);
+    assert_eq!(
+        (descriptor.handler)(&xenora_loader::Win64Args::new(&cpu), &mut cpu, &mut memory).unwrap(),
+        0
+    );
+    assert_eq!(
+        session.xinput_vibration(2).map(|command| command.enabled),
+        Some(1)
+    );
+
+    assert_eq!(std::mem::size_of::<XInputVibration>(), 12);
+    assert!(session.send_xinput(
+        2,
+        XInputSnapshot {
+            connected: 0,
+            ..XInputSnapshot::default()
+        }
+    ));
+    assert_eq!(
+        session.xinput_vibration(2),
+        Some(XInputVibration::default())
+    );
+    assert!(session.xinput_vibration(4).is_none());
+
+    assert!(!session.send_xinput(4, snapshot));
+    assert!(!session.send_xinput(
+        0,
+        XInputSnapshot {
+            connected: 2,
+            ..snapshot
+        },
+    ));
+    assert!(!session.send_xinput(
+        0,
+        XInputSnapshot {
+            reserved: [1, 0],
+            ..snapshot
+        },
+    ));
 }
 
 #[cfg(test)]

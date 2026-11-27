@@ -414,8 +414,12 @@ fn test_fixture_b_xmem_guest_allocator() {
     // 0x1014: 48 89 c3                    mov rbx, rax    (save allocated address in rbx)
     // 0x1017: 48 c7 03 42 00 00 00        mov qword ptr [rbx], 0x42 (write to allocated memory)
     // 0x101e: 48 8b 0b                    mov rcx, [rbx]  (read back into rcx)
-    // 0x1021: 48 83 c4 28                 add rsp, 0x28
-    // 0x1025: f4                          hlt
+    // 0x1021: 49 89 cc                    mov r12, rcx    (keep the checked value)
+    // 0x1024: 48 89 d9                    mov rcx, rbx    (free the exact allocation base)
+    // 0x1027: 31 d2                       xor edx, edx    (attributes = 0)
+    // 0x1029: ff 15 71 11 00 00           call qword ptr [rip + 0x1171] -> XMemFree IAT at 0x21a0
+    // 0x102f: 48 83 c4 28                 add rsp, 0x28
+    // 0x1033: f4                          hlt
     let mut code = vec![0u8; 0x100];
     code[0..4].copy_from_slice(&[0x48, 0x83, 0xec, 0x28]);
     code[4..11].copy_from_slice(&[0x48, 0xc7, 0xc1, 0x00, 0x10, 0x00, 0x00]);
@@ -426,12 +430,18 @@ fn test_fixture_b_xmem_guest_allocator() {
     code[23..30].copy_from_slice(&[0x48, 0xc7, 0x03, 0x42, 0x00, 0x00, 0x00]);
     // 48 8b 0b -> mov rcx, [rbx]
     code[30..33].copy_from_slice(&[0x48, 0x8b, 0x0b]);
-    code[33..37].copy_from_slice(&[0x48, 0x83, 0xc4, 0x28]);
-    code[37] = 0xf4;
+    // 49 89 cc -> mov r12, rcx
+    code[33..36].copy_from_slice(&[0x49, 0x89, 0xcc]);
+    // 48 89 d9 -> mov rcx, rbx; 31 d2 -> xor edx, edx
+    code[36..41].copy_from_slice(&[0x48, 0x89, 0xd9, 0x31, 0xd2]);
+    code[41..47].copy_from_slice(&[0xff, 0x15, 0x71, 0x11, 0x00, 0x00]);
+    code[47..51].copy_from_slice(&[0x48, 0x83, 0xc4, 0x28]);
+    code[51] = 0xf4;
 
     let pe_bytes = TestPeBuilder::new(pref_base, 0x1000)
         .code(&code)
         .add_import("xmem.dll", "XMemAlloc")
+        .add_import("xmem.dll", "XMemFree")
         .build();
 
     let pe = ParsedPe::parse(&pe_bytes).expect("parse pe");
@@ -455,7 +465,7 @@ fn test_fixture_b_xmem_guest_allocator() {
     let bound = import_registry
         .bind_imports(&pe, &pe_bytes, pref_base, &mut memory)
         .expect("bind xmem");
-    assert_eq!(bound, 1);
+    assert_eq!(bound, 2);
 
     let stack_top = 0x500000000u64;
     memory
@@ -479,7 +489,56 @@ fn test_fixture_b_xmem_guest_allocator() {
     assert_eq!(result.exit_reason, ExitReason::Halt);
     let allocated_addr = result.final_state.get(Register::Rbx);
     assert!(allocated_addr >= 0x200000000); // In allocated guest heap range
-    assert_eq!(result.final_state.get(Register::Rcx), 0x42); // Read back correctly!
+    assert_eq!(result.final_state.get(Register::R12), 0x42); // Read back before free
+    assert!(
+        memory.read_u8(allocated_addr).is_err(),
+        "XMemFree left the exact allocation base readable"
+    );
+}
+
+#[test]
+fn test_xmem_free_rejects_foreign_address() {
+    // A foreign exact address is not owned by XMemAlloc. Since the public
+    // signature has no error return, the implementation must stop explicitly
+    // rather than silently accepting ownership corruption.
+    let pref_base = 0x140000000u64;
+    // mov rcx, 0xdead0000; xor edx, edx; call XMemFree; hlt
+    let mut code = vec![0u8; 0x100];
+    code[0..7].copy_from_slice(&[0x48, 0xc7, 0xc1, 0x00, 0x00, 0xad, 0xde]);
+    code[7..9].copy_from_slice(&[0x31, 0xd2]);
+    // The call ends at RVA 0x100f; IAT is RVA 0x2060 when XMemFree is first.
+    code[9..15].copy_from_slice(&[0xff, 0x15, 0x51, 0x10, 0x00, 0x00]);
+    code[15] = 0xf4;
+
+    let pe_bytes = TestPeBuilder::new(pref_base, 0x1000)
+        .code(&code)
+        .add_import("xmem.dll", "XMemFree")
+        .build();
+    let pe = ParsedPe::parse(&pe_bytes).expect("parse pe");
+    let mut memory = xenora_loader::memory::GuestMemory::new();
+    for sec in &pe.sections {
+        let base = pref_base + sec.virtual_address as u64;
+        let size = std::cmp::max(sec.virtual_size, sec.raw_data_size) as usize;
+        let file_off = sec.raw_data_ptr as usize;
+        let data = &pe_bytes[file_off..file_off + sec.raw_data_size as usize];
+        memory
+            .map_region_with_data(base, size, sec.permissions, data)
+            .expect("map section");
+    }
+    let mut import_registry = ImportRegistry::new();
+    let clock = Arc::new(MockClock::new(100));
+    register_standard_services(&mut import_registry, Arc::new(ServicesState::new(clock)));
+    import_registry
+        .bind_imports(&pe, &pe_bytes, pref_base, &mut memory)
+        .expect("bind xmem free");
+    memory
+        .map_region(0x4FFFF0000, 0x10000, MemoryPermissions::READ_WRITE)
+        .expect("map stack");
+    let mut dbt = DbtEngine::new(1024 * 1024).expect("init JIT");
+    dbt.set_import_registry(import_registry);
+    let mut cpu = CpuState::new(pref_base + 0x1000, 0x500000000);
+    let result = dbt.run(&mut cpu, &mut memory, 1000);
+    assert_eq!(result.exit_reason, ExitReason::IllegalInstruction(0xFE));
 }
 
 fn run_fixture_c(handler: xenora_loader::imports::ServiceHandler) {

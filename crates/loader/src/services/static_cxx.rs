@@ -15,6 +15,8 @@
 //! mingw-w64 `errno.h` values. The scheduler runs one guest thread at a time,
 //! so the host keeps the lock and key state and never reads the mutex word.
 
+use super::advapi::fill_random;
+use super::crt::set_errno;
 use crate::cpu::ExitReason;
 use crate::imports::{CallbackStart, CallbackStep, CallbackTask, ImportRegistry, ServiceStatus};
 use crate::memory::{GuestMemory, MemoryError};
@@ -26,6 +28,7 @@ const UCRT: &str = "ucrtbase.dll";
 const EPERM: u64 = 1;
 const EAGAIN: u64 = 11;
 const EBUSY: u64 = 16;
+const EIO: u64 = 5;
 const EINVAL: u64 = 22;
 const EDEADLK: u64 = 36;
 /// Keys one process may create. ponytail: a fixed bound; winpthreads' own
@@ -36,6 +39,26 @@ const UNSUPPORTED: ExitReason = ExitReason::IllegalInstruction(0xFE);
 
 fn fault(error: MemoryError) -> ExitReason {
     ExitReason::MemoryFault(error)
+}
+
+fn rand_s_result(
+    memory: &mut GuestMemory,
+    teb: u64,
+    output: u64,
+    draw: impl FnOnce(&mut [u8]) -> Result<(), u32>,
+) -> Result<u64, ExitReason> {
+    if output == 0 {
+        set_errno(memory, teb, EINVAL as u32)?;
+        return Ok(EINVAL);
+    }
+    let mut bytes = [0; 4];
+    if draw(&mut bytes).is_err() {
+        memory.write_u32(output, 0).map_err(fault)?;
+        set_errno(memory, teb, EIO as u32)?;
+        return Ok(EIO);
+    }
+    memory.write_bytes(output, &bytes).map_err(fault)?;
+    Ok(0)
 }
 
 #[derive(Default)]
@@ -236,9 +259,18 @@ pub(super) fn register(registry: &mut ImportRegistry) {
     // serves it since #466.
     // `FormatMessageA` is no longer a stub here: the error services
     // implement it since package 9 of #459. `_read` is served since #493.
-    registry.register_with_status(UCRT, "rand_s", ServiceStatus::Stub, |_, _, _| {
-        Err(UNSUPPORTED)
-    });
+    // Microsoft documents `rand_s` as operating-system cryptographic
+    // randomness independent of `srand`. A null pointer continues here as
+    // EINVAL, as the CRT documents when the invalid-parameter handler returns;
+    // Xenora does not yet dispatch that handler. Another host-entropy failure
+    // zeroes the output before reporting EIO, Xenora's errno for an entropy
+    // read failure.
+    registry.register_with_status(
+        UCRT,
+        "rand_s",
+        ServiceStatus::Partial,
+        |args, cpu, memory| rand_s_result(memory, cpu.gs_base, args.rcx, fill_random),
+    );
     for (api_set, symbol) in [
         ("api-ms-win-crt-private-l1-1-0.dll", "memchr"),
         ("api-ms-win-crt-private-l1-1-0.dll", "strchr"),
@@ -253,5 +285,101 @@ pub(super) fn register(registry: &mut ImportRegistry) {
     // under the same names, as it does for the forms crt.rs serves.
     for symbol in ["memchr", "strchr", "getenv"] {
         registry.alias("msvcrt.dll", UCRT, symbol);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::MemoryPermissions;
+
+    fn memory() -> GuestMemory {
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x1000, 0x1000, MemoryPermissions::READ_WRITE)
+            .expect("map rand_s test memory");
+        memory
+    }
+
+    fn errno(memory: &mut GuestMemory, teb: u64) -> u32 {
+        let address = memory.crt_errno_address(teb).expect("errno cell");
+        memory.read_u32(address).expect("read errno")
+    }
+
+    #[test]
+    fn rand_s_host_entropy_writes_full_words_and_resolves_its_api_set() {
+        let mut registry = ImportRegistry::new();
+        register(&mut registry);
+        let mut memory = memory();
+        let call = |memory: &mut GuestMemory, output: u64| {
+            let mut cpu = CpuState::default();
+            cpu.set(Register::Rcx, output);
+            cpu.set(Register::Rsp, 0x1f00);
+            let descriptor = registry
+                .resolve(UCRT, &ImportName::Name("rand_s".to_owned()))
+                .expect("rand_s registration");
+            (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).expect("rand_s call")
+        };
+
+        for index in 0..8 {
+            assert_eq!(call(&mut memory, 0x1000 + index * 4), 0);
+        }
+        let mut values = [0u32; 8];
+        for (index, value) in values.iter_mut().enumerate() {
+            *value = memory
+                .read_u32(0x1000 + index as u64 * 4)
+                .expect("read random word");
+        }
+        assert!(values.iter().any(|&value| value != 0));
+        assert!(values.windows(2).any(|pair| pair[0] != pair[1]));
+        assert!(
+            registry
+                .resolve(
+                    "api-ms-win-crt-utility-l1-1-0.dll",
+                    &ImportName::Name("rand_s".to_owned()),
+                )
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn rand_s_null_output_returns_and_records_einval() {
+        let mut memory = memory();
+        assert_eq!(
+            rand_s_result(&mut memory, 0x5000, 0, |_| Ok(())).expect("null result"),
+            EINVAL
+        );
+        assert_eq!(errno(&mut memory, 0x5000), EINVAL as u32);
+    }
+
+    #[test]
+    fn rand_s_entropy_failure_zeroes_output_and_reports_eio() {
+        let mut memory = memory();
+        memory.write_u32(0x1000, 0xaaaa_5555).unwrap();
+        assert_eq!(
+            rand_s_result(&mut memory, 0x6000, 0x1000, |_| Err(50)).expect("failure result"),
+            EIO
+        );
+        assert_eq!(memory.read_u32(0x1000).unwrap(), 0);
+        assert_eq!(errno(&mut memory, 0x6000), EIO as u32);
+    }
+
+    #[test]
+    fn rand_s_success_writes_little_endian_bytes_without_clearing_errno() {
+        let mut memory = memory();
+        set_errno(&mut memory, 0x7000, EINVAL as u32).expect("seed errno");
+        assert_eq!(
+            rand_s_result(&mut memory, 0x7000, 0x1000, |bytes| {
+                bytes.copy_from_slice(&[0x78, 0x56, 0x34, 0x12]);
+                Ok(())
+            })
+            .expect("success result"),
+            0
+        );
+        assert_eq!(memory.read_u32(0x1000).unwrap(), 0x1234_5678);
+        assert_eq!(errno(&mut memory, 0x7000), EINVAL as u32);
     }
 }

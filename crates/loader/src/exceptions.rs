@@ -20,6 +20,7 @@
 use crate::cpu::{CpuState, ExitReason, Register};
 use crate::imports::{CALLBACK_RETURN, ENTRY_RETURN, ImportRegistry, ServiceStatus, Win64Args};
 use crate::memory::{GuestMemory, MemoryError};
+use crate::pe::{MappedImageBacking, ParsedPe};
 
 mod faults;
 mod scope;
@@ -107,6 +108,24 @@ fn span(address: u64, size: u64) -> Result<(), ExitReason> {
 /// trailing handler RVA or chained 12-byte entry.
 const UNWIND_INFO_SPAN: u64 = 4 + 2 * 256 + 12;
 
+/// Fixed bytes of one unwind-info chain link: header, whole aligned unwind
+/// codes, and the trailing handler RVA or chained RUNTIME_FUNCTION entry.
+/// Language-specific handler data is variable-sized and intentionally excluded.
+fn fixed_unwind_span(header: u32) -> u64 {
+    let bytes = header.to_le_bytes();
+    let count = u64::from(bytes[2]);
+    let codes = (count + 1) & !1;
+    let flags = bytes[0] >> 3;
+    let trailing = if flags & UNW_FLAG_CHAININFO != 0 {
+        12
+    } else if flags & (UNW_FLAG_EHANDLER | UNW_FLAG_UHANDLER) != 0 {
+        4
+    } else {
+        0
+    };
+    4 + 2 * codes + trailing
+}
+
 fn at(base: u64, offset: u64) -> Result<u64, ExitReason> {
     base.checked_add(offset).ok_or(fault(MemoryError::Overflow))
 }
@@ -118,14 +137,36 @@ pub(crate) fn register_exception_directory(
     base: u64,
     size_of_image: u32,
     memory: &mut GuestMemory,
-) -> Result<(), String> {
+) -> Result<u64, String> {
+    register_exception_directory_impl(bytes, base, size_of_image, memory, None)
+}
+
+/// Read and check data directory 3 using the parsed image's committed header
+/// and section backing, then record its function table.
+pub(crate) fn register_exception_directory_for_image(
+    pe: &ParsedPe,
+    bytes: &[u8],
+    base: u64,
+    memory: &mut GuestMemory,
+) -> Result<u64, String> {
+    let backing = MappedImageBacking::new(pe);
+    register_exception_directory_impl(bytes, base, pe.size_of_image, memory, Some(&backing))
+}
+
+fn register_exception_directory_impl(
+    bytes: &[u8],
+    base: u64,
+    size_of_image: u32,
+    memory: &mut GuestMemory,
+    backing: Option<&MappedImageBacking>,
+) -> Result<u64, String> {
     let u32_at = |offset: usize| -> Option<u32> {
         Some(u32::from_le_bytes(
             bytes.get(offset..offset.checked_add(4)?)?.try_into().ok()?,
         ))
     };
     let Some(lfanew) = u32_at(0x3C) else {
-        return Ok(());
+        return Ok(0);
     };
     let coff = lfanew as usize + 4;
     let optional = coff + 20;
@@ -134,13 +175,13 @@ pub(crate) fn register_exception_directory(
         .map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
     // PE32+: NumberOfRvaAndSizes at 108, the exception directory at 136.
     if optional_len < 144 || u32_at(optional + 108).unwrap_or(0) < 4 {
-        return Ok(());
+        return Ok(0);
     }
     let (Some(rva), Some(size)) = (u32_at(optional + 136), u32_at(optional + 140)) else {
-        return Ok(());
+        return Ok(0);
     };
     if rva == 0 && size == 0 {
-        return Ok(());
+        return Ok(0);
     }
     let bad = |why: &str| Err(format!("malformed exception directory: {why}"));
     if size == 0 || !size.is_multiple_of(12) || !rva.is_multiple_of(4) {
@@ -148,6 +189,9 @@ pub(crate) fn register_exception_directory(
     }
     if u64::from(rva) + u64::from(size) > u64::from(size_of_image) {
         return bad("it runs past the end of the image");
+    }
+    if backing.is_some_and(|backing| !backing.covers(rva, u64::from(size))) {
+        return bad("its entries are not continuously backed by image memory");
     }
     let table = base + u64::from(rva);
     let count = u64::from(size / 12);
@@ -169,8 +213,25 @@ pub(crate) fn register_exception_directory(
                 "entry {index} is not sorted after the one before it"
             ));
         }
-        if !unwind.is_multiple_of(4) || u64::from(unwind) + 4 > u64::from(size_of_image) {
+        if backing.is_some_and(|backing| !backing.covers(begin, u64::from(end - begin))) {
+            return bad(&format!(
+                "entry {index} has a function range outside committed image memory"
+            ));
+        }
+        let unwind_address = base.checked_add(u64::from(unwind)).ok_or_else(|| {
+            format!("malformed exception directory: entry {index}: unwind address overflows")
+        })?;
+        let unwind_header = memory.read_u32(unwind_address).map_err(|e| {
+            format!("malformed exception directory: entry {index}: unwind header: {e}")
+        })?;
+        let fixed_span = fixed_unwind_span(unwind_header);
+        if !unwind.is_multiple_of(4) || u64::from(unwind) + fixed_span > u64::from(size_of_image) {
             return bad(&format!("entry {index} has unwind data outside the image"));
+        }
+        if backing.is_some_and(|backing| !backing.covers(unwind, fixed_span)) {
+            return bad(&format!(
+                "entry {index} has unwind data outside committed image memory"
+            ));
         }
         previous_end = end;
     }
@@ -180,7 +241,7 @@ pub(crate) fn register_exception_directory(
         table,
         count,
     });
-    Ok(())
+    Ok(count)
 }
 
 /// `RtlLookupFunctionEntry`: the image base and the guest address of the

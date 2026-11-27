@@ -149,16 +149,9 @@ pub fn parse_tls_directory(bytes: &[u8], pe: &ParsedPe) -> Result<Option<TlsDire
         return Ok(None);
     }
 
-    let tls_rva = u32::from_le_bytes(
-        bytes[opt_offset + 184..opt_offset + 188]
-            .try_into()
-            .unwrap(),
-    );
-    let tls_size = u32::from_le_bytes(
-        bytes[opt_offset + 188..opt_offset + 192]
-            .try_into()
-            .unwrap(),
-    );
+    let Some((tls_rva, tls_size)) = tls_directory_entry(bytes) else {
+        return Ok(None);
+    };
 
     if tls_rva == 0 || tls_size == 0 {
         return Ok(None);
@@ -192,6 +185,30 @@ pub fn parse_tls_directory(bytes: &[u8], pe: &ParsedPe) -> Result<Option<TlsDire
         characteristics,
         callbacks,
     }))
+}
+
+/// Locate data directory 9 without interpreting it. Shared by the trusted
+/// single-image parser and the explicit-module batch validator.
+pub(crate) fn tls_directory_entry(bytes: &[u8]) -> Option<(u32, u32)> {
+    if bytes.len() < 0x40 {
+        return None;
+    }
+    let e_lfanew = u32::from_le_bytes(bytes[0x3C..0x40].try_into().unwrap()) as usize;
+    let opt_offset = e_lfanew.checked_add(24)?;
+    if bytes.len() < opt_offset.checked_add(192)? {
+        return None;
+    }
+    let tls_rva = u32::from_le_bytes(
+        bytes[opt_offset + 184..opt_offset + 188]
+            .try_into()
+            .unwrap(),
+    );
+    let tls_size = u32::from_le_bytes(
+        bytes[opt_offset + 188..opt_offset + 192]
+            .try_into()
+            .unwrap(),
+    );
+    (tls_rva != 0 && tls_size != 0).then_some((tls_rva, tls_size))
 }
 
 /// Read the known directory fields by RVA, across raw-backed sections if needed.
@@ -272,7 +289,7 @@ fn read_callbacks(bytes: &[u8], pe: &ParsedPe, address: u64) -> Result<Vec<u64>,
 }
 
 /// Bytes reserved at `thread_tls_base` for the thread's TLS pointer array.
-const TLS_ARRAY_SIZE: usize = 0x1000;
+pub(crate) const TLS_ARRAY_SIZE: usize = 0x1000;
 
 /// Bytes read per step when a template is checked and then copied into its
 /// block.

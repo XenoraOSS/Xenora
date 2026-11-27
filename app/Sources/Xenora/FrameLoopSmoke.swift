@@ -3,6 +3,7 @@ import Combine
 import CoreGraphics
 import CXenora
 import Foundation
+import GameController
 
 private final class StopGate: Sendable {
     private let release = DispatchSemaphore(value: 0)
@@ -14,7 +15,7 @@ private final class StopGate: Sendable {
 /// Scripted failure paths. This never opens a Metal device.
 private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
     enum Operation: String {
-        case create, destroy, standard, interactive, sendInput, pause, resume, stop, status, journalSize
+        case create, destroy, standard, interactive, sendInput, sendXInput, pollXInputVibration, pause, resume, stop, status, journalSize
     }
 
     // Deinitialization can call the API from outside the main actor.
@@ -22,8 +23,13 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
     private var live: xenora_session = 0
     private var next: xenora_session = 1
     private var codes: [Operation: Int32] = [:]
+    private var persistentCodes: [Operation: Int32] = [:]
     private var calls: [Operation] = []
     private var sentInputs: [(handle: xenora_session, input: xenora_controller_input)] = []
+    private var sentXInputs: [(handle: xenora_session, userIndex: UInt32, input: xenora_xinput_state)] = []
+    private var sentXInputBatteries: [(userIndex: UInt32, battery: xenora_xinput_battery)] = []
+    private var vibrations = [xenora_xinput_vibration](repeating: xenora_xinput_vibration(), count: 4)
+    private var vibrationPolls: [UInt32] = []
     private var invalidCalls = 0
     private var nextStopGate: StopGate?
     private var snapshot = (state: UInt32(XENORA_LOOP_FINISHED), completed: UInt32(1), frame: UInt32(0), pixel: UInt8(0))
@@ -34,6 +40,10 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
 
     func fail(_ operation: Operation, _ code: Int32) {
         lock.withLock { codes[operation] = code }
+    }
+
+    func failContinuously(_ operation: Operation, _ code: Int32) {
+        lock.withLock { persistentCodes[operation] = code }
     }
 
     func count(_ operation: Operation) -> Int {
@@ -48,6 +58,37 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
 
     var inputs: [xenora_controller_input] { lock.withLock { sentInputs.map(\.input) } }
 
+    var xinputs: [(userIndex: UInt32, input: xenora_xinput_state)] {
+        lock.withLock { sentXInputs.map { ($0.userIndex, $0.input) } }
+    }
+
+    var xinputBatteries: [(userIndex: UInt32, battery: xenora_xinput_battery)] {
+        lock.withLock { sentXInputBatteries }
+    }
+
+    var polledVibrationSlots: [UInt32] { lock.withLock { vibrationPolls } }
+
+    func reportVibration(
+        sequence: UInt32, left: UInt16, right: UInt16, connected: Bool, enabled: Bool = true,
+        slot: Int? = nil
+    ) {
+        lock.withLock {
+            let value = xenora_xinput_vibration(
+                sequence: sequence,
+                left_motor: left,
+                right_motor: right,
+                connected: connected ? 1 : 0,
+                enabled: enabled ? 1 : 0,
+                reserved: (0, 0)
+            )
+            if let slot, vibrations.indices.contains(slot) {
+                vibrations[slot] = value
+            } else {
+                vibrations = [xenora_xinput_vibration](repeating: value, count: 4)
+            }
+        }
+    }
+
     var lastInputHandle: xenora_session? { lock.withLock { sentInputs.last?.handle } }
 
     var clean: Bool { lock.withLock { live == 0 && invalidCalls == 0 } }
@@ -58,7 +99,7 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
             invalidCalls += 1
             return Int32(XENORA_INVALID_HANDLE)
         }
-        return codes.removeValue(forKey: operation) ?? Int32(XENORA_OK)
+        return persistentCodes[operation] ?? codes.removeValue(forKey: operation) ?? Int32(XENORA_OK)
     }
 
     func create(_ handle: inout xenora_session) -> Int32 {
@@ -89,6 +130,39 @@ private final class ScriptedFrameLoop: FrameLoopAPI, @unchecked Sendable {
         lock.withLock {
             sentInputs.append((handle, input))
             return call(.sendInput, handle)
+        }
+    }
+
+    func sendXInput(_ handle: xenora_session, _ userIndex: UInt32, _ input: inout xenora_xinput_state) -> Int32 {
+        lock.withLock {
+            sentXInputs.append((handle, userIndex, input))
+            return call(.sendXInput, handle)
+        }
+    }
+
+    func sendXInputWithBattery(
+        _ handle: xenora_session,
+        _ userIndex: UInt32,
+        _ input: inout xenora_xinput_state,
+        _ battery: inout xenora_xinput_battery
+    ) -> Int32 {
+        lock.withLock {
+            sentXInputs.append((handle, userIndex, input))
+            sentXInputBatteries.append((userIndex, battery))
+            return call(.sendXInput, handle)
+        }
+    }
+
+    func pollXInputVibration(
+        _ handle: xenora_session, _ userIndex: UInt32, _ output: inout xenora_xinput_vibration
+    ) -> Int32 {
+        lock.withLock {
+            vibrationPolls.append(userIndex)
+            let code = call(.pollXInputVibration, handle)
+            if code == XENORA_OK, vibrations.indices.contains(Int(userIndex)) {
+                output = vibrations[Int(userIndex)]
+            }
+            return code
         }
     }
 
@@ -222,7 +296,9 @@ func checkFrameLoopFailures() async -> [String] {
     expect(teardownAPI.count(.status) == 0, "poll ran after teardown")
     return failures + (await checkFramePolling()) + (await checkNonblockingStop())
         + (await checkFailedStopRecovery())
-        + checkControllerComposition() + checkControllerHandoffs() + (await checkControllerErrorRecovery())
+        + checkControllerComposition() + checkMultiplayerSlots() + checkControllerHandoffs()
+        + (await checkControllerErrorRecovery()) + (await checkVibrationOutput())
+        + (await checkMultiSlotVibration())
 }
 
 @MainActor
@@ -312,6 +388,147 @@ private func checkFailedStopRecovery() async -> [String] {
     await model.stop()?.value
     expect(model.canStart && !model.isStopping,
            "failed-stop recovery did not allow a clean stop")
+    return failures
+}
+
+
+@MainActor
+private final class RecordingVibrationSink: ControllerVibrationSink {
+    private(set) var commands: [XInputVibrationCommand] = []
+    private(set) var resetCount = 0
+    var lastError: String?
+
+    func apply(command: XInputVibrationCommand, haptics: GCDeviceHaptics?) {
+        commands.append(command)
+    }
+
+    func reset() {
+        resetCount += 1
+    }
+}
+
+@MainActor
+private func checkVibrationOutput() async -> [String] {
+    var failures: [String] = []
+    func expect(_ condition: Bool, _ message: String) {
+        if !condition { failures.append(message) }
+    }
+
+    let api = ScriptedFrameLoop()
+    let sink = RecordingVibrationSink()
+    let controller = DetectedController(
+        identity: ObjectIdentifier(api), name: "Rumble controller", supportsHaptics: true,
+        snapshot: ControllerSnapshot(buttons: 0, x: 0, y: 0, leftTrigger: 0, rightTrigger: 0)
+    )
+    let model = FrameLoopModel(
+        api: api,
+        readController: { controller },
+        vibrationSink: sink,
+        sleepBeforePoll: { _ in try await Task.sleep(for: .milliseconds(5)) }
+    )
+    api.report(XENORA_LOOP_RUNNING, completed: 1, frame: 0, pixel: 0)
+    api.reportVibration(sequence: 7, left: 32768, right: 65535, connected: true)
+    model.startInteractive()
+    let initialResets = sink.resetCount
+    expect(await waitForLoop { sink.commands.count == 1 },
+           "vibration command did not reach the output sink")
+    expect(sink.commands.last == XInputVibrationCommand(
+        sequence: 7, leftMotor: 32768, rightMotor: 65535, connected: true
+    ), "vibration command bytes were altered")
+
+    try? await Task.sleep(for: .milliseconds(25))
+    expect(sink.commands.count == 1, "unchanged vibration sequence was applied repeatedly")
+    api.reportVibration(sequence: 8, left: 0, right: 1024, connected: true)
+    expect(await waitForLoop { sink.commands.count == 2 },
+           "updated vibration sequence did not reach the output sink")
+    expect(sink.commands.last == XInputVibrationCommand(
+        sequence: 8, leftMotor: 0, rightMotor: 1024, connected: true
+    ), "updated vibration command bytes were altered")
+
+    api.reportVibration(sequence: 8, left: 0, right: 1024, connected: true, enabled: false)
+    expect(await waitForLoop { sink.commands.count == 3 },
+           "disabled XInput reporting did not reach the output sink")
+    expect(sink.commands.last?.enabled == false && sink.commands.last?.rightIntensity == 0,
+           "disabled XInput reporting did not suppress actuation")
+    api.reportVibration(sequence: 8, left: 0, right: 1024, connected: true, enabled: true)
+    expect(await waitForLoop { sink.commands.count == 4 },
+           "re-enabled XInput reporting did not replay the registered vibration")
+    expect(sink.commands.last?.enabled == true && sink.commands.last?.rightIntensity != 0,
+           "re-enabled XInput reporting did not restore the registered intensity")
+
+    api.report(XENORA_LOOP_STOPPED, completed: 2, frame: 0, pixel: 0)
+    await model.stop()?.value
+    expect(sink.resetCount > initialResets, "terminal loop did not reset vibration output")
+    expect(model.controllerVibrationError == nil,
+           "successful scripted vibration polling published an error")
+
+    api.failContinuously(.pollXInputVibration, Int32(XENORA_INTERNAL_ERROR))
+    api.report(XENORA_LOOP_RUNNING, completed: 2, frame: 0, pixel: 0)
+    model.startInteractive()
+    expect(await waitForLoop { model.controllerVibrationError?.contains("poll controller vibration") == true },
+           "vibration polling failure was hidden; polled slots \(api.polledVibrationSlots), error \(String(describing: model.controllerVibrationError))")
+    return failures
+}
+
+@MainActor
+private func checkMultiSlotVibration() async -> [String] {
+    var failures: [String] = []
+    func expect(_ condition: Bool, _ message: String) {
+        if !condition { failures.append(message) }
+    }
+
+    final class Token: NSObject {}
+    func controller(_ token: NSObject, _ name: String) -> DetectedController {
+        DetectedController(
+            identity: ObjectIdentifier(token), name: name, supportsHaptics: true,
+            snapshot: ControllerSnapshot(buttons: 0, x: 0, y: 0, leftTrigger: 0, rightTrigger: 0)
+        )
+    }
+    let firstToken = Token()
+    let secondToken = Token()
+    let first = controller(firstToken, "first rumble")
+    let second = controller(secondToken, "second rumble")
+    var detected = [first, second]
+    var sinks: [RecordingVibrationSink] = []
+    let api = ScriptedFrameLoop()
+    let model = FrameLoopModel(
+        api: api,
+        readControllers: { detected },
+        vibrationSinkFactory: {
+            let sink = RecordingVibrationSink()
+            sinks.append(sink)
+            return sink
+        },
+        sleepBeforePoll: { _ in try await Task.sleep(for: .milliseconds(5)) }
+    )
+    api.reportVibration(sequence: 3, left: 1000, right: 2000, connected: true, slot: 0)
+    api.reportVibration(sequence: 4, left: 3000, right: 4000, connected: true, slot: 1)
+    api.report(XENORA_LOOP_RUNNING, completed: 1, frame: 0, pixel: 0)
+    model.startInteractive()
+
+    expect(await waitForLoop { sinks.count == 2 && sinks.allSatisfy { $0.commands.count == 1 } },
+           "multi-slot vibration did not create independent outputs for slots zero and one")
+    guard sinks.count == 2 else {
+        return failures + ["missing multi-slot vibration sinks: \(sinks.count), controllers \(model.controllers.count), polls \(api.polledVibrationSlots)"]
+    }
+    expect(sinks[0].commands.last?.sequence == 3 && sinks[1].commands.last?.sequence == 4,
+           "multi-slot vibration commands were not routed to their respective slots")
+    expect(api.polledVibrationSlots.contains(0) && api.polledVibrationSlots.contains(1),
+           "multi-slot vibration did not poll both occupied slots")
+
+    detected = [first]
+    api.reportVibration(sequence: 4, left: 0, right: 0, connected: false, slot: 1)
+    expect(await waitForLoop { sinks[1].commands.count == 2 },
+           "slot-one disconnect did not reach its independent output")
+    expect(sinks[1].commands.last?.connected == false
+           && sinks[1].commands.last?.leftMotor == 0 && sinks[1].commands.last?.rightMotor == 0,
+           "slot-one disconnect did not stop with a neutral command")
+    expect(sinks[0].commands.count == 1,
+           "slot-one disconnect disturbed the unchanged slot-zero output")
+
+    api.report(XENORA_LOOP_STOPPED, completed: 1, frame: 0, pixel: 0)
+    await model.stop()?.value
+    expect(sinks.allSatisfy { $0.resetCount > 0 }, "terminal loop did not reset every vibration slot")
     return failures
 }
 
@@ -405,7 +622,14 @@ private func checkControllerComposition() -> [String] {
     let controller = DetectedController(
         identity: ObjectIdentifier(api), name: "Held controller", supportsHaptics: false,
         snapshot: ControllerSnapshot(
-            buttons: left | action, x: 1, y: -1, leftTrigger: 0.25, rightTrigger: 0.75
+            buttons: left | action, x: 1, y: -1, leftTrigger: 0.25, rightTrigger: 0.75,
+            xinput: XInputSnapshotValues(
+                buttons: XInputButtonBits.dpadLeft | XInputButtonBits.a,
+                leftTrigger: 64,
+                rightTrigger: 191,
+                leftX: 32767,
+                leftY: -32768
+            )
         )
     )
     let model = FrameLoopModel(api: api, readController: { controller })
@@ -428,6 +652,115 @@ private func checkControllerComposition() -> [String] {
     }) {
         failures.append("screen direction or release replaced the connected controller's analog input")
     }
+    let xinputs = api.xinputs
+    let xbuttons = xinputs.map(\.input.buttons)
+    let expectedXButtons = [
+        XInputButtonBits.dpadLeft | XInputButtonBits.a,
+        XInputButtonBits.dpadRight | XInputButtonBits.a,
+        XInputButtonBits.dpadLeft | XInputButtonBits.a,
+    ]
+    if xbuttons != expectedXButtons {
+        failures.append("controller composition sent XInput buttons \(xbuttons), expected \(expectedXButtons)")
+    }
+    if !xinputs.allSatisfy({ item in
+        item.userIndex == 0 && item.input.connected == 1 && item.input.left_x == 32767
+            && item.input.left_y == -32768 && item.input.left_trigger == 64 && item.input.right_trigger == 191
+    }) {
+        failures.append("screen direction or release replaced the connected controller's XInput analog state")
+    }
+    return failures
+}
+
+@MainActor
+private func checkMultiplayerSlots() -> [String] {
+    var failures: [String] = []
+    func expect(_ condition: Bool, _ message: String) {
+        if !condition { failures.append(message) }
+    }
+
+    final class Token: NSObject {}
+    let firstToken = Token()
+    let secondToken = Token()
+    let thirdToken = Token()
+    func controller(
+        _ token: NSObject,
+        _ buttons: UInt16,
+        supportsHaptics: Bool = false,
+        battery: XInputBatteryValues = XInputBatteryValues()
+    ) -> DetectedController {
+        DetectedController(
+            identity: ObjectIdentifier(token),
+            name: "Controller \(buttons)",
+            supportsHaptics: supportsHaptics,
+            snapshot: ControllerSnapshot(
+                buttons: 0, x: 0, y: 0, leftTrigger: 0, rightTrigger: 0,
+                xinput: XInputSnapshotValues(buttons: buttons)
+            ),
+            battery: battery
+        )
+    }
+
+    let firstBattery = XInputBatteryValues(
+        present: true,
+        state: UInt8(XENORA_XINPUT_BATTERY_STATE_DISCHARGING),
+        level: 55
+    )
+    let first = controller(firstToken, XInputButtonBits.a, battery: firstBattery)
+    let second = controller(secondToken, XInputButtonBits.b, supportsHaptics: true)
+    let third = controller(thirdToken, XInputButtonBits.x)
+    var detected: [DetectedController] = []
+    let api = ScriptedFrameLoop()
+    let model = FrameLoopModel(api: api, readControllers: { detected })
+    model.startInteractive()
+
+    detected = [first, second]
+    api.report(XENORA_LOOP_PAUSED, completed: 1, frame: 0, pixel: 0)
+    model.pause()
+    var xinputs = api.xinputs
+    if xinputs.count == 2 {
+        expect(xinputs[0].userIndex == 0 && xinputs[0].input.buttons == XInputButtonBits.a
+               && xinputs[0].input.connected == 1 && xinputs[0].input.features == 0,
+               "first controller did not occupy XInput slot zero without haptics")
+        expect(xinputs[1].userIndex == 1 && xinputs[1].input.buttons == XInputButtonBits.b
+               && xinputs[1].input.connected == 1
+               && xinputs[1].input.features == UInt8(XENORA_XINPUT_FEATURE_VIBRATION),
+               "second controller did not occupy XInput slot one with its haptics capability")
+    } else {
+        failures.append("two connected controllers produced \(xinputs.count) XInput submissions, expected 2")
+    }
+    expect(model.controller == first && model.controllers == [first, second],
+           "multiplayer publication did not expose slot order with the first controller as primary")
+    let batteries = api.xinputBatteries
+    expect(batteries.count == 2 && batteries[0].userIndex == 0
+           && batteries[0].battery.present == 1
+           && batteries[0].battery.state == UInt8(XENORA_XINPUT_BATTERY_STATE_DISCHARGING)
+           && batteries[0].battery.level == 55
+           && batteries[0].battery.reserved == 0,
+           "the first controller battery evidence was not transported atomically with its XInput slot")
+    expect(batteries.count == 2 && batteries[1].userIndex == 1 && batteries[1].battery.present == 0
+           && batteries[1].battery.state == 0 && batteries[1].battery.level == 0,
+           "a controller without battery evidence did not use the canonical absent battery shape")
+
+    detected = [second]
+    model.pause()
+    xinputs = api.xinputs
+    expect(xinputs.count == 3 && xinputs.last?.userIndex == 0
+           && xinputs.last?.input.connected == 0 && xinputs.last?.input.buttons == 0,
+           "removing the slot-zero controller did not send exactly one neutral disconnect")
+    expect(model.controller == second && model.controllers == [second],
+           "the remaining slot-one controller did not become the legacy primary controller")
+
+    detected = [second, third]
+    model.pause()
+    xinputs = api.xinputs
+    expect(xinputs.count == 4 && xinputs.last?.userIndex == 0
+           && xinputs.last?.input.buttons == XInputButtonBits.x && xinputs.last?.input.connected == 1,
+           "a newly connected controller did not reuse the first empty XInput slot")
+    expect(model.controller == third && model.controllers == [third, second],
+           "slot-order publication did not place the replacement slot-zero controller first")
+
+    model.pause()
+    expect(api.xinputs.count == 4, "unchanged multiplayer snapshots were resent")
     return failures
 }
 

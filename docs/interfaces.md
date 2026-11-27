@@ -75,8 +75,8 @@ A guest ends its process through `kernel32.dll!ExitProcess`, also reachable as
 the guest passed. Only the guest stops: the host process is not ended. A
 returning entry point does the same with EAX as the status, which matches
 Windows while the process has one thread. The exit closes every guest handle:
-kernel objects, Winsock sockets and task-queue handles, which
-`ServicesState::open_handle_count` counts together. Files stay on the synthetic `C:` drive, guest memory stays mapped so the host
+kernel objects, WinHTTP objects, Winsock sockets and task-queue handles,
+which `ServicesState::open_handle_count` counts together. Files stay on the synthetic `C:` drive, guest memory stays mapped so the host
 can inspect it, and `atexit` functions are not run: that belongs to the C
 runtime's `exit`, described below. `ServicesState::exit_status`
 reports the status. After an exit the `DbtEngine` that ran the guest executes
@@ -140,6 +140,96 @@ that starts inside the header page, used to load and is now refused. The header
 pages count toward the 256 MiB mapping budget of one image, which is checked
 before anything is mapped. `ParsedPe::parse` does not make these checks, so
 static inspection of a file is unchanged.
+
+The separate explicit-module loader infrastructure can plan and map a batch of
+caller-supplied in-memory PE32+ images without host file search. Batch mapping
+returns half-open reservation records and also retains those complete image
+spans in `GuestMemory` as lightweight ownership records. Only headers and
+sections are committed; holes remain unmapped. A batch is rejected before
+mutation when memory already exists anywhere in a planned span, and later
+unrelated mappings or dynamic allocations cannot reuse those holes. The records
+do not implement unloading,
+per-section ownership or host operating-system guard pages. Batch relocation
+requires exactly one reservation per input image and validates its index,
+64 KiB-aligned base, `SizeOfImage` extent, entry and preferred-base metadata
+and overlap shape before mutation. It then applies the existing DIR64
+relocation engine at each reserved base and writes each mapped optional-header
+`ImageBase` field. A DIR64 target must be continuously backed by committed
+image headers or sections; a target in a `SizeOfImage` hole is refused even
+if inconsistent memory state contains unrelated bytes there. Any validation or
+relocation failure restores the exact pre-relocation address space, including
+fixups already applied to earlier images. The implementation uses a whole
+`GuestMemory` snapshot for that transaction; this is correct but deliberately
+expensive and is not the final memory-ownership design. Relocation itself
+performs no import or IAT write. Ordinary-IAT binding is a separate implemented
+step, while delayed imports, service registration, exception-directory
+registration, TLS callbacks, unloading, reference counting and module execution
+remain unsupported. Before ordinary-IAT writes, the binder also requires
+fixed-base images to occupy their preferred reservations and each image/base
+pair to satisfy the same nonmutating mapping validation that produces legitimate
+reservations.
+step, while delayed imports, service registration, TLS callbacks, unloading,
+reference counting and module execution remain unsupported.
+
+Batch exception-directory registration uses the same exact-one reservation
+validation. For each image it reads PE data directory 3, requires whole aligned
+`RUNTIME_FUNCTION` entries in ascending order inside `SizeOfImage`, and requires
+the directory, function ranges and fixed unwind-data bytes to be backed by
+committed image headers or sections. Valid tables are registered in input order
+for the existing x64 exception lookup path, while an absent directory is an
+honest no-op. Registration writes no guest bytes; if a later image fails, the
+function-table list is truncated to its original length so earlier registrations
+do not remain visible. Language-specific variable-sized handler data is not fully bounded here. This
+does not execute module code, change unwind semantics, implement dynamic
+function-table APIs or provide unloading.
+
+Batch TLS preparation uses the same exact-one reservation validation. For
+each image it reads PE data directory 9, rebases preferred-image virtual
+addresses to the reservation base, and validates the complete declared
+directory, the four-byte index location, the template bytes and the callback
+array including its terminator against committed image backing. Callback
+targets must be inside executable committed image code, but they are only
+reported; this layer never executes them. An absent directory is an honest
+no-op.
+
+The caller selects one thread's TLS pointer array by its eight-byte-aligned
+base. If that array is absent it is created as bounded thread-owned memory;
+if it already exists it must be writable. Zero slots are Xenora's free-slot
+markers for this batch layer. Preparation never overwrites a nonzero slot and
+assigns the first free slots in input order to modules that have TLS
+directories. It writes each module's index, copies its template in bounded
+chunks into independently owned thread-dynamic storage and leaves the declared
+zero-fill bytes zero. Reports therefore distinguish no directory, prepared
+storage ownership and callbacks discovered without execution. The caller must
+supply the batch in dependency order; this layer treats input order as the
+initialization-order contract. Dependency sorting and module initialization
+execution remain separate responsibilities.
+
+All TLS metadata is validated before mutation. A later allocation, backing or
+copy failure restores the exact pre-preparation memory through the same
+deliberately expensive whole-memory snapshot used by the other batch seams.
+This is not a general memory transaction API. TLS callbacks, `DllMain`, thread
+creation policy, dynamic TLS APIs, unloading and reference counting remain
+unsupported. A directory with no template bytes and no zero-fill receives a
+batch-local index but has no storage pointer with which later independent
+batches could retain that slot; that edge is part of the unresolved storage
+ownership design rather than silent Windows-compatible behavior.
+
+Module initialization-order planning is also non-executing metadata. The
+planner requires positional agreement between logical package inputs, parsed
+explicit images and reservations. It can run before TLS preparation; when TLS
+reports are supplied it validates and carries them through the same image
+indexes. It rebuilds the module dependency graph from the supplied bytes and
+rejects a stale or mismatched caller-supplied graph before using it. The resulting components keep
+the graph's provider-before-consumer condensation order and annotate each
+module with its file name, actual reserved entry-point address and TLS callback
+addresses. DLL entries are distinguished as potential `DllMain` work from
+non-DLL process entries; neither kind is executed. Circular strongly connected
+components remain grouped without an invented member order, and incomplete
+import or export table inspection is reported as ordering uncertainty because
+hidden dependencies could change the correct order. Loader-lock behavior,
+thread policy, initialization execution, unloading and reference counting
+remain unsupported.
 
 `xenora probe --mode static` inventories ordinary and delay-loaded PE imports
 without guest execution. Without `--report` it writes to `diagnostics/probe`,
@@ -257,6 +347,23 @@ outside this subset. A failed output write leaves the handle table unchanged.
 zero size. The guest memory map tracks allocation ownership and bounds live
 virtual allocations to 64 MiB. Decommit, executable pages, and console-specific
 allocation lifecycle remain unsupported.
+
+`xmem.dll!XMemAlloc` uses the same bounded backing store for its narrow
+data-only allocation subset, while `XMemFree` releases only the exact base of
+a live XMem-owned allocation. XMem and VirtualAlloc ownership are distinct in
+the memory map, so one API cannot release the other's allocation. Because the
+public free routine returns void, a null, interior, foreign or already-freed
+address stops with Xenora's explicit runtime-limit fault instead of inventing
+an error channel or silently accepting ownership corruption. Allocator IDs,
+graphics memory types, page-size selection, alignment attributes and physical
+Xbox memory behavior remain unsupported; attribute bits are currently not
+interpreted.
+
+References include Microsoft's public
+[XMemAlloc](https://docs.xbox.com/reference/system/xmem/functions/xmemalloc_routine)
+and [XMemFree](https://docs.xbox.com/reference/system/xmem/functions/xmemfree_routine)
+routine signatures. The behavior above is Xenora's bounded ownership model,
+not GDK or Xbox-hardware comparison evidence.
 
 References include Microsoft's
 [thread handle](https://learn.microsoft.com/windows/win32/api/processthreadsapi/nf-processthreadsapi-openthread),
@@ -429,6 +536,189 @@ Those pages list one set of locations for a function and its A and W names
 together, so both names resolve in each.
 `crates/loader/tests/startup_info.rs` runs original C and C++ programs through
 them. Nothing was compared with Windows.
+
+### XInput controller state
+
+`XInputGetState` resolves through the legacy DirectX redistributable
+`xinput1_3.dll` name as well as `xinput1_4.dll`, `xinput9_1_0.dll` and
+`xinputuap.dll`. Undocumented ordinal 100 (`XInputGetStateEx` in public
+reverse-engineering literature) resolves only on `xinput1_3.dll` and
+`xinput1_4.dll`; it uses the same evidenced 16-byte output layout but preserves
+the guide-button bit `0x0400`, while named `XInputGetState` masks that bit.
+This ordinal behavior is compatibility evidence from public reverse-engineering
+reports, not a Microsoft-documented contract or Xbox-hardware observation. The public structure layout is 16 bytes: a 32-bit packet
+number followed by the packed 12-byte gamepad state. A host may install one explicit snapshot per slot through
+`ServicesState::set_xinput_controller`. The runtime applies no deadzones and
+stores the documented units directly: the XInput button bitmask, triggers from
+0 through 255 and signed thumb axes from -32768 through 32767. A connected
+snapshot returns `ERROR_SUCCESS` and writes the exact 16-byte layout: packet
+number, buttons, triggers, then left X/Y and right X/Y in little-endian order.
+The packet number starts at one for a newly connected snapshot and increments
+only when a supplied snapshot changes or a disconnected slot reconnects.
+Supplying the same snapshot repeatedly leaves it unchanged. Disconnecting a
+slot makes later calls return `ERROR_DEVICE_NOT_CONNECTED` without mutating
+output. Slots start disconnected, so the honest default is that error.
+
+Indexes outside zero through three return `ERROR_BAD_ARGUMENTS`. Null,
+unwritable or truncated output ranges also return `ERROR_BAD_ARGUMENTS` before
+any mutation; Microsoft does not document that pointer-validation case, so
+this is Xenora's memory-safety boundary rather than Windows comparison
+evidence.
+
+The native application interface carries one explicit host snapshot through
+`xenora_session_send_xinput_state`: a 16-byte wire structure with public XInput
+button bits, triggers already scaled to 0 through 255, both thumbstick axes, a
+connected flag constrained to 0 or 1, a feature byte and two zeroed reserved
+bytes. Bit zero of the feature byte is host-reported vibration support; all
+other feature bits must be zero. The interface
+accepts user slots zero through three and validates session state, null
+pointers, indexes, the connected flag and reserved bytes. The frame-loop
+session owns its `ServicesState`, so a snapshot accepted there is what a guest
+later reads through `XInputGetState`. The legacy fixture input structure stays
+separate: it is not reinterpreted as XInput and its mouse fields are not
+overloaded as stick axes.
+
+The macOS app's existing GameController polling maps extended and micro
+gamepads into those XInput units. Menu and options map to start and back where
+available; the documented face, shoulder, thumbstick-button and directional-pad
+bits map directly; an extended gamepad's home button maps to the ordinal-100
+guide bit even though named `XInputGetState` masks it. Thumbsticks are scaled
+without applying the legacy fixture deadzone, with -1 reaching -32768 and +1 reaching 32767. Triggers scale to 0
+through 255.
+
+The app discovers up to four playable GameController devices for the XInput
+bridge. Discovery orders extended gamepads before micro gamepads, preferring
+the current controller within each class and otherwise following the order
+returned by GameController. The frame loop then keeps session-local slot
+assignments by controller object identity: an assigned controller keeps its
+slot while it remains present, a disconnected controller vacates its slot, and
+a newly discovered controller uses the lowest empty slot. This stable
+session-local policy is Xenora host behavior, not Windows or Xbox assignment
+evidence.
+Slot zero remains the primary controller for the legacy fixture input, the
+on-screen virtual input and vibration output. If slot zero is empty, the
+lowest occupied slot supplies legacy input, but vibration remains tied to the
+controller actually assigned to slot zero. The on-screen directional control
+can act as a virtual host input on slot zero and replace only the horizontal
+directional bits, mirroring the legacy fixture control. No physical
+multiplayer hardware verification has been performed.
+
+`XInputSetState` accepts the exact four-byte public vibration layout for a
+connected virtual slot and records the latest motor command with a sequence
+number. Disconnected slots, invalid indexes and invalid input memory fail
+before mutation. Disconnecting a slot clears the motors and sequence. The
+native interface exposes the latest command through
+`xenora_session_poll_xinput_vibration`: a 12-byte structure containing the
+sequence, left and right motor speeds, a connected byte, an enabled byte and
+two zeroed reserved bytes. Polling is non-consuming. A disconnected slot succeeds with a zeroed
+command so the host can stop output; invalid indexes, null output, invalid
+sessions and sessions without a running loop are rejected before writing.
+
+The macOS frame-loop fixture polls each XInput slot that has an assigned
+physical controller, plus a previously connected slot once after removal so its
+actuator can stop. Changed sequences for each slot pass to an independent
+GameController/Core Haptics output sink. When the selected controller exposes
+left- and right-handle localities, the XInput left and right motor speeds map
+to continuous haptic intensity on those respective actuators. When it does
+not, Xenora uses the guaranteed default locality once with the stronger motor
+intensity; this is an explicit approximation, not independent motor emulation.
+Motor speed maps to intensity only. Xenora does not claim the XInput low- and
+high-frequency motor characters, trigger actuators, exact force response or a
+hardware-verified effect. Engine or player failures are surfaced in the app;
+commands are best-effort host output evidence only. When the host input
+snapshot reports vibration support, the runtime advertises the force-feedback
+capability bit and 16-bit motor resolution for that slot. That is host
+capability metadata and best-effort output plumbing, not evidence that a
+physical pulse was observed. Without that host bit, motor resolutions remain
+zero.
+
+`XInputEnable` is available on `xinput1_3.dll`, `xinput1_4.dll` and
+`xinputuap.dll`, matching the public export sets, and is absent from reduced `xinput9_1_0.dll`. It tracks
+one global reporting state, initially enabled. While disabled,
+`XInputGetState` still reports connected slots but returns neutral gamepad
+data. Public documentation does not define the packet number in this mode;
+Xenora explicitly chooses zero because the visible neutral state is constant,
+and this is not Windows comparison evidence. `XInputSetState` commands remain
+registered and sequence-numbered while disabled, but the FFI vibration poll
+reports `enabled = 0`, so host actuators must stop. When reporting is
+re-enabled, the same stored command is exposed with `enabled = 1`, implementing
+the documented replay of the latest vibration request. The macOS frame-loop
+fixture applies that enabled bit through its haptic sink. This is only the
+guest API state machine; the app does not yet integrate physical window-focus
+policy with it.
+
+`XInputGetKeystroke` is available on `xinput1_3.dll`, `xinput1_4.dll` and
+`xinputuap.dll`, matching the public export sets; it is deliberately absent from the reduced
+`xinput9_1_0.dll` surface. The implementation validates indexes zero through
+three or `XUSER_INDEX_ANY`, requires the reserved parameter to be zero and
+checks the full eight-byte output range before looking at device state. A
+specific disconnected slot, or `XUSER_INDEX_ANY` with no connected slots,
+returns `ERROR_DEVICE_NOT_CONNECTED`. Connected slots currently return the
+documented `ERROR_EMPTY` result because Xenora has no host keystroke-event
+source yet. No key press, repeat, release, Unicode value or HID code is
+fabricated and the output buffer is not mutated for an empty result.
+
+`XInputGetBatteryInformation` is available on `xinput1_3.dll`,
+`xinput1_4.dll` and `xinputuap.dll`, matching the public export metadata, and is absent from
+reduced `xinput9_1_0.dll`. It validates the two-byte output range and accepts
+only the documented gamepad/headset device-type values. A disconnected slot or
+the unsupported headset reports `BATTERY_TYPE_DISCONNECTED` with empty level.
+A connected gamepad always reports `BATTERY_TYPE_UNKNOWN`: Apple
+GameController exposes charge state and an approximate fraction but no battery
+chemistry or wired/wireless XInput class, so Xenora must not invent
+`ALKALINE`, `NIMH` or `WIRED`. Public XInput documentation says the level is
+meaningful only for wireless devices with a known battery type. Xenora makes
+an explicit compatibility policy rather than claiming Windows behavior: when
+the host supplies a real percentage, it is published beside the unknown type
+using Xenora's coarse quantization (`0...10` empty, `11...40` low, `41...70`
+medium and `71...100` full). A missing battery object or an object with no
+trustworthy level leaves the level empty, where empty means no valid evidence
+rather than a measured drained pack. Charging/discharging/full evidence is
+transported through the additive host FFI and retained internally; it is not
+misrepresented as XInput chemistry.
+
+`XInputGetAudioDeviceIds` is available only on `xinput1_4.dll` and
+`xinputuap.dll`; it is absent from `xinput1_3.dll` and reduced
+`xinput9_1_0.dll`. The implementation extracts the fifth Win64 argument from
+the guest stack, validates the slot and every supplied count pointer before
+mutation, and treats a supplied nonzero count as requiring a writable buffer
+of at least one wide character. Public documentation does not define those
+malformed-pointer cases, so they are Xenora's memory-safety boundary rather
+than Windows comparison evidence. A connected virtual controller succeeds with
+zero counts and empty strings where capacity exists because Xenora exposes no
+headset endpoint. A disconnected slot returns `ERROR_DEVICE_NOT_CONNECTED`.
+Omitted optional count pointers leave the corresponding buffers untouched. No
+WASAPI endpoint identifier is invented and no audio render/capture path is
+implemented.
+
+`XInputGetDSoundAudioDeviceGuids` is available only on the legacy
+`xinput1_3.dll` and `xinput9_1_0.dll` surfaces, matching public documentation;
+it is absent from `xinput1_4.dll` and `xinputuap.dll`. Both GUID output ranges
+are validated before mutation. A connected virtual controller succeeds with
+two `GUID_NULL` values because Xenora exposes no headset endpoint, while a
+disconnected slot returns `ERROR_DEVICE_NOT_CONNECTED`. This is only the
+legacy identifier boundary: no DirectSound device, audio render path, capture
+path or headset is implemented. The ordinal-only xinput1_3 exports remain
+unsupported because their public contracts are undocumented.
+
+`XInputGetCapabilities` is available on the same four library names for a
+connected virtual slot. It accepts flags zero or `XINPUT_FLAG_GAMEPAD` and
+writes the exact 20-byte public structure. Xenora reports the virtual surface
+as `XINPUT_DEVTYPE_GAMEPAD`/`XINPUT_DEVSUBTYPE_GAMEPAD`, every standard input
+button bit, trigger resolution 255 and thumbstick resolution 32767. Motor
+resolution and the force-feedback feature flag reflect only host-reported
+haptic support as described above; the runtime does not pretend that wireless,
+voice, plug-in module or physical force-feedback properties are known.
+Disconnected slots return `ERROR_DEVICE_NOT_CONNECTED`, and invalid slots,
+flags or output ranges return `ERROR_BAD_ARGUMENTS` before mutation.
+
+Hardware-verified vibration output, keystroke event capture,
+hardware-verified physical battery behavior, actual headset/audio endpoints and audio render/capture,
+physical-controller hotplug policy beyond the app's existing
+polling, ordinal 101/102/103 guide-wait/poweroff functions,
+arbitrary game execution and real-game compatibility remain unsupported. This chain proves conversion and delivery
+into runtime services; it does not prove physical Xbox controller behavior and
+was not compared with Windows or Xbox hardware.
 
 ### Guest heaps
 
@@ -754,6 +1044,124 @@ in one package in one group, coherent with the count `GetSystemInfo`
 reports. Numa, cache and group relationships are not modeled yet:
 enumerating them alone answers zero entries. Nothing was compared with
 Windows.
+
+### WinHTTP synchronous cleartext subset
+
+`winhttp.dll` has a partial, synchronous object and cleartext HTTP/1.1
+transport model. `WinHttpOpen` copies the optional agent string and creates a
+session handle. The direct and default access modes are accepted; because the
+synthetic machine has no proxy configuration, the default mode currently means
+direct access. Named and automatic proxy modes and every nonzero session flag,
+including asynchronous operation, fail with `ERROR_NOT_SUPPORTED`. Proxy
+strings are not dereferenced in the accepted modes because Microsoft's
+documentation makes them inputs to the named-proxy mode.
+
+`WinHttpConnect` requires a live session handle of the correct type, a
+nonempty ASCII host or address string rather than a URL, a zero reserved field
+and a 16-bit `INTERNET_PORT`; only the low sixteen bits of the Win64 argument
+register are consumed. It creates a connection object but, as on Windows,
+establishes no network connection. `WinHttpOpenRequest` requires a live
+connection handle of the correct type. Validation and insertion happen under
+the same handle-table lock, so another thread cannot close the parent between
+the two steps. Null verb and version strings default to `GET` and `HTTP/1.1`;
+a null object name is transmitted as `/`. The request copies its strings and
+accept types into immutable state, so later guest-memory writes cannot mutate
+the object. Only the zero flags and `WINHTTP_FLAG_SECURE` are accepted. The
+secure flag records that HTTPS was requested but does not implement TLS;
+sending such a request fails with `ERROR_NOT_SUPPORTED` before any network
+use.
+
+`WinHttpSendRequest` performs one synchronous cleartext HTTP/1.1 exchange.
+It validates and copies additional headers and the optional request body out
+of guest memory before network use. A header length of `-1` means a
+null-terminated UTF-16 header block; otherwise the documented length is a
+count of UTF-16 units. Header lines must use CRLF and a printable ASCII field
+name and value. `Host`, `Content-Length`, `Connection` and
+`Transfer-Encoding` are generated by the transport and are refused in the
+additional-header block. Xenora emits `Connection: close`; there is no
+connection reuse or keep-alive pool. `dwTotalLength` must equal the optional
+body length because `WinHttpWriteData` streaming is not implemented. The
+pre-send copy is bounded at 16 MiB; larger inline bodies fail with
+`ERROR_OUTOFMEMORY`.
+
+`WinHttpSetTimeouts` accepts session and not-yet-sent request handles. Its
+signed millisecond values follow the public contract: zero or minus one means
+no API-level timeout, positive values are finite timeouts and other negative
+values fail with `ERROR_INVALID_PARAMETER`. Sessions start with the documented
+defaults: infinite resolution, 60-second connect, 30-second send and 30-second
+receive timeouts. A request inherits a snapshot of the session values when it
+is created; later session changes do not rewrite that request, while a request
+override applies only to that request. Connect, send and receive timeouts are
+applied to the blocking TCP operations. Rust's host resolver is blocking and
+cannot be cancelled once entered, so a finite resolution timeout is enforced
+with a detached helper thread: the caller fails with `ERROR_WINHTTP_TIMEOUT`,
+while a late resolver result is discarded. Resolution therefore has the
+documented helper-thread cost and is not true cancellation of the operating
+system resolver. A request may connect to whatever address the resolver
+returns; loopback tests are evidence of the transport mechanics only, not of
+general Internet reachability.
+
+`WinHttpQueryOption` supports only the four DWORD timeout options matching
+those stored values: resolve, connect, send and receive on session or request
+handles. Infinite values are returned as unsigned `0xffffffff` DWORD bits. It
+implements the documented required-size contract by writing four to
+`lpdwBufferLength` when the output buffer is null or too small and failing
+with `ERROR_INSUFFICIENT_BUFFER`; success writes exactly four bytes. Connection
+handles fail with the incorrect-handle-type error, unknown options fail with
+`ERROR_WINHTTP_INVALID_OPTION`, and arbitrary other options remain unsupported.
+
+`WinHttpReceiveResponse` parses HTTP/1.0 and HTTP/1.1 status lines and a
+bounded response header block. It preserves the status line and headers for
+the supported `WinHttpQueryHeaders` forms: `WINHTTP_QUERY_STATUS_CODE` as a
+UTF-16 string or combined with `WINHTTP_QUERY_FLAG_NUMBER` as a 32-bit number,
+`WINHTTP_QUERY_STATUS_TEXT` as a UTF-16 string, `WINHTTP_QUERY_CONTENT_TYPE`,
+`WINHTTP_QUERY_CONTENT_LENGTH` as a UTF-16 string or 32-bit number, and
+`WINHTTP_QUERY_SERVER`. Named response-header lookup is case-insensitive and
+returns the first matching parsed header; duplicate enumeration through
+`lpdwIndex` remains unsupported. A missing supported header fails with
+`ERROR_WINHTTP_HEADER_NOT_FOUND`. String forms implement the documented
+required-size contract and report the successful byte length without the
+terminating null. Request-header queries, custom names, raw-header queries,
+indexes and all other info levels remain unsupported. Bodies with
+`Content-Length` are bounded by
+that length; responses without one are read until close. `HEAD`, informational,
+204 and 304 responses have no body. Chunked transfer coding is decoded incrementally; other transfer codings are
+rejected rather than decoded incorrectly.
+
+`WinHttpQueryDataAvailable` reports bytes available without consuming them,
+waiting for more cleartext body data in the synchronous subset when the end
+has not been reached. `WinHttpReadData` zeroes its count output before other
+work, validates the destination span before consuming network data, returns a
+bounded partial read, reports EOF with a zero count and propagates malformed
+responses, timeouts and reset connections as documented WinHTTP errors.
+Responses whose only transfer coding is exactly `chunked` are decoded
+incrementally: chunk sizes and extensions are bounded and validated, chunk
+data is exposed without the framing bytes, trailers are validated and
+discarded, and malformed framing or premature EOF fails the request rather
+than being exposed as body data. Other transfer codings and combinations
+remain unsupported.
+Operations on one request handle are serialized by its transport lock;
+independent handles may proceed independently. Closing a handle while another
+thread is using it remains caller misuse, but the implementation retains the
+in-flight object rather than corrupting the table.
+
+`WinHttpCloseHandle` closes exactly one session, connection or request handle
+and makes later use of that value fail. Closing a parent does not rewrite an
+existing child object: children carry immutable snapshots of the state they
+need. This is Xenora's object-lifetime policy for the synchronous subset;
+Microsoft's public documentation requires applications to close handles and
+not reuse them but does not give a complete parent-close cascade contract.
+Handles are process-local opaque values and are also discarded when the guest
+process exits.
+
+TLS certificate validation, HTTPS, asynchronous callbacks, in-flight cancellation,
+redirects, authentication, proxy resolution, request streaming, connection
+reuse, custom/raw response-header queries, duplicate-header enumeration,
+non-chunked or combined transfer codings and libcurl-compatible interfaces
+remain unsupported. Tests
+use independently authored controlled loopback servers and synthetic guest
+memory on Apple Silicon only. They are not Windows comparison evidence,
+independent review or proof of Internet connectivity.
 
 ### Encoding conversions and code pages
 
@@ -1381,6 +1789,14 @@ addresses are not modelled. `UnmapViewOfFile` releases the view.
 process information structure, because the guest is the only process.
 This is implemented behaviour verified through the unit tests. Nothing
 here was compared with Windows or with an Xbox console.
+
+## XNetworking connectivity hint
+
+`xgameruntime.dll!XNetworkingGetConnectivityHint` writes the documented 16-byte `XNetworkingConnectivityHint`: three little-endian 32-bit fields followed by four one-byte boolean fields. Xenora reports `networkInitialized` as true because its bounded networking facility exists, `connectivityLevel` as `None` (1), `connectivityCost` as `Unknown` (0), and `ianaInterfaceType` as IANA `softwareLoopback` (24). The data-limit and roaming booleans are false. This is the honest state of the current machine: it has process-local loopback sockets but no external network route, DNS, proxy, TLS or Internet connectivity truth. The query must not be read as evidence that a title endpoint is reachable.
+
+A null, unmapped or partially unwritable output pointer returns `HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER)` and writes no success result. Registration, change callbacks, security-information queries and configuration settings are not implemented. This is locally verified behavior only; it has not been compared with Windows or Xbox hardware.
+
+Sources: [XNetworkingGetConnectivityHint](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/networking/xnetworking/functions/xnetworkinggetconnectivityhint), [XNetworkingConnectivityHint](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/networking/xnetworking/structs/xnetworkingconnectivityhint), [XNetworkingConnectivityLevelHint](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/networking/xnetworking/enums/xnetworkingconnectivitylevelhint), and [network initialization and connectivity](https://docs.xbox.com/build/console-features/networking/initialization-connectivity-networking).
 
 ## Opt-in synthetic Gaming Runtime lifecycle
 

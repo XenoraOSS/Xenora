@@ -9,6 +9,7 @@
 //!   for a synthetic imports.csv input.
 
 use std::sync::Arc;
+use xenora_loader::import_table::ImportName;
 use xenora_loader::imports::{ImportRegistry, ServiceStatus};
 use xenora_loader::services::{MockClock, ServicesState, register_standard_services};
 
@@ -179,16 +180,22 @@ fn import_backlog_generator_is_idempotent() {
 fn has_binding_matches_iter_registered() {
     let registry = standard_registry();
     // Collect all canonical keys from iter_registered
-    let registered: std::collections::HashSet<(String, String)> = registry
-        .iter_registered()
-        .map(|(m, s, _)| (m.to_ascii_lowercase(), s.to_string()))
+    let registered: std::collections::HashSet<(String, ImportName)> = registry
+        .iter_service_descriptors()
+        .map(|descriptor| {
+            (
+                descriptor.module.to_ascii_lowercase(),
+                descriptor.import_name(),
+            )
+        })
         .collect();
 
-    // All canonically registered services must respond true to has_binding
+    // All canonically registered services must respond true to the type-aware
+    // binding check, including canonical ordinal-only services.
     for (module, symbol) in &registered {
         assert!(
-            registry.has_binding(module, symbol),
-            "has_binding must return true for canonical {module}!{symbol}"
+            registry.has_binding_key(module, symbol),
+            "has_binding_key must return true for canonical {module}!{symbol}"
         );
     }
 

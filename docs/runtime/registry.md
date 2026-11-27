@@ -22,7 +22,7 @@ Guest imports resolve through one lookup, `ImportRegistry::resolve`. Binding, th
 
 ## Manual registrations and implementation status
 
-The typed table is only part of the standard registry. Manual code also registers services in the same `ImportRegistry`: Win32 services that do not yet have typed adapters, legacy CRT entry points and data imports, Winsock, C++ support libraries, module-loader services, the fixture graphics, task and platform services, `XMemAlloc` and the `XMemFree` stub. The generated live inventory is the authoritative current list; do not maintain a second list here.
+The typed table is only part of the standard registry. Manual code also registers services in the same `ImportRegistry`: Win32 services that do not yet have typed adapters, legacy CRT entry points and data imports, Winsock, C++ support libraries, module-loader services, the fixture graphics, task and platform services, `XMemAlloc` and exact-base XMem-owned `XMemFree` release. The generated live inventory is the authoritative current list; do not maintain a second list here.
 
 `ImportRegistry::register` keeps its historical default status of `implemented`. A status is explicit only when registration uses `try_register` or `register_with_status`, or when `set_status` is applied later. The inventory's `status_explicit=false` rows therefore identify metadata that was never explicitly chosen. That is an audit finding, not by itself a claim that the implementation is wrong.
 

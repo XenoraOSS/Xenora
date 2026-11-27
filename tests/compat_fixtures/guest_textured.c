@@ -9,7 +9,8 @@
 // resource view, a sampler and a root signature, records a textured draw,
 // executes it, reads the rendered framebuffer back into guest memory, asks
 // the runtime which backend produced the frame, and destroys everything in
-// the reverse order of creation.
+// the reverse order of creation. In the indexed variants it binds a guest
+// index buffer and selects a nonsequential triangle with a different sample.
 //
 // Every outside function is imported by name from xenora_graphics.dll or
 // kernel32.dll; the prototypes below follow the public interface described in
@@ -62,6 +63,8 @@ IMPORT int XenoraSetVertexBuffer(u64 list, u32 slot, u64 resource, u64 offset, u
 IMPORT int XenoraSetRenderTarget(u64 list, u64 resource, u32 clearColor);
 IMPORT int XenoraSetViewport(u64 list, u32 width, u32 height);
 IMPORT int XenoraDraw(u64 list, u32 vertexCount, u32 instanceCount, u32 startVertex);
+IMPORT int XenoraSetIndexBuffer(u64 list, u64 resource, u64 offset, u32 format);
+IMPORT int XenoraDrawIndexed(u64 list, u32 indexCount, u32 instanceCount, u64 startIndexBase);
 IMPORT int XenoraCloseCommandList(u64 list);
 IMPORT int XenoraExecuteCommandLists(u64 queue, u64 list);
 IMPORT int XenoraReadbackResource(u64 resource, u64 guestAddr, u64 byteLength);
@@ -122,7 +125,6 @@ IMPORT void XenoraNoSuchService(void);
 // the vertex stride is 32 bytes.
 #define VERTEX_COUNT 3
 #define VERTEX_FLOATS 8
-#define VERTEX_BYTES (VERTEX_COUNT * VERTEX_FLOATS * 4)
 
 // The compiler refers to this when a program uses floating point. The vertex
 // and texture data are the only floats in the program and they are plain data.
@@ -164,13 +166,37 @@ static unsigned char texture_pixels[TEXTURE_BYTES] = {
     0, 0, 255, 255,   /* row 1, column 1: blue */
 };
 
-// The full-screen triangle. Every vertex carries the same texture coordinate,
-// so every pixel samples column 0 of the texture, which is red.
-static float scene[3][VERTEX_FLOATS] = {
+// Sequential draws use a red full-screen triangle. In the indexed variants
+// those first three records form a degenerate triangle, so even an indexed
+// UV fetch cannot produce a blue frame when positions are fetched in order.
+static float scene[][VERTEX_FLOATS] = {
+#if defined(GATE_INDEX16) || defined(GATE_INDEX32)
+    {-1.0f, -1.0f, 0.5f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f},
+    {-1.0f, -1.0f, 0.5f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f},
+    {-1.0f, -1.0f, 0.5f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f},
+    // The resolved indices 7, 3, 5 cover the screen and sample column 1.
+    {-1.0f, -1.0f, 0.5f, 1.0f, 0.75f, 0.5f, 0.0f, 0.0f},
+    {0.0f, 0.0f, 0.5f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f},
+    {3.0f, -1.0f, 0.5f, 1.0f, 0.75f, 0.5f, 0.0f, 0.0f},
+    {0.0f, 0.0f, 0.5f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f},
+    {-1.0f, 3.0f, 0.5f, 1.0f, 0.75f, 0.5f, 0.0f, 0.0f},
+#else
     {-1.0f, -1.0f, 0.5f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f},
     {3.0f, -1.0f, 0.5f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f},
     {-1.0f, 3.0f, 0.5f, 1.0f, 0.25f, 0.5f, 0.0f, 0.0f},
+#endif
 };
+
+// A byte offset skips the first index and start index 1 skips the second.
+#if defined(GATE_INDEX16)
+static unsigned short indices[] = {0, 0, 8, 4, 6};
+#define INDEX_FORMAT 57
+#define BASE_VERTEX (-1)
+#elif defined(GATE_INDEX32)
+static u32 indices[] = {0, 0, 6, 2, 4};
+#define INDEX_FORMAT 42
+#define BASE_VERTEX 1
+#endif
 
 // The raw frame bytes, read back from the render target.
 static unsigned char frame_bytes[FRAME_BYTES];
@@ -246,7 +272,12 @@ static u32 run(void) {
         XenoraCreateTexture2D(device_handle, TEXTURE_WIDTH, TEXTURE_HEIGHT, TEXTURE_FORMAT,
                               (u64)texture_pixels, &outcome.texture);
     outcome.create_buffer =
-        XenoraCreateBuffer(device_handle, (u64)&scene[0][0], VERTEX_BYTES, &outcome.vertex_buffer);
+        XenoraCreateBuffer(device_handle, (u64)scene, sizeof scene, &outcome.vertex_buffer);
+#if defined(INDEX_FORMAT)
+    u64 index_buffer = 0;
+    int create_index_buffer =
+        XenoraCreateBuffer(device_handle, (u64)indices, sizeof indices, &index_buffer);
+#endif
     outcome.create_render_target =
         XenoraCreateRenderTarget(device_handle, FRAME_WIDTH, FRAME_HEIGHT, &outcome.render_target);
 
@@ -279,7 +310,14 @@ static u32 run(void) {
     outcome.set_viewport = XenoraSetViewport(outcome.list, FRAME_WIDTH, FRAME_HEIGHT);
     outcome.set_vertex_buffer = XenoraSetVertexBuffer(outcome.list, 0, outcome.vertex_buffer, 0,
                                                       VERTEX_STRIDE_TEXTURED);
+#if defined(INDEX_FORMAT)
+    int set_index_buffer =
+        XenoraSetIndexBuffer(outcome.list, index_buffer, sizeof indices[0], INDEX_FORMAT);
+    u64 start_index_base = ((u64)(u32)BASE_VERTEX << 32) | 1u;
+    outcome.draw = XenoraDrawIndexed(outcome.list, VERTEX_COUNT, 1, start_index_base);
+#else
     outcome.draw = XenoraDraw(outcome.list, VERTEX_COUNT, 1, 0);
+#endif
     outcome.close_list = XenoraCloseCommandList(outcome.list);
     outcome.execute = XenoraExecuteCommandLists(outcome.queue, outcome.list);
     outcome.readback =
@@ -293,6 +331,9 @@ static u32 run(void) {
     XenoraDestroyResource(outcome.render_target);
     XenoraDestroyResource(outcome.texture);
     XenoraDestroyResource(outcome.vertex_buffer);
+#if defined(INDEX_FORMAT)
+    XenoraDestroyResource(index_buffer);
+#endif
     XenoraDestroyCommandList(outcome.list);
     XenoraDestroyCommandAllocator(outcome.allocator);
     XenoraDestroyCommandQueue(outcome.queue);
@@ -324,6 +365,11 @@ static u32 run(void) {
                     outcome.set_render_target == S_OK && outcome.set_viewport == S_OK &&
                     outcome.set_vertex_buffer == S_OK && outcome.draw == S_OK &&
                     outcome.close_list == S_OK && outcome.execute == S_OK;
+
+#if defined(INDEX_FORMAT)
+    handles = handles && index_buffer != 0;
+    succeeded = succeeded && create_index_buffer == S_OK && set_index_buffer == S_OK;
+#endif
 
     // 3: the readback succeeded.
     u32 readback = outcome.readback == S_OK;

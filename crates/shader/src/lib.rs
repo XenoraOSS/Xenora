@@ -206,12 +206,15 @@ enum Op {
     /// MIMG 2D texture sample: the selected channel of
     /// `tex0.sample(samp0, float2(u, v), level(lod))` as float bits. The texture
     /// and sampler are the synthetic ABI bindings, not register operands.
+    /// `exec` is the compile-time EXEC mask: only its lanes check the sample
+    /// domain (finite coordinates and, for `explicit_lod`, a whole mip level).
     Sample {
         u: Value,
         v: Value,
         lod: Value,
         component: u8,
         explicit_lod: bool,
+        exec: u32,
     },
 }
 
@@ -335,7 +338,7 @@ impl Op {
                 v,
                 lod,
                 component,
-                explicit_lod: _,
+                ..
             } => {
                 let channel = ["r", "g", "b", "a"][usize::from(component)];
                 format!(
@@ -627,12 +630,13 @@ pub fn compile_with(
     // A texture and sampler pair must precede the grid attribute, so the
     // parameter list is built in one piece instead of rewriting the signature.
     let sampled = if samples {
-        "    texture2d<float, access::sample> tex0 [[texture(0)]],\n    sampler samp0 [[sampler(0)]],\n"
+        "    texture2d<float, access::sample> tex0 [[texture(0)]],\n    sampler samp0 [[sampler(0)]],\n    device atomic_uint* fault [[buffer(2)]],\n"
     } else {
         ""
     };
+    let helpers = if samples { SAMPLE_DOMAIN_HELPERS } else { "" };
     let mut msl = format!(
-        "#include <metal_stdlib>\nusing namespace metal;\nkernel void {ENTRY_POINT}(\n    device const uint* input [[buffer(0)]],\n    device uint* output [[buffer(1)]],\n{sampled}    uint index [[thread_position_in_grid]]{grid}) {{\n"
+        "#include <metal_stdlib>\nusing namespace metal;\n{helpers}kernel void {ENTRY_POINT}(\n    device const uint* input [[buffer(0)]],\n    device uint* output [[buffer(1)]],\n{sampled}    uint index [[thread_position_in_grid]]{grid}) {{\n"
     );
     if operations.iter().any(|(_, operation)| {
         matches!(
@@ -835,19 +839,34 @@ pub fn compile_with(
             Op::Sample {
                 u,
                 v,
-                lod: _,
+                lod,
                 component,
                 explicit_lod,
+                exec,
             } => {
                 let channel = ["r", "g", "b", "a"][usize::from(component)];
-                let form = if explicit_lod {
-                    "sample_l.2d.f32"
+                let (form, level, lod_check) = if explicit_lod {
+                    (
+                        "sample_l.2d.f32",
+                        format!(", lod {lod}"),
+                        format!(
+                            " if (!xenora_whole_level({lod}, tex0.get_num_mip_levels())) {{ bad |= {SAMPLE_FAULT_LOD}u; }}"
+                        ),
+                    )
                 } else {
-                    "sample_lz.2d.f32"
+                    ("sample_lz.2d.f32", String::new(), String::new())
+                };
+                let active = if exec == u32::MAX {
+                    String::new()
+                } else {
+                    format!(" && ((0x{exec:08x}u >> (index & 31u)) & 1u) != 0u")
                 };
                 (
-                    format!("{form} tex0, samp0, ({u}, {v})[{channel}]"),
-                    format!("uint {dest} = {};", operation.expression(&thread, "", "")),
+                    format!("{form} tex0, samp0, ({u}, {v}){level}[{channel}] exec=0x{exec:08x}"),
+                    format!(
+                        "{{ uint bad = 0u; if (!xenora_finite({u}) || !xenora_finite({v})) {{ bad |= {SAMPLE_FAULT_COORDINATES}u; }}{lod_check} if (bad != 0u{active}) {{ atomic_fetch_or_explicit(fault, bad, memory_order_relaxed); }} }}\n    uint {dest} = {};",
+                        operation.expression(&thread, "", "")
+                    ),
                 )
             }
         };
@@ -970,6 +989,19 @@ fn scalar_load_pending(scalars: &[ScalarValue]) -> bool {
         .iter()
         .any(|value| matches!(value, ScalarValue::Pending(_)))
 }
+
+/// Bit set in the `[[buffer(2)]]` fault word when an active lane's explicit LOD
+/// is not a whole mip level of the bound texture (the reference's `InvalidLod`).
+pub const SAMPLE_FAULT_LOD: u32 = 1;
+/// Bit set in the fault word when an active lane's coordinate is NaN or
+/// infinite (the reference's `NonFiniteCoordinates`).
+pub const SAMPLE_FAULT_COORDINATES: u32 = 2;
+
+/// MSL helpers for the sample domain check. Both compare raw bits, so the
+/// check does not depend on the compiler's floating-point mode. A whole level
+/// is -0.0 or the exact binary32 value of a level below `levels`, the domain
+/// `xenora_ref::texture_sampling::lod_to_mip` accepts.
+const SAMPLE_DOMAIN_HELPERS: &str = "static inline bool xenora_finite(uint bits) {\n    return (bits & 0x7f800000u) != 0x7f800000u;\n}\nstatic inline bool xenora_whole_level(uint bits, uint levels) {\n    if (bits == 0x80000000u) { return true; }\n    for (uint level = 0u; level < levels; ++level) {\n        if (bits == as_type<uint>(float(level))) { return true; }\n    }\n    return false;\n}\n";
 
 /// The synthetic binding ABI load that may provide descriptor register `slot`.
 fn descriptor_load(slot: usize) -> Option<(usize, u32, &'static str)> {
@@ -1956,6 +1988,7 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                             lod,
                             component,
                             explicit_lod,
+                            exec,
                         },
                     ));
                     let slot = usize::from(next_dst);
@@ -2178,12 +2211,14 @@ fn map_uses(operation: Op, map: impl Fn(Value) -> Value) -> Op {
             lod,
             component,
             explicit_lod,
+            exec,
         } => Op::Sample {
             u: map(u),
             v: map(v),
             lod: map(lod),
             component,
             explicit_lod,
+            exec,
         },
     }
 }

@@ -41,6 +41,15 @@ cargo test --locked -p xenora-loader --features gpu-tests --test graphics_textur
 timeout 30s cargo test --locked -p xenora-loader --features gpu-tests --test graphics_textures -- \
     --nocapture --test-threads=1
 
+# Native fences, compiled guest frames, submission lifetimes and threaded draws.
+for target in graphics_fences guest_graphics_fences guest_graphics_path \
+    guest_textured_path hosted_graphics_path shared_resource_lifecycle \
+    threaded_guest_application; do
+    cargo test --locked -p xenora-loader --features gpu-tests --test "$target" --no-run
+    timeout 30s cargo test --locked -p xenora-loader --features gpu-tests --test "$target" -- \
+        --nocapture --test-threads=1
+done
+
 # The native app interface runs the trusted fixture's guest draw on Metal.
 cargo test --locked -p xenora-ffi --features gpu-tests --test native_frame --no-run
 timeout 30s cargo test --locked -p xenora-ffi --features gpu-tests --test native_frame -- \

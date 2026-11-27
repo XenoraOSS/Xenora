@@ -84,8 +84,13 @@ dependencies = [
  "objc2",
  "objc2-foundation",
  "objc2-metal",
+ "xenora-ref",
  "xenora-texture",
 ]
+
+[[package]]
+name = "xenora-ref"
+version = "0.1.0"
 
 [[package]]
 name = "xenora-shader"

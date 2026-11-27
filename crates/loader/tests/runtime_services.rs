@@ -8045,3 +8045,319 @@ fn the_wide_file_operations_follow_the_drive() {
     );
     assert_eq!(guest.errno(), 22);
 }
+
+#[test]
+fn co_initialize_ex_tracks_the_apartment_per_thread() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("CoInitializeEx", &[0, 2]), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 2]), 1);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]) as u32, 0x8001_0106);
+    guest.teb = 0x1234;
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[1, 0]) as u32, 0x8007_0057);
+}
+
+#[test]
+fn co_uninitialize_balances_each_initialization() {
+    let mut guest = Guest::new();
+    guest.call("CoInitializeEx", &[0, 2]);
+    guest.call("CoInitializeEx", &[0, 2]);
+    guest.call("CoUninitialize", &[]);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]) as u32, 0x8001_0106);
+    guest.call("CoUninitialize", &[]);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+}
+
+#[test]
+fn co_create_guid_returns_a_version_four_guid() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("CoCreateGuid", &[SCRATCH]), 0);
+    assert_eq!(guest.memory.read_u16(SCRATCH + 6).unwrap() & 0xf000, 0x4000);
+    assert_eq!(guest.memory.read_u16(SCRATCH + 8).unwrap() & 0xc0, 0x80);
+}
+
+#[test]
+fn string_from_guid2_renders_the_documented_text_form() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .write_bytes(
+            SCRATCH,
+            &[
+                0x33, 0x22, 0x11, 0, 0x55, 0x44, 0x77, 0x66, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        guest.call("StringFromGUID2", &[SCRATCH, SCRATCH + 32, 38]),
+        0
+    );
+    assert_eq!(
+        guest.call("StringFromGUID2", &[SCRATCH, SCRATCH + 32, 39]),
+        39
+    );
+    for (i, unit) in "{00112233-4455-6677-8899-AABBCCDDEEFF}\0"
+        .encode_utf16()
+        .enumerate()
+    {
+        assert_eq!(
+            guest.memory.read_u16(SCRATCH + 32 + 2 * i as u64).unwrap(),
+            unit
+        );
+    }
+}
+
+#[test]
+fn clsid_from_string_parses_the_braced_and_bare_forms() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .write_bytes(SCRATCH + 128, &[0xff; 16])
+        .unwrap();
+    assert_eq!(guest.call("CLSIDFromString", &[0, SCRATCH + 128]), 0);
+    assert_eq!(guest.memory.read_u64(SCRATCH + 128).unwrap(), 0);
+    assert_eq!(guest.memory.read_u64(SCRATCH + 136).unwrap(), 0);
+    for text in [
+        "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+        "00112233-4455-6677-8899-aabbccddeeff",
+    ] {
+        for (i, unit) in text.encode_utf16().chain([0]).enumerate() {
+            guest
+                .memory
+                .write_u16(SCRATCH + 2 * i as u64, unit)
+                .unwrap();
+        }
+        assert_eq!(guest.call("CLSIDFromString", &[SCRATCH, SCRATCH + 128]), 0);
+        assert_eq!(guest.memory.read_u32(SCRATCH + 128).unwrap(), 0x0011_2233);
+    }
+    guest.memory.write_u16(SCRATCH, 0).unwrap();
+    assert_eq!(
+        guest.call("CLSIDFromString", &[SCRATCH, SCRATCH + 128]) as u32,
+        0x8004_01f3
+    );
+}
+
+#[test]
+fn co_task_memory_owns_its_blocks() {
+    let mut guest = Guest::new();
+    let ptr = guest.call("CoTaskMemAlloc", &[16]);
+    assert_ne!(ptr, 0);
+    guest.memory.write_u32(ptr, 0x12345678).unwrap();
+    guest.call("CoTaskMemFree", &[ptr]);
+    assert!(guest.memory.read_u32(ptr).is_err());
+    guest.call("CoTaskMemFree", &[0]);
+}
+
+#[test]
+fn co_task_mem_realloc_preserves_contents_and_refuses_foreign_blocks() {
+    let mut guest = Guest::new();
+    let ptr = guest.call("CoTaskMemAlloc", &[16]);
+    guest.memory.write_u32(ptr, 0x12345678).unwrap();
+    let resized = guest.call("CoTaskMemRealloc", &[ptr, 64]);
+    assert_ne!(resized, 0);
+    assert_eq!(guest.memory.read_u32(resized).unwrap(), 0x12345678);
+    assert_eq!(guest.call("CoTaskMemRealloc", &[resized, u64::MAX]), 0);
+    assert_eq!(guest.memory.read_u32(resized).unwrap(), 0x12345678);
+    assert_eq!(guest.call("CoTaskMemRealloc", &[resized, 0]), 0);
+    assert_ne!(guest.run("CoTaskMemFree", &[SCRATCH]).1, ExitReason::Halt);
+}
+
+#[test]
+fn co_create_instance_reports_an_unregistered_class() {
+    let mut guest = Guest::new();
+    guest.memory.write_u64(SCRATCH + 64, 42).unwrap();
+    assert_eq!(
+        call6(
+            &mut guest,
+            "CoCreateInstance",
+            &[SCRATCH, 0, 1, SCRATCH + 16, SCRATCH + 64]
+        ) as u32,
+        0x8004_01f0
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    assert_eq!(
+        call6(
+            &mut guest,
+            "CoCreateInstance",
+            &[SCRATCH, 0, 1, SCRATCH + 16, SCRATCH + 64]
+        ) as u32,
+        0x8004_0154
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+}
+
+#[test]
+fn synthetic_com_class_requires_explicit_fixture_registration() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .write_bytes(
+            SCRATCH,
+            &[
+                0x51, 0x37, 0x71, 0x58, 0x90, 0x74, 0x4e, 0x41, 0xa0, 0x58, 0x63, 0x6f, 0x6d, 0, 0,
+                1,
+            ],
+        )
+        .unwrap();
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    assert_eq!(
+        call6(
+            &mut guest,
+            "CoCreateInstance",
+            &[SCRATCH, 0, 1, SCRATCH + 16, SCRATCH + 64]
+        ) as u32,
+        0x8004_0154
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+}
+
+#[test]
+fn com_api_set_exports_are_registered_individually() {
+    let (registry, _) = standard(0);
+    assert!(
+        registry
+            .binding("api-ms-win-core-com-l1-1-1.dll", "IIDFromString")
+            .is_some()
+    );
+    assert!(
+        registry
+            .binding("api-ms-win-core-com-l1-1-0.dll", "IIDFromString")
+            .is_some()
+    );
+    assert!(
+        registry
+            .binding("api-ms-win-core-com-l1-1-0.dll", "CoCreateInstance")
+            .is_none()
+    );
+}
+
+#[test]
+fn prop_variant_clear_clears_values_and_frees_task_strings() {
+    let mut guest = Guest::new();
+    assert_ne!(guest.run("PropVariantClear", &[0]).1, ExitReason::Halt);
+    let ptr = guest.call("CoTaskMemAlloc", &[16]);
+    guest.memory.write_u16(SCRATCH, 31).unwrap();
+    guest.memory.write_u64(SCRATCH + 8, ptr).unwrap();
+    assert_eq!(guest.call("PropVariantClear", &[SCRATCH]), 0);
+    assert_eq!(guest.memory.read_u16(SCRATCH).unwrap(), 0);
+    assert!(guest.memory.read_u32(ptr).is_err());
+    guest.memory.write_u16(SCRATCH, 13).unwrap();
+    assert_ne!(
+        guest.run("PropVariantClear", &[SCRATCH]).1,
+        ExitReason::Halt
+    );
+    assert_eq!(guest.memory.read_u16(SCRATCH).unwrap(), 13);
+
+    guest.memory.write_u16(SCRATCH, 0x8003).unwrap();
+    assert_ne!(
+        guest.run("PropVariantClear", &[SCRATCH]).1,
+        ExitReason::Halt
+    );
+    assert_eq!(guest.memory.read_u16(SCRATCH).unwrap(), 0x8003);
+
+    let owned = guest.call("CoTaskMemAlloc", &[16]);
+    let mut readonly = [0u8; 24];
+    readonly[..2].copy_from_slice(&31u16.to_le_bytes());
+    readonly[8..16].copy_from_slice(&owned.to_le_bytes());
+    guest
+        .memory
+        .map_region_with_data(CPBUF, 24, MemoryPermissions::READ_ONLY, &readonly)
+        .unwrap();
+    assert_ne!(guest.run("PropVariantClear", &[CPBUF]).1, ExitReason::Halt);
+    guest.memory.write_u32(owned, 42).unwrap();
+    guest.call("CoTaskMemFree", &[owned]);
+}
+
+#[test]
+fn co_initialize_uses_the_single_threaded_model() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("CoInitialize", &[0]), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 2]), 1);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]) as u32, 0x8001_0106);
+    guest.call("CoUninitialize", &[]);
+    guest.call("CoUninitialize", &[]);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+}
+
+#[test]
+fn iid_from_string_parses_a_guid_and_null() {
+    let mut guest = Guest::new();
+    for (i, unit) in "{00112233-4455-6677-8899-AABBCCDDEEFF}\0"
+        .encode_utf16()
+        .enumerate()
+    {
+        guest
+            .memory
+            .write_u16(SCRATCH + 2 * i as u64, unit)
+            .unwrap();
+    }
+    assert_eq!(guest.call("IIDFromString", &[SCRATCH, SCRATCH + 128]), 0);
+    assert_eq!(guest.memory.read_u32(SCRATCH + 128).unwrap(), 0x0011_2233);
+    assert_eq!(guest.call("IIDFromString", &[0, SCRATCH + 128]), 0);
+    assert_eq!(guest.memory.read_u64(SCRATCH + 128).unwrap(), 0);
+    assert_eq!(guest.memory.read_u64(SCRATCH + 136).unwrap(), 0);
+    guest.memory.write_u16(SCRATCH, 0).unwrap();
+    assert_eq!(
+        guest.call("IIDFromString", &[SCRATCH, SCRATCH + 128]) as u32,
+        0x8007_0057
+    );
+}
+
+#[test]
+fn co_get_class_object_refuses_unregistered_classes() {
+    let mut guest = Guest::new();
+    let args = [SCRATCH, 1, 0, SCRATCH + 16, SCRATCH + 64];
+    guest.memory.write_u64(SCRATCH + 64, 42).unwrap();
+    assert_eq!(
+        call6(&mut guest, "CoGetClassObject", &args) as u32,
+        0x8004_01f0
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    guest.memory.write_u64(SCRATCH + 64, 42).unwrap();
+    assert_eq!(
+        call6(&mut guest, "CoGetClassObject", &args) as u32,
+        0x8004_0154
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+}
+
+#[test]
+fn co_create_instance_ex_checks_the_bounded_interface_array() {
+    let mut guest = Guest::new();
+    let record = SCRATCH + 64;
+    guest.memory.write_u64(record, SCRATCH + 16).unwrap();
+    let args = [SCRATCH, 0, 1, 0, 1, record];
+    assert_eq!(
+        call6(&mut guest, "CoCreateInstanceEx", &args) as u32,
+        0x8004_01f0
+    );
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    assert_eq!(
+        call6(&mut guest, "CoCreateInstanceEx", &args) as u32,
+        0x8004_0154
+    );
+    assert_eq!(guest.memory.read_u64(record + 8).unwrap(), 0);
+    assert_eq!(guest.memory.read_u32(record + 16).unwrap(), 0);
+    guest.memory.write_u64(record + 8, 1).unwrap();
+    assert_eq!(
+        call6(&mut guest, "CoCreateInstanceEx", &args) as u32,
+        0x8007_0057
+    );
+    assert_eq!(
+        call6(
+            &mut guest,
+            "CoCreateInstanceEx",
+            &[SCRATCH, 0, 1, 0, 0, record]
+        ) as u32,
+        0x8007_0057
+    );
+    guest.memory.write_u64(STACK_TOP + 32, 65).unwrap();
+    guest.memory.write_u64(STACK_TOP + 40, record).unwrap();
+    assert_ne!(
+        guest.run("CoCreateInstanceEx", &[SCRATCH, 0, 1, 0]).1,
+        ExitReason::Halt
+    );
+}

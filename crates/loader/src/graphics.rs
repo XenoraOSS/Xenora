@@ -1271,7 +1271,7 @@ impl GraphicsContext {
         Ok(())
     }
 
-    /// Record set vertex buffer.
+    /// Record a vertex-buffer binding backed by a buffer resource.
     pub fn cmd_set_vertex_buffer(
         &mut self,
         list: GraphicsHandle,
@@ -1290,6 +1290,9 @@ impl GraphicsContext {
             .resources
             .get(&resource)
             .ok_or(GraphicsError::InvalidResourceHandle)?;
+        if res.desc.dimension != ResourceDimension::Buffer {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
         let end = offset
             .checked_add(stride)
             .ok_or(GraphicsError::InvalidDescriptor)?;
@@ -1329,7 +1332,8 @@ impl GraphicsContext {
         Ok(())
     }
 
-    /// Record set index buffer. `format` is a DXGI format code; only
+    /// Record an index-buffer binding backed by a buffer resource.
+    /// `format` is a DXGI format code; only
     /// `R16_UINT` (57) and `R32_UINT` (42) are index formats.
     pub fn cmd_set_index_buffer(
         &mut self,
@@ -1351,7 +1355,10 @@ impl GraphicsContext {
             .resources
             .get(&resource)
             .ok_or(GraphicsError::InvalidResourceHandle)?;
-        if !offset.is_multiple_of(format.size()) || offset > res.data.len() {
+        if res.desc.dimension != ResourceDimension::Buffer
+            || !offset.is_multiple_of(format.size())
+            || offset > res.data.len()
+        {
             return Err(GraphicsError::InvalidDescriptor);
         }
         cmd_list.commands.push(GraphicsCommand::SetIndexBuffer {
@@ -1367,6 +1374,8 @@ impl GraphicsContext {
     /// the start instance 0, or the draw is rejected; a zero index or instance
     /// count draws nothing. Index values are ordinary triangle-list indices
     /// (no primitive restart), range checked after adding the base vertex.
+    /// With a textured root signature, both position and texture coordinates
+    /// come from each resolved vertex.
     pub fn cmd_draw_indexed_instanced(
         &mut self,
         list: GraphicsHandle,
@@ -2075,24 +2084,43 @@ impl GraphicsContext {
                     if *index_count_per_instance == 0 || *instance_count == 0 {
                         continue;
                     }
-                    if bindings.root_signature.is_some() {
-                        return Err(GraphicsError::Unsupported("textured indexed draws"));
-                    }
-                    let vertices = self.fetch_indexed_triangle(
-                        memory,
-                        index_buffer,
-                        (vertex_resource, vertex_offset, vertex_stride),
-                        *start_index_location,
-                        *base_vertex_location,
-                    )?;
-                    draw_count += 1;
-                    let pixels = if let Some(renderer) = backend_renderer {
-                        renderer(&vertices, viewport, clear_color)?
-                    } else if backend_id == GraphicsBackendId::MetalNative {
-                        return Err(GraphicsError::NativeMetalRequired);
+                    let (index_handle, index_offset, format) =
+                        index_buffer.ok_or(GraphicsError::InvalidResourceHandle)?;
+                    let index_resource = self
+                        .resources
+                        .get(&index_handle)
+                        .ok_or(GraphicsError::InvalidResourceHandle)?;
+                    let index_view = (index_resource, index_offset, format);
+                    let index_range = (*start_index_location, *base_vertex_location);
+                    let vertex_view = (vertex_resource, vertex_offset, vertex_stride);
+                    let pixels = if let Some((_, root_signature)) = bindings.root_signature {
+                        let indices =
+                            Self::resolve_triangle_indices(memory, index_view, index_range)?;
+                        self.textured_draw(
+                            memory,
+                            &bindings,
+                            root_signature,
+                            vertex_view,
+                            indices,
+                            (viewport, clear_color),
+                            (textured_renderer, backend_id),
+                        )?
                     } else {
-                        Self::execute_software_reference_draw(&vertices, viewport, clear_color)?
+                        let vertices = self.fetch_indexed_positions(
+                            memory,
+                            vertex_view,
+                            index_view,
+                            index_range,
+                        )?;
+                        if let Some(renderer) = backend_renderer {
+                            renderer(&vertices, viewport, clear_color)?
+                        } else if backend_id == GraphicsBackendId::MetalNative {
+                            return Err(GraphicsError::NativeMetalRequired);
+                        } else {
+                            Self::execute_software_reference_draw(&vertices, viewport, clear_color)?
+                        }
                     };
+                    draw_count += 1;
                     if let Some(th) = target_handle
                         && let Some(target_res) = self.resources.get_mut(&th)
                         && target_res.data.len() >= pixels.len()
@@ -2119,12 +2147,13 @@ impl GraphicsContext {
                                 "textured draw other than one instance of three vertices",
                             ));
                         }
+                        let first = *start_vertex_location as usize;
                         let pixels = self.textured_draw(
                             memory,
                             &bindings,
                             root_signature,
                             (vertex_resource, vertex_offset, vertex_stride),
-                            *start_vertex_location,
+                            [first, first + 1, first + 2],
                             (viewport, clear_color),
                             (textured_renderer, backend_id),
                         )?;
@@ -2220,29 +2249,12 @@ impl GraphicsContext {
         })
     }
 
-    /// The three float4 positions one indexed triangle fetches: index `k` is
-    /// read at `offset + (start + k) * size` of the index buffer, and vertex
-    /// `index + base_vertex` at `offset + vertex * stride` of the vertex buffer.
-    fn fetch_indexed_triangle(
-        &self,
+    /// Decode three indices from the bound view and apply the signed base vertex.
+    fn resolve_triangle_indices(
         memory: &GuestMemory,
-        index_buffer: Option<(GraphicsHandle, usize, IndexFormat)>,
-        (vertex_resource, vertex_offset, vertex_stride): (Option<GraphicsHandle>, usize, usize),
-        start: u32,
-        base_vertex: i32,
-    ) -> Result<[[f32; 4]; 3], GraphicsError> {
-        let resource = |handle: Option<GraphicsHandle>| {
-            handle
-                .and_then(|handle| self.resources.get(&handle))
-                .ok_or(GraphicsError::InvalidResourceHandle)
-        };
-        let (index_handle, index_offset, format) =
-            index_buffer.ok_or(GraphicsError::InvalidResourceHandle)?;
-        let index_res = resource(Some(index_handle))?;
-        let vertex_res = resource(vertex_resource)?;
-        if vertex_stride < 16 {
-            return Err(GraphicsError::InvalidDescriptor);
-        }
+        (index_res, index_offset, format): (&GraphicsResource, usize, IndexFormat),
+        (start, base_vertex): (u32, i32),
+    ) -> Result<[usize; 3], GraphicsError> {
         let size = format.size();
         let mut raw_indices = [0u8; 12];
         let raw_indices = &mut raw_indices[..3 * size];
@@ -2251,15 +2263,36 @@ impl GraphicsContext {
             .and_then(|bytes| bytes.checked_add(index_offset))
             .ok_or(GraphicsError::IndexOutOfRange)?;
         Self::read_resource(index_res, memory, first, raw_indices)?;
-        let mut vertices = [[0.0f32; 4]; 3];
-        for (row, index) in vertices.iter_mut().zip(raw_indices.chunks_exact(size)) {
-            let index = if size == 2 {
-                u32::from(u16::from_le_bytes([index[0], index[1]]))
-            } else {
-                u32::from_le_bytes(index.try_into().unwrap())
+        let mut indices = [0; 3];
+        for (vertex, encoded) in indices.iter_mut().zip(raw_indices.chunks_exact(size)) {
+            let index = match format {
+                IndexFormat::R16Uint => u32::from(u16::from_le_bytes(encoded.try_into().unwrap())),
+                IndexFormat::R32Uint => u32::from_le_bytes(encoded.try_into().unwrap()),
             };
-            let vertex = usize::try_from(i64::from(index) + i64::from(base_vertex))
+            *vertex = usize::try_from(i64::from(index) + i64::from(base_vertex))
                 .map_err(|_| GraphicsError::IndexOutOfRange)?;
+        }
+        Ok(indices)
+    }
+
+    /// Fetch the float4 position of each vertex selected by the index view.
+    fn fetch_indexed_positions(
+        &self,
+        memory: &GuestMemory,
+        (vertex_resource, vertex_offset, vertex_stride): (Option<GraphicsHandle>, usize, usize),
+        index_view: (&GraphicsResource, usize, IndexFormat),
+        index_range: (u32, i32),
+    ) -> Result<[[f32; 4]; 3], GraphicsError> {
+        let vertex_res = vertex_resource
+            .and_then(|handle| self.resources.get(&handle))
+            .ok_or(GraphicsError::InvalidResourceHandle)?;
+        if vertex_stride < 16 {
+            return Err(GraphicsError::InvalidDescriptor);
+        }
+        // Preserve flat draws' binding validation before reading index data.
+        let indices = Self::resolve_triangle_indices(memory, index_view, index_range)?;
+        let mut vertices = [[0.0f32; 4]; 3];
+        for (row, vertex) in vertices.iter_mut().zip(indices) {
             let at = vertex
                 .checked_mul(vertex_stride)
                 .and_then(|bytes| bytes.checked_add(vertex_offset))
@@ -2283,7 +2316,7 @@ impl GraphicsContext {
         bindings: &TableBindings,
         root_signature: RootSignature,
         (vertex_resource, vertex_offset, vertex_stride): (Option<GraphicsHandle>, usize, usize),
-        start_vertex: u32,
+        vertex_indices: [usize; 3],
         (viewport, clear_color): ((usize, usize), [u8; 4]),
         (renderer, backend_id): (Option<&TexturedBackendRenderer<'_>>, GraphicsBackendId),
     ) -> Result<Vec<u8>, GraphicsError> {
@@ -2322,8 +2355,10 @@ impl GraphicsContext {
         }
         let mut positions = [[0.0f32; 4]; 3];
         let mut texcoords = [[0.0f32; 4]; 3];
-        for (k, (position, texcoord)) in positions.iter_mut().zip(&mut texcoords).enumerate() {
-            let at = (start_vertex as usize + k)
+        for ((position, texcoord), vertex) in
+            positions.iter_mut().zip(&mut texcoords).zip(vertex_indices)
+        {
+            let at = vertex
                 .checked_mul(vertex_stride)
                 .and_then(|bytes| bytes.checked_add(vertex_offset))
                 .ok_or(GraphicsError::IndexOutOfRange)?;

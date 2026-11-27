@@ -158,11 +158,13 @@ enum ComputeInput<'a> {
     },
     /// A translated gfx1030 kernel that samples a bound texture: the input
     /// words go to `[[buffer(0)]]`, output to `[[buffer(1)]]`, and the texture
-    /// and sampler to `[[texture(0)]]` and `[[sampler(0)]]`.
+    /// and sampler to `[[texture(0)]]` and `[[sampler(0)]]`, and the one-word
+    /// sample-domain fault flag to `[[buffer(2)]]`.
     WordsSampled {
         words: &'a [u32],
         texture: &'a ProtocolObject<dyn MTLTexture>,
         sampler: &'a ProtocolObject<dyn MTLSamplerState>,
+        fault: &'a ProtocolObject<dyn MTLBuffer>,
     },
 }
 
@@ -357,6 +359,7 @@ struct InFlightResources {
     output: SharedBuffer,
     _texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     _sampler: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
+    _fault: Option<SharedBuffer>,
     gate: Option<Retained<ProtocolObject<dyn MTLSharedEvent>>>,
     word_count: usize,
 }
@@ -857,12 +860,16 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
     /// The input words reach `[[buffer(0)]]`, the output `[[buffer(1)]]`, and
     /// the validated texture and sampler `[[texture(0)]]` and `[[sampler(0)]]`.
     /// The bounds, completion and trusted-kernel requirements of
-    /// [`Self::run_words`] apply.
+    /// [`Self::run_words`] apply. The kernel also takes a zeroed fault word at
+    /// `[[buffer(2)]]`; a nonzero word after completion means an active lane
+    /// sampled outside the supported domain, and the output is discarded.
     ///
     /// # Errors
     ///
     /// Returns an error for out-of-policy input sizes, compilation, resource
-    /// setup, dispatch or completion failure.
+    /// setup, dispatch or completion failure, and when an active lane's
+    /// explicit LOD is not a whole mip level or a coordinate is NaN or
+    /// infinite (the cases the CPU reference refuses).
     pub fn run_words_sampled(
         &self,
         source: &str,
@@ -874,17 +881,25 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         validate_words(source, entry, input)?;
         validate_image_binding(input, texture, sampler)?;
         autoreleasepool(|_| {
-            self.run_sized(
-                source,
-                entry,
-                ComputeInput::WordsSampled {
-                    words: input,
-                    texture: texture.raw(),
-                    sampler: sampler.raw(),
-                },
-                None,
-            )
-            .map(|profile| profile.output)
+            let fault = self.new_buffer(&[0])?;
+            let output = self
+                .run_sized(
+                    source,
+                    entry,
+                    ComputeInput::WordsSampled {
+                        words: input,
+                        texture: texture.raw(),
+                        sampler: sampler.raw(),
+                        fault: &fault,
+                    },
+                    None,
+                )?
+                .output;
+            // SAFETY: run_sized returned after the command buffer completed, so
+            // the GPU no longer writes the live, one-word shared buffer.
+            let flags = unsafe { fault.contents().cast::<u32>().as_ptr().read() };
+            sample_domain_result(flags)?;
+            Ok(output)
         })
     }
 
@@ -1284,10 +1299,14 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
                     encoder.setSamplerState_atIndex(Some(sampler), 0);
                 }
                 ComputeInput::WordsSampled {
-                    texture, sampler, ..
+                    texture,
+                    sampler,
+                    fault,
+                    ..
                 } => {
                     encoder.setTexture_atIndex(Some(texture), 0);
                     encoder.setSamplerState_atIndex(Some(sampler), 0);
+                    encoder.setBuffer_offset_atIndex(Some(fault), 0, 2);
                 }
                 ComputeInput::Words(..) => {}
             }
@@ -1299,15 +1318,22 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         encoder.dispatchThreads_threadsPerThreadgroup(size(input.len()), size(width));
         encoder.endEncoding();
         let encode_seconds = encode_start.elapsed().as_secs_f64();
-        let (texture, sampler) = match input {
-            ComputeInput::Texture(texture, _) => (Some(texture.retain()), None),
+        let (texture, sampler, fault) = match input {
+            ComputeInput::Texture(texture, _) => (Some(texture.retain()), None, None),
             ComputeInput::SampledTexture {
                 texture, sampler, ..
-            } => (Some(texture.retain()), Some(sampler.retain())),
+            } => (Some(texture.retain()), Some(sampler.retain()), None),
             ComputeInput::WordsSampled {
-                texture, sampler, ..
-            } => (Some(texture.retain()), Some(sampler.retain())),
-            ComputeInput::Words(_) => (None, None),
+                texture,
+                sampler,
+                fault,
+                ..
+            } => (
+                Some(texture.retain()),
+                Some(sampler.retain()),
+                Some(fault.retain()),
+            ),
+            ComputeInput::Words(_) => (None, None, None),
         };
         let resources = InFlightResources {
             command,
@@ -1316,6 +1342,7 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
             output: output_buffer,
             _texture: texture,
             _sampler: sampler,
+            _fault: fault,
             gate: gate.map(Message::retain),
             word_count: input.len(),
         };
@@ -1450,6 +1477,31 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         }
         .ok_or_else(|| MetalError::new("newBufferWithBytes", "shared buffer allocation failed"))
     }
+}
+
+/// The guard bits a translated sample kernel sets in its fault word. They are
+/// `xenora_shader::SAMPLE_FAULT_LOD` and `SAMPLE_FAULT_COORDINATES`; the metal
+/// crate does not depend on the shader crate, so the values are repeated here
+/// and pinned by the native sample tests.
+const SAMPLE_FAULT_LOD: u32 = 1;
+const SAMPLE_FAULT_COORDINATES: u32 = 2;
+
+/// Refuse a dispatch whose fault word reports an out-of-domain active lane.
+fn sample_domain_result(flags: u32) -> Result<(), MetalError> {
+    if flags == 0 {
+        return Ok(());
+    }
+    let mut reasons = Vec::new();
+    if flags & SAMPLE_FAULT_LOD != 0 {
+        reasons.push("an active lane's explicit LOD is not a whole mip level");
+    }
+    if flags & SAMPLE_FAULT_COORDINATES != 0 {
+        reasons.push("an active lane's texture coordinate is NaN or infinite");
+    }
+    if flags & !(SAMPLE_FAULT_LOD | SAMPLE_FAULT_COORDINATES) != 0 {
+        reasons.push("the kernel set an unknown fault bit");
+    }
+    Err(MetalError::new("image sample domain", reasons.join("; ")))
 }
 
 /// Validate the T# and S# the synthetic input carries against the bound texture

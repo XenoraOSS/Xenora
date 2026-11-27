@@ -8,28 +8,16 @@ from __future__ import annotations
 
 import json
 import re
+import tomllib
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Iterable
-
-
-# Opcode tables are discovered from existing loader sources when present.
-OPCODE_MATCH = re.compile(
-    r"(?:match\s+opcode|Op::|opcode\s*=>|0x([0-9A-Fa-f]{2}))"
-)
-IMPORT_MATCH = re.compile(
-    r'^\s*(?:pub\s+)?(?:const|static)?\s*(?:NAME|DLL|dll|module)?[^\"\n]*\"([A-Za-z0-9_.]+)\"',
-    re.MULTILINE,
-)
-HANDLER_KIND_MATCH = re.compile(
-    r"(Unsupported|Todo|todo!|unimplemented!|alias|Alias|forward|Forward)",
-)
+from typing import Any
 
 
 @dataclass
 class OpcodeEntry:
     opcode: str
-    status: str  # supported | unsupported | unknown
+    status: str  # decodable | unsupported | unknown
     source: str
 
 
@@ -70,27 +58,49 @@ def _read(path: Path) -> str:
 
 
 def scan_opcodes(text: str, *, source: str) -> list[OpcodeEntry]:
+    """Read decodable opcode identities from the declarative x86 registry.
+
+    Hexadecimal bytes in implementation or fixture code are not evidence. The
+    identity includes the encoding space, map and mandatory prefix because the
+    same byte can denote different instructions in those contexts.
+    """
+    data = tomllib.loads(text)
     found: dict[str, OpcodeEntry] = {}
-    for match in re.finditer(r"0x([0-9A-Fa-f]{2})", text):
-        op = match.group(1).lower()
-        line_start = text.rfind("\n", 0, match.start()) + 1
-        line_end = text.find("\n", match.end())
-        if line_end < 0:
-            line_end = len(text)
-        line = text[line_start:line_end]
-        if re.search(r"unsupported|illegal|todo!|unimplemented!", line, re.I):
-            status = "unsupported"
-        elif re.search(r"match|Op::|opcode|=>", line, re.I):
-            status = "supported"
-        else:
-            status = "unknown"
-        prev = found.get(op)
-        # Prefer explicit unsupported/supported over unknown; do not let a later
-        # unsupported line rewrite an earlier supported opcode with the same hex.
-        if prev is None:
-            found[op] = OpcodeEntry(opcode=op, status=status, source=source)
-        elif prev.status == "unknown" and status != "unknown":
-            found[op] = OpcodeEntry(opcode=op, status=status, source=source)
+
+    def key(space: str, map_name: str, prefix: str, opcode: int) -> str:
+        mandatory = f"+{prefix}" if prefix else ""
+        return f"{space}:{map_name}{mandatory}:{opcode:02x}"
+
+    def add(space: str, form: dict, opcode: int | None = None) -> None:
+        value = form["opcode"] if opcode is None else opcode
+        identity = key(
+            space,
+            form.get("map", "1"),
+            form.get("prefix", ""),
+            value,
+        )
+        found.setdefault(identity, OpcodeEntry(identity, "decodable", source))
+
+    for form in data.get("form", []):
+        for opcode in range(form["opcode"], form["opcode"] + form.get("count", 1)):
+            add("legacy", form, opcode)
+
+    # These expansions mirror the declarative registry's documented compression:
+    # six forms at operation_index * 8 plus the immediate groups 80, 81 and 83.
+    for index, _operation in enumerate(data.get("alu", {}).get("operations", [])):
+        base = index * 8
+        for opcode in (*range(base, base + 6), 0x80, 0x81, 0x83):
+            add("legacy", {"opcode": opcode}, opcode)
+
+    for group in data.get("group", []):
+        for opcode, _size, _imm, _enc in group.get("opcodes", []):
+            form = {"opcode": opcode, "map": group.get("map", "1"), "prefix": group.get("prefix", "")}
+            add("legacy", form, opcode)
+
+    for form in data.get("vex", []):
+        for opcode in range(form["opcode"], form["opcode"] + form.get("count", 1)):
+            add("vex", form, opcode)
+
     return [found[k] for k in sorted(found)]
 
 
@@ -180,28 +190,84 @@ def scan_imports(text: str, *, source: str, default_dll: str = "unknown") -> lis
     return [best[k] for k in sorted(best)]
 
 
-def scan_symbols(text: str, pattern: str) -> list[str]:
-    return sorted(set(re.findall(pattern, text)))
+def _rust_production(text: str) -> str:
+    """Production Rust source with comments removed enough for token scanning."""
+    text = text.split("#[cfg(test)]", 1)[0]
+    text = re.sub(r"/\*[\s\S]*?\*/", " ", text)
+    return re.sub(r"//[^\n]*", " ", text)
+
+
+def _operation_tokens(text: str) -> list[str]:
+    return sorted({f"Op::{name}" for name in re.findall(r"\bOp::([A-Z][A-Za-z0-9]*)\b", text)})
+
+
+def scan_interpreter_operations(texts: list[str]) -> list[str]:
+    """Operations named by the shared semantic implementation modules.
+
+    This is intentionally operation-oriented evidence, not proof that every
+    encoding of an operation is correct or even accepted. It is still much more
+    meaningful than helper-function names because these modules are the only
+    semantic execution path.
+    """
+    tokens: set[str] = set()
+    for text in texts:
+        tokens.update(_operation_tokens(_rust_production(text)))
+    return sorted(tokens)
+
+
+def _rust_function_body(text: str, name: str) -> str:
+    match = re.search(rf"\b(?:pub\s+)?fn\s+{re.escape(name)}\s*\(", text)
+    if not match:
+        return ""
+    start = text.find("{", match.end())
+    if start < 0:
+        return ""
+    depth = 0
+    for index in range(start, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:index + 1]
+    return ""
+
+
+def scan_dbt_native_operations(text: str) -> list[str]:
+    """Operations the DBT native-eligibility path can lower to ARM64.
+
+    `is_native` is the gate. `neon_operation` and `neon_widening` are included
+    because the gate delegates SIMD eligibility to those mappings. Conditions
+    such as operand width or encoding are intentionally collapsed to operation
+    coverage; the report remains a heuristic summary.
+    """
+    production = _rust_production(text)
+    tokens: set[str] = set()
+    for name in ("is_native", "neon_operation", "neon_widening"):
+        tokens.update(_operation_tokens(_rust_function_body(production, name)))
+    return sorted(tokens)
 
 
 def build_report(root: Path) -> CoverageReport:
     report = CoverageReport(notes=[
         "Read-only scan of existing sources; not an architectural claim of completeness.",
-        "Statuses are heuristic over source text where no authoritative inventory file exists.",
+        "Operation coverage is a source-text heuristic, not proof of per-encoding semantic completeness.",
     ])
-    cpu = root / "crates" / "loader" / "src" / "cpu.rs"
+    semantic_names = ["x86_exec.rs", "x86_simd.rs", "x86_float.rs", "x86_avx.rs", "x86_strings.rs"]
+    semantic_texts = []
+    for name in semantic_names:
+        path = root / "crates" / "loader" / "src" / name
+        if path.exists():
+            semantic_texts.append(_read(path))
+    report.interpreter_symbols = scan_interpreter_operations(semantic_texts)
+
     dbt = root / "crates" / "loader" / "src" / "dbt.rs"
-    probe = root / "crates" / "loader" / "src" / "probe.rs"
-    if cpu.exists():
-        text = _read(cpu)
-        report.opcodes.extend(scan_opcodes(text, source=str(cpu.relative_to(root))))
-        report.interpreter_symbols = scan_symbols(text, r"\bfn\s+(execute_[a-z0-9_]+)\b")
     if dbt.exists():
-        text = _read(dbt)
-        report.dbt_symbols = scan_symbols(text, r"\bfn\s+(lower_[a-z0-9_]+|emit_[a-z0-9_]+)\b")
-        report.opcodes.extend(scan_opcodes(text, source=str(dbt.relative_to(root))))
-    if probe.exists():
-        report.opcodes.extend(scan_opcodes(_read(probe), source=str(probe.relative_to(root))))
+        report.dbt_symbols = scan_dbt_native_operations(_read(dbt))
+    registry = root / "crates" / "loader" / "x86" / "instructions.toml"
+    if registry.exists():
+        report.opcodes.extend(scan_opcodes(_read(registry), source=str(registry.relative_to(root))))
 
     # Import generation / service registries when present.
     for path in sorted((root / "crates").rglob("*.rs")):
@@ -213,7 +279,7 @@ def build_report(root: Path) -> CoverageReport:
             report.imports.extend(scan_imports(_read(path), source=rel, default_dll=path.stem))
 
     # Dedup opcodes preferring supported over unsupported over unknown
-    rank = {"supported": 2, "unsupported": 1, "unknown": 0}
+    rank = {"decodable": 2, "supported": 2, "unsupported": 1, "unknown": 0}
     best: dict[str, OpcodeEntry] = {}
     for entry in report.opcodes:
         cur = best.get(entry.opcode)
@@ -226,7 +292,11 @@ def build_report(root: Path) -> CoverageReport:
 def compare_reports(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     before_ops = {o["opcode"]: o["status"] for o in before.get("opcodes", [])}
     after_ops = {o["opcode"]: o["status"] for o in after.get("opcodes", [])}
-    newly_supported = sorted(op for op, st in after_ops.items() if st == "supported" and before_ops.get(op) != "supported")
+    positive = {"supported", "decodable"}
+    newly_supported = sorted(
+        op for op, st in after_ops.items()
+        if st in positive and before_ops.get(op) not in positive
+    )
     newly_unsupported = sorted(op for op, st in after_ops.items() if st == "unsupported" and before_ops.get(op) != "unsupported")
     missing = sorted(set(before_ops) - set(after_ops))
     return {

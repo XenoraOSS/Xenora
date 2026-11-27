@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 252] = [
+pub static SERVICES: [ServiceMetadata; 266] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -2781,6 +2781,160 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         reference: "process.h _getpid",
         tests: &["crt_getpid_matches_the_process_identity"],
     },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoInitialize",
+        parameters: &[Parameter { name: "reserved", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["ole32.dll"],
+        failure: "E_INVALIDARG for a non-null reserved pointer; RPC_E_CHANGED_MODE for an existing multithreaded apartment",
+        reference: "https://learn.microsoft.com/en-us/windows/win32/api/objbase/nf-objbase-coinitialize",
+        tests: &["co_initialize_uses_the_single_threaded_model"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoInitializeEx",
+        parameters: &[Parameter { name: "reserved", kind: "ptr" }, Parameter { name: "model", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "E_INVALIDARG for a non-null reserved pointer or a COINIT bit outside the documented set; RPC_E_CHANGED_MODE when the thread already initialized the other apartment model",
+        reference: "combaseapi.h CoInitializeEx and the COINIT enumeration",
+        tests: &["co_initialize_ex_tracks_the_apartment_per_thread"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoUninitialize",
+        parameters: &[],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "never; a thread with no outstanding initialization is left unchanged",
+        reference: "combaseapi.h CoUninitialize",
+        tests: &["co_uninitialize_balances_each_initialization"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoCreateGuid",
+        parameters: &[Parameter { name: "guid", kind: "out<16>" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "E_UNEXPECTED when the host has no entropy; a guest fault for an address it cannot write",
+        reference: "combaseapi.h CoCreateGuid; RFC 4122 version 4 and variant bits",
+        tests: &["co_create_guid_returns_a_version_four_guid"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "StringFromGUID2",
+        parameters: &[Parameter { name: "guid", kind: "ptr" }, Parameter { name: "text", kind: "ptr" }, Parameter { name: "capacity", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "0 and no write when capacity is below 39 units; a guest fault for a GUID or buffer address it cannot access",
+        reference: "combaseapi.h StringFromGUID2 and the CLSID text form",
+        tests: &["string_from_guid2_renders_the_documented_text_form"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CLSIDFromString",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "clsid", kind: "out<16>" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "CO_E_CLASSSTRING and no write for text that is not the braced or bare CLSID form; NULL produces GUID_NULL; a guest fault for an address it cannot read",
+        reference: "combaseapi.h CLSIDFromString",
+        tests: &["clsid_from_string_parses_the_braced_and_bare_forms"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "IIDFromString",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "clsid", kind: "out<16>" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "E_INVALIDARG for malformed text by Xenora policy; NULL produces GUID_NULL; invalid guest pointers fault",
+        reference: "https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-iidfromstring",
+        tests: &["iid_from_string_parses_a_guid_and_null"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoTaskMemAlloc",
+        parameters: &[Parameter { name: "size", kind: "u64" }],
+        result: "ptr",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "null when the task allocator cannot map the block; a zero size requests the smallest block",
+        reference: "combaseapi.h CoTaskMemAlloc",
+        tests: &["co_task_memory_owns_its_blocks"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoTaskMemFree",
+        parameters: &[Parameter { name: "address", kind: "ptr" }],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "never for the null pointer; Xenora faults the guest for a block the task allocator does not own",
+        reference: "combaseapi.h CoTaskMemFree",
+        tests: &["co_task_memory_owns_its_blocks"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoTaskMemRealloc",
+        parameters: &[Parameter { name: "address", kind: "ptr" }, Parameter { name: "size", kind: "u64" }],
+        result: "ptr",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "null with the original block unchanged when the grow fails, null after freeing for a zero size, and a guest fault for a block the task allocator does not own",
+        reference: "combaseapi.h CoTaskMemRealloc",
+        tests: &["co_task_mem_realloc_preserves_contents_and_refuses_foreign_blocks"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoCreateInstance",
+        parameters: &[Parameter { name: "clsid", kind: "ptr" }, Parameter { name: "outer", kind: "ptr" }, Parameter { name: "class_context", kind: "u32" }, Parameter { name: "iid", kind: "ptr" }, Parameter { name: "object", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["ole32.dll"],
+        failure: "E_POINTER for a null out pointer, E_INVALIDARG for a null CLSID or IID, CO_E_NOTINITIALIZED for an uninitialized thread, and REGDB_E_CLASSNOTREG for unregistered classes; the out pointer is nulled first; a synthetic class exists only with explicit fixture registration",
+        reference: "combaseapi.h CoCreateInstance",
+        tests: &["co_create_instance_reports_an_unregistered_class"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoGetClassObject",
+        parameters: &[Parameter { name: "clsid", kind: "ptr" }, Parameter { name: "class_context", kind: "u32" }, Parameter { name: "server_info", kind: "ptr" }, Parameter { name: "iid", kind: "ptr" }, Parameter { name: "object", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["ole32.dll"],
+        failure: "uninitialized threads return CO_E_NOTINITIALIZED; ordinary runtime has no registered classes; remote activation is unsupported",
+        reference: "https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cogetclassobject",
+        tests: &["co_get_class_object_refuses_unregistered_classes"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoCreateInstanceEx",
+        parameters: &[Parameter { name: "clsid", kind: "ptr" }, Parameter { name: "outer", kind: "ptr" }, Parameter { name: "class_context", kind: "u32" }, Parameter { name: "server_info", kind: "ptr" }, Parameter { name: "count", kind: "u32" }, Parameter { name: "results", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["ole32.dll"],
+        failure: "validates up to 64 MULTI_QI records; refuses remote or larger requests; ordinary runtime has no registered classes and output records remain unchanged on class lookup failure",
+        reference: "https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cocreateinstanceex",
+        tests: &["co_create_instance_ex_checks_the_bounded_interface_array"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "PropVariantClear",
+        parameters: &[Parameter { name: "variant", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "stops the guest for a null pointer, array, vector and by-reference forms, VT_BSTR, VT_UNKNOWN and VT_DISPATCH; their results or release paths are not modelled",
+        reference: "propidl.h PROPVARIANT and PropVariantClear",
+        tests: &["prop_variant_clear_clears_values_and_frees_task_strings"],
+    },
 ];
 
 /// Register every generated service and its API-set aliases.
@@ -5006,6 +5160,136 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let _ = args;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::crt_getpid(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoInitialize", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_initialize(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoInitializeEx", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_initialize_ex(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoUninitialize", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::co_uninitialize(&mut context)?;
+        Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoCreateGuid", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.out::<16>(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_create_guid(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "StringFromGUID2", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.i32(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::string_from_guid2(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CLSIDFromString", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.out::<16>(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::clsid_from_string(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "IIDFromString", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.out::<16>(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iid_from_string(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoTaskMemAlloc", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::co_task_mem_alloc(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoTaskMemFree", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::co_task_mem_free(&mut context, a0)?;
+        Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoTaskMemRealloc", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::co_task_mem_realloc(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoCreateInstance", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u64(4)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_create_instance(&mut context, a0, a1, a2, a3, a4)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoGetClassObject", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u64(4)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_get_class_object(&mut context, a0, a1, a2, a3, a4)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoCreateInstanceEx", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u32(4)?;
+        let a5 = call.u64(5)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_create_instance_ex(&mut context, a0, a1, a2, a3, a4, a5)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "PropVariantClear", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::prop_variant_clear(&mut context, a0)?;
         Ok(result.place(cpu))
     });
     for service in &SERVICES {

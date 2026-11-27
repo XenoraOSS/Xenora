@@ -82,6 +82,11 @@ fn resolve_directory(path: &Path) -> io::Result<PathBuf> {
 }
 
 fn check_checkout_path(path: &Path, kind: OutputKind) -> io::Result<()> {
+    // Only the nearest enclosing checkout governs the path. A checkout that
+    // merely contains that one - a home directory kept in Git, for example -
+    // does not own another repository's directories and cannot withhold
+    // access to them. Every ancestor is still checked for `.git` metadata,
+    // which the walk reaches before the owning checkout for such a path.
     for ancestor in path.ancestors() {
         if ancestor
             .file_name()
@@ -98,8 +103,8 @@ fn check_checkout_path(path: &Path, kind: OutputKind) -> io::Result<()> {
         if kind == OutputKind::PersistentCache {
             return Err(refused(path, "persistent caches belong outside checkouts"));
         }
-        // Check the nearest checkout and any enclosing checkout. An embedded
-        // checkout cannot grant write access inside a protected parent.
+        // The owning checkout must be a Xenora tree, and the target must sit
+        // in one of the two directories the policy allows.
         if !ancestor.join("crates/loader/Cargo.toml").is_file()
             || !ancestor.join("scripts/build-app.sh").is_file()
             || !ALLOWED_CHECKOUT_DIRS
@@ -111,6 +116,7 @@ fn check_checkout_path(path: &Path, kind: OutputKind) -> io::Result<()> {
                 "checkout exports are limited to Xenora's artifacts and diagnostics/probe directories",
             ));
         }
+        return Ok(());
     }
     Ok(())
 }

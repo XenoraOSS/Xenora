@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 //! Issue #434: a guest PE32+ program binds its own texture and draws a
-//! textured triangle, end to end.
+//! textured triangle, end to end. Issue #559 also covers indexed draws.
 //!
 //! A guest PE32+ program is built from source by
 //! `tests/compat_fixtures/build-guest-textured.sh`, loaded by the real startup
@@ -11,12 +11,11 @@
 //! reports through a `.gate` section.
 //!
 //! The expected pixels are literals in this file. They are not computed from
-//! the rasteriser, the renderer or any other function under test: the guest
-//! samples column 0 of its texture, which is red, so every pixel of the frame
-//! is `R8G8B8A8` red `(255, 0, 0, 255)`.
+//! the rasteriser, the renderer or any other function under test. Sequential
+//! draws sample column 0 (red). Indexed draws select a different triangle
+//! that samples column 1 (blue). Each expected frame has one uniform color.
 //!
-//! The build script and the guest program are built by other workers. This
-//! test fails, and does not skip, when they are missing.
+//! A failed source build fails the test.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -65,6 +64,11 @@ const EXPECTED_FRAME: [u8; FRAME_BYTES] = [
     255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
     255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255,
 ];
+
+/// Both indexed draws resolve the same three blue vertices. With a
+/// constant u = 0.75 and a two-column texture, every pixel picks column 1.
+const INDEXED_PIXEL: [u8; 4] = [0, 0, 255, 255];
+const INDEXED_GUESTS: [&str; 2] = ["guest-textured-index16-O1", "guest-textured-index32-O2"];
 
 // ---------------------------------------------------------------------------
 // The fixture
@@ -377,12 +381,13 @@ fn declared_dir64(bytes: &[u8]) -> usize {
 /// optimisation level, on the software reference backend.
 #[test]
 fn the_guest_textured_path_draws_the_sampled_texture_on_the_software_backend() {
-    for name in [
+    let original = [
         "guest-textured-O0",
         "guest-textured-O1",
         "guest-textured-O2",
         "guest-textured-Os",
-    ] {
+    ];
+    for name in original.into_iter().chain(INDEXED_GUESTS) {
         let outcome = run(name, BUDGET).unwrap_or_else(|error| panic!("{name}: {error}"));
         let result = &outcome.result;
         let state = &outcome.state;
@@ -434,9 +439,21 @@ fn the_guest_textured_path_draws_the_sampled_texture_on_the_software_backend() {
         // The pixels, read out of the guest's own memory: the colour the
         // sampler picked out of the guest's texture, not the clear colour.
         let frame = frame_bytes(&outcome, block.frame_ptr);
+        assert_expected_frame(name, &frame);
+    }
+}
+
+fn assert_expected_frame(name: &str, frame: &[u8]) {
+    if INDEXED_GUESTS.contains(&name) {
+        assert_eq!(
+            frame,
+            INDEXED_PIXEL.repeat(FRAME_BYTES / INDEXED_PIXEL.len()),
+            "{name}: the indexed triangle must sample blue"
+        );
+    } else {
         assert_eq!(
             frame, EXPECTED_FRAME,
-            "{name}: the frame is not the sampled texture colour"
+            "{name}: the triangle must sample red"
         );
     }
 }
@@ -485,68 +502,67 @@ fn the_guest_textured_path_draws_the_sampled_texture_on_native_metal() {
     let gpu = Arc::new(NativeCompute::new().expect("native Metal GPU device"));
     let entries = [VERTEX_ENTRY_POINT, PIXEL_ENTRY_POINT];
 
-    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
-    {
-        let backend = Arc::clone(&gpu);
-        let msl = msl.clone();
-        let mut graphics = state.graphics.lock().expect("the graphics context lock");
-        graphics.set_metal_textured_backend(move |draw| {
-            assert_eq!(
-                draw.texture.format,
-                TextureFormat::Rgba8Unorm,
-                "the guest's texture format"
-            );
-            let metal_error = |error: xenora_metal::MetalError| {
-                GraphicsError::BackendError(format!("Metal GPU error: {error:?}"))
-            };
-            let sampler = MetalSampler::new(
-                backend.device(),
-                xenora_texture::SamplerDesc::nearest_clamp(),
-            )
-            .map_err(metal_error)?;
-            let width = draw.texture.width as usize;
-            let height = draw.texture.height as usize;
-            let desc = Rgba8TextureDesc::new(width, height, 1).map_err(metal_error)?;
-            let level = Rgba8MipLevel::new_packed(0, width, height, draw.texture.bytes);
-            let texture =
-                MetalRgba8Texture::upload(backend.device(), desc, &[level]).map_err(metal_error)?;
-            backend
-                .render_rgba8_sampled(
-                    &msl,
-                    entries,
-                    &draw.positions,
-                    &draw.texcoords,
-                    [draw.viewport.0, draw.viewport.1],
-                    draw.clear_color,
-                    Some((&texture, &sampler)),
+    for name in std::iter::once("guest-textured-O1").chain(INDEXED_GUESTS) {
+        let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+        {
+            let backend = Arc::clone(&gpu);
+            let msl = msl.clone();
+            let mut graphics = state.graphics.lock().expect("the graphics context lock");
+            graphics.set_metal_textured_backend(move |draw| {
+                assert_eq!(
+                    draw.texture.format,
+                    TextureFormat::Rgba8Unorm,
+                    "the guest's texture format"
+                );
+                let metal_error = |error: xenora_metal::MetalError| {
+                    GraphicsError::BackendError(format!("Metal GPU error: {error:?}"))
+                };
+                let sampler = MetalSampler::new(
+                    backend.device(),
+                    xenora_texture::SamplerDesc::nearest_clamp(),
                 )
-                .map_err(metal_error)
-        });
+                .map_err(metal_error)?;
+                let width = draw.texture.width as usize;
+                let height = draw.texture.height as usize;
+                let desc = Rgba8TextureDesc::new(width, height, 1).map_err(metal_error)?;
+                let level = Rgba8MipLevel::new_packed(0, width, height, draw.texture.bytes);
+                let texture = MetalRgba8Texture::upload(backend.device(), desc, &[level])
+                    .map_err(metal_error)?;
+                backend
+                    .render_rgba8_sampled(
+                        &msl,
+                        entries,
+                        &draw.positions,
+                        &draw.texcoords,
+                        [draw.viewport.0, draw.viewport.1],
+                        draw.clear_color,
+                        Some((&texture, &sampler)),
+                    )
+                    .map_err(metal_error)
+            });
+        }
+
+        let outcome =
+            run_with_state(state, name, BUDGET).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert_eq!(
+            outcome.result.execution.exit_reason,
+            ExitReason::ProcessExit(0),
+            "{name}: the guest did not end itself"
+        );
+        assert_eq!(outcome.state.exit_status(), Some(0), "{name}");
+
+        let block = result_block(&outcome);
+        assert_eq!(block.magic, MAGIC, "result magic");
+        assert_eq!(block.checks, CHECKS, "structural checks");
+        assert_eq!(block.width, WIDTH, "render target width");
+        assert_eq!(block.height, HEIGHT, "render target height");
+        assert_eq!(block.backend, 1, "the guest did not see the Metal backend");
+        assert_eq!(block.draw_count, 1, "draw count");
+        assert_eq!(block.frame_len, FRAME_BYTES as u32, "frame bytes");
+
+        let frame = frame_bytes(&outcome, block.frame_ptr);
+        assert_expected_frame(name, &frame);
     }
-
-    let outcome = run_with_state(state, "guest-textured-O1", BUDGET)
-        .unwrap_or_else(|error| panic!("guest-textured-O1: {error}"));
-    assert_eq!(
-        outcome.result.execution.exit_reason,
-        ExitReason::ProcessExit(0),
-        "the guest did not end itself"
-    );
-    assert_eq!(outcome.state.exit_status(), Some(0));
-
-    let block = result_block(&outcome);
-    assert_eq!(block.magic, MAGIC, "result magic");
-    assert_eq!(block.checks, CHECKS, "structural checks");
-    assert_eq!(block.width, WIDTH, "render target width");
-    assert_eq!(block.height, HEIGHT, "render target height");
-    assert_eq!(block.backend, 1, "the guest did not see the Metal backend");
-    assert_eq!(block.draw_count, 1, "draw count");
-    assert_eq!(block.frame_len, FRAME_BYTES as u32, "frame bytes");
-
-    let frame = frame_bytes(&outcome, block.frame_ptr);
-    assert_eq!(
-        frame, EXPECTED_FRAME,
-        "the Metal frame is not the sampled texture colour"
-    );
     println!(
         "device={} guest-bound texture sampled through the translated image_sample_lz stage",
         gpu.device_name()

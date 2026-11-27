@@ -70,23 +70,36 @@ A texel byte converts to binary32 as `byte / 255.0`; a selected component is
 written to its destination VGPR as those f32 bits. `IMAGE_SAMPLE_LZ` uses mip
 0, and `IMAGE_SAMPLE_L` requires an integral LOD in `[0, last level]`.
 
-## Known limits
+## Runtime domain
 
 The CPU reference refuses an explicit LOD that is not an exact integer mip
-level, and answers `SamplingError::InvalidLod` for a fractional, negative or
-out-of-range LOD. The GPU path cannot refuse a runtime value: the generated
-MSL calls `tex0.sample(samp0, float2(u, v), level(lod))` and the bound Metal
-sampler state sets `MTLSamplerMipFilter::Nearest`, so Metal rounds the LOD
-to the nearest mip level instead of failing. The sampler's LOD clamps
-(`LodMinClamp` and `LodMaxClamp`) also pull a negative or too large LOD
-into the sampler's range rather than refusing it.
+level (`SamplingError::InvalidLod` for a fractional, negative, out-of-range,
+NaN or infinite LOD) and a NaN or infinite coordinate
+(`SamplingError::NonFiniteCoordinates`). Both values are guest data read at
+run time, so the compiler cannot prove them, and Metal would round or clamp
+them instead of failing: the bound sampler sets
+`MTLSamplerMipFilter::Nearest`, and its `LodMinClamp` and `LodMaxClamp` pull a
+negative or too large LOD into range.
 
-The two paths therefore differ for a non-integer explicit LOD: the reference
-reports `InvalidLod` and the GPU samples the nearest mip level. The bounded
-contract assumes an integral explicit LOD, and a program that depends on the
-refusal must not be run on the GPU path. Nothing here is claimed for Xbox
-hardware; Metal's rounding rule is Metal's own and not a guide-derived
-expectation.
+The generated MSL therefore checks the domain before each sample, in the lanes
+the compile-time EXEC mask selects. A coordinate is finite when its exponent
+bits are not all ones; an explicit LOD is in the domain when its bits are
+-0.0 or the exact binary32 value of a level below
+`tex0.get_num_mip_levels()` (the backend has already checked that the bound
+texture's level count equals the T#'s). Both checks compare raw bits, so they
+do not depend on the floating-point mode. A failing lane sets bit 0 (LOD) or
+bit 1 (coordinate) of a zeroed fault word at `[[buffer(2)]]`;
+`NativeCompute::run_words_sampled` reads the word after completion and
+returns an `image sample domain` error instead of the output, matching the
+reference's refusal of the whole dispatch. An inactive lane's values do not
+fault on either path. The native tests take the LOD from each lane's guest
+`v` coordinate under a partial EXEC and cover 0.5, 1.5, the largest binary32
+below 1.0, 2.0, 15.0, -1.0, NaN and both infinities, plus NaN and infinite
+coordinates for `IMAGE_SAMPLE_LZ`.
+
+Nothing here is claimed for Xbox hardware: the guide does not say how the
+hardware rounds a fractional LOD, so the bounded contract refuses it rather
+than inventing a rounding rule.
 
 ## Translation and Metal
 

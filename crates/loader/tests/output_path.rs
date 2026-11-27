@@ -100,6 +100,30 @@ fn refuses_checkout_sources_before_creating_missing_directories() {
     assert!(export(&other.join(".git")).is_err());
 }
 
+#[test]
+fn a_checkout_inside_another_repository_governs_its_own_exports() {
+    let scratch = Scratch::new();
+    // An enclosing repository stands in for a home directory kept in Git.
+    let home = scratch.0.join("home");
+    fs::create_dir(&home).unwrap();
+    fs::write(home.join(".git"), "gitdir: elsewhere\n").unwrap();
+    let checkout = home.join("Developer/Xenora");
+    fs::create_dir_all(checkout.join("crates/loader")).unwrap();
+    fs::create_dir_all(checkout.join("scripts")).unwrap();
+    fs::write(checkout.join(".git"), "gitdir: elsewhere\n").unwrap();
+    fs::write(checkout.join("crates/loader/Cargo.toml"), "").unwrap();
+    fs::write(checkout.join("scripts/build-app.sh"), "").unwrap();
+
+    export(&checkout.join("artifacts/report")).unwrap();
+    assert!(checkout.join("artifacts/report/imports.csv").is_file());
+
+    // The enclosing repository still governs its own tree.
+    assert!(export(&home.join("artifacts")).is_err());
+    assert!(!home.join("artifacts").exists());
+    assert!(export(&home.join("artifacts/report")).is_err());
+    assert!(!home.join("artifacts").exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn resolves_directory_aliases_and_rejects_unsafe_output_leaves() {

@@ -3,19 +3,99 @@
 import CXenora
 import GameController
 
+struct XInputSnapshotValues: Equatable {
+    var buttons: UInt16 = 0
+    var leftTrigger: UInt8 = 0
+    var rightTrigger: UInt8 = 0
+    var leftX: Int16 = 0
+    var leftY: Int16 = 0
+    var rightX: Int16 = 0
+    var rightY: Int16 = 0
+
+    func ffi(connected: Bool, vibrationSupported: Bool = false) -> xenora_xinput_state {
+        xenora_xinput_state(
+            buttons: buttons,
+            left_trigger: leftTrigger,
+            right_trigger: rightTrigger,
+            left_x: leftX,
+            left_y: leftY,
+            right_x: rightX,
+            right_y: rightY,
+            connected: connected ? 1 : 0,
+            features: connected && vibrationSupported ? UInt8(XENORA_XINPUT_FEATURE_VIBRATION) : 0,
+            reserved: (0, 0)
+        )
+    }
+}
+
+
+struct XInputBatteryValues: Equatable {
+    var present = false
+    var state: UInt8 = UInt8(XENORA_XINPUT_BATTERY_STATE_UNKNOWN)
+    var level: UInt8 = 0
+
+    func ffi() -> xenora_xinput_battery {
+        xenora_xinput_battery(
+            present: present ? 1 : 0,
+            state: present ? state : 0,
+            level: present ? level : 0,
+            reserved: 0
+        )
+    }
+
+    static func hostValues(_ battery: GCDeviceBattery?) -> XInputBatteryValues {
+        guard let battery else { return XInputBatteryValues() }
+        return hostEvidence(state: battery.batteryState, level: battery.batteryLevel)
+    }
+
+    static func hostEvidence(state hostState: GCDeviceBattery.State, level rawLevel: Float) -> XInputBatteryValues {
+        let state: UInt8
+        switch hostState {
+        case .discharging: state = UInt8(XENORA_XINPUT_BATTERY_STATE_DISCHARGING)
+        case .charging: state = UInt8(XENORA_XINPUT_BATTERY_STATE_CHARGING)
+        case .full: state = UInt8(XENORA_XINPUT_BATTERY_STATE_FULL)
+        default: state = UInt8(XENORA_XINPUT_BATTERY_STATE_UNKNOWN)
+        }
+        let level: UInt8 = rawLevel.isFinite && rawLevel >= 0 && rawLevel <= 1
+            ? UInt8((rawLevel * 100).rounded())
+            : UInt8(XENORA_XINPUT_BATTERY_LEVEL_UNKNOWN)
+        return XInputBatteryValues(present: true, state: state, level: level)
+    }
+}
+
 struct ControllerSnapshot: Equatable {
     let buttons: UInt32
     let x: Int16
     let y: Int16
     let leftTrigger: Float
     let rightTrigger: Float
+    let xinput: XInputSnapshotValues
 
-    init(buttons: UInt32, x: Float, y: Float, leftTrigger: Float, rightTrigger: Float) {
+    init(
+        buttons: UInt32,
+        x: Float,
+        y: Float,
+        leftTrigger: Float,
+        rightTrigger: Float,
+        xinput: XInputSnapshotValues = XInputSnapshotValues()
+    ) {
         self.buttons = buttons
         self.x = Self.axis(x)
         self.y = Self.axis(y)
         self.leftTrigger = Self.trigger(leftTrigger)
         self.rightTrigger = Self.trigger(rightTrigger)
+        self.xinput = xinput
+    }
+
+    static func rawXInputAxis(_ value: Float) -> Int16 {
+        guard value.isFinite else { return 0 }
+        let clamped = min(1, max(-1, value))
+        let scaled = clamped < 0 ? clamped * 32768 : clamped * 32767
+        return Int16(scaled.rounded())
+    }
+
+    static func xinputTrigger(_ value: Float) -> UInt8 {
+        UInt8((trigger(value) * 255).rounded())
     }
 
     private static func axis(_ value: Float) -> Int16 {
@@ -30,11 +110,58 @@ struct ControllerSnapshot: Equatable {
     }
 }
 
+enum XInputButtonBits {
+    static let dpadUp = UInt16(XENORA_XINPUT_GAMEPAD_DPAD_UP)
+    static let dpadDown = UInt16(XENORA_XINPUT_GAMEPAD_DPAD_DOWN)
+    static let dpadLeft = UInt16(XENORA_XINPUT_GAMEPAD_DPAD_LEFT)
+    static let dpadRight = UInt16(XENORA_XINPUT_GAMEPAD_DPAD_RIGHT)
+    static let start = UInt16(XENORA_XINPUT_GAMEPAD_START)
+    static let back = UInt16(XENORA_XINPUT_GAMEPAD_BACK)
+    static let leftThumb = UInt16(XENORA_XINPUT_GAMEPAD_LEFT_THUMB)
+    static let rightThumb = UInt16(XENORA_XINPUT_GAMEPAD_RIGHT_THUMB)
+    static let leftShoulder = UInt16(XENORA_XINPUT_GAMEPAD_LEFT_SHOULDER)
+    static let rightShoulder = UInt16(XENORA_XINPUT_GAMEPAD_RIGHT_SHOULDER)
+    static let guide = UInt16(XENORA_XINPUT_GAMEPAD_GUIDE)
+    static let a = UInt16(XENORA_XINPUT_GAMEPAD_A)
+    static let b = UInt16(XENORA_XINPUT_GAMEPAD_B)
+    static let x = UInt16(XENORA_XINPUT_GAMEPAD_X)
+    static let y = UInt16(XENORA_XINPUT_GAMEPAD_Y)
+}
+
 struct DetectedController: Equatable {
     let identity: ObjectIdentifier
     let name: String
     let supportsHaptics: Bool
     let snapshot: ControllerSnapshot
+    let battery: XInputBatteryValues
+    let haptics: GCDeviceHaptics?
+
+    init(
+        identity: ObjectIdentifier,
+        name: String,
+        supportsHaptics: Bool,
+        snapshot: ControllerSnapshot,
+        battery: XInputBatteryValues = XInputBatteryValues(),
+        haptics: GCDeviceHaptics? = nil
+    ) {
+        self.identity = identity
+        self.name = name
+        self.supportsHaptics = supportsHaptics
+        self.snapshot = snapshot
+        self.battery = battery
+        self.haptics = haptics
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        let sameHaptics = switch (lhs.haptics, rhs.haptics) {
+        case (nil, nil): true
+        case let (left?, right?): left === right
+        default: false
+        }
+        return lhs.identity == rhs.identity && lhs.name == rhs.name
+            && lhs.supportsHaptics == rhs.supportsHaptics && lhs.snapshot == rhs.snapshot
+            && lhs.battery == rhs.battery && sameHaptics
+    }
 }
 
 @MainActor
@@ -43,13 +170,38 @@ func pollGameController() -> DetectedController? {
 }
 
 @MainActor
-func pollGameController(current: GCController?, controllers: [GCController]) -> DetectedController? {
-    let extended = current.flatMap { $0.extendedGamepad == nil ? nil : $0 }
-        ?? controllers.first { $0.extendedGamepad != nil }
-    let controller = extended ?? current.flatMap { $0.microGamepad == nil ? nil : $0 }
-        ?? controllers.first { $0.microGamepad != nil }
-    guard let controller else { return nil }
+func pollGameControllers() -> [DetectedController] {
+    pollGameControllers(current: GCController.current, controllers: GCController.controllers())
+}
 
+@MainActor
+func pollGameController(current: GCController?, controllers: [GCController]) -> DetectedController? {
+    pollGameControllers(current: current, controllers: controllers).first
+}
+
+@MainActor
+func pollGameControllers(current: GCController?, controllers: [GCController]) -> [DetectedController] {
+    var prioritized: [GCController] = []
+    if let current, current.extendedGamepad != nil { prioritized.append(current) }
+    for controller in controllers where controller.extendedGamepad != nil { prioritized.append(controller) }
+    if let current, current.microGamepad != nil { prioritized.append(current) }
+    for controller in controllers where controller.microGamepad != nil { prioritized.append(controller) }
+
+    var ordered: [GCController] = []
+    for controller in prioritized {
+        guard controller.extendedGamepad != nil || controller.microGamepad != nil else { continue }
+        var duplicate = false
+        for existing in ordered where existing === controller {
+            duplicate = true
+            break
+        }
+        if !duplicate { ordered.append(controller) }
+    }
+    return ordered.prefix(4).compactMap(detectController)
+}
+
+@MainActor
+private func detectController(_ controller: GCController) -> DetectedController? {
     let captured = controller.capture()
     let snapshot: ControllerSnapshot
     if let pad = captured.extendedGamepad {
@@ -58,12 +210,16 @@ func pollGameController(current: GCController?, controllers: [GCController]) -> 
         if pad.buttonB.isPressed { buttons |= UInt32(XENORA_INPUT_ACTION_B) }
         snapshot = ControllerSnapshot(
             buttons: buttons, x: pad.leftThumbstick.xAxis.value, y: pad.leftThumbstick.yAxis.value,
-            leftTrigger: pad.leftTrigger.value, rightTrigger: pad.rightTrigger.value
+            leftTrigger: pad.leftTrigger.value, rightTrigger: pad.rightTrigger.value,
+            xinput: extendedXInputSnapshot(pad)
         )
     } else if let pad = captured.microGamepad {
         var buttons = directionalButtons(pad.dpad)
         if pad.buttonA.isPressed { buttons |= UInt32(XENORA_INPUT_ACTION_A) }
-        snapshot = ControllerSnapshot(buttons: buttons, x: 0, y: 0, leftTrigger: 0, rightTrigger: 0)
+        snapshot = ControllerSnapshot(
+            buttons: buttons, x: 0, y: 0, leftTrigger: 0, rightTrigger: 0,
+            xinput: microXInputSnapshot(pad)
+        )
     } else {
         return nil
     }
@@ -72,8 +228,54 @@ func pollGameController(current: GCController?, controllers: [GCController]) -> 
         identity: ObjectIdentifier(controller),
         name: controller.vendorName ?? controller.productCategory,
         supportsHaptics: controller.haptics != nil,
-        snapshot: snapshot
+        snapshot: snapshot,
+        battery: XInputBatteryValues.hostValues(controller.battery),
+        haptics: controller.haptics
     )
+}
+
+@MainActor
+private func extendedXInputSnapshot(_ pad: GCExtendedGamepad) -> XInputSnapshotValues {
+    var buttons = xinputDirectionalButtons(pad.dpad)
+    if pad.buttonMenu.isPressed { buttons |= XInputButtonBits.start }
+    if pad.buttonOptions?.isPressed == true { buttons |= XInputButtonBits.back }
+    if pad.leftThumbstickButton?.isPressed == true { buttons |= XInputButtonBits.leftThumb }
+    if pad.rightThumbstickButton?.isPressed == true { buttons |= XInputButtonBits.rightThumb }
+    if pad.leftShoulder.isPressed { buttons |= XInputButtonBits.leftShoulder }
+    if pad.rightShoulder.isPressed { buttons |= XInputButtonBits.rightShoulder }
+    if pad.buttonHome?.isPressed == true { buttons |= XInputButtonBits.guide }
+    if pad.buttonA.isPressed { buttons |= XInputButtonBits.a }
+    if pad.buttonB.isPressed { buttons |= XInputButtonBits.b }
+    if pad.buttonX.isPressed { buttons |= XInputButtonBits.x }
+    if pad.buttonY.isPressed { buttons |= XInputButtonBits.y }
+    return XInputSnapshotValues(
+        buttons: buttons,
+        leftTrigger: ControllerSnapshot.xinputTrigger(pad.leftTrigger.value),
+        rightTrigger: ControllerSnapshot.xinputTrigger(pad.rightTrigger.value),
+        leftX: ControllerSnapshot.rawXInputAxis(pad.leftThumbstick.xAxis.value),
+        leftY: ControllerSnapshot.rawXInputAxis(pad.leftThumbstick.yAxis.value),
+        rightX: ControllerSnapshot.rawXInputAxis(pad.rightThumbstick.xAxis.value),
+        rightY: ControllerSnapshot.rawXInputAxis(pad.rightThumbstick.yAxis.value)
+    )
+}
+
+@MainActor
+private func microXInputSnapshot(_ pad: GCMicroGamepad) -> XInputSnapshotValues {
+    var buttons = xinputDirectionalButtons(pad.dpad)
+    if pad.buttonMenu.isPressed { buttons |= XInputButtonBits.start }
+    if pad.buttonA.isPressed { buttons |= XInputButtonBits.a }
+    if pad.buttonX.isPressed { buttons |= XInputButtonBits.x }
+    return XInputSnapshotValues(buttons: buttons)
+}
+
+@MainActor
+private func xinputDirectionalButtons(_ pad: GCControllerDirectionPad) -> UInt16 {
+    var buttons: UInt16 = 0
+    if pad.right.isPressed { buttons |= XInputButtonBits.dpadRight }
+    if pad.left.isPressed { buttons |= XInputButtonBits.dpadLeft }
+    if pad.up.isPressed { buttons |= XInputButtonBits.dpadUp }
+    if pad.down.isPressed { buttons |= XInputButtonBits.dpadDown }
+    return buttons
 }
 
 @MainActor

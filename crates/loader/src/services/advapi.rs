@@ -26,7 +26,7 @@ pub(super) struct CryptoProviders {
     live: BTreeSet<u64>,
 }
 
-fn fill_random(buffer: &mut [u8]) -> Result<(), u32> {
+pub(super) fn fill_random(buffer: &mut [u8]) -> Result<(), u32> {
     use std::io::Read;
     let mut source = std::fs::File::open("/dev/urandom").map_err(|_| ERROR_NOT_SUPPORTED)?;
     source.read_exact(buffer).map_err(|_| ERROR_NOT_SUPPORTED)

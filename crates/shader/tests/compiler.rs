@@ -814,6 +814,79 @@ fn image_sample_under_a_partial_exec_keeps_the_prior_destination() {
     );
 }
 
+/// Every translated sample checks its domain before the result is used: finite
+/// coordinates always, a whole mip level for an explicit LOD, and only in the
+/// lanes EXEC selects. A failing lane sets the `[[buffer(2)]]` fault word.
+#[test]
+fn image_samples_guard_their_runtime_domain() {
+    for (fixture, form, _, _) in IMAGE_SAMPLE_FIXTURES {
+        let compiled = compile(Architecture::Gfx1030, fixture).expect("compile image sample");
+        let msl = &compiled.msl;
+        assert!(
+            msl.contains("device atomic_uint* fault [[buffer(2)]]"),
+            "{msl}"
+        );
+        assert!(
+            msl.contains("static inline bool xenora_finite(uint bits)")
+                && msl.contains("static inline bool xenora_whole_level(uint bits, uint levels)"),
+            "{msl}"
+        );
+        let samples = msl.matches(".sample(samp0").count();
+        let guards = msl
+            .matches("atomic_fetch_or_explicit(fault, bad, memory_order_relaxed)")
+            .count();
+        assert_eq!(samples, guards, "every sample is guarded: {msl}");
+        assert_eq!(
+            msl.matches("bad |= 2u;").count(),
+            samples,
+            "coordinate check: {msl}"
+        );
+        let lod_checks = msl
+            .matches("tex0.get_num_mip_levels())) { bad |= 1u; }")
+            .count();
+        if form == "sample_l.2d.f32" {
+            assert_eq!(lod_checks, samples, "explicit LOD check: {msl}");
+            assert!(
+                compiled.ir.contains(", lod t"),
+                "IR names the LOD: {}",
+                compiled.ir
+            );
+        } else {
+            assert_eq!(lod_checks, 0, "LZ has no LOD to check: {msl}");
+        }
+        // Full EXEC: the guard has no lane condition.
+        assert!(msl.contains("if (bad != 0u) {"), "{msl}");
+    }
+    assert_eq!(xenora_shader::SAMPLE_FAULT_LOD, 1);
+    assert_eq!(xenora_shader::SAMPLE_FAULT_COORDINATES, 2);
+}
+
+/// Under a partial EXEC only the selected lanes may report a domain fault, so
+/// an inactive lane's coordinate cannot refuse the dispatch.
+#[test]
+fn image_sample_domain_guard_follows_a_partial_exec() {
+    let compiled = compile(Architecture::Gfx1030, &image_sample_program_with_exec(5))
+        .expect("compile a partially active image sample");
+    assert!(
+        compiled
+            .msl
+            .contains("if (bad != 0u && ((0x00000005u >> (index & 31u)) & 1u) != 0u) {"),
+        "{}",
+        compiled.msl
+    );
+    assert!(compiled.ir.contains("exec=0x00000005"), "{}", compiled.ir);
+}
+
+/// A program without an image sample keeps the two-buffer kernel signature.
+#[test]
+fn programs_without_samples_bind_no_fault_word() {
+    for fixture in [FIXTURE, BRANCH, FLOAT] {
+        let compiled = compile(Architecture::Gfx1030, fixture).expect("compile fixture");
+        assert!(!compiled.msl.contains("fault"), "{}", compiled.msl);
+        assert!(!compiled.msl.contains("xenora_finite"), "{}", compiled.msl);
+    }
+}
+
 fn words(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|word| word.to_le_bytes()).collect()
 }

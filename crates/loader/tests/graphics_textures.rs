@@ -22,6 +22,9 @@ use xenora_loader::memory::{GuestMemory, MemoryPermissions};
 const CBV_SRV_UAV: u32 = 0;
 const SAMPLER: u32 = 1;
 const VB_ADDR: u64 = 0x10_0000;
+const INDEX_ADDR: u64 = 0x18_0000;
+const R16_UINT: u32 = 57;
+const R32_UINT: u32 = 42;
 const TEX_ADDR: u64 = 0x20_0000;
 const STRIDE: usize = 32;
 
@@ -299,8 +302,8 @@ fn srv(slot: u32) -> Binding {
 }
 
 /// Record and run: the binding's viewport, heaps, root signature, the two
-/// tables (SRV at root parameter 0 and sampler at 1, or swapped) and one draw.
-fn run(rig: &mut Rig, binding: Binding) -> Result<ExecutionOutcome, GraphicsError> {
+/// tables (SRV at root parameter 0 and sampler at 1, or swapped).
+fn record_binding(rig: &mut Rig, binding: Binding) -> Result<(), GraphicsError> {
     let ctx = &mut rig.ctx;
     ctx.reset_command_list(rig.list, rig.alloc)?;
     let size = binding.viewport as usize;
@@ -330,6 +333,12 @@ fn run(rig: &mut Rig, binding: Binding) -> Result<ExecutionOutcome, GraphicsErro
         let base = base.offset(slot).unwrap();
         ctx.cmd_set_graphics_root_descriptor_table(rig.list, sampler_parameter, base)?;
     }
+    Ok(())
+}
+
+fn run(rig: &mut Rig, binding: Binding) -> Result<ExecutionOutcome, GraphicsError> {
+    record_binding(rig, binding)?;
+    let ctx = &mut rig.ctx;
     let (vertices, instances, start_instance) = binding.draw;
     ctx.cmd_draw_instanced(
         rig.list,
@@ -717,36 +726,6 @@ fn bad_bindings_fail_and_never_draw() {
         assert_eq!(result, Err(GraphicsError::InvalidDescriptor), "{case}");
     }
 
-    // A textured indexed draw is outside the subset.
-    let ib = ctx
-        .create_committed_resource(
-            rig.device,
-            ResourceDesc {
-                dimension: ResourceDimension::Buffer,
-                width: 6,
-                height: 1,
-                depth_or_array_size: 1,
-                mip_levels: 1,
-                format_rgba8: false,
-            },
-            ResourceStates::COMMON,
-            None,
-        )
-        .unwrap();
-    ctx.reset_command_list(rig.list, rig.alloc).unwrap();
-    ctx.cmd_set_vertex_buffer(rig.list, rig.vb, 0, STRIDE)
-        .unwrap();
-    ctx.cmd_set_index_buffer(rig.list, ib, 0, 57).unwrap();
-    ctx.cmd_set_graphics_root_signature(rig.list, rig.root_signature)
-        .unwrap();
-    ctx.cmd_draw_indexed_instanced(rig.list, 3, 1, 0, 0, 0)
-        .unwrap();
-    ctx.close_command_list(rig.list).unwrap();
-    assert!(matches!(
-        ctx.execute_command_list(rig.queue, rig.list, &rig.memory),
-        Err(GraphicsError::Unsupported(_))
-    ));
-
     // Two heaps of one type in one SetDescriptorHeaps call.
     ctx.reset_command_list(rig.list, rig.alloc).unwrap();
     assert_eq!(
@@ -774,15 +753,171 @@ fn point_clamp_sampling_off_centre_and_outside_unit_range() {
         },
     )
     .expect("textured draw");
-    let a = texture_a();
-    let expected: Vec<u8> = (0..16)
+    assert_eq!(outcome.pixels, clamped_pixels());
+    assert_ne!(outcome.pixels, texture_a());
+}
+
+fn clamped_pixels() -> Vec<u8> {
+    let texture = texture_a();
+    (0..16)
         .flat_map(|i| {
             let at = (CLAMPED_TEXEL[i / 4] * 4 + CLAMPED_TEXEL[i % 4]) * 4;
-            a[at..at + 4].to_vec()
+            <[u8; 4]>::try_from(&texture[at..at + 4]).unwrap()
         })
-        .collect();
-    assert_eq!(outcome.pixels, expected);
-    assert_ne!(outcome.pixels, a);
+        .collect()
+}
+
+fn index_buffer(rig: &mut Rig, format: u32) -> (GraphicsHandle, usize, u32) {
+    // Offset skips the first index and the draw start skips the second.
+    // With the supplied signed bases, either form resolves to [5, 3, 4].
+    let (bytes, width): (Vec<u8>, usize) = if format == R16_UINT {
+        (
+            [0u16, 0, 6, 4, 5]
+                .into_iter()
+                .flat_map(u16::to_le_bytes)
+                .collect(),
+            2,
+        )
+    } else {
+        (
+            [0u32, 0, 4, 2, 3]
+                .into_iter()
+                .flat_map(u32::to_le_bytes)
+                .collect(),
+            4,
+        )
+    };
+    rig.memory
+        .map_region_with_data(INDEX_ADDR, 0x1000, MemoryPermissions::READ_ONLY, &bytes)
+        .unwrap();
+    let resource = rig
+        .ctx
+        .create_committed_resource(
+            rig.device,
+            ResourceDesc {
+                dimension: ResourceDimension::Buffer,
+                width: bytes.len() as u64,
+                height: 1,
+                depth_or_array_size: 1,
+                mip_levels: 1,
+                format_rgba8: false,
+            },
+            ResourceStates::COMMON,
+            Some(INDEX_ADDR),
+        )
+        .unwrap();
+    (resource, width, format)
+}
+
+fn run_indexed(
+    rig: &mut Rig,
+    index: Option<(GraphicsHandle, usize, u32)>,
+    (count, instances, start, base): (u32, u32, u32, i32),
+) -> Result<ExecutionOutcome, GraphicsError> {
+    record_binding(rig, SLOT_0)?;
+    let ctx = &mut rig.ctx;
+    if let Some((resource, offset, format)) = index {
+        ctx.cmd_set_index_buffer(rig.list, resource, offset, format)?;
+    }
+    ctx.cmd_draw_indexed_instanced(rig.list, count, instances, start, base, 0)?;
+    ctx.close_command_list(rig.list)?;
+    ctx.execute_command_list(rig.queue, rig.list, &rig.memory)
+}
+
+#[test]
+fn flat_indexed_draw_checks_the_vertex_binding_before_reading_indices() {
+    let mut rig = rig();
+    let (resource, offset, format) = index_buffer(&mut rig, R16_UINT);
+    for (stride, expected) in [
+        (None, GraphicsError::InvalidResourceHandle),
+        (Some(8), GraphicsError::InvalidDescriptor),
+    ] {
+        rig.ctx.reset_command_list(rig.list, rig.alloc).unwrap();
+        rig.ctx
+            .cmd_set_index_buffer(rig.list, resource, offset, format)
+            .unwrap();
+        if let Some(stride) = stride {
+            rig.ctx
+                .cmd_set_vertex_buffer(rig.list, rig.vb, 0, stride)
+                .unwrap();
+        }
+        rig.ctx
+            .cmd_draw_indexed_instanced(rig.list, 3, 1, u32::MAX, 0, 0)
+            .unwrap();
+        rig.ctx.close_command_list(rig.list).unwrap();
+        assert_eq!(
+            rig.ctx
+                .execute_command_list(rig.queue, rig.list, &rig.memory),
+            Err(expected)
+        );
+    }
+}
+
+#[test]
+fn indexed_inputs_require_buffer_resources() {
+    let mut rig = rig();
+    let texture = rig
+        .ctx
+        .create_committed_texture2d(
+            rig.device,
+            4,
+            4,
+            DXGI_FORMAT_R8G8B8A8_UNORM,
+            ResourceStates::COMMON,
+            None,
+        )
+        .unwrap();
+    let bindings = [
+        rig.ctx.cmd_set_vertex_buffer(rig.list, texture, 0, STRIDE),
+        rig.ctx.cmd_set_index_buffer(rig.list, texture, 0, R16_UINT),
+    ];
+    assert_eq!(
+        bindings,
+        [
+            Err(GraphicsError::InvalidDescriptor),
+            Err(GraphicsError::InvalidDescriptor)
+        ]
+    );
+
+    let index = index_buffer(&mut rig, R16_UINT);
+    let valid = run_indexed(&mut rig, Some(index), (3, 1, 1, -1)).expect("valid buffer draw");
+    assert_eq!(valid.pixels, clamped_pixels());
+}
+
+#[test]
+fn textured_indexed_draw_fetches_positions_and_uvs_at_the_resolved_indices() {
+    for (format, base) in [(R16_UINT, -1), (R32_UINT, 1)] {
+        let mut rig = rig();
+        let index = index_buffer(&mut rig, format);
+        let output =
+            run_indexed(&mut rig, Some(index), (3, 1, 1, base)).expect("textured indexed draw");
+        assert_eq!(output.backend, GraphicsBackendId::SoftwareReference);
+        assert_eq!(output.draw_count, 1);
+        assert_eq!((output.width, output.height), (4, 4));
+        assert_eq!(output.pixels, clamped_pixels());
+        assert_ne!(output.pixels, texture_a());
+    }
+}
+
+#[test]
+fn textured_indexed_draw_checks_ranges_and_skips_zero_draws() {
+    let mut rig = rig();
+    let index = index_buffer(&mut rig, R16_UINT);
+    for (view, draw, expected) in [
+        (None, (3, 1, 1, -1), GraphicsError::InvalidResourceHandle),
+        (Some(index), (3, 1, 2, -1), GraphicsError::IndexOutOfRange),
+        (Some(index), (3, 1, 1, -7), GraphicsError::IndexOutOfRange),
+        (Some(index), (3, 1, 1, 0), GraphicsError::IndexOutOfRange),
+    ] {
+        assert_eq!(run_indexed(&mut rig, view, draw).unwrap_err(), expected);
+    }
+    for (count, instances) in [(0, 1), (3, 0)] {
+        let output = run_indexed(&mut rig, None, (count, instances, u32::MAX, i32::MIN))
+            .expect("zero draw requires no index buffer");
+        assert_eq!(output.draw_count, 0);
+    }
+    let output = run_indexed(&mut rig, Some(index), (3, 1, 1, -1)).expect("draw after rejection");
+    assert_eq!(output.pixels, clamped_pixels());
 }
 
 /// The root signature's parameter order decides which table is which, and
@@ -1205,6 +1340,21 @@ fn native_metal_textured_draw_matches_references() {
         "clamped: native vs software"
     );
     assert_ne!(native.pixels, texture_a());
+
+    let index = index_buffer(&mut rig, R32_UINT);
+    let indexed =
+        run_indexed(&mut rig, Some(index), (3, 1, 1, 1)).expect("native textured indexed draw");
+    assert_eq!(indexed.backend, GraphicsBackendId::MetalNative);
+    assert_eq!(indexed.draw_count, 1);
+    assert_eq!(
+        indexed.pixels,
+        clamped_pixels(),
+        "indexed: native vs hand-derived"
+    );
+    assert_eq!(
+        indexed.pixels, reference.pixels,
+        "indexed: native vs software"
+    );
     println!(
         "device={} guest-bound textures: RGBA8 slots 0 and 1 (16 of 16 pixels) and BC1 slot 2 (64 of 64) match",
         gpu.device_name()

@@ -6,7 +6,7 @@
 //! is loaded at a base address different from its preferred PE `image_base`.
 
 use crate::memory::{GuestMemory, MemoryError};
-use crate::pe::{ParsedPe, PeSection};
+use crate::pe::{MappedImageBacking, ParsedPe, PeSection};
 use std::collections::BTreeMap;
 use std::fmt;
 
@@ -37,6 +37,10 @@ pub enum RelocationError {
     },
     UnsupportedRelocationType(u8),
     TargetOutOfBounds {
+        target_va: u64,
+    },
+    TargetNotImageBacked {
+        target_rva: u32,
         target_va: u64,
     },
     Memory(MemoryError),
@@ -77,7 +81,16 @@ impl fmt::Display for RelocationError {
             Self::TargetOutOfBounds { target_va } => {
                 write!(
                     f,
-                    "relocation target VA 0x{target_va:016x} is outside mapped memory"
+                    "relocation target VA 0x{target_va:016x} is outside the image"
+                )
+            }
+            Self::TargetNotImageBacked {
+                target_rva,
+                target_va,
+            } => {
+                write!(
+                    f,
+                    "relocation target RVA 0x{target_rva:08x} (VA 0x{target_va:016x}) is not continuously backed by image headers or sections"
                 )
             }
             Self::Memory(e) => write!(f, "guest memory fault during relocation: {e}"),
@@ -251,6 +264,7 @@ pub fn apply_relocations(
             size: reloc_size,
         },
     )?;
+    let backing = MappedImageBacking::new(pe);
 
     let mut read_bytes = 0usize;
     let max_read = reloc_size as usize;
@@ -258,6 +272,12 @@ pub fn apply_relocations(
     while read_bytes < max_read {
         reader.advance_if_empty();
         let block_start = reader.current.file_offset;
+        let block_rva = reloc_rva as usize + read_bytes;
+        if !block_rva.is_multiple_of(4) {
+            return Err(RelocationError::MalformedBlockHeader {
+                offset: block_start,
+            });
+        }
         // A partial block header after the last block is malformed, not padding.
         if max_read - read_bytes < 8 {
             return Err(RelocationError::MalformedBlockHeader {
@@ -286,9 +306,10 @@ pub fn apply_relocations(
             apply_entries(
                 entries.map(u16::from_le_bytes),
                 page_rva,
-                pe.size_of_image,
+                pe,
                 loaded_base,
                 memory,
+                &backing,
                 &mut report,
             )?;
         } else {
@@ -296,9 +317,10 @@ pub fn apply_relocations(
             apply_entries(
                 entries,
                 page_rva,
-                pe.size_of_image,
+                pe,
                 loaded_base,
                 memory,
+                &backing,
                 &mut report,
             )?;
         }
@@ -323,9 +345,10 @@ pub fn apply_relocations(
 fn apply_entries(
     entries: impl Iterator<Item = u16>,
     page_rva: u32,
-    image_size: u32,
+    pe: &ParsedPe,
     loaded_base: u64,
     memory: &mut GuestMemory,
+    backing: &MappedImageBacking,
     report: &mut RelocationReport,
 ) -> Result<(), RelocationError> {
     for entry_val in entries {
@@ -345,7 +368,10 @@ fn apply_entries(
                     .checked_add(offset_in_page)
                     .ok_or(RelocationError::ArithmeticOverflow)?;
                 // The 8-byte target must lie inside the image, not in other mapped memory.
-                if target_rva.checked_add(8).is_none_or(|end| end > image_size) {
+                if target_rva
+                    .checked_add(8)
+                    .is_none_or(|end| end > pe.size_of_image)
+                {
                     return Err(RelocationError::TargetOutOfBounds {
                         target_va: loaded_base.wrapping_add(u64::from(target_rva)),
                     });
@@ -353,6 +379,15 @@ fn apply_entries(
                 let target_va = loaded_base
                     .checked_add(target_rva as u64)
                     .ok_or(RelocationError::ArithmeticOverflow)?;
+                // SizeOfImage includes holes that the image mapping does not own.
+                // Only headers and sections are committed backing; adjacent
+                // committed intervals may jointly cover a crossing target.
+                if !backing.covers(target_rva, 8) {
+                    return Err(RelocationError::TargetNotImageBacked {
+                        target_rva,
+                        target_va,
+                    });
+                }
 
                 // Read current 64-bit value at target_va
                 // Use write_u64_bypass / read_u64_bypass if section is read-only
@@ -477,7 +512,7 @@ mod tests {
         bytes[0x134..0x138].copy_from_slice(&size.to_le_bytes());
         let pe = ParsedPe {
             machine: 0x8664,
-            number_of_sections: 1,
+            number_of_sections: 2,
             time_date_stamp: 0,
             characteristics: crate::pe::IMAGE_FILE_DLL,
             image_base: PREFERRED,
@@ -486,15 +521,26 @@ mod tests {
             size_of_image: DIRECTORY_RVA + size.max(4096),
             size_of_headers: 512,
             entry_point_rva: 0,
-            sections: vec![PeSection {
-                name: ".reloc".into(),
-                virtual_address: DIRECTORY_RVA,
-                virtual_size: size,
-                raw_data_ptr: DIRECTORY_OFFSET as u32,
-                raw_data_size: size,
-                characteristics: 0x40000040,
-                permissions: MemoryPermissions::READ_ONLY,
-            }],
+            sections: vec![
+                PeSection {
+                    name: ".data".into(),
+                    virtual_address: DATA_RVA,
+                    virtual_size: 4096,
+                    raw_data_ptr: 0,
+                    raw_data_size: 0,
+                    characteristics: 0xC0000040,
+                    permissions: MemoryPermissions::READ_ONLY,
+                },
+                PeSection {
+                    name: ".reloc".into(),
+                    virtual_address: DIRECTORY_RVA,
+                    virtual_size: size,
+                    raw_data_ptr: DIRECTORY_OFFSET as u32,
+                    raw_data_size: size,
+                    characteristics: 0x40000040,
+                    permissions: MemoryPermissions::READ_ONLY,
+                },
+            ],
         };
         let mut memory = GuestMemory::new();
         memory

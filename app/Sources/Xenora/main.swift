@@ -747,6 +747,11 @@ struct ContentView: View {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
+                    if let vibrationError = loop.controllerVibrationError {
+                        Text(vibrationError)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
                     HStack {
                         Button("◀ Left") { loop.sendInput(buttons: UInt32(XENORA_INPUT_LEFT)) }
                         Button("▶ Right") { loop.sendInput(buttons: UInt32(XENORA_INPUT_RIGHT)) }

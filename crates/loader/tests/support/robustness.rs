@@ -15,6 +15,7 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use xenora_loader::cpu::{CpuState, Register};
+use xenora_loader::import_table::ImportName;
 use xenora_loader::imports::{ImportRegistry, Win64Args};
 use xenora_loader::memory::{GuestMemory, MemoryPermissions};
 use xenora_loader::services::{MockClock, ServicesState, register_standard_services};
@@ -57,7 +58,7 @@ pub struct RunStats {
 }
 
 pub struct Driver {
-    services: Vec<(String, String)>,
+    services: Vec<(String, ImportName)>,
 }
 
 impl Default for Driver {
@@ -73,10 +74,10 @@ impl Driver {
             &mut registry,
             Arc::new(ServicesState::new(Arc::new(MockClock::new(0)))),
         );
-        let mut services: Vec<(String, String)> = registry
-            .iter_registered()
-            .filter(|(module, symbol, _)| !excluded(module, symbol))
-            .map(|(module, symbol, _)| (module.to_owned(), symbol.to_owned()))
+        let mut services: Vec<(String, ImportName)> = registry
+            .iter_service_descriptors()
+            .filter(|descriptor| !excluded(&descriptor.module, &descriptor.symbol))
+            .map(|descriptor| (descriptor.module.clone(), descriptor.import_name()))
             .collect();
         services.sort();
         Self { services }
@@ -93,7 +94,7 @@ impl Driver {
         self.services
             .iter()
             .position(|(entry_module, entry_symbol)| {
-                entry_module.eq_ignore_ascii_case(module) && entry_symbol == symbol
+                entry_module.eq_ignore_ascii_case(module) && entry_symbol.to_string() == symbol
             })
     }
 
@@ -183,7 +184,7 @@ impl Driver {
             let before = preserved.map(|register| cpu.get(register));
 
             let service = registry
-                .binding(module, symbol)
+                .binding_key(module, symbol)
                 .expect("registered service");
             let outcome = (service.handler)(&Win64Args::new(&cpu), &mut cpu, &mut memory);
 

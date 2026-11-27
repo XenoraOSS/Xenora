@@ -66,6 +66,61 @@ typedef struct {
     uint16_t right_trigger;
 } xenora_controller_input;
 
+/* Controller snapshot in public XInput units for guest runtime services.
+ * Trigger values span 0 to 255. `connected` must be 0 or 1, `features` may
+ * contain only XENORA_XINPUT_FEATURE_* bits and reserved bytes must be zero.
+ * Unlike xenora_controller_input, this carries both thumbsticks
+ * and uses the public XInput button bit assignments directly.
+ */
+typedef struct {
+    uint16_t buttons;
+    uint8_t left_trigger;
+    uint8_t right_trigger;
+    int16_t left_x;
+    int16_t left_y;
+    int16_t right_x;
+    int16_t right_y;
+    uint8_t connected;
+    uint8_t features;
+    uint8_t reserved[2];
+} xenora_xinput_state;
+
+#define XENORA_XINPUT_FEATURE_VIBRATION 0x01u
+
+#define XENORA_XINPUT_BATTERY_STATE_UNKNOWN 0u
+#define XENORA_XINPUT_BATTERY_STATE_DISCHARGING 1u
+#define XENORA_XINPUT_BATTERY_STATE_CHARGING 2u
+#define XENORA_XINPUT_BATTERY_STATE_FULL 3u
+#define XENORA_XINPUT_BATTERY_LEVEL_UNKNOWN 255u
+
+/* Host battery evidence for one XInput controller. present=0 means the host
+ * exposed no battery object and requires zero state/level. For a present
+ * object, level is 0..100 or XENORA_XINPUT_BATTERY_LEVEL_UNKNOWN. Charging
+ * state is host evidence only and is never battery chemistry.
+ */
+typedef struct {
+    uint8_t present;
+    uint8_t state;
+    uint8_t level;
+    uint8_t reserved;
+} xenora_xinput_battery;
+
+/* Latest vibration command accepted from the guest. When `connected` is zero,
+ * sequence and motor values are zero and the host must stop actuators. When
+ * `enabled` is zero the motor values are registered but must not actuate;
+ * output stops until XInput reporting is re-enabled. The sequence increments
+ * for every accepted command while the virtual slot stays connected. Reserved
+ * bytes are zero in output written by this library.
+ */
+typedef struct {
+    uint32_t sequence;
+    uint16_t left_motor;
+    uint16_t right_motor;
+    uint8_t connected;
+    uint8_t enabled;
+    uint8_t reserved[2];
+} xenora_xinput_vibration;
+
 #define XENORA_INPUT_NONE     0u
 #define XENORA_INPUT_RIGHT    (1u << 0)
 #define XENORA_INPUT_LEFT     (1u << 1)
@@ -73,6 +128,23 @@ typedef struct {
 #define XENORA_INPUT_DOWN     (1u << 3)
 #define XENORA_INPUT_ACTION_A (1u << 4)
 #define XENORA_INPUT_ACTION_B (1u << 5)
+
+/* Public XInput button bit assignments carried by xenora_xinput_state. */
+#define XENORA_XINPUT_GAMEPAD_DPAD_UP 0x0001u
+#define XENORA_XINPUT_GAMEPAD_DPAD_DOWN 0x0002u
+#define XENORA_XINPUT_GAMEPAD_DPAD_LEFT 0x0004u
+#define XENORA_XINPUT_GAMEPAD_DPAD_RIGHT 0x0008u
+#define XENORA_XINPUT_GAMEPAD_START 0x0010u
+#define XENORA_XINPUT_GAMEPAD_BACK 0x0020u
+#define XENORA_XINPUT_GAMEPAD_LEFT_THUMB 0x0040u
+#define XENORA_XINPUT_GAMEPAD_RIGHT_THUMB 0x0080u
+#define XENORA_XINPUT_GAMEPAD_LEFT_SHOULDER 0x0100u
+#define XENORA_XINPUT_GAMEPAD_RIGHT_SHOULDER 0x0200u
+#define XENORA_XINPUT_GAMEPAD_GUIDE 0x0400u
+#define XENORA_XINPUT_GAMEPAD_A 0x1000u
+#define XENORA_XINPUT_GAMEPAD_B 0x2000u
+#define XENORA_XINPUT_GAMEPAD_X 0x4000u
+#define XENORA_XINPUT_GAMEPAD_Y 0x8000u
 
 /* Size of the frame drawn by the trusted fixture: RGBA8, rows top to bottom. */
 #define XENORA_FIXTURE_FRAME_WIDTH 4u
@@ -124,6 +196,23 @@ xenora_status xenora_session_start_frame_loop(xenora_session session, uint32_t f
 xenora_status xenora_session_start_interactive_loop(xenora_session session, uint32_t frame_count);
 xenora_status xenora_session_send_input(xenora_session session, const xenora_input_state *input);
 xenora_status xenora_session_send_controller_input(xenora_session session, const xenora_controller_input *input);
+/* Install or remove a full XInput-unit controller snapshot for user_index 0-3
+ * in the running frame loop's guest runtime services. The legacy fixture input
+ * above is not changed. Returns XENORA_INVALID_ARGUMENT for an invalid index,
+ * connected value, feature bits or reserved bytes, and XENORA_INVALID_STATE when no loop runs.
+ */
+xenora_status xenora_session_send_xinput_state(xenora_session session, uint32_t user_index, const xenora_xinput_state *input);
+/* Atomically replace one XInput snapshot and its latest battery evidence. */
+xenora_status xenora_session_send_xinput_state_with_battery(
+    xenora_session session,
+    uint32_t user_index,
+    const xenora_xinput_state *input,
+    const xenora_xinput_battery *battery);
+/* Poll the latest vibration command for user_index 0-3 without consuming it.
+ * A disconnected slot succeeds with a zeroed disconnected command so the host
+ * can stop output. Returns XENORA_INVALID_STATE when no loop runs.
+ */
+xenora_status xenora_session_poll_xinput_vibration(xenora_session session, uint32_t user_index, xenora_xinput_vibration *output);
 xenora_status xenora_session_queue_input(xenora_session session, const xenora_input_state *input);
 xenora_status xenora_session_pause_frame_loop(xenora_session session);
 xenora_status xenora_session_resume_frame_loop(xenora_session session);

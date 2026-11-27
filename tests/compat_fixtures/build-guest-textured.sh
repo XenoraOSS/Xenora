@@ -113,6 +113,7 @@ EXPORTS
     XenoraDestroyDevice
     XenoraDestroyResource
     XenoraDraw
+    XenoraDrawIndexed
     XenoraExecuteCommandLists
     XenoraGetLastFrameInfo
     XenoraNoSuchService
@@ -121,6 +122,7 @@ EXPORTS
     XenoraSetGraphicsRootDescriptorTable
     XenoraSetGraphicsRootSignature
     XenoraSetRenderTarget
+    XenoraSetIndexBuffer
     XenoraSetVertexBuffer
     XenoraSetViewport
 DEF
@@ -142,6 +144,8 @@ build() {
 for level in O0 O1 O2 Os; do
     build "guest-textured-$level" "$level" ""
 done
+build guest-textured-index16-O1 O1 GATE_INDEX16
+build guest-textured-index32-O2 O2 GATE_INDEX32
 # Control: an import nobody provides. The loader must refuse the image before
 # the entry point runs.
 build guest-textured-missing O1 GATE_MISSING

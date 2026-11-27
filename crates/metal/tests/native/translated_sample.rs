@@ -287,3 +287,217 @@ fn translated_image_sample_rejects_invalid_descriptors() {
         .expect_err("a sampler without point mip filtering must be refused");
     assert_eq!(error.operation, "image sampler descriptor");
 }
+
+// Runtime sample-domain enforcement. The CPU reference refuses a dispatch in
+// which any active lane has a non-whole explicit LOD or a NaN or infinite
+// coordinate; the translated kernel must refuse the same dispatches instead of
+// letting Metal round or clamp the value.
+
+/// The EXEC mask of the runtime-LOD program: lanes 20..31 of every wave. Lanes
+/// 0..11 hold the descriptors and lanes 0..19 of wave 2 the texels, so every
+/// active lane reads a coordinate word the test controls or a zero pad word.
+const RUNTIME_EXEC: u32 = 0xfff0_0000;
+
+fn code_words(code: &[u8]) -> Vec<u32> {
+    code.as_chunks::<4>()
+        .0
+        .iter()
+        .map(|word| u32::from_le_bytes(*word))
+        .collect()
+}
+
+fn code_bytes(words: &[u32]) -> Vec<u8> {
+    words.iter().flat_map(|word| word.to_le_bytes()).collect()
+}
+
+/// The LOD-1 fixture with the LOD taken from each lane's own v coordinate
+/// (`v_mov_b32 v4, v3` replaces `v_mov_b32 v4, 1.0`, inline constant 0xf2)
+/// and the sample run under
+/// [`RUNTIME_EXEC`]. The LOD is guest data read at run time, not a constant.
+fn runtime_lod_program() -> Vec<u8> {
+    let words = code_words(L_LOD1);
+    let mov = words
+        .iter()
+        .position(|&word| word == 0x7e08_02f2)
+        .expect("v_mov_b32 v4, 1.0 in the LOD-1 fixture");
+    let sample = words
+        .iter()
+        .position(|word| word >> 26 == 0x3c)
+        .expect("MIMG image_sample_l in the LOD-1 fixture");
+    let mut program = words[..mov].to_vec();
+    program.push(0x7e08_0303); // v_mov_b32_e32 v4, v3
+    program.extend_from_slice(&words[mov + 1..sample]);
+    program.extend([0xbefe_03ff, RUNTIME_EXEC]); // s_mov_b32 exec_lo, mask
+    program.extend_from_slice(&words[sample..sample + 2]);
+    program.push(0xbefe_03c1); // s_mov_b32 exec_lo, -1: the store needs a full wave
+    program.extend_from_slice(&words[sample + 2..]);
+    code_bytes(&program)
+}
+
+/// `input()` with every coordinate lane the runtime-LOD program activates
+/// holding a whole-level v (0.0 or 1.0), so the dispatch is in the domain.
+fn runtime_lod_input() -> Vec<u32> {
+    let mut input = input();
+    let us = [0.125f32, 0.375, 0.625, 0.875, -0.5, 1.5];
+    for lane in 20..32 {
+        let v = if lane % 2 == 0 { 0.0f32 } else { 1.0 };
+        input[lane] = packed(us[lane % us.len()], v);
+    }
+    input
+}
+
+fn set_v(input: &mut [u32], lane: usize, v: f32) {
+    input[lane] = (input[lane] & 0xffff) | (v.to_bits() & 0xffff_0000);
+}
+
+/// Red of every lane: active lanes sample the mip their v names, inactive
+/// lanes keep the zero their destination was initialised to.
+fn runtime_lod_expected(input: &[u32]) -> Vec<u32> {
+    input
+        .iter()
+        .enumerate()
+        .map(|(lane, &word)| {
+            if (RUNTIME_EXEC >> (lane & 31)) & 1 == 0 {
+                return 0;
+            }
+            let u = f32::from_bits((word & 0xffff) << 16);
+            let v = f32::from_bits(word & 0xffff_0000);
+            let mip = v as u32;
+            let (x, y) = texel_index(u, v, mip);
+            (f32::from(texel_byte(mip, x, y, 0)) / 255.0).to_bits()
+        })
+        .collect()
+}
+
+#[test]
+fn translated_sample_fault_bits_match_the_compiler() {
+    assert_eq!(xenora_shader::SAMPLE_FAULT_LOD, 1);
+    assert_eq!(xenora_shader::SAMPLE_FAULT_COORDINATES, 2);
+}
+
+#[test]
+fn translated_image_sample_l_runtime_lod_in_domain_matches_the_reference() {
+    let code = runtime_lod_program();
+    let compiled = compile(Architecture::Gfx1030, &code).expect("compile runtime-LOD sample");
+    assert!(
+        compiled
+            .msl
+            .contains("device atomic_uint* fault [[buffer(2)]]")
+    );
+    assert!(compiled.msl.contains("xenora_whole_level("));
+    let input = runtime_lod_input();
+    let wanted = runtime_lod_expected(&input);
+    assert!(
+        wanted
+            .iter()
+            .enumerate()
+            .any(|(lane, &value)| { lane % 2 == 1 && (20..32).contains(&lane) && value != 0 }),
+        "the in-domain case must sample mip 1 in some lane"
+    );
+    let oracle = xenora_ref::execute(&code, &input).expect("CPU reference");
+    assert_eq!(oracle, wanted, "independent CPU oracle");
+    let actual = context()
+        .run_words_sampled(
+            &compiled.msl,
+            ENTRY_POINT,
+            &input,
+            &bound_texture(),
+            &bound_sampler(),
+        )
+        .expect("in-domain runtime LOD must run");
+    assert_eq!(actual, wanted, "GPU must match the CPU oracle");
+}
+
+#[test]
+fn translated_image_sample_l_refuses_out_of_domain_runtime_lod() {
+    let code = runtime_lod_program();
+    let compiled = compile(Architecture::Gfx1030, &code).expect("compile runtime-LOD sample");
+    let texture = bound_texture();
+    let sampler = bound_sampler();
+    let below_one = f32::from_bits(1.0f32.to_bits() - 1);
+    // One active lane (25) carries the bad LOD; every other lane is in domain.
+    for (lod, coordinates_bad) in [
+        (0.5f32, false),    // fractional
+        (1.5, false),       // fractional between the two levels
+        (below_one, false), // the largest value below a whole level
+        (2.0, false),       // whole but above the last level (1)
+        (15.0, false),      // far above the last level
+        (-1.0, false),      // negative
+        (f32::NAN, true),   // NaN, also a NaN coordinate
+        (f32::INFINITY, true),
+        (f32::NEG_INFINITY, true),
+    ] {
+        let mut input = runtime_lod_input();
+        set_v(&mut input, 25, lod);
+        let reference = xenora_ref::execute(&code, &input)
+            .expect_err("the CPU reference refuses an out-of-domain LOD");
+        let error = context()
+            .run_words_sampled(&compiled.msl, ENTRY_POINT, &input, &texture, &sampler)
+            .expect_err("the GPU must refuse an out-of-domain LOD the reference refuses");
+        assert_eq!(error.operation, "image sample domain", "lod {lod}: {error}");
+        let text = error.to_string();
+        assert!(
+            text.contains("LOD is not a whole mip level"),
+            "lod {lod}: {text}"
+        );
+        assert_eq!(
+            text.contains("NaN or infinite"),
+            coordinates_bad,
+            "lod {lod}: {text}; reference: {reference:?}"
+        );
+    }
+    // The same values in an inactive lane (15) do not affect the dispatch.
+    for lod in [0.5f32, 2.0, -1.0, f32::NAN] {
+        let mut input = runtime_lod_input();
+        set_v(&mut input, 15, lod);
+        let wanted = runtime_lod_expected(&input);
+        assert_eq!(
+            xenora_ref::execute(&code, &input).expect("inactive lane is ignored"),
+            wanted
+        );
+        let actual = context()
+            .run_words_sampled(&compiled.msl, ENTRY_POINT, &input, &texture, &sampler)
+            .expect("an inactive lane's LOD must not refuse the dispatch");
+        assert_eq!(actual, wanted, "inactive lod {lod}");
+    }
+    // The device keeps working after a refused dispatch.
+    let input = runtime_lod_input();
+    let actual = context()
+        .run_words_sampled(&compiled.msl, ENTRY_POINT, &input, &texture, &sampler)
+        .expect("a later in-domain dispatch runs");
+    assert_eq!(actual, runtime_lod_expected(&input));
+    println!(
+        "device={} refused fractional, out-of-range and non-finite runtime LODs",
+        context().device_name()
+    );
+}
+
+#[test]
+fn translated_image_sample_lz_refuses_non_finite_coordinates() {
+    let compiled = compile(Architecture::Gfx1030, LZ_DMASK1).expect("compile LZ sample");
+    assert!(compiled.msl.contains("xenora_finite("));
+    assert!(
+        !compiled.msl.contains("xenora_whole_level(v"),
+        "LZ has no explicit LOD to check"
+    );
+    let texture = bound_texture();
+    let sampler = bound_sampler();
+    for (lane, u, v) in [
+        (20, f32::NAN, 0.125f32),
+        (21, 0.125, f32::NAN),
+        (22, f32::INFINITY, 0.125),
+        (23, 0.125, f32::NEG_INFINITY),
+    ] {
+        let mut input = input();
+        input[lane] = packed(u, v);
+        xenora_ref::execute(LZ_DMASK1, &input)
+            .expect_err("the CPU reference refuses a non-finite coordinate");
+        let error = context()
+            .run_words_sampled(&compiled.msl, ENTRY_POINT, &input, &texture, &sampler)
+            .expect_err("the GPU must refuse a non-finite coordinate");
+        assert_eq!(error.operation, "image sample domain");
+        let text = error.to_string();
+        assert!(text.contains("NaN or infinite"), "({u}, {v}): {text}");
+        assert!(!text.contains("LOD"), "LZ reports no LOD fault: {text}");
+    }
+}
