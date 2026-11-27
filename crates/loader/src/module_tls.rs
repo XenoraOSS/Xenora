@@ -884,6 +884,7 @@ mod tests {
             memory.read_u64(THREAD_TLS + 8).unwrap(),
             second_storage.base
         );
+        assert_eq!(first_storage.base % 8192, 0);
         assert_eq!(first_storage.end - first_storage.base, 9);
         assert_eq!(first_storage.template_bytes, 6);
         assert_eq!(first_storage.zero_fill_bytes, 3);

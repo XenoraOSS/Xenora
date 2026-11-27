@@ -134,6 +134,49 @@ fn an_inverted_template_range_is_rejected_before_anything_is_mapped() {
 }
 
 #[test]
+fn original_executable_tls_block_uses_the_directory_alignment() {
+    const TEMPLATE_RVA: u64 = 0x3020;
+
+    for (encoded, expected_offset) in [(0u32, 0x1000), (14, 0x2000)] {
+        // Extend the repository's original TLS fixture at its preferred base.
+        // The encoded values are the PE alignment nibble: zero means no
+        // specific alignment, fourteen means 8 KiB.
+        let mut pe = include_bytes!("../../../fixtures/pe/trusted-runner.exe").to_vec();
+        pe[0x6a0..0x6a8].copy_from_slice(&(IMAGE + TEMPLATE_RVA).to_le_bytes());
+        pe[0x6a8..0x6b0].copy_from_slice(&(IMAGE + TEMPLATE_RVA + 2).to_le_bytes());
+        pe[0x6c0..0x6c4].copy_from_slice(&0u32.to_le_bytes());
+        pe[0x6c4..0x6c8].copy_from_slice(&(encoded << 20).to_le_bytes());
+        pe[0x820..0x822].copy_from_slice(&[0xa5, 0x5a]);
+        let entry = [
+            0x65, 0x48, 0x8b, 0x04, 0x25, 0x58, 0, 0, 0, // mov rax, gs:[0x58]
+            0x48, 0x8b, 0x00, // mov rax, [rax] (module index zero)
+            0xf4, // hlt
+        ];
+        pe[0x400..0x400 + entry.len()].copy_from_slice(&entry);
+
+        let mut imports = ImportRegistry::new();
+        imports.register("xenora.dll", "fixture_draw", |_, _, _| Ok(0));
+        let result = run_synthetic_startup(
+            &pe,
+            StartupLayout {
+                image_base: IMAGE,
+                stack_top: 0x2_0001_0000,
+                tls_base: THREAD_TLS,
+            },
+            imports,
+            100,
+        )
+        .unwrap_or_else(|error| panic!("start TLS alignment fixture: {error}"));
+        assert_eq!(result.execution.exit_reason, ExitReason::Halt);
+        assert_eq!(
+            result.execution.final_state.get(Register::Rax),
+            THREAD_TLS + expected_offset,
+            "encoded alignment {encoded}"
+        );
+    }
+}
+
+#[test]
 fn main_thread_can_read_static_tls_on_both_sides_of_the_teb_boundary() {
     const TEMPLATE_RVA: u64 = 0x3020;
     const BLOCKS: [(u32, u64); 2] = [(60 * 1024, 0x1000), (60 * 1024 + 1, 0x12000)];

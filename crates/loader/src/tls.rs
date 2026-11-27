@@ -35,6 +35,10 @@ pub enum TlsError {
         start: u64,
         end: u64,
     },
+    /// Bits 20 through 23 name an alignment the PE format does not define.
+    UnsupportedAlignment {
+        encoded: u32,
+    },
     /// `AddressOfCallbacks` is not zero and not inside a section of the image.
     CallbackArrayOutOfBounds {
         address: u64,
@@ -66,6 +70,9 @@ impl fmt::Display for TlsError {
                     f,
                     "invalid TLS template range: 0x{start:016x}..0x{end:016x}"
                 )
+            }
+            Self::UnsupportedAlignment { encoded } => {
+                write!(f, "TLS alignment value {encoded} is not defined")
             }
             Self::CallbackArrayOutOfBounds { address } => {
                 write!(
@@ -174,6 +181,7 @@ pub fn parse_tls_directory(bytes: &[u8], pe: &ParsedPe) -> Result<Option<TlsDire
     let size_of_zero_fill = u32::from_le_bytes(directory[32..36].try_into().unwrap());
     let characteristics = u32::from_le_bytes(directory[36..40].try_into().unwrap());
 
+    required_alignment(characteristics)?;
     let callbacks = read_callbacks(bytes, pe, callbacks_address)?;
 
     Ok(Some(TlsDirectory {
@@ -307,12 +315,36 @@ const DIRECT_TEMPLATE_MIN: usize = 64 * 1024;
 /// than the staging buffer once the template reached 1 MiB.
 const DIRECT_TEMPLATE_LIMIT: usize = 1024 * 1024;
 
+/// Alignment required by bits 20 through 23 of the TLS characteristics.
+///
+/// Microsoft's PE format encodes 1 through 14 as `IMAGE_SCN_ALIGN_*` values
+/// selecting powers of two from 1 byte through 8 KiB. Zero means no specific
+/// alignment and preserves Xenora's existing placement. Fifteen is undefined.
+fn required_alignment(characteristics: u32) -> Result<Option<u64>, TlsError> {
+    let encoded = (characteristics >> 20) & 0xF;
+    match encoded {
+        0 => Ok(None),
+        1..=14 => Ok(Some(1u64 << (encoded - 1))),
+        _ => Err(TlsError::UnsupportedAlignment { encoded }),
+    }
+}
+
+fn align_up(address: u64, alignment: Option<u64>) -> Result<u64, MemoryError> {
+    let Some(alignment) = alignment else {
+        return Ok(address);
+    };
+    address
+        .checked_add(alignment - 1)
+        .map(|end| end & !(alignment - 1))
+        .ok_or(MemoryError::Overflow)
+}
+
 /// Set up TLS runtime state in guest memory:
 /// 1. Assign TLS index 0 at `index_address`.
 /// 2. Map the thread's TLS pointer array at `thread_tls_base`.
-/// 3. Map the thread's data block one page above it, initialized from the
-///    template and zero fill, and store its address in the array slot of the
-///    index.
+/// 3. Map the thread's data block after it at the alignment bits 20-23 of
+///    the directory require, initialized from the template and zero fill, and
+///    store its address in the array slot of the index.
 ///
 /// `thread_tls_base` is the value the thread environment block holds as its
 /// TLS pointer. Compiled code loads that pointer, indexes it by the module's
@@ -360,6 +392,7 @@ pub(crate) fn setup_tls_avoiding(
         }
     };
 
+    let alignment = required_alignment(tls.characteristics)?;
     let actual_index_addr = rebase(tls.index_address);
     // Set TLS index = 0 in guest memory
     memory.write_u32_bypass(actual_index_addr, 0)?;
@@ -395,9 +428,12 @@ pub(crate) fn setup_tls_avoiding(
         };
 
         // Allocate the pointer array and the per-thread TLS block.
-        let mut block_base = thread_tls_base
-            .checked_add(TLS_ARRAY_SIZE as u64)
-            .ok_or(MemoryError::Overflow)?;
+        let mut block_base = align_up(
+            thread_tls_base
+                .checked_add(TLS_ARRAY_SIZE as u64)
+                .ok_or(MemoryError::Overflow)?,
+            alignment,
+        )?;
         let page_size = 4096;
         let map_size = total_size
             .checked_next_multiple_of(page_size)
@@ -407,7 +443,7 @@ pub(crate) fn setup_tls_avoiding(
                 .checked_add(map_size as u64)
                 .ok_or(MemoryError::Overflow)?;
             if block_base < reserved.end && reserved.start < block_end {
-                block_base = reserved.end;
+                block_base = align_up(reserved.end, alignment)?;
             }
         }
         // The startup claims the array before binding imports, so that a
@@ -768,6 +804,25 @@ mod tests {
     }
 
     #[test]
+    fn tls_alignment_values_are_decoded_and_the_undefined_value_is_rejected() {
+        let mut bytes = file(ARRAY, ARRAY_RVA, &[FIRST, 0]);
+        let characteristics = SECTION_FILE + 36;
+        for encoded in [0u32, 1, 5, 14] {
+            bytes[characteristics..characteristics + 4]
+                .copy_from_slice(&(encoded << 20).to_le_bytes());
+            assert!(
+                parse_tls_directory(&bytes, &parsed(SECTION_SIZE)).is_ok(),
+                "encoded alignment {encoded}"
+            );
+        }
+        bytes[characteristics..characteristics + 4].copy_from_slice(&(15u32 << 20).to_le_bytes());
+        assert!(matches!(
+            parse_tls_directory(&bytes, &parsed(SECTION_SIZE)),
+            Err(TlsError::UnsupportedAlignment { encoded: 15 })
+        ));
+    }
+
+    #[test]
     fn tls_directory_requires_the_fixed_size_and_fits_the_image() {
         let mut bytes = file(ARRAY, ARRAY_RVA, &[FIRST, 0]);
         let pe = parsed(SECTION_SIZE);
@@ -1060,6 +1115,53 @@ mod tests {
     const TEMPLATE_AT: u64 = 0x2_0020_0000;
     const INDEX_AT: u64 = 0x2_0000_1000;
     const THREAD_AT: u64 = 0x5_0000_0000;
+
+    #[test]
+    fn a_required_eight_kib_alignment_moves_the_default_block_up() {
+        let template = synthetic_template(16);
+        let mut memory = template_memory(TEMPLATE_AT, &template, 0, INDEX_AT);
+        let mut directory = directory_at(TEMPLATE_AT, template.len() as u64, INDEX_AT, 0);
+        directory.characteristics = 14 << 20;
+        setup_tls(&directory, IMAGE_BASE, IMAGE_BASE, &mut memory, THREAD_AT).unwrap();
+        assert_eq!(memory.read_u64(THREAD_AT).unwrap(), THREAD_AT + 0x2000);
+    }
+
+    #[test]
+    fn a_reserved_range_moves_the_block_to_the_next_required_alignment() {
+        for (encoded, expected) in [(0u32, 0x3000), (14, 0x4000)] {
+            let template = synthetic_template(16);
+            let mut memory = template_memory(TEMPLATE_AT, &template, 0, INDEX_AT);
+            let mut directory = directory_at(TEMPLATE_AT, template.len() as u64, INDEX_AT, 0);
+            directory.characteristics = encoded << 20;
+            setup_tls_avoiding(
+                &directory,
+                IMAGE_BASE,
+                IMAGE_BASE,
+                &mut memory,
+                THREAD_AT,
+                Some(THREAD_AT + 0x1800..THREAD_AT + 0x3000),
+            )
+            .unwrap();
+            assert_eq!(memory.read_u64(THREAD_AT).unwrap(), THREAD_AT + expected);
+        }
+    }
+
+    #[test]
+    fn an_undefined_alignment_is_rejected_before_anything_is_mapped() {
+        let template = synthetic_template(16);
+        let mut memory = template_memory(TEMPLATE_AT, &template, 0, INDEX_AT);
+        let mut directory = directory_at(TEMPLATE_AT, template.len() as u64, INDEX_AT, 0);
+        directory.characteristics = 15 << 20;
+        assert_eq!(
+            setup_tls(&directory, IMAGE_BASE, IMAGE_BASE, &mut memory, THREAD_AT),
+            Err(TlsError::UnsupportedAlignment { encoded: 15 })
+        );
+        assert_eq!(memory.read_u32(INDEX_AT).unwrap(), 0xFFFF_FFFF);
+        assert!(matches!(
+            memory.read_u64(THREAD_AT),
+            Err(MemoryError::UnmappedAddress(_))
+        ));
+    }
 
     #[test]
     fn a_small_template_is_copied_and_zero_fill_does_not_take_the_following_bytes() {

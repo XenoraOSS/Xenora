@@ -131,6 +131,17 @@ have been applied, so an entry aimed at that field cannot leave any other value
 there. This is Xenora's policy: the PE specification defines `ImageBase` as the
 preferred base, and the behaviour has not been compared with Windows.
 
+Static TLS block placement decodes bits 20 through 23 of the TLS directory's
+`Characteristics` field. Encodings 1 through 14 mean the public power-of-two
+alignments from 1 byte through 8 KiB, zero keeps Xenora's existing
+no-specific-alignment placement, and the undefined encoding 15 is rejected
+before guest memory is changed. When the thread-environment reservation moves
+the block, the post-move address is aligned upward to the required boundary.
+Explicit-module TLS storage currently comes from the 64 KiB-aligned dynamic
+allocator, which satisfies every defined encoding as an implementation detail
+rather than as a separate module placement contract. None of this has been
+compared with Windows.
+
 The load is refused with `PeError::InvalidHeaderSize` when `SizeOfHeaders` is
 zero, ends before the section table does, runs past the end of the file, or its
 pages would reach into a section, and when the bytes given to the loader are not
