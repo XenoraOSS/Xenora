@@ -41,6 +41,7 @@ EXPORTS
     CreateEventW
     SetEvent
     WaitForSingleObject
+    SignalObjectAndWait
     CloseHandle
     ExitProcess
     CreateThread
