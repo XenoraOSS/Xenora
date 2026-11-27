@@ -16,20 +16,28 @@ const KEY_READ: u64 = 0x0002_0019;
 const NAME: u64 = SCRATCH + 0x100;
 const UNWRITTEN: u64 = 0x1122_3344_5566_7788;
 
-const fn imports(module: &'static str) -> [(&'static str, &'static str); 6] {
-    [
-        (module, "RegOpenKeyExA"),
-        (module, "RegOpenKeyExW"),
-        (module, "RegQueryValueExA"),
-        (module, "RegQueryValueExW"),
-        (module, "RegCloseKey"),
-        (KERNEL32, "GetLastError"),
-    ]
-}
+const ADVAPI_IMPORTS: [(&str, &str); 7] = [
+    (ADVAPI32, "RegOpenKeyW"),
+    (ADVAPI32, "RegOpenKeyExA"),
+    (ADVAPI32, "RegOpenKeyExW"),
+    (ADVAPI32, "RegQueryValueExA"),
+    (ADVAPI32, "RegQueryValueExW"),
+    (ADVAPI32, "RegCloseKey"),
+    (KERNEL32, "GetLastError"),
+];
+
+const API_SET_IMPORTS: [(&str, &str); 6] = [
+    (REGISTRY_API, "RegOpenKeyExA"),
+    (REGISTRY_API, "RegOpenKeyExW"),
+    (REGISTRY_API, "RegQueryValueExA"),
+    (REGISTRY_API, "RegQueryValueExW"),
+    (REGISTRY_API, "RegCloseKey"),
+    (KERNEL32, "GetLastError"),
+];
 
 const CASES: [(&str, &[(&str, &str)]); 2] = [
-    (ADVAPI32, &imports(ADVAPI32)),
-    (REGISTRY_API, &imports(REGISTRY_API)),
+    (ADVAPI32, &ADVAPI_IMPORTS),
+    (REGISTRY_API, &API_SET_IMPORTS),
 ];
 
 fn narrow(guest: &mut Guest, text: &str) {
@@ -44,6 +52,34 @@ fn wide(guest: &mut Guest, text: &str) {
             .write_u16(NAME + index as u64 * 2, unit)
             .unwrap();
     }
+}
+
+#[test]
+fn reg_open_key_w_uses_its_three_argument_contract() {
+    let mut guest = Guest::new(&ADVAPI_IMPORTS, &[]);
+    wide(&mut guest, "");
+    for root in [HKCU, WIN64_HKCU] {
+        for subkey in [0, NAME] {
+            guest.memory.write_u64(SCRATCH, UNWRITTEN).unwrap();
+            assert_eq!(guest.call("RegOpenKeyW", &[root, subkey, SCRATCH]), 0);
+            assert_eq!(guest.u64_at(SCRATCH), root);
+        }
+    }
+
+    wide(&mut guest, "Software\\Xenora");
+    guest.memory.write_u64(SCRATCH, UNWRITTEN).unwrap();
+    assert_eq!(guest.call("RegOpenKeyW", &[WIN64_HKCU, NAME, SCRATCH]), 2);
+    assert_eq!(guest.u64_at(SCRATCH), UNWRITTEN);
+    assert_eq!(guest.error(), 2);
+
+    assert_eq!(guest.call("RegOpenKeyW", &[WIN64_HKCU, 0, 0]), 87);
+    assert_eq!(guest.error(), 87);
+
+    let foreign = 0x1234_5678_8000_0001;
+    guest.memory.write_u64(SCRATCH, UNWRITTEN).unwrap();
+    assert_eq!(guest.call("RegOpenKeyW", &[foreign, 0, SCRATCH]), 6);
+    assert_eq!(guest.u64_at(SCRATCH), UNWRITTEN);
+    assert_eq!(guest.error(), 6);
 }
 
 #[test]

@@ -115,6 +115,43 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         });
     }
 
+    {
+        let state = Arc::clone(state);
+        registry.register(ADVAPI32, "RegOpenKeyW", move |args, cpu, memory| {
+            let (key, subkey, output) = (args.rcx, args.rdx, args.r8);
+            if output == 0 {
+                return state.fail(
+                    cpu.gs_base,
+                    ERROR_INVALID_PARAMETER,
+                    u64::from(ERROR_INVALID_PARAMETER),
+                );
+            }
+            if !is_predefined_root(key) {
+                return state.fail(
+                    cpu.gs_base,
+                    ERROR_INVALID_HANDLE,
+                    u64::from(ERROR_INVALID_HANDLE),
+                );
+            }
+            let path = if subkey == 0 {
+                Vec::new()
+            } else {
+                read_string(memory, subkey, true)?
+            };
+            if !path.is_empty() {
+                return state.fail(
+                    cpu.gs_base,
+                    ERROR_FILE_NOT_FOUND,
+                    u64::from(ERROR_FILE_NOT_FOUND),
+                );
+            }
+            memory
+                .write_u64(output, key)
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(0)
+        });
+    }
+
     for (symbol, wide) in [("RegQueryValueExA", false), ("RegQueryValueExW", true)] {
         let state = Arc::clone(state);
         registry.register(ADVAPI32, symbol, move |args, cpu, memory| {
@@ -148,6 +185,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             Ok(u64::from(ERROR_INVALID_HANDLE))
         }
     });
+
+    registry.set_status(
+        ADVAPI32,
+        "RegOpenKeyW",
+        crate::imports::ServiceStatus::Partial,
+    );
 
     for (module, symbol) in [
         (ADVAPI32, "RegOpenKeyExA"),
