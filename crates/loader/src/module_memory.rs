@@ -346,9 +346,11 @@ impl std::error::Error for ModuleRelocationError {
 
 /// Apply every explicit module image's base relocations as one transaction.
 ///
-/// The reservation shape, image extents, alignment, entry metadata and mapped
-/// image-base field locations are validated before mutation. Relocation then
-/// runs in input order through the existing PE32+ DIR64 engine. Because that
+/// Reservation records are matched by `image_index`, so the caller's slice
+/// order does not matter. The exact-one index rule, reservation shape, image
+/// extents, alignment, entry and preferred-base metadata, span overlap and
+/// mapped image-base field locations are validated before mutation. Relocation
+/// then runs in input order through the existing PE32+ DIR64 engine. Because that
 /// engine is intentionally small and can discover malformed later entries only
 /// after earlier writes, this batch layer snapshots the whole address space
 /// once; any failure assigns that snapshot back before returning. The rollback
