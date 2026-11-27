@@ -138,6 +138,9 @@ cmc = { reads = "cf", writes = "cf", ref = "sdm CMC" }
 lahf = { reads = "cf zf sf pf af", ref = "sdm LAHF" }
 sahf = { writes = "cf zf sf pf af", ref = "sdm SAHF" }
 cpuid = { ref = "sdm CPUID" }
+# EDX:EAX take the guest time-stamp counter, which lives in GuestMemory and
+# never reads a host timer (docs/cpu/instruction-registry.md).
+rdtsc = { ref = "sdm RDTSC" }
 cld = { ref = "sdm CLD" }
 std = { ref = "sdm STD" }
 fninit = { ref = "sdm FINIT/FNINIT" }
@@ -884,6 +887,13 @@ size = "n"
 op = "cpuid"
 map = "0f"
 opcode = 0xA2
+enc = "none"
+size = "n"
+
+[[form]]
+op = "rdtsc"
+map = "0f"
+opcode = 0x31
 enc = "none"
 size = "n"
 
