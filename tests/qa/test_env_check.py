@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+import subprocess
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 from qa.env_check import (
     check_branch_sync,
+    measure_branch_sync,
     check_git_worktree_clean,
     check_llvm_tool,
     check_rosetta_translated,
@@ -38,6 +42,23 @@ class EnvCheck(unittest.TestCase):
         ])
         self.assertFalse(report.ok)
         self.assertIn("FAIL", format_report(report))
+
+    def test_measured_branch_sync_uses_git_counts(self):
+        with patch("qa.env_check.subprocess.check_output", return_value="2\t1\n") as run:
+            finding = measure_branch_sync(Path("/repo"))
+        self.assertFalse(finding.ok)
+        self.assertIn("ahead=2", finding.detail)
+        self.assertIn("behind=1", finding.detail)
+        self.assertEqual(run.call_args.args[0], ["git", "rev-list", "--left-right", "--count", "HEAD...@{upstream}"])
+
+    def test_missing_upstream_is_not_reported_as_synchronized(self):
+        with patch(
+            "qa.env_check.subprocess.check_output",
+            side_effect=subprocess.CalledProcessError(128, ["git"]),
+        ):
+            finding = measure_branch_sync(Path("/repo"))
+        self.assertFalse(finding.ok)
+        self.assertIn("unavailable", finding.detail)
 
 
 if __name__ == "__main__":

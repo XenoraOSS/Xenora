@@ -666,14 +666,18 @@ fn vopc_f_t_outside_the_contract_are_rejected() {
 
 #[test]
 fn other_constant_compares_stay_unsupported() {
-    // F and T/TRU of the float and v_cmpx groups (Table 61):
-    // V_CMP_F_F32 0, V_CMP_TRU_F32 15, V_CMPX_F_F32 16, V_CMPX_TRU_F32 31,
-    // V_CMPX_F_I64 176, V_CMPX_T_I64 183, V_CMPX_F_U64 240, V_CMPX_T_U64 247.
-    // The 64-bit V_CMP_F/T (160, 167, 224, 231) are covered by vopc_wide.rs.
+    // The constant compares outside the sixteen V_CMP_*_F32 forms of Table 61
+    // that #786 implements: the CMPX forms of the same groups and the
+    // neighbours of the two 32-bit integer groups.
+    // V_CMPX_F_F32 16, V_CMPX_TRU_F32 31, V_CMPX_F_I64 176, V_CMPX_T_I64 183,
+    // V_CMPX_F_U64 240, V_CMPX_T_U64 247. The 64-bit V_CMP_F/T (160, 167,
+    // 224, 231) are covered by vopc_wide.rs. V_CMP_F_F32 0 and
+    // V_CMP_TRU_F32 15 are no longer listed: they are two of the sixteen
+    // binary32 forms #786 implements, and vopc_f32.rs covers them.
     let setup = vmov(3, 7);
     // Also the neighbours of the two 32-bit integer groups: 127 and 191 (not
     // in Table 61), 136 V_CMP_CLASS_F32 and 200 V_CMP_F_F16.
-    for op in [0, 15, 16, 31, 127, 136, 176, 183, 191, 200, 240, 247] {
+    for op in [16, 31, 127, 136, 176, 183, 191, 200, 240, 247] {
         let (code, offset) = program(&setup, None, &[vopc(op, vgpr(1), 3)], &[]);
         assert_rejected_at(&format!("opcode {op}"), &code, offset, &lanes());
     }

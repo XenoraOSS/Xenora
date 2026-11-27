@@ -97,7 +97,6 @@ FLOAT_ROUNDING = {"trunc", "ceil", "rndne", "floor"}
 # V_ADD/SUB/SUBREV/MUL/MIN/MAX_F32 (guide 12.7, pages 131-133) reuse these
 # operation names with signedness float; only the vop2_f32 rule takes them.
 VOP2_FLOAT_ARITHMETIC = {"add", "sub", "mul", "min", "max"}
-FLOAT_OPERATIONS = FLOAT_ROUNDING | VOP2_FLOAT_ARITHMETIC
 # ---- end VOP2 binary32 arithmetic (#784) ----
 # Sign extension reads only the low source_bits of S0 (required for sext only).
 SOURCE_BITS_KEY = "source_bits"
@@ -107,6 +106,11 @@ RELATION_KEY = "relation"
 RELATIONS = {
     "eq": "Equal", "lg": "NotEqual", "gt": "Greater", "ge": "GreaterOrEqual",
     "lt": "Less", "le": "LessOrEqual", "f": "False", "t": "True",
+    # ---- VOPC binary32 compares (#786): relations that exist only for floats ----
+    # Guide 12.9 Table 61 (pages 152-153): O and U test for NaN operands; the N*
+    # forms are the negations of LT..GE and so hold on unordered inputs.
+    "o": "Ordered", "u": "Unordered", "nge": "NotGreaterOrEqual", "nlg": "NotLessOrGreater",
+    "ngt": "NotGreater", "nle": "NotLessOrEqual", "neq": "NotEqualOrUnordered", "nlt": "NotLess",
 }
 # F and T exist only as VOPC compares (guide Table 59 offsets 0 and 7).
 VECTOR_ONLY_RELATIONS = {"f", "t"}
@@ -118,6 +122,26 @@ VOPC_INTEGER_BASES = {
     64: {"signed": 160, "unsigned": 224},
 }
 VOPC_RELATION_OFFSETS = {"f": 0, "lt": 1, "eq": 2, "le": 3, "gt": 4, "lg": 5, "ge": 6, "t": 7}
+# ---- VOPC binary32 compares (#786) ----
+# Guide 12.9 Table 61 (pages 152-153): V_CMP_*_F32 is opcode 0 + offset, with
+# sixteen relations; TRU (offset 15) is declared as relation "t".
+VOPC_F32_BASE = 0
+VOPC_F32_RELATION_OFFSETS = {
+    "f": 0, "lt": 1, "eq": 2, "le": 3, "gt": 4, "lg": 5, "ge": 6, "o": 7,
+    "u": 8, "nge": 9, "nlg": 10, "ngt": 11, "nle": 12, "neq": 13, "nlt": 14, "t": 15,
+}
+# The operand rule of the float compares; the only rule whose forms are float compares.
+VOPC_F32_RULE = "vopc_vcc_f32"
+# The operand rules whose forms take binary32 operands, and the operations each
+# of them takes: the VOP1 rounding set, the VOP2 binary32 arithmetic (#784) and
+# the VOPC binary32 compares (#786). The rule decides, not the operation name:
+# an integer add shares the operation name `add` with the binary32 one, and
+# only the `vop2_f32` rule takes it.
+FLOAT_RULE_OPERATIONS = {
+    "vop1_f32": FLOAT_ROUNDING,
+    "vop2_f32": VOP2_FLOAT_ARITHMETIC,
+    VOPC_F32_RULE: {"compare"},
+}
 # (relation, signedness) -> primitive. Equality does not depend on signedness,
 # so both declared signednesses of EQ and LG share one primitive.
 COMPARE_PRIMITIVES = {
@@ -129,6 +153,13 @@ COMPARE_PRIMITIVES = {
     ("le", "signed"): "le_i32", ("le", "unsigned"): "le_u32",
     ("f", "signed"): "false_b32", ("f", "unsigned"): "false_b32",
     ("t", "signed"): "true_b32", ("t", "unsigned"): "true_b32",
+    # ---- VOPC binary32 compares (#786): IEEE 754 relations on the f32 bits ----
+    ("f", "float"): "false_b32", ("lt", "float"): "lt_f32", ("eq", "float"): "eq_f32",
+    ("le", "float"): "le_f32", ("gt", "float"): "gt_f32", ("lg", "float"): "lg_f32",
+    ("ge", "float"): "ge_f32", ("o", "float"): "o_f32", ("u", "float"): "u_f32",
+    ("nge", "float"): "nge_f32", ("nlg", "float"): "nlg_f32", ("ngt", "float"): "ngt_f32",
+    ("nle", "float"): "nle_f32", ("neq", "float"): "neq_f32", ("nlt", "float"): "nlt_f32",
+    ("t", "float"): "true_b32",
 }
 # Logical operations take untyped bits; arithmetic ones never do. Shifts take
 # the signedness their primitive names, and their S1 is an unsigned count.
@@ -541,6 +572,28 @@ OPERAND_RULES = {
         },
         "kind": "vector_compare",
         "width": 16,
+    },
+    # ---- VOPC binary32 compares (#786) ----
+    # As vopc_vcc without integer inline constants: the guide does not say how
+    # a float operation reads them (the vop1_f32 reading). NaN sources are
+    # accepted: a compare returns a mask bit, never a quieted float.
+    "vopc_vcc_f32": {
+        "rust": "VopcVccF32",
+        "enum": "VectorCompareOp",
+        "shape": {
+            "family": "VOPC",
+            "src": [
+                {"field": "SRC0", "class": "vector_source"},
+                {"field": "VSRC1", "class": "vgpr"},
+            ],
+            "max_literals": 1,
+        },
+        "unsupported": {
+            "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+            "src_float_inline", "src_special",
+        },
+        "kind": "vector_compare",
+        "width": 32,
     },
     "vopc_vcc_pair": {
         "rust": "VopcVccPair",
@@ -1126,9 +1179,19 @@ def validate(registry, snapshot):
             and (
                 (form["operation"] in LOGICAL and form["signedness"] != "bitwise")
                 or (form["operation"] in ARITHMETIC and form["signedness"] == "bitwise")
-                or (form["operation"] in FLOAT_ROUNDING and form["signedness"] != "float")
-                # #784: float signedness also admits the VOP2 binary32 arithmetic.
-                or (form["signedness"] == "float" and form["operation"] not in FLOAT_OPERATIONS)
+                # Float operands: the rounding set and the VOP2 binary32 arithmetic
+                # (#784) admit float signedness, and the VOPC binary32 compares
+                # (#786) require it. The operand rule decides, not the operation
+                # name: an integer add shares the name `add` with the binary32 one.
+                or (
+                    (form["operands"] in FLOAT_RULE_OPERATIONS)
+                    != (form["signedness"] == "float")
+                )
+                # A binary32 rule names only the operations that rule takes.
+                or (
+                    form["operands"] in FLOAT_RULE_OPERATIONS
+                    and form["operation"] not in FLOAT_RULE_OPERATIONS[form["operands"]]
+                )
             )
         ):
             errors.append(
@@ -1180,6 +1243,15 @@ def validate(registry, snapshot):
                     errors.append(
                         f"{label}: relation {relation}/{form['signedness']} has SOPK opcode "
                         f"{expected} (guide 13.1.2), not {form['opcode']}"
+                    )
+            elif _rule_kind(form) == "vector_compare" and form["signedness"] == "float":
+                # VOPC binary32 compares (#786): guide Table 61 offsets 0-15.
+                expected = VOPC_F32_BASE + VOPC_F32_RELATION_OFFSETS[relation] \
+                    if relation in VOPC_F32_RELATION_OFFSETS else None
+                if form["opcode"] != expected:
+                    errors.append(
+                        f"{label}: relation {relation}/float has VOPC opcode "
+                        f"{expected} (guide Table 61), not {form['opcode']}"
                     )
             elif _rule_kind(form) == "vector_compare":
                 base = VOPC_INTEGER_BASES.get(expected_width, {}).get(form["signedness"])

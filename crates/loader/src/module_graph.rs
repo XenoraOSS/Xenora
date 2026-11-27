@@ -535,7 +535,7 @@ impl ModuleGraph {
     }
 }
 
-fn validate_file_name(file_name: &str) -> Result<(), FileNameError> {
+pub(crate) fn validate_file_name(file_name: &str) -> Result<(), FileNameError> {
     if file_name.is_empty() {
         return Err(FileNameError::Empty);
     }

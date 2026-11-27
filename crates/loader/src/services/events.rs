@@ -24,7 +24,7 @@ const WAIT_OBJECT_0: u64 = 0;
 pub(super) const INFINITE: u32 = u32::MAX;
 pub(super) const TICKS_PER_MILLI: u64 = 10_000;
 const WAIT_TIMEOUT: u64 = 258;
-const WAIT_FAILED: u64 = u32::MAX as u64;
+pub(super) const WAIT_FAILED: u64 = u32::MAX as u64;
 const WAIT_ABANDONED_0: u64 = 0x80;
 
 const SEMAPHORE_ALL_ACCESS: u32 = 0x001f_0003;
@@ -429,7 +429,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     }
 }
 
-fn wait_for_objects(
+pub(super) fn wait_for_objects(
     state: &ServicesState,
     teb: u64,
     handles: &[u64],
@@ -495,7 +495,7 @@ fn wait_for_objects(
 /// Continue the wait this thread is blocked in, if any. Waiters are retried
 /// directly after a signal, so an object found signaled once the deadline has
 /// passed was signaled too late and is left alone.
-fn resume_wait(state: &ServicesState, teb: u64) -> Option<Result<u64, ExitReason>> {
+pub(super) fn resume_wait(state: &ServicesState, teb: u64) -> Option<Result<u64, ExitReason>> {
     let mut table = state.threads.lock().expect("guest thread table");
     let Some(Pending::Objects(pending)) = table.waits.get(&teb) else {
         return None;

@@ -15,7 +15,7 @@
 /// that merely starts like a known family is not assumed to forward anywhere.
 pub fn resolve_api_set_canonical(module: &str) -> &'static str {
     let lower = module.to_ascii_lowercase();
-    for canonical in ["kernel32.dll", "ucrtbase.dll"] {
+    for canonical in ["kernel32.dll", "ucrtbase.dll", "combase.dll"] {
         if get_api_sets_for_canonical(canonical).contains(&lower.as_str()) {
             return canonical;
         }
@@ -23,6 +23,7 @@ pub fn resolve_api_set_canonical(module: &str) -> &'static str {
     match lower.as_str() {
         "kernel32.dll" | "kernelbase.dll" => "kernel32.dll",
         "ucrtbase.dll" => "ucrtbase.dll",
+        "combase.dll" | "ole32.dll" => "combase.dll",
         "ntdll.dll" => "ntdll.dll",
         "ws2_32.dll" => "ws2_32.dll",
         "advapi32.dll" => "advapi32.dll",
@@ -90,6 +91,13 @@ pub fn get_api_sets_for_canonical(canonical: &str) -> &'static [&'static str] {
             // forwarders. No document naming this set was found.
             "api-ms-win-crt-private-l1-1-0.dll",
         ],
+        // Microsoft's "Windows API sets" page lists the COM base set as
+        // forwarding to combase.dll, the module that has carried the COM base
+        // entry points since Windows 8.
+        "combase.dll" => &[
+            "api-ms-win-core-com-l1-1-0.dll",
+            "api-ms-win-core-com-l1-1-1.dll",
+        ],
         _ => &[],
     }
 }
@@ -104,9 +112,13 @@ pub fn get_api_sets_for_canonical(canonical: &str) -> &'static [&'static str] {
 /// corners a correct implementation accepts, so programs written against the
 /// legacy module keep running. Where a real divergence is found, the entry
 /// point must grow its own implementation instead of relying on this mapping.
+///
+/// `ole32.dll` is accepted as a compatibility module for individually listed
+/// COM entries; this does not mean that its entire export set matches combase.
 pub fn get_compat_modules_for_canonical(canonical: &str) -> &'static [&'static str] {
     match canonical {
         "ucrtbase.dll" => &["msvcrt.dll"],
+        "combase.dll" => &["ole32.dll"],
         _ => &[],
     }
 }
@@ -158,6 +170,20 @@ mod tests {
         assert_eq!(
             resolve_api_set_canonical("api-ms-win-core-synch-l1-2-1.dll"),
             "kernel32.dll"
+        );
+    }
+
+    #[test]
+    fn com_base_resolves_through_its_api_set_and_ole32() {
+        assert_eq!(
+            resolve_api_set_canonical("api-ms-win-core-com-l1-1-0.dll"),
+            "combase.dll"
+        );
+        assert_eq!(resolve_api_set_canonical("ole32.dll"), "combase.dll");
+        assert_eq!(resolve_api_set_canonical("combase.dll"), "combase.dll");
+        assert_eq!(
+            get_compat_modules_for_canonical("combase.dll"),
+            &["ole32.dll"]
         );
     }
 }

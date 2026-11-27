@@ -26,7 +26,7 @@ pub(super) struct CryptoProviders {
     live: BTreeSet<u64>,
 }
 
-fn fill_random(buffer: &mut [u8]) -> Result<(), u32> {
+pub(super) fn fill_random(buffer: &mut [u8]) -> Result<(), u32> {
     use std::io::Read;
     let mut source = std::fs::File::open("/dev/urandom").map_err(|_| ERROR_NOT_SUPPORTED)?;
     source.read_exact(buffer).map_err(|_| ERROR_NOT_SUPPORTED)
@@ -166,9 +166,13 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
 // The security-token surface of a machine with exactly one identity.
 // There is one user, one logon session, one token: every process token is
 // that token, duplication yields the same identity, and the information
-// classes answer its fixed contents. AccessCheck against a machine with
-// no ACLs is not implementable security theater, so it stays unregistered
-// rather than lying.
+// classes answer its fixed contents. AccessCheck follows the same machine
+// truth as the SAFER surface below: nothing on the machine is restricted,
+// so the one fully trusted identity is never denied. That is not security
+// theater - it is what unrestricted execution on a machine without
+// privilege separation truthfully answers. What it does not do is evaluate
+// a DACL, because the machine models no access control lists; the grant
+// is the machine's, not the descriptor's.
 
 const ERROR_INSUFFICIENT_BUFFER: u32 = 122;
 
@@ -270,6 +274,100 @@ pub(super) fn register_tokens(registry: &mut ImportRegistry, state: &Arc<Service
                 return Ok(0);
             };
             Ok(u64::from(left == right))
+        },
+    );
+
+    // AccessCheck on a machine with one fully trusted identity and no
+    // access control lists: validation is exact, the generic mapping is
+    // applied as documented, and the grant is machine truth because
+    // nothing here restricts anything. The descriptor is read only far
+    // enough to know it is there - no DACL is evaluated, because there is
+    // none.
+    let check = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "AccessCheck",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let descriptor = args.rcx;
+            let token = args.rdx;
+            let desired = args.r8 as u32;
+            let mapping = args.r9;
+            let privilege_set = args.get(4, memory).map_err(ExitReason::MemoryFault)?;
+            let privilege_length = args.get(5, memory).map_err(ExitReason::MemoryFault)?;
+            let granted_out = args.get(6, memory).map_err(ExitReason::MemoryFault)?;
+            let status_out = args.get(7, memory).map_err(ExitReason::MemoryFault)?;
+            if descriptor == 0
+                || mapping == 0
+                || privilege_length == 0
+                || granted_out == 0
+                || status_out == 0
+            {
+                return check.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            if token != MACHINE_TOKEN {
+                return check.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+            }
+            // The descriptor must at least be present to mean anything:
+            // its revision and control words are the smallest honest read.
+            memory
+                .read_u32(descriptor)
+                .map_err(ExitReason::MemoryFault)?;
+            // The privilege set of a machine that never needs privileges
+            // is empty, but its header - count and control, eight bytes -
+            // is still written, so the buffer must hold it.
+            let length = memory
+                .read_u32(privilege_length)
+                .map_err(ExitReason::MemoryFault)?;
+            if privilege_set != 0 && length < 8 {
+                memory
+                    .write_u32(privilege_length, 8)
+                    .map_err(ExitReason::MemoryFault)?;
+                return check.fail(cpu.gs_base, ERROR_INSUFFICIENT_BUFFER, 0);
+            }
+            if privilege_set != 0 {
+                memory
+                    .write_u32(privilege_set, 0)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_u32(privilege_set + 4, 0)
+                    .map_err(ExitReason::MemoryFault)?;
+                memory
+                    .write_u32(privilege_length, 8)
+                    .map_err(ExitReason::MemoryFault)?;
+            }
+            // GENERIC_READ/WRITE/EXECUTE/ALL map through the caller's
+            // mapping exactly as the contract documents.
+            let generic_read = memory.read_u32(mapping).map_err(ExitReason::MemoryFault)?;
+            let generic_write = memory
+                .read_u32(mapping + 4)
+                .map_err(ExitReason::MemoryFault)?;
+            let generic_execute = memory
+                .read_u32(mapping + 8)
+                .map_err(ExitReason::MemoryFault)?;
+            let generic_all = memory
+                .read_u32(mapping + 12)
+                .map_err(ExitReason::MemoryFault)?;
+            let mut granted = desired & !0xF000_0000;
+            if desired & 0x8000_0000 != 0 {
+                granted |= generic_read;
+            }
+            if desired & 0x4000_0000 != 0 {
+                granted |= generic_write;
+            }
+            if desired & 0x2000_0000 != 0 {
+                granted |= generic_execute;
+            }
+            if desired & 0x1000_0000 != 0 {
+                granted |= generic_all;
+            }
+            memory
+                .write_u32(granted_out, granted)
+                .map_err(ExitReason::MemoryFault)?;
+            memory
+                .write_u32(status_out, 1)
+                .map_err(ExitReason::MemoryFault)?;
+            Ok(1)
         },
     );
 }
@@ -861,4 +959,121 @@ fn security_info_answers_the_one_identity_and_refuses_acls() {
         &[0x70C0DE, 1, 4, 0x1100, 0, 0x1110, 0, 0],
     );
     assert_eq!(result, ERROR_NOT_SUPPORTED as u64);
+}
+
+#[cfg(test)]
+#[test]
+fn access_check_grants_the_one_identity_and_validates_exactly() {
+    use crate::cpu::{CpuState, Register};
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::{GuestMemory, MemoryPermissions};
+    use crate::services::MockClock;
+
+    let mut registry = ImportRegistry::new();
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    register(&mut registry, &state);
+    register_tokens(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    memory
+        .map_region(0x1000, 8192, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let call = |memory: &mut GuestMemory, args: &[u64]| {
+        let mut cpu = CpuState::default();
+        for (reg, &value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args)
+        {
+            cpu.set(reg, value);
+        }
+        cpu.set(Register::Rsp, 0x2000);
+        for (index, &value) in args.iter().enumerate().skip(4) {
+            memory
+                .write_u64(0x2000 + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        let descriptor = registry
+            .resolve(MODULE, &ImportName::Name("AccessCheck".to_owned()))
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    };
+    // A self-relative descriptor header, the generic mapping of a file
+    // object, and the output slots.
+    memory.write_u32(0x1100, 1).unwrap(); // descriptor revision presence
+    memory.write_u32(0x1200, 0x0012_0089).unwrap(); // generic read
+    memory.write_u32(0x1204, 0x0012_0116).unwrap(); // generic write
+    memory.write_u32(0x1208, 0x0012_00A0).unwrap(); // generic execute
+    memory.write_u32(0x120C, 0x001F_01FF).unwrap(); // generic all
+    memory.write_u32(0x1300, 64).unwrap(); // privilege buffer length
+    // GENERIC_READ alone maps to the file-read bits and is granted.
+    let args = [
+        0x1100,
+        MACHINE_TOKEN,
+        0x8000_0000,
+        0x1200,
+        0x1400,
+        0x1300,
+        0x1500,
+        0x1504,
+    ];
+    assert_eq!(call(&mut memory, &args), 1);
+    assert_eq!(memory.read_u32(0x1500).unwrap(), 0x0012_0089, "mapped read");
+    assert_eq!(memory.read_u32(0x1504).unwrap(), 1, "access granted");
+    // The empty privilege set header is written and the length updated.
+    assert_eq!(memory.read_u32(0x1400).unwrap(), 0, "no privileges");
+    assert_eq!(
+        memory.read_u32(0x1300).unwrap(),
+        8,
+        "length of the empty set"
+    );
+    // Specific bits pass through unmapped, combined with generic mapping.
+    memory.write_u32(0x1300, 64).unwrap();
+    let args = [
+        0x1100,
+        MACHINE_TOKEN,
+        0x8000_0004,
+        0x1200,
+        0x1400,
+        0x1300,
+        0x1500,
+        0x1504,
+    ];
+    assert_eq!(call(&mut memory, &args), 1);
+    assert_eq!(
+        memory.read_u32(0x1500).unwrap(),
+        0x0012_0089 | 4,
+        "specific bits survive beside the mapping"
+    );
+    // A privilege buffer too small reports the needed eight bytes.
+    memory.write_u32(0x1300, 4).unwrap();
+    assert_eq!(call(&mut memory, &args), 0);
+    assert_eq!(
+        memory.read_u32(0x1300).unwrap(),
+        8,
+        "required size reported"
+    );
+    // A foreign token is a bad handle; a null descriptor is invalid.
+    memory.write_u32(0x1300, 64).unwrap();
+    let bad_token = [
+        0x1100,
+        0xDEAD,
+        0x8000_0000,
+        0x1200,
+        0x1400,
+        0x1300,
+        0x1500,
+        0x1504,
+    ];
+    assert_eq!(call(&mut memory, &bad_token), 0);
+    let null_sd = [
+        0,
+        MACHINE_TOKEN,
+        0x8000_0000,
+        0x1200,
+        0x1400,
+        0x1300,
+        0x1500,
+        0x1504,
+    ];
+    assert_eq!(call(&mut memory, &null_sd), 0);
 }

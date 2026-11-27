@@ -346,6 +346,9 @@ pub enum OperandRule {
     VopcVccPair,
     /// VOPC with low-half operands and no literal selector.
     VopcVccHalf,
+    /// VOPC binary32 compare (#786): as `VopcVcc` without integer inline
+    /// constants; NaN sources are accepted.
+    VopcVccF32,
     /// VOP3 encoding of a VOP2 vector form: VDST is v0-v255, SRC0 and SRC1 are
     /// VGPRs, no input or output modifiers, SRC2 unused. Everything else is
     /// rejected as unsupported.

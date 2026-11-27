@@ -272,6 +272,12 @@ pub fn apply_relocations(
     while read_bytes < max_read {
         reader.advance_if_empty();
         let block_start = reader.current.file_offset;
+        let block_rva = reloc_rva as usize + read_bytes;
+        if !block_rva.is_multiple_of(4) {
+            return Err(RelocationError::MalformedBlockHeader {
+                offset: block_start,
+            });
+        }
         // A partial block header after the last block is malformed, not padding.
         if max_read - read_bytes < 8 {
             return Err(RelocationError::MalformedBlockHeader {

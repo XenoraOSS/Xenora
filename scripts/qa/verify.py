@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -101,7 +102,7 @@ def run_profile(
     specs = list(override_specs) if override_specs is not None else list(PROFILES[profile])
     started = time.time()
     # Suites run sequentially; GPU profiles therefore never overlap.
-    report = run_suites(specs, stop_on_fail=stop_on_fail)
+    report = run_suites(specs, stop_on_fail=stop_on_fail, cwd=str(root))
     finished = time.time()
     skipped = {
         "ignored": report.ignored,
@@ -121,6 +122,37 @@ def run_profile(
 
 def evidence_is_stale(evidence: Evidence, root: Path) -> bool:
     return evidence.source_fingerprint != fingerprint_sources(root)
+
+
+def current_revision(root: Path) -> str:
+    return subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=root, text=True
+    ).strip()
+
+
+def assess_evidence(
+    evidence: Evidence,
+    root: Path,
+    *,
+    requested_profile: str,
+    actual_revision: str,
+) -> dict[str, Any]:
+    stale = evidence_is_stale(evidence, root)
+    revision_matches = evidence.revision == actual_revision
+    profile_matches = evidence.profile == requested_profile
+    suites_passed = evidence.overall_returncode == 0
+    return {
+        "stale": stale,
+        "revision": evidence.revision,
+        "actual_revision": actual_revision,
+        "revision_matches": revision_matches,
+        "profile": evidence.profile,
+        "requested_profile": requested_profile,
+        "profile_matches": profile_matches,
+        "evidence_returncode": evidence.overall_returncode,
+        "suites_passed": suites_passed,
+        "accepted": not stale and revision_matches and profile_matches and suites_passed,
+    }
 
 
 def load_evidence(text: str) -> Evidence:

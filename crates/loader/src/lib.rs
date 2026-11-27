@@ -23,8 +23,10 @@ pub mod module_init;
 pub mod module_init_exec;
 pub mod module_layout;
 pub mod module_memory;
+pub mod module_store;
 pub mod module_tls;
 pub mod output_path;
+pub mod package;
 pub mod pe;
 pub mod probe;
 pub mod reloc;
@@ -75,9 +77,18 @@ pub use module_memory::{
     ExplicitModuleImage, ModuleMemoryError, ModuleRelocationError, ModuleReservation,
     ModuleReservationError, map_module_batch, relocate_module_batch,
 };
+pub use module_store::{
+    MAX_PROVISIONED_MODULES, MAX_PROVISIONED_TOTAL_BYTES, ModuleStoreError, PreparedModuleLoad,
+    ProvisionedModule, ProvisionedModuleStore, RuntimeLoadPreparationError, prepare_runtime_load,
+};
 pub use module_tls::{
     ModuleTlsError, ModuleTlsReport, ModuleTlsStorage, ModuleTlsValidationError, PreparedModuleTls,
     prepare_module_tls,
+};
+pub use package::{
+    ImportDiagnostic, ImportDisposition, ImportFailure, InitializationOutcome, InitializationPhase,
+    InitializationRecord, ModuleDiagnostic, PackageStartupError, PackageStartupLayout,
+    PackageStartupResult, StartupDiagnostics, run_package_startup,
 };
 pub use pe::{LoadedImage, ParsedPe, PeError, PeSection};
 pub use probe::{

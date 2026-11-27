@@ -38,9 +38,10 @@
 //! production operator. SOP2 arithmetic runs through a bit-serial ripple
 //! adder (subtraction as addition of the complement), not host integer ops.
 //!
-//! Wave32 VOPC integer compares
-//! (`v_cmp_{f,lt,eq,le,gt,ne,ge,t}_{i32,u32,i64,u64}_e32` and
-//! `v_cmp_{lt,eq,le,gt,ne,ge}_{i16,u16}_e32`, contract
+//! Wave32 VOPC compares
+//! (`v_cmp_{f,lt,eq,le,gt,ne,ge,t}_{i32,u32,i64,u64}_e32`,
+//! `v_cmp_{lt,eq,le,gt,ne,ge}_{i16,u16}_e32` and the sixteen
+//! `v_cmp_*_f32_e32`, compared on the raw bits, contract
 //! `docs/shaders/vector-compare.md`) need all lanes of a wave, so execution
 //! runs lockstep waves of 32 consecutive dispatch indices with wave-uniform
 //! scalar state and per-lane vector state. A lane-local failure stops only that
@@ -101,10 +102,12 @@ enum Insn {
     VMovFromVcc(u8),
     /// Integer vector compare into `dst`: relation 0 f, 1 lt, 2 eq, 3 le, 4 gt, 5 ne, 6 ge, 7 t.
     /// `bits` is 16, 32 or 64; 64-bit register operands name the low register of a pair.
+    /// `float` marks the binary32 compares (#786), whose relation is 0-15.
     VCmp {
         dst: u8,
         relation: u8,
         signed: bool,
+        float: bool,
         bits: u32,
         src0: CmpSrc,
         src1: u8,
@@ -247,6 +250,7 @@ fn run_wave(program: &[(usize, Insn)], wave: &[u32], buffer: &[u32]) -> Result<V
                 dst,
                 relation,
                 signed,
+                float,
                 bits,
                 src0,
                 src1,
@@ -260,7 +264,7 @@ fn run_wave(program: &[(usize, Insn)], wave: &[u32], buffer: &[u32]) -> Result<V
                     &lanes,
                     &sgpr,
                     execution_mask,
-                    (relation, signed, bits, src0, src1),
+                    (relation, signed, float, bits, src0, src1),
                     offset,
                 )
                 .map(|mask| {
@@ -994,7 +998,7 @@ fn compare(
     lanes: &[Lane],
     sgpr: &[Option<u32>; 128],
     execution_mask: u32,
-    (relation, signed, bits, src0, src1): (u8, bool, u32, CmpSrc, u8),
+    (relation, signed, float, bits, src0, src1): (u8, bool, bool, u32, CmpSrc, u8),
     offset: usize,
 ) -> Result<u32, String> {
     if execution_mask == 0 {
@@ -1057,6 +1061,10 @@ fn compare(
             (None, _) => unreachable!(),
         };
         let b = read_v(lane, src1)?;
+        if float {
+            mask |= u32::from(binary32_relation(relation, a as u32, b as u32)) << n;
+            continue;
+        }
         let (a, b) = (a & keep, b & keep);
         // Signed order equals unsigned order after flipping the sign bit.
         let (a, b) = if signed { (a ^ sign, b ^ sign) } else { (a, b) };
@@ -1075,6 +1083,43 @@ fn compare(
         mask |= u32::from(pass) << n;
     }
     Ok(mask)
+}
+
+/// Guide 12.9 Table 61 (pages 152-153) for `V_CMP_*_F32` offset `relation`,
+/// on the raw bits without host float comparisons: a NaN is an all-ones
+/// exponent with a nonzero fraction (quiet or signalling, the reading of
+/// isNan), and ordered values compare by magnitude and sign with -0 == +0.
+fn binary32_relation(relation: u8, a: u32, b: u32) -> bool {
+    let nan = |x: u32| x & 0x7fff_ffff > 0x7f80_0000;
+    // Signed magnitude to a total order: zero (either sign) is 0.
+    let order = |x: u32| -> i64 {
+        let magnitude = i64::from(x & 0x7fff_ffff);
+        if x >> 31 == 1 { -magnitude } else { magnitude }
+    };
+    let ordered = !nan(a) && !nan(b);
+    let (x, y) = (order(a), order(b));
+    let lt = ordered && x < y;
+    let eq = ordered && x == y;
+    let gt = ordered && x > y;
+    match relation {
+        0 => false,
+        1 => lt,
+        2 => eq,
+        3 => lt || eq,
+        4 => gt,
+        5 => lt || gt,
+        6 => gt || eq,
+        7 => ordered,
+        // U per the per-opcode table: either input is a NaN.
+        8 => !ordered,
+        9 => !(gt || eq),
+        10 => !(lt || gt),
+        11 => !gt,
+        12 => !(lt || eq),
+        13 => !eq,
+        14 => !lt,
+        _ => true,
+    }
 }
 
 /// Static acceptance of the region skipped by a runtime `s_cbranch_vccz`
@@ -1636,6 +1681,8 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
         let opcode = (first >> 17) & 0xff;
         // Guide 12.9 Table 61 opcode groups (16-bit groups lack F and T).
         let (signed, bits, relation) = match opcode {
+            // Binary32 compares (#786); `signed` is unused for them.
+            0..=15 => (false, 32, opcode),
             128..=135 => (true, 32, opcode - 128),
             192..=199 => (false, 32, opcode - 192),
             137..=142 => (true, 16, opcode - 136),
@@ -1648,7 +1695,10 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
         let src1 = (first >> 9) as u8;
         // Accepted subset: no literal for 16-bit forms; 64-bit forms take an
         // even SGPR pair below VCC, a VGPR pair below v255 or an inline integer.
+        let float = opcode < 16;
         let allowed = match (bits, src0) {
+            // No integer inline constant for a float compare; a literal is kept.
+            (32, CmpSrc::Imm(_)) if float => len == 8,
             (16 | 64, CmpSrc::Imm(_)) if len == 8 => false,
             (64, CmpSrc::Vcc) => false,
             (64, CmpSrc::Sgpr(reg)) => reg % 2 == 0 && src1 != 255,
@@ -1663,6 +1713,7 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
             dst: 106,
             relation: relation as u8,
             signed,
+            float,
             bits,
             src0,
             src1,
@@ -1707,6 +1758,7 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
                 dst,
                 relation: (opcode % 8) as u8,
                 signed: opcode < 192,
+                float: false,
                 bits: 32,
                 src0: CmpSrc::Vgpr(src0),
                 src1,

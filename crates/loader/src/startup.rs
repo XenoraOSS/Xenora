@@ -10,7 +10,7 @@ use crate::{
     execute_tls_callbacks, parse_tls_directory,
 };
 
-const STACK_SIZE: usize = 64 * 1024;
+pub(crate) const STACK_SIZE: usize = 64 * 1024;
 const JIT_CAPACITY: usize = 1024 * 1024;
 const RETURN_SENTINEL_PAGE_SIZE: usize = 0x1000;
 /// The TEB is placed this far above the TLS base and spans two 4 KiB pages.
@@ -87,6 +87,7 @@ pub fn run_synthetic_startup_with_observer(
         layout,
         imports,
         entry_budget,
+        crate::pe::DEFAULT_MAPPED_IMAGE_BUDGET,
         observe,
         #[cfg(test)]
         |_| {},
@@ -113,11 +114,36 @@ pub fn run_synthetic_startup_scheduled(
     quantum: usize,
     observe: impl FnMut(StartupEvent),
 ) -> Result<StartupResult, Box<dyn std::error::Error>> {
+    run_synthetic_startup_scheduled_with_budget(
+        bytes,
+        layout,
+        imports,
+        state,
+        entry_budget,
+        quantum,
+        crate::pe::DEFAULT_MAPPED_IMAGE_BUDGET,
+        observe,
+    )
+}
+
+/// Run scheduled startup with a caller-selected budget for mapped PE bytes.
+#[allow(clippy::too_many_arguments)]
+pub fn run_synthetic_startup_scheduled_with_budget(
+    bytes: &[u8],
+    layout: StartupLayout,
+    imports: ImportRegistry,
+    state: std::sync::Arc<crate::services::ServicesState>,
+    entry_budget: usize,
+    quantum: usize,
+    mapped_image_budget: u64,
+    observe: impl FnMut(StartupEvent),
+) -> Result<StartupResult, Box<dyn std::error::Error>> {
     run_startup_with(
         bytes,
         layout,
         imports,
         entry_budget,
+        mapped_image_budget,
         observe,
         #[cfg(test)]
         |_| {},
@@ -169,11 +195,13 @@ enum StartupStage {
 }
 
 /// The shared startup, with the entry point left to the caller to run.
+#[cfg_attr(test, allow(clippy::too_many_arguments))]
 fn run_startup_with(
     bytes: &[u8],
     layout: StartupLayout,
     mut imports: ImportRegistry,
     entry_budget: usize,
+    mapped_image_budget: u64,
     mut observe: impl FnMut(StartupEvent),
     #[cfg(test)] mut stage_finished: impl FnMut(StartupStage),
     run_entry: impl FnOnce(
@@ -191,7 +219,7 @@ fn run_startup_with(
         .into());
     }
     // Reject an impossible layout before parsing or mapping anything.
-    let (stack_base, teb_base) = layout_regions(&layout)?;
+    let (stack_base, teb_base) = layout_regions(layout.stack_top, layout.tls_base)?;
     #[cfg(test)]
     stage_finished(StartupStage::ValidateLayout);
     let pe = ParsedPe::parse(bytes)?;
@@ -201,7 +229,7 @@ fn run_startup_with(
         sections: pe.sections.len(),
         entry_rva: pe.entry_point_rva,
     });
-    let mut image = pe.load_at_base(bytes, layout.image_base)?;
+    let mut image = pe.load_at_base(bytes, layout.image_base, mapped_image_budget)?;
     let pe = &image.pe;
     let image_base_field = image.image_base_field;
     let memory = &mut image.memory;
@@ -240,12 +268,20 @@ fn run_startup_with(
     .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidData, why))?;
     #[cfg(test)]
     stage_finished(StartupStage::RegisterExceptions);
-    let bound_imports = imports.bind_imports(pe, bytes, layout.image_base, memory)?;
-    #[cfg(test)]
-    stage_finished(StartupStage::BindImports);
-    observe(StartupEvent::ImportsBound {
-        count: bound_imports,
-    });
+    // The thread's TLS array, data block and environment block belong to
+    // thread initialization, which Windows performs before the process heap
+    // serves its first allocation. Binding imports allocates from the guest
+    // heap for service state, and the dynamic allocator scans upward from
+    // the same base the harness layout gives the TLS array, so the thread
+    // complex is claimed first: a heap allocation landing where the array
+    // belongs would otherwise fail the TLS setup of any image that uses
+    // static TLS, and the TEB of any image at all. The array exists for
+    // every thread, whether or not the image has a TLS directory.
+    memory.map_region(
+        layout.tls_base,
+        crate::tls::TLS_ARRAY_SIZE,
+        MemoryPermissions::READ_WRITE,
+    )?;
     let tls = parse_tls_directory(bytes, pe)?;
     if let Some(tls) = &tls {
         setup_tls_avoiding(
@@ -257,9 +293,21 @@ fn run_startup_with(
             Some(teb_base..teb_base + TEB_SIZE as u64),
         )?;
     }
-
+    map_teb(
+        memory,
+        teb_base,
+        layout.stack_top,
+        layout.tls_base,
+        stack_base,
+    )?;
     #[cfg(test)]
     stage_finished(StartupStage::SetupTls);
+    let bound_imports = imports.bind_imports(pe, bytes, layout.image_base, memory)?;
+    #[cfg(test)]
+    stage_finished(StartupStage::BindImports);
+    observe(StartupEvent::ImportsBound {
+        count: bound_imports,
+    });
     memory.map_region(stack_base, STACK_SIZE, MemoryPermissions::READ_WRITE)?;
     // Keep guest code and data out of the page that holds the return
     // addresses the engine intercepts. An image or layout that already covers
@@ -269,8 +317,6 @@ fn run_startup_with(
         RETURN_SENTINEL_PAGE_SIZE,
         MemoryPermissions::NO_ACCESS,
     )?;
-
-    map_teb(memory, teb_base, &layout, stack_base)?;
 
     let mut engine = DbtEngine::new(JIT_CAPACITY)?;
     engine.set_import_registry(imports);
@@ -355,19 +401,17 @@ fn run_startup_with(
 /// The stack occupies `[stack_top - STACK_SIZE, stack_top)` and the TEB
 /// `[tls_base + TEB_OFFSET, + TEB_SIZE)`. Both ranges must fit in the address
 /// space and must not overlap each other.
-fn layout_regions(layout: &StartupLayout) -> Result<(u64, u64), MemoryError> {
-    let stack_base = layout
-        .stack_top
+pub(crate) fn layout_regions(stack_top: u64, tls_base: u64) -> Result<(u64, u64), MemoryError> {
+    let stack_base = stack_top
         .checked_sub(STACK_SIZE as u64)
         .ok_or(MemoryError::Overflow)?;
-    let teb_base = layout
-        .tls_base
+    let teb_base = tls_base
         .checked_add(TEB_OFFSET)
         .ok_or(MemoryError::Overflow)?;
     let teb_end = teb_base
         .checked_add(TEB_SIZE as u64)
         .ok_or(MemoryError::Overflow)?;
-    if teb_base < layout.stack_top && stack_base < teb_end {
+    if teb_base < stack_top && stack_base < teb_end {
         return Err(MemoryError::OverlappingRegion {
             base: teb_base,
             size: TEB_SIZE as u64,
@@ -377,17 +421,18 @@ fn layout_regions(layout: &StartupLayout) -> Result<(u64, u64), MemoryError> {
 }
 
 /// Map the Win64 TEB and write the fields the harness provides.
-fn map_teb(
+pub(crate) fn map_teb(
     memory: &mut crate::GuestMemory,
     teb_base: u64,
-    layout: &StartupLayout,
+    stack_top: u64,
+    tls_base: u64,
     stack_base: u64,
 ) -> Result<(), MemoryError> {
     memory.map_region(teb_base, TEB_SIZE, MemoryPermissions::READ_WRITE)?;
-    memory.write_u64_bypass(teb_base + TEB_STACK_BASE, layout.stack_top)?;
+    memory.write_u64_bypass(teb_base + TEB_STACK_BASE, stack_top)?;
     memory.write_u64_bypass(teb_base + TEB_STACK_LIMIT, stack_base)?;
     memory.write_u64_bypass(teb_base + TEB_SELF, teb_base)?;
-    memory.write_u64_bypass(teb_base + TEB_TLS_POINTER, layout.tls_base)
+    memory.write_u64_bypass(teb_base + TEB_TLS_POINTER, tls_base)
 }
 
 #[cfg(test)]
@@ -405,14 +450,14 @@ mod tests {
 
     #[test]
     fn valid_layout_places_stack_and_teb() {
-        let regions = layout_regions(&layout(0x2_0001_0000, 0x3_0000_0000));
+        let regions = layout_regions(0x2_0001_0000, 0x3_0000_0000);
         assert_eq!(regions, Ok((0x2_0000_0000, 0x3_0001_0000)));
     }
 
     #[test]
     fn stack_below_zero_is_rejected() {
         assert_eq!(
-            layout_regions(&layout(0x8000, 0x3_0000_0000)),
+            layout_regions(0x8000, 0x3_0000_0000),
             Err(MemoryError::Overflow)
         );
     }
@@ -421,7 +466,7 @@ mod tests {
     fn teb_address_overflow_is_rejected_not_saturated() {
         for tls_base in [u64::MAX, u64::MAX - 0xFFFF, u64::MAX - TEB_OFFSET - 0x1FFF] {
             assert_eq!(
-                layout_regions(&layout(0x2_0001_0000, tls_base)),
+                layout_regions(0x2_0001_0000, tls_base),
                 Err(MemoryError::Overflow),
                 "tls_base {tls_base:#x}"
             );
@@ -429,7 +474,7 @@ mod tests {
         // The highest TEB that fits ends at u64::MAX: an end of 2^64 is not
         // representable, and GuestMemory could not map that range either.
         let top = u64::MAX - TEB_OFFSET - TEB_SIZE as u64;
-        assert!(layout_regions(&layout(0x2_0001_0000, top)).is_ok());
+        assert!(layout_regions(0x2_0001_0000, top).is_ok());
     }
 
     #[test]
@@ -437,11 +482,11 @@ mod tests {
         // TEB at 0x2_0000_8000..0x2_0000_A000 lies inside the stack 0x2_0000_0000..0x2_0001_0000.
         let collide = layout(0x2_0001_0000, 0x1_FFFF_8000);
         assert!(matches!(
-            layout_regions(&collide),
+            layout_regions(collide.stack_top, collide.tls_base),
             Err(MemoryError::OverlappingRegion { .. })
         ));
         // Directly above the stack is fine.
-        assert!(layout_regions(&layout(0x2_0001_0000, 0x2_0000_0000)).is_ok());
+        assert!(layout_regions(0x2_0001_0000, 0x2_0000_0000).is_ok());
     }
 
     #[test]
@@ -464,9 +509,9 @@ mod tests {
     #[test]
     fn teb_fields_are_at_win64_offsets() {
         let l = layout(0x2_0001_0000, 0x3_0000_0000);
-        let (stack_base, teb) = layout_regions(&l).unwrap();
+        let (stack_base, teb) = layout_regions(l.stack_top, l.tls_base).unwrap();
         let mut memory = GuestMemory::new();
-        map_teb(&mut memory, teb, &l, stack_base).unwrap();
+        map_teb(&mut memory, teb, l.stack_top, l.tls_base, stack_base).unwrap();
         assert_eq!(memory.read_u64(teb + 0x08), Ok(0x2_0001_0000));
         assert_eq!(memory.read_u64(teb + 0x10), Ok(0x2_0000_0000));
         assert_eq!(memory.read_u64(teb + 0x30), Ok(teb));
@@ -565,6 +610,7 @@ mod tests {
                     },
                     imports,
                     1_000,
+                    crate::pe::DEFAULT_MAPPED_IMAGE_BUDGET,
                     |_| {},
                     |stage| {
                         let now = Instant::now();

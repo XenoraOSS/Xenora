@@ -127,7 +127,7 @@ const PE32_PLUS_MIN_OPTIONAL_HEADER: usize = 112;
 const SECTION_HEADER_SIZE: usize = 40;
 /// Host memory budget for the mapped headers and sections of one image. This is a
 /// loader policy limit, not a property of the PE format.
-const MAX_MAPPED_IMAGE_BYTES: u64 = 256 * 1024 * 1024;
+pub const DEFAULT_MAPPED_IMAGE_BUDGET: u64 = 256 * 1024 * 1024;
 /// The mapped headers end on a guest page boundary.
 const HEADER_PAGE: u64 = 0x1000;
 /// Field offsets within the PE32+ optional header.
@@ -529,7 +529,12 @@ impl ParsedPe {
     /// Validate the input and arithmetic of a mapping without changing memory.
     /// The plan borrows section data from `bytes`, so the mapping itself does
     /// not need to rediscover file-slice errors.
-    fn mapping_plan<'a>(&self, bytes: &'a [u8], base: u64) -> Result<MappingPlan<'a>, PeError> {
+    fn mapping_plan<'a>(
+        &self,
+        bytes: &'a [u8],
+        base: u64,
+        budget: u64,
+    ) -> Result<MappingPlan<'a>, PeError> {
         let (headers_len, headers_mapped, image_base_field_offset) = self.headers_for(bytes)?;
 
         // Count allocated bytes and measure the full image span separately.
@@ -545,7 +550,7 @@ impl ParsedPe {
                 required = required.max(u64::from(sec.virtual_address) + size);
             }
         }
-        if mapped > MAX_MAPPED_IMAGE_BYTES {
+        if mapped > budget {
             return Err(PeError::SectionMappingError(MemoryError::AllocationFailed));
         }
         let declared = self.size_of_image;
@@ -601,11 +606,14 @@ impl ParsedPe {
     /// `base` under the same header, extent, budget, arithmetic and entry rules
     /// used by `map_into_memory`.
     pub(crate) fn validate_mapping_at(&self, bytes: &[u8], base: u64) -> Result<(), PeError> {
-        self.mapping_plan(bytes, base).map(|_| ())
+        self.mapping_plan(bytes, base, DEFAULT_MAPPED_IMAGE_BUDGET)
+            .map(|_| ())
     }
 
     pub(crate) fn image_base_field_address(&self, bytes: &[u8], base: u64) -> Result<u64, PeError> {
-        Ok(self.mapping_plan(bytes, base)?.image_base_field)
+        Ok(self
+            .mapping_plan(bytes, base, DEFAULT_MAPPED_IMAGE_BUDGET)?
+            .image_base_field)
     }
 
     /// Map this parsed image into an existing guest address space at `base`.
@@ -628,7 +636,7 @@ impl ParsedPe {
         memory: &mut GuestMemory,
         base: u64,
     ) -> Result<Option<u64>, PeError> {
-        let mapped = self.map_transactional(bytes, memory, base)?;
+        let mapped = self.map_transactional(bytes, memory, base, DEFAULT_MAPPED_IMAGE_BUDGET)?;
         Ok((self.entry_point_rva != 0).then_some(mapped.entry_point))
     }
 
@@ -637,8 +645,9 @@ impl ParsedPe {
         bytes: &[u8],
         memory: &mut GuestMemory,
         base: u64,
+        budget: u64,
     ) -> Result<MappingOutcome, PeError> {
-        let plan = self.mapping_plan(bytes, base)?;
+        let plan = self.mapping_plan(bytes, base, budget)?;
         let before = memory.clone();
         match map_plan(base, memory, plan) {
             Ok(mapped) => Ok(mapped),
@@ -652,7 +661,8 @@ impl ParsedPe {
     /// Load this parsed PE into a fresh `GuestMemory` instance, mapping the
     /// headers and all sections.
     pub fn load_into_memory(&self, bytes: &[u8]) -> Result<LoadedImage, PeError> {
-        let (memory, entry_point, image_base_field) = self.map_at_base(bytes, self.image_base)?;
+        let (memory, entry_point, image_base_field) =
+            self.map_at_base(bytes, self.image_base, DEFAULT_MAPPED_IMAGE_BUDGET)?;
         Ok(LoadedImage {
             pe: self.clone(),
             memory,
@@ -661,8 +671,13 @@ impl ParsedPe {
         })
     }
 
-    pub(crate) fn load_at_base(self, bytes: &[u8], base: u64) -> Result<LoadedImage, PeError> {
-        let (memory, entry_point, image_base_field) = self.map_at_base(bytes, base)?;
+    pub(crate) fn load_at_base(
+        self,
+        bytes: &[u8],
+        base: u64,
+        budget: u64,
+    ) -> Result<LoadedImage, PeError> {
+        let (memory, entry_point, image_base_field) = self.map_at_base(bytes, base, budget)?;
         Ok(LoadedImage {
             pe: self,
             memory,
@@ -671,9 +686,14 @@ impl ParsedPe {
         })
     }
 
-    fn map_at_base(&self, bytes: &[u8], base: u64) -> Result<(GuestMemory, u64, u64), PeError> {
+    fn map_at_base(
+        &self,
+        bytes: &[u8],
+        base: u64,
+        budget: u64,
+    ) -> Result<(GuestMemory, u64, u64), PeError> {
         let mut memory = GuestMemory::new();
-        let mapped = self.map_transactional(bytes, &mut memory, base)?;
+        let mapped = self.map_transactional(bytes, &mut memory, base, budget)?;
         Ok((memory, mapped.entry_point, mapped.image_base_field))
     }
 }
@@ -687,6 +707,21 @@ mod tests {
     fn section_table(bytes: &[u8]) -> usize {
         let coff = read_u32(bytes, 0x3c) as usize + 4;
         coff + 20 + usize::from(read_u16(bytes, coff + 16))
+    }
+
+    #[test]
+    fn mapped_image_budget_counts_headers_and_sections() {
+        let pe = ParsedPe::parse(FIXTURE).unwrap();
+        let required = u64::from(pe.size_of_headers).next_multiple_of(HEADER_PAGE)
+            + pe.sections
+                .iter()
+                .map(|section| u64::from(section.virtual_size.max(section.raw_data_size)))
+                .sum::<u64>();
+        assert!(matches!(
+            pe.mapping_plan(FIXTURE, pe.image_base, required - 1),
+            Err(PeError::SectionMappingError(MemoryError::AllocationFailed))
+        ));
+        assert!(pe.mapping_plan(FIXTURE, pe.image_base, required).is_ok());
     }
 
     #[test]

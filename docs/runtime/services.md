@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 252 |
-| Generated adapters | 252 |
-| Unique handler implementations | 243 |
-| Implemented | 84 |
-| Partial | 166 |
+| Services with a declared ABI | 293 |
+| Generated adapters | 293 |
+| Unique handler implementations | 275 |
+| Implemented | 100 |
+| Partial | 191 |
 | Stub | 2 |
-| Conformance-tested through guest dispatch | 252 |
-| API-set aliases (not services) | 300 |
+| Conformance-tested through guest dispatch | 293 |
+| API-set aliases (not services) | 369 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -45,6 +45,7 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!fputs` | `(text: ptr, stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null string or stream, or EBADF or ENOSPC for a file; stops the guest for stdin or a pointer that is no stream |
 | `ucrtbase.dll!fflush` | `(stream: ptr) -> i32` | partial | stops the guest for a pointer that is no stream |
 | `ucrtbase.dll!setvbuf` | `(stream: ptr, buffer: ptr, mode: i32, size: u64) -> i32` | partial | -1 with errno EINVAL for a null stream, an unknown mode or a size outside 2 to INT_MAX; stops the guest for a pointer that is no stream |
+| `ucrtbase.dll!setbuf` | `(stream: ptr, buffer: ptr) -> void` | partial | errno EINVAL for a null stream; stops the guest for a pointer that is no stream |
 | `ucrtbase.dll!fread` | `(buffer: ptr, size: u64, count: u64, stream: ptr) -> u64` | partial | 0 with errno EINVAL for a null buffer or stream, or EBADF for a stream open for writing; stops the guest for more than this runtime transfers at once |
 | `ucrtbase.dll!fgetc` | `(stream: ptr) -> i32` | partial | EOF with errno EINVAL for a null stream or EBADF for one open for writing |
 | `ucrtbase.dll!fseek` | `(stream: ptr, offset: i32, origin: i32) -> i32` | partial | -1 with errno EINVAL for a null stream, a bad origin or a position before the start; stops the guest for a standard stream |
@@ -128,19 +129,45 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!iswspace` | `(wide: u32) -> i32` | implemented | never |
 | `ucrtbase.dll!towlower` | `(wide: u32) -> u32` | implemented | never |
 | `ucrtbase.dll!towupper` | `(wide: u32) -> u32` | implemented | never |
+| `ucrtbase.dll!isalpha` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!isdigit` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!isalnum` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!islower` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!isupper` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!isspace` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!ispunct` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!iscntrl` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!isprint` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!isgraph` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!isblank` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!isxdigit` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!tolower` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!toupper` | `(character: i32) -> i32` | implemented | never |
+| `ucrtbase.dll!atoi` | `(text: ptr) -> i32` | implemented | never; stops the guest for memory it cannot read |
+| `ucrtbase.dll!atof` | `(text: ptr) -> f64` | implemented | never; stops the guest for memory it cannot read |
 | `ucrtbase.dll!wcsncat` | `(start: ptr, end: ptr, count: u64) -> ptr` | implemented | never; stops the guest for memory it cannot write |
 | `ucrtbase.dll!wcscpy` | `(start: ptr, end: ptr) -> ptr` | implemented | never; nothing bounds the copy, as the CRT does not bound it |
 | `ucrtbase.dll!_wcsnicmp` | `(first: ptr, second: ptr, count: u64) -> i32` | implemented | never; the folding is the ASCII one of the C locale, the only locale modelled, and the answer is -1, 0 or 1 as the sign-only contract permits |
 | `ucrtbase.dll!_wcsdup` | `(text: ptr) -> ptr` | implemented | null when the copy cannot be allocated |
 | `ucrtbase.dll!_strdup` | `(text: ptr) -> ptr` | partial | a string longer than 65536 bytes or an allocation failure answers null; errno is not set |
 | `ucrtbase.dll!_wfopen` | `(name: ptr, mode: ptr) -> ptr` | partial | null with errno EINVAL, ENOENT, EACCES, EMFILE, ENOSPC or ENOMEM |
+| `msvcrt.dll!_wfopen` | `(name: ptr, mode: ptr) -> ptr` | partial | null with errno EINVAL or ENOENT |
 | `ucrtbase.dll!_unlink` | `(name: ptr) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES for a directory or a read-only file |
+| `msvcrt.dll!_unlink` | `(name: ptr) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES |
 | `ucrtbase.dll!_wunlink` | `(name: ptr) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES for a directory or a read-only file |
+| `msvcrt.dll!_wunlink` | `(name: ptr) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES |
 | `ucrtbase.dll!_access` | `(name: ptr, mode: i32) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES for a write mode on a read-only file |
+| `msvcrt.dll!_access` | `(name: ptr, mode: i32) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES |
 | `ucrtbase.dll!_waccess` | `(name: ptr, mode: i32) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES for a write mode on a read-only file |
+| `msvcrt.dll!_waccess` | `(name: ptr, mode: i32) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES |
 | `ucrtbase.dll!_wmkdir` | `(name: ptr) -> i32` | partial | -1 with errno EINVAL, ENOENT, ENOSPC or EACCES when the name is taken |
+| `msvcrt.dll!_wmkdir` | `(name: ptr) -> i32` | partial | -1 with errno EINVAL, ENOENT or EACCES |
+| `ucrtbase.dll!_chmod` | `(name: ptr, mode: i32) -> i32` | partial | -1 with errno EINVAL or ENOENT |
+| `msvcrt.dll!_chmod` | `(name: ptr, mode: i32) -> i32` | partial | -1 with errno EINVAL or ENOENT |
 | `ucrtbase.dll!_wchmod` | `(name: ptr, mode: i32) -> i32` | partial | -1 with errno EINVAL or ENOENT |
+| `msvcrt.dll!_wchmod` | `(name: ptr, mode: i32) -> i32` | partial | -1 with errno EINVAL or ENOENT |
 | `ucrtbase.dll!_wstat64i32` | `(name: ptr, output: ptr) -> i32` | partial | -1 with errno EINVAL or ENOENT; the times answer -1 because the drive has no time stamps |
+| `msvcrt.dll!_wstat64i32` | `(name: ptr, output: ptr) -> i32` | partial | -1 with errno EINVAL or ENOENT |
 | `ucrtbase.dll!_assert` | `(expression: ptr, file: ptr, line: u32) -> void` | partial | nothing; the message prints on stderr and the process ends with status 3, since no signal handler can exist here |
 | `ucrtbase.dll!_beginthreadex` | `(security: ptr, stack_size: u64, start: ptr, arglist: ptr, initflag: u32, thrdaddr: ptr) -> ptr` | partial | 0 with errno EINVAL for a security descriptor, unknown flags or a null start, ENOMEM when the machine has no room or no scheduler |
 | `ucrtbase.dll!_endthreadex` | `(code: u32) -> void` | partial | nothing; the thread ends with the code as its exit code |
@@ -270,3 +297,17 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `kernel32.dll!SetConsoleTitleA` | `(title: ptr) -> bool32` | partial | FALSE with ERROR_INVALID_PARAMETER for a null title |
 | `kernel32.dll!GetConsoleTitleA` | `(buffer: ptr, size: u32) -> u32` | partial | 0 with ERROR_INVALID_PARAMETER for a null buffer or a zero size, the same documented length answer as the wide form |
 | `ucrtbase.dll!_getpid` | `() -> i32` | implemented | never |
+| `combase.dll!CoInitialize` | `(reserved: ptr) -> i32` | partial | E_INVALIDARG for a non-null reserved pointer; RPC_E_CHANGED_MODE for an existing multithreaded apartment |
+| `combase.dll!CoInitializeEx` | `(reserved: ptr, model: u32) -> i32` | partial | E_INVALIDARG for a non-null reserved pointer or a COINIT bit outside the documented set; RPC_E_CHANGED_MODE when the thread already initialized the other apartment model |
+| `combase.dll!CoUninitialize` | `() -> void` | partial | never; a thread with no outstanding initialization is left unchanged |
+| `combase.dll!CoCreateGuid` | `(guid: out<16>) -> i32` | partial | E_UNEXPECTED when the host has no entropy; a guest fault for an address it cannot write |
+| `combase.dll!StringFromGUID2` | `(guid: ptr, text: ptr, capacity: i32) -> i32` | partial | 0 and no write when capacity is below 39 units; a guest fault for a GUID or buffer address it cannot access |
+| `combase.dll!CLSIDFromString` | `(text: ptr, clsid: out<16>) -> i32` | partial | CO_E_CLASSSTRING and no write for text that is not the braced or bare CLSID form; NULL produces GUID_NULL; a guest fault for an address it cannot read |
+| `combase.dll!IIDFromString` | `(text: ptr, clsid: out<16>) -> i32` | partial | E_INVALIDARG for malformed text by Xenora policy; NULL produces GUID_NULL; invalid guest pointers fault |
+| `combase.dll!CoTaskMemAlloc` | `(size: u64) -> ptr` | partial | null when the task allocator cannot map the block; a zero size requests the smallest block |
+| `combase.dll!CoTaskMemFree` | `(address: ptr) -> void` | partial | never for the null pointer; Xenora faults the guest for a block the task allocator does not own |
+| `combase.dll!CoTaskMemRealloc` | `(address: ptr, size: u64) -> ptr` | partial | null with the original block unchanged when the grow fails, null after freeing for a zero size, and a guest fault for a block the task allocator does not own |
+| `combase.dll!CoCreateInstance` | `(clsid: ptr, outer: ptr, class_context: u32, iid: ptr, object: ptr) -> i32` | partial | E_POINTER for a null out pointer, E_INVALIDARG for a null CLSID or IID, CO_E_NOTINITIALIZED for an uninitialized thread, and REGDB_E_CLASSNOTREG for unregistered classes; the out pointer is nulled first; a synthetic class exists only with explicit fixture registration |
+| `combase.dll!CoGetClassObject` | `(clsid: ptr, class_context: u32, server_info: ptr, iid: ptr, object: ptr) -> i32` | partial | uninitialized threads return CO_E_NOTINITIALIZED; ordinary runtime has no registered classes; remote activation is unsupported |
+| `combase.dll!CoCreateInstanceEx` | `(clsid: ptr, outer: ptr, class_context: u32, server_info: ptr, count: u32, results: ptr) -> i32` | partial | validates up to 64 MULTI_QI records; refuses remote or larger requests; ordinary runtime has no registered classes and output records remain unchanged on class lookup failure |
+| `combase.dll!PropVariantClear` | `(variant: ptr) -> i32` | partial | stops the guest for a null pointer, array, vector and by-reference forms, VT_BSTR, VT_UNKNOWN and VT_DISPATCH; their results or release paths are not modelled |

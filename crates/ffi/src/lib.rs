@@ -2155,7 +2155,9 @@ fn inspection_report(bytes: &[u8]) -> (i32, String) {
         report.relocations.total_entries,
         report.tls.callback_targets.len()
     );
-    out.push_str("\nExecution of opened files is not available (see #257).\n");
+    out.push_str(
+        "\nInspection is read-only. The experimental runner can attempt execution separately.\n",
+    );
     (XENORA_OK, out)
 }
 
@@ -2614,6 +2616,7 @@ mod tests {
             "{text}"
         );
         assert!(text.contains("nothing in this file was executed"));
+        assert!(text.contains("experimental runner can attempt execution separately"));
     }
 
     #[test]

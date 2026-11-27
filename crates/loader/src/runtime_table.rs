@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 252] = [
+pub static SERVICES: [ServiceMetadata; 293] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -304,6 +304,17 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         aliases: &["api-ms-win-crt-stdio-l1-1-0.dll", "msvcrt.dll"],
         failure: "-1 with errno EINVAL for a null stream, an unknown mode or a size outside 2 to INT_MAX; stops the guest for a pointer that is no stream",
         reference: "stdio.h setvbuf",
+        tests: &["fflush_and_setvbuf_return_their_documented_results"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "setbuf",
+        parameters: &[Parameter { name: "stream", kind: "ptr" }, Parameter { name: "buffer", kind: "ptr" }],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-stdio-l1-1-0.dll", "msvcrt.dll"],
+        failure: "errno EINVAL for a null stream; stops the guest for a pointer that is no stream",
+        reference: "stdio.h setbuf",
         tests: &["fflush_and_setvbuf_return_their_documented_results"],
     },
     ServiceMetadata {
@@ -1221,6 +1232,182 @@ pub static SERVICES: [ServiceMetadata; 252] = [
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
+        symbol: "isalpha",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isalpha",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "isdigit",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isdigit",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "isalnum",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isalnum",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "islower",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h islower",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "isupper",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isupper",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "isspace",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isspace",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "ispunct",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h ispunct",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "iscntrl",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h iscntrl",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "isprint",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isprint",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "isgraph",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isgraph",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "isblank",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isblank",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "isxdigit",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h isxdigit",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "tolower",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h tolower",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "toupper",
+        parameters: &[Parameter { name: "character", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-string-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never",
+        reference: "ctype.h toupper",
+        tests: &["narrow_classification_is_the_c_locale"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "atoi",
+        parameters: &[Parameter { name: "text", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never; stops the guest for memory it cannot read",
+        reference: "stdlib.h atoi",
+        tests: &["narrow_decimal_parses_follow_the_c_contract"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "atof",
+        parameters: &[Parameter { name: "text", kind: "ptr" }],
+        result: "f64",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-convert-l1-1-0.dll", "msvcrt.dll"],
+        failure: "never; stops the guest for memory it cannot read",
+        reference: "stdlib.h atof",
+        tests: &["narrow_decimal_parses_follow_the_c_contract"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
         symbol: "wcsncat",
         parameters: &[Parameter { name: "start", kind: "ptr" }, Parameter { name: "end", kind: "ptr" }, Parameter { name: "count", kind: "u64" }],
         result: "ptr",
@@ -1286,6 +1473,17 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         tests: &["the_wide_file_operations_follow_the_drive"],
     },
     ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_wfopen",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "ptr" }],
+        result: "ptr",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "null with errno EINVAL or ENOENT",
+        reference: "corecrt_wstdio.h _wfopen; the legacy dll exports the same entry",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
         library: "ucrtbase.dll",
         symbol: "_unlink",
         parameters: &[Parameter { name: "name", kind: "ptr" }],
@@ -1294,6 +1492,17 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         aliases: &["api-ms-win-crt-filesystem-l1-1-0.dll"],
         failure: "-1 with errno EINVAL, ENOENT or EACCES for a directory or a read-only file",
         reference: "io.h _unlink",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_unlink",
+        parameters: &[Parameter { name: "name", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL, ENOENT or EACCES",
+        reference: "io.h _unlink; the legacy dll exports the same entry",
         tests: &["the_wide_file_operations_follow_the_drive"],
     },
     ServiceMetadata {
@@ -1308,6 +1517,17 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         tests: &["the_wide_file_operations_follow_the_drive"],
     },
     ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_wunlink",
+        parameters: &[Parameter { name: "name", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL, ENOENT or EACCES",
+        reference: "corecrt_wio.h _wunlink; the legacy dll exports the same entry",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
         library: "ucrtbase.dll",
         symbol: "_access",
         parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "i32" }],
@@ -1316,6 +1536,17 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         aliases: &["api-ms-win-crt-filesystem-l1-1-0.dll"],
         failure: "-1 with errno EINVAL, ENOENT or EACCES for a write mode on a read-only file",
         reference: "io.h _access",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_access",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL, ENOENT or EACCES",
+        reference: "io.h _access; the legacy dll exports the same entry",
         tests: &["the_wide_file_operations_follow_the_drive"],
     },
     ServiceMetadata {
@@ -1330,6 +1561,17 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         tests: &["the_wide_file_operations_follow_the_drive"],
     },
     ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_waccess",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL, ENOENT or EACCES",
+        reference: "corecrt_wio.h _waccess; the legacy dll exports the same entry",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
         library: "ucrtbase.dll",
         symbol: "_wmkdir",
         parameters: &[Parameter { name: "name", kind: "ptr" }],
@@ -1338,6 +1580,39 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         aliases: &["api-ms-win-crt-filesystem-l1-1-0.dll"],
         failure: "-1 with errno EINVAL, ENOENT, ENOSPC or EACCES when the name is taken",
         reference: "corecrt_wdirect.h _wmkdir",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_wmkdir",
+        parameters: &[Parameter { name: "name", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL, ENOENT or EACCES",
+        reference: "corecrt_wdirect.h _wmkdir; the legacy dll exports the same entry",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "_chmod",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-filesystem-l1-1-0.dll"],
+        failure: "-1 with errno EINVAL or ENOENT",
+        reference: "corecrt_io.h _chmod",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_chmod",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL or ENOENT",
+        reference: "corecrt_io.h _chmod; the legacy dll exports the same entry",
         tests: &["the_wide_file_operations_follow_the_drive"],
     },
     ServiceMetadata {
@@ -1352,6 +1627,17 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         tests: &["the_wide_file_operations_follow_the_drive"],
     },
     ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_wchmod",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "mode", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL or ENOENT",
+        reference: "corecrt_wio.h _wchmod; the legacy dll exports the same entry",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
         library: "ucrtbase.dll",
         symbol: "_wstat64i32",
         parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "output", kind: "ptr" }],
@@ -1360,6 +1646,17 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         aliases: &["api-ms-win-crt-filesystem-l1-1-0.dll"],
         failure: "-1 with errno EINVAL or ENOENT; the times answer -1 because the drive has no time stamps",
         reference: "corecrt_wio.h _wstat64i32, _mingw_stat64.h struct _stat64i32",
+        tests: &["the_wide_file_operations_follow_the_drive"],
+    },
+    ServiceMetadata {
+        library: "msvcrt.dll",
+        symbol: "_wstat64i32",
+        parameters: &[Parameter { name: "name", kind: "ptr" }, Parameter { name: "output", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with errno EINVAL or ENOENT",
+        reference: "corecrt_wstat.h _wstat64i32; the legacy dll exports the same entry",
         tests: &["the_wide_file_operations_follow_the_drive"],
     },
     ServiceMetadata {
@@ -2781,6 +3078,160 @@ pub static SERVICES: [ServiceMetadata; 252] = [
         reference: "process.h _getpid",
         tests: &["crt_getpid_matches_the_process_identity"],
     },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoInitialize",
+        parameters: &[Parameter { name: "reserved", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["ole32.dll"],
+        failure: "E_INVALIDARG for a non-null reserved pointer; RPC_E_CHANGED_MODE for an existing multithreaded apartment",
+        reference: "https://learn.microsoft.com/en-us/windows/win32/api/objbase/nf-objbase-coinitialize",
+        tests: &["co_initialize_uses_the_single_threaded_model"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoInitializeEx",
+        parameters: &[Parameter { name: "reserved", kind: "ptr" }, Parameter { name: "model", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "E_INVALIDARG for a non-null reserved pointer or a COINIT bit outside the documented set; RPC_E_CHANGED_MODE when the thread already initialized the other apartment model",
+        reference: "combaseapi.h CoInitializeEx and the COINIT enumeration",
+        tests: &["co_initialize_ex_tracks_the_apartment_per_thread"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoUninitialize",
+        parameters: &[],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "never; a thread with no outstanding initialization is left unchanged",
+        reference: "combaseapi.h CoUninitialize",
+        tests: &["co_uninitialize_balances_each_initialization"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoCreateGuid",
+        parameters: &[Parameter { name: "guid", kind: "out<16>" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "E_UNEXPECTED when the host has no entropy; a guest fault for an address it cannot write",
+        reference: "combaseapi.h CoCreateGuid; RFC 4122 version 4 and variant bits",
+        tests: &["co_create_guid_returns_a_version_four_guid"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "StringFromGUID2",
+        parameters: &[Parameter { name: "guid", kind: "ptr" }, Parameter { name: "text", kind: "ptr" }, Parameter { name: "capacity", kind: "i32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "0 and no write when capacity is below 39 units; a guest fault for a GUID or buffer address it cannot access",
+        reference: "combaseapi.h StringFromGUID2 and the CLSID text form",
+        tests: &["string_from_guid2_renders_the_documented_text_form"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CLSIDFromString",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "clsid", kind: "out<16>" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "CO_E_CLASSSTRING and no write for text that is not the braced or bare CLSID form; NULL produces GUID_NULL; a guest fault for an address it cannot read",
+        reference: "combaseapi.h CLSIDFromString",
+        tests: &["clsid_from_string_parses_the_braced_and_bare_forms"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "IIDFromString",
+        parameters: &[Parameter { name: "text", kind: "ptr" }, Parameter { name: "clsid", kind: "out<16>" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "E_INVALIDARG for malformed text by Xenora policy; NULL produces GUID_NULL; invalid guest pointers fault",
+        reference: "https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-iidfromstring",
+        tests: &["iid_from_string_parses_a_guid_and_null"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoTaskMemAlloc",
+        parameters: &[Parameter { name: "size", kind: "u64" }],
+        result: "ptr",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "null when the task allocator cannot map the block; a zero size requests the smallest block",
+        reference: "combaseapi.h CoTaskMemAlloc",
+        tests: &["co_task_memory_owns_its_blocks"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoTaskMemFree",
+        parameters: &[Parameter { name: "address", kind: "ptr" }],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "never for the null pointer; Xenora faults the guest for a block the task allocator does not own",
+        reference: "combaseapi.h CoTaskMemFree",
+        tests: &["co_task_memory_owns_its_blocks"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoTaskMemRealloc",
+        parameters: &[Parameter { name: "address", kind: "ptr" }, Parameter { name: "size", kind: "u64" }],
+        result: "ptr",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "null with the original block unchanged when the grow fails, null after freeing for a zero size, and a guest fault for a block the task allocator does not own",
+        reference: "combaseapi.h CoTaskMemRealloc",
+        tests: &["co_task_mem_realloc_preserves_contents_and_refuses_foreign_blocks"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoCreateInstance",
+        parameters: &[Parameter { name: "clsid", kind: "ptr" }, Parameter { name: "outer", kind: "ptr" }, Parameter { name: "class_context", kind: "u32" }, Parameter { name: "iid", kind: "ptr" }, Parameter { name: "object", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["ole32.dll"],
+        failure: "E_POINTER for a null out pointer, E_INVALIDARG for a null CLSID or IID, CO_E_NOTINITIALIZED for an uninitialized thread, and REGDB_E_CLASSNOTREG for unregistered classes; the out pointer is nulled first; a synthetic class exists only with explicit fixture registration",
+        reference: "combaseapi.h CoCreateInstance",
+        tests: &["co_create_instance_reports_an_unregistered_class"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoGetClassObject",
+        parameters: &[Parameter { name: "clsid", kind: "ptr" }, Parameter { name: "class_context", kind: "u32" }, Parameter { name: "server_info", kind: "ptr" }, Parameter { name: "iid", kind: "ptr" }, Parameter { name: "object", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["ole32.dll"],
+        failure: "uninitialized threads return CO_E_NOTINITIALIZED; ordinary runtime has no registered classes; remote activation is unsupported",
+        reference: "https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cogetclassobject",
+        tests: &["co_get_class_object_refuses_unregistered_classes"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "CoCreateInstanceEx",
+        parameters: &[Parameter { name: "clsid", kind: "ptr" }, Parameter { name: "outer", kind: "ptr" }, Parameter { name: "class_context", kind: "u32" }, Parameter { name: "server_info", kind: "ptr" }, Parameter { name: "count", kind: "u32" }, Parameter { name: "results", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["ole32.dll"],
+        failure: "validates up to 64 MULTI_QI records; refuses remote or larger requests; ordinary runtime has no registered classes and output records remain unchanged on class lookup failure",
+        reference: "https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cocreateinstanceex",
+        tests: &["co_create_instance_ex_checks_the_bounded_interface_array"],
+    },
+    ServiceMetadata {
+        library: "combase.dll",
+        symbol: "PropVariantClear",
+        parameters: &[Parameter { name: "variant", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "api-ms-win-core-com-l1-1-1.dll", "ole32.dll"],
+        failure: "stops the guest for a null pointer, array, vector and by-reference forms, VT_BSTR, VT_UNKNOWN and VT_DISPATCH; their results or release paths are not modelled",
+        reference: "propidl.h PROPVARIANT and PropVariantClear",
+        tests: &["prop_variant_clear_clears_values_and_frees_task_strings"],
+    },
 ];
 
 /// Register every generated service and its API-set aliases.
@@ -3043,6 +3494,15 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::setvbuf(&mut context, a0, a1, a2, a3)?;
         Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "setbuf", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::setbuf(&mut context, a0, a1)?;
+        Ok(0)
     });
     let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "fread", ServiceStatus::Partial, move |args, cpu, memory| {
@@ -3771,6 +4231,134 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isalpha", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isalpha(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isdigit", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isdigit(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isalnum", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isalnum(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "islower", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::islower(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isupper", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isupper(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isspace", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isspace(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "ispunct", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::ispunct(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "iscntrl", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iscntrl(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isprint", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isprint(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isgraph", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isgraph(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isblank", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isblank(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "isxdigit", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::isxdigit(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "tolower", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::tolower(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "toupper", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.i32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::toupper(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "atoi", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::atoi(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "atof", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: crate::runtime::Float64 = handlers::atof(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "wcsncat", ServiceStatus::Implemented, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.u64(0)?;
@@ -3825,7 +4413,24 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_wfopen", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::_wfopen(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "_unlink", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_unlink(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_unlink", ServiceStatus::Partial, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.u64(0)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
@@ -3841,7 +4446,24 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_wunlink", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_wunlink(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "_access", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.i32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_access(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_access", ServiceStatus::Partial, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.u64(0)?;
         let a1 = call.i32(1)?;
@@ -3859,11 +4481,46 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_waccess", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.i32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_waccess(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "_wmkdir", ServiceStatus::Partial, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.u64(0)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::_wmkdir(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_wmkdir", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_wmkdir(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "_chmod", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.i32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_chmod(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_chmod", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.i32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_chmod(&mut context, a0, a1)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();
@@ -3876,7 +4533,25 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_wchmod", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.i32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_wchmod(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "_wstat64i32", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::_wstat64i32(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("msvcrt.dll", "_wstat64i32", ServiceStatus::Partial, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.u64(0)?;
         let a1 = call.u64(1)?;
@@ -5006,6 +5681,136 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let _ = args;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::crt_getpid(&mut context)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoInitialize", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_initialize(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoInitializeEx", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_initialize_ex(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoUninitialize", ServiceStatus::Partial, move |args, cpu, memory| {
+        let _ = args;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::co_uninitialize(&mut context)?;
+        Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoCreateGuid", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.out::<16>(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_create_guid(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "StringFromGUID2", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.i32(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::string_from_guid2(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CLSIDFromString", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.out::<16>(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::clsid_from_string(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "IIDFromString", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.out::<16>(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::iid_from_string(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoTaskMemAlloc", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::co_task_mem_alloc(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoTaskMemFree", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::co_task_mem_free(&mut context, a0)?;
+        Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoTaskMemRealloc", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: u64 = handlers::co_task_mem_realloc(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoCreateInstance", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u64(4)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_create_instance(&mut context, a0, a1, a2, a3, a4)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoGetClassObject", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u64(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u64(4)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_get_class_object(&mut context, a0, a1, a2, a3, a4)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "CoCreateInstanceEx", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u64(1)?;
+        let a2 = call.u32(2)?;
+        let a3 = call.u64(3)?;
+        let a4 = call.u32(4)?;
+        let a5 = call.u64(5)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::co_create_instance_ex(&mut context, a0, a1, a2, a3, a4, a5)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("combase.dll", "PropVariantClear", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::prop_variant_clear(&mut context, a0)?;
         Ok(result.place(cpu))
     });
     for service in &SERVICES {

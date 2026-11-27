@@ -570,6 +570,23 @@ fn vop1_float_rounding_fixture_lowers_to_integer_bit_operations() {
     assert!(!compiled.msl.contains("as_type") && !compiled.msl.contains("float"));
 }
 
+#[test]
+fn vopc_f32_fixture_compares_binary32_bits_without_float_operations() {
+    let code = include_bytes!("../../../fixtures/rdna2/vector-compare-f32.bin");
+    let compiled = compile(Architecture::Gfx1030, code).unwrap();
+    assert_eq!(
+        compiled.ir,
+        include_str!("../../../fixtures/golden/vector-compare-f32.ir")
+    );
+    assert_eq!(
+        compiled.msl,
+        include_str!("../../../fixtures/golden/vector-compare-f32.metal")
+    );
+    // NaN, zero and order tests are integer operations on the bits, so the
+    // Metal math mode cannot change a NaN or signed-zero result (#786).
+    assert!(!compiled.msl.contains("as_type<float>") && !compiled.msl.contains("isnan"));
+}
+
 // --- Opt-in constant folding: hand-computed known-answer fixtures -------------
 // Instruction words are built by hand to match the existing RDNA2 fixture shape
 // (load, wait, mov literals, op, store). Expected constants are derived from the
@@ -1689,6 +1706,7 @@ fn cse_leaves_every_golden_fixture_unchanged() {
     golden!("scalar-unary");
     golden!("vector-compare");
     golden!("vector-compare-ft");
+    golden!("vector-compare-f32");
     golden!("vector-integer");
     golden!("vector-unary");
     golden!("vector-round");

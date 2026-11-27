@@ -73,6 +73,35 @@ required. The newer Metal 4 compute-encoder API also exposes build/refit/copy
 operations and residency-set obligations, but Xenora should not mix classic and
 Metal 4 ownership models in one abstraction without an explicit boundary.
 
+## Host construction probe
+
+This branch adds a deliberately small synchronous probe in the Swift
+application layer. `MetalAccelerationStructureProbe.buildSingleTriangle()`:
+
+- requires a default Metal device and checks `supportsRaytracing` at runtime;
+- creates one original non-indexed triangle in a shared vertex buffer;
+- constructs a triangle geometry descriptor and primitive acceleration
+  structure descriptor;
+- queries sizes on the exact device performing the build;
+- allocates the acceleration structure and private scratch buffer from those
+  sizes;
+- encodes one classic acceleration-structure build command;
+- keeps the vertex buffer, scratch buffer, descriptor and output alive across
+  `waitUntilCompleted` with an explicit extended lifetime;
+- requires the command buffer to finish in `.completed` state.
+
+The local Apple Silicon development host completed the build twice with the
+same positive allocation and scratch sizes. The test also has an explicit
+unsupported-device path: if runtime detection reports no ray-tracing support,
+the probe must fail with `unsupportedRayTracing` and the test verifies that
+negative capability report rather than counting a build as run. Only the
+positive path is construction evidence. The positive result establishes only
+this narrow fact: on that host, the public classic Metal API accepted and
+completed one single-triangle primitive build with the tested buffer ownership
+pattern. It does not establish ray intersection correctness, visual behavior,
+performance, compact/refit behavior, cross-generation support or console
+compatibility.
+
 ## Required independent fixtures
 
 Before implementation claims are made, Xenora needs original deterministic
@@ -94,10 +123,11 @@ console compatibility, general hardware support or performance.
 ## Unsupported or unresolved
 
 No console-specific bottom-level/top-level ABI, memory layout, shader binding
-or ray-tracing instruction contract is claimed here. No implementation exists
-in this branch. Visual quality, performance, motion geometry behavior and
-cross-generation Apple GPU support remain unverified. Active renderer, shader
-and RDNA implementation files are intentionally untouched.
+or ray-tracing instruction contract is claimed here. The probe is host-side
+construction evidence only; ray queries, intersection correctness, visual
+quality, performance, motion geometry behavior and cross-generation Apple GPU
+support remain unverified. Active renderer, shader and RDNA implementation
+files are intentionally untouched.
 
 ## Sources
 

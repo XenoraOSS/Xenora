@@ -90,6 +90,7 @@ def run_suites(
     specs: Sequence[SuiteSpec],
     *,
     stop_on_fail: bool = False,
+    cwd: str | None = None,
 ) -> OrchestrationReport:
     report = OrchestrationReport(started_at=time.time())
     halted = False
@@ -125,7 +126,7 @@ def run_suites(
             )
             continue
         started = time.time()
-        result = run_preserving_status(spec.command)
+        result = run_preserving_status(spec.command, cwd=cwd)
         finished = time.time()
         status = classify_status(result.returncode)
         report.suites.append(

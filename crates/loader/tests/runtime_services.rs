@@ -2773,6 +2773,23 @@ fn fflush_and_setvbuf_return_their_documented_results() {
     }
     assert_eq!(guest.run("setvbuf", &[TEXT, 0, 4, 0]).1, LIMIT);
 
+    // `setbuf` is the legacy reduction: the buffer pointer only chooses
+    // between full and no buffering, and both are accepted for a real
+    // stream because output is never held back either way.
+    guest.set_errno(0);
+    for stream in [input, out, err] {
+        guest.call("setbuf", &[stream, TEXT]);
+        assert_eq!(guest.errno(), 0, "{stream:#x}");
+        guest.call("setbuf", &[stream, 0]);
+        assert_eq!(guest.errno(), 0, "{stream:#x}");
+    }
+    // A null stream is errno EINVAL through the void return; a pointer
+    // that is no stream stops the guest, as it does for `setvbuf`.
+    guest.call("setbuf", &[0, TEXT]);
+    assert_eq!(guest.errno(), STDIO_EINVAL);
+    guest.set_errno(0);
+    assert_eq!(guest.run("setbuf", &[TEXT, 0]).1, LIMIT);
+
     // Neither function holds output back or lets any through.
     assert!(guest.state.standard_output().is_empty());
     assert_eq!(print(&mut guest, out, b"now", &[]), 3);
@@ -4917,7 +4934,7 @@ const LEGACY_DATA_SYMBOLS: [&str; 7] = [
 /// Legacy-linked binaries import these services from `msvcrt.dll`, where the
 /// compatibility mapping resolves them to the same handlers as the modern
 /// runtime.
-const LEGACY_FUNCTION_SYMBOLS: [&str; 21] = [
+const LEGACY_FUNCTION_SYMBOLS: [&str; 37] = [
     "__iob_func",
     "sscanf",
     "fprintf",
@@ -4939,6 +4956,22 @@ const LEGACY_FUNCTION_SYMBOLS: [&str; 21] = [
     "_getpid",
     "rand",
     "srand",
+    "isalpha",
+    "isdigit",
+    "isalnum",
+    "islower",
+    "isupper",
+    "isspace",
+    "ispunct",
+    "iscntrl",
+    "isprint",
+    "isgraph",
+    "isxdigit",
+    "isblank",
+    "tolower",
+    "toupper",
+    "atoi",
+    "atof",
 ];
 
 const JUNK: u64 = 0xFFFF_FFFF_0000_0000;
@@ -8044,4 +8077,439 @@ fn the_wide_file_operations_follow_the_drive() {
         0xFFFF_FFFF
     );
     assert_eq!(guest.errno(), 22);
+    // The narrow form marks a file the same way: write bit clear, read-only.
+    let narrow_mode = place(&mut guest, TEXT + 0x2100, b"c:\\narrowmode.txt");
+    let create_mode = place(&mut guest, TEXT + 0x2300, b"w");
+    let created = guest.call("fopen", &[narrow_mode, create_mode]);
+    assert_ne!(created, 0);
+    close(&mut guest, created);
+    assert_eq!(guest.call("_chmod", &[narrow_mode, 0x100]) & 0xFFFF_FFFF, 0);
+    assert_eq!(
+        guest.call("_access", &[narrow_mode, 2]) & 0xFFFF_FFFF,
+        0xFFFF_FFFF,
+        "a read-only file denies the write probe"
+    );
+    assert_eq!(guest.call("_chmod", &[narrow_mode, 0x180]) & 0xFFFF_FFFF, 0);
+    assert_eq!(
+        guest.call("_access", &[narrow_mode, 2]) & 0xFFFF_FFFF,
+        0,
+        "the write bit restores access"
+    );
+    // A missing file is ENOENT, an unreadable name EINVAL.
+    let missing = place(&mut guest, TEXT + 0x2200, b"c:\\missing-narrow.txt");
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_chmod", &[missing, 0x100]) & 0xFFFF_FFFF,
+        0xFFFF_FFFF
+    );
+    assert_ne!(guest.errno(), 0);
+}
+
+#[test]
+fn co_initialize_ex_tracks_the_apartment_per_thread() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("CoInitializeEx", &[0, 2]), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 2]), 1);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]) as u32, 0x8001_0106);
+    guest.teb = 0x1234;
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[1, 0]) as u32, 0x8007_0057);
+}
+
+#[test]
+fn co_uninitialize_balances_each_initialization() {
+    let mut guest = Guest::new();
+    guest.call("CoInitializeEx", &[0, 2]);
+    guest.call("CoInitializeEx", &[0, 2]);
+    guest.call("CoUninitialize", &[]);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]) as u32, 0x8001_0106);
+    guest.call("CoUninitialize", &[]);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+}
+
+#[test]
+fn co_create_guid_returns_a_version_four_guid() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("CoCreateGuid", &[SCRATCH]), 0);
+    assert_eq!(guest.memory.read_u16(SCRATCH + 6).unwrap() & 0xf000, 0x4000);
+    assert_eq!(guest.memory.read_u16(SCRATCH + 8).unwrap() & 0xc0, 0x80);
+}
+
+#[test]
+fn string_from_guid2_renders_the_documented_text_form() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .write_bytes(
+            SCRATCH,
+            &[
+                0x33, 0x22, 0x11, 0, 0x55, 0x44, 0x77, 0x66, 0x88, 0x99, 0xaa, 0xbb, 0xcc, 0xdd,
+                0xee, 0xff,
+            ],
+        )
+        .unwrap();
+    assert_eq!(
+        guest.call("StringFromGUID2", &[SCRATCH, SCRATCH + 32, 38]),
+        0
+    );
+    assert_eq!(
+        guest.call("StringFromGUID2", &[SCRATCH, SCRATCH + 32, 39]),
+        39
+    );
+    for (i, unit) in "{00112233-4455-6677-8899-AABBCCDDEEFF}\0"
+        .encode_utf16()
+        .enumerate()
+    {
+        assert_eq!(
+            guest.memory.read_u16(SCRATCH + 32 + 2 * i as u64).unwrap(),
+            unit
+        );
+    }
+}
+
+#[test]
+fn clsid_from_string_parses_the_braced_and_bare_forms() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .write_bytes(SCRATCH + 128, &[0xff; 16])
+        .unwrap();
+    assert_eq!(guest.call("CLSIDFromString", &[0, SCRATCH + 128]), 0);
+    assert_eq!(guest.memory.read_u64(SCRATCH + 128).unwrap(), 0);
+    assert_eq!(guest.memory.read_u64(SCRATCH + 136).unwrap(), 0);
+    for text in [
+        "{00112233-4455-6677-8899-AABBCCDDEEFF}",
+        "00112233-4455-6677-8899-aabbccddeeff",
+    ] {
+        for (i, unit) in text.encode_utf16().chain([0]).enumerate() {
+            guest
+                .memory
+                .write_u16(SCRATCH + 2 * i as u64, unit)
+                .unwrap();
+        }
+        assert_eq!(guest.call("CLSIDFromString", &[SCRATCH, SCRATCH + 128]), 0);
+        assert_eq!(guest.memory.read_u32(SCRATCH + 128).unwrap(), 0x0011_2233);
+    }
+    guest.memory.write_u16(SCRATCH, 0).unwrap();
+    assert_eq!(
+        guest.call("CLSIDFromString", &[SCRATCH, SCRATCH + 128]) as u32,
+        0x8004_01f3
+    );
+}
+
+#[test]
+fn co_task_memory_owns_its_blocks() {
+    let mut guest = Guest::new();
+    let ptr = guest.call("CoTaskMemAlloc", &[16]);
+    assert_ne!(ptr, 0);
+    guest.memory.write_u32(ptr, 0x12345678).unwrap();
+    guest.call("CoTaskMemFree", &[ptr]);
+    assert!(guest.memory.read_u32(ptr).is_err());
+    guest.call("CoTaskMemFree", &[0]);
+}
+
+#[test]
+fn co_task_mem_realloc_preserves_contents_and_refuses_foreign_blocks() {
+    let mut guest = Guest::new();
+    let ptr = guest.call("CoTaskMemAlloc", &[16]);
+    guest.memory.write_u32(ptr, 0x12345678).unwrap();
+    let resized = guest.call("CoTaskMemRealloc", &[ptr, 64]);
+    assert_ne!(resized, 0);
+    assert_eq!(guest.memory.read_u32(resized).unwrap(), 0x12345678);
+    assert_eq!(guest.call("CoTaskMemRealloc", &[resized, u64::MAX]), 0);
+    assert_eq!(guest.memory.read_u32(resized).unwrap(), 0x12345678);
+    assert_eq!(guest.call("CoTaskMemRealloc", &[resized, 0]), 0);
+    assert_ne!(guest.run("CoTaskMemFree", &[SCRATCH]).1, ExitReason::Halt);
+}
+
+#[test]
+fn co_create_instance_reports_an_unregistered_class() {
+    let mut guest = Guest::new();
+    guest.memory.write_u64(SCRATCH + 64, 42).unwrap();
+    assert_eq!(
+        call6(
+            &mut guest,
+            "CoCreateInstance",
+            &[SCRATCH, 0, 1, SCRATCH + 16, SCRATCH + 64]
+        ) as u32,
+        0x8004_01f0
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    assert_eq!(
+        call6(
+            &mut guest,
+            "CoCreateInstance",
+            &[SCRATCH, 0, 1, SCRATCH + 16, SCRATCH + 64]
+        ) as u32,
+        0x8004_0154
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+}
+
+#[test]
+fn synthetic_com_class_requires_explicit_fixture_registration() {
+    let mut guest = Guest::new();
+    guest
+        .memory
+        .write_bytes(
+            SCRATCH,
+            &[
+                0x51, 0x37, 0x71, 0x58, 0x90, 0x74, 0x4e, 0x41, 0xa0, 0x58, 0x63, 0x6f, 0x6d, 0, 0,
+                1,
+            ],
+        )
+        .unwrap();
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    assert_eq!(
+        call6(
+            &mut guest,
+            "CoCreateInstance",
+            &[SCRATCH, 0, 1, SCRATCH + 16, SCRATCH + 64]
+        ) as u32,
+        0x8004_0154
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+}
+
+#[test]
+fn com_api_set_exports_are_registered_individually() {
+    let (registry, _) = standard(0);
+    assert!(
+        registry
+            .binding("api-ms-win-core-com-l1-1-1.dll", "IIDFromString")
+            .is_some()
+    );
+    assert!(
+        registry
+            .binding("api-ms-win-core-com-l1-1-0.dll", "IIDFromString")
+            .is_some()
+    );
+    assert!(
+        registry
+            .binding("api-ms-win-core-com-l1-1-0.dll", "CoCreateInstance")
+            .is_none()
+    );
+}
+
+#[test]
+fn prop_variant_clear_clears_values_and_frees_task_strings() {
+    let mut guest = Guest::new();
+    assert_ne!(guest.run("PropVariantClear", &[0]).1, ExitReason::Halt);
+    let ptr = guest.call("CoTaskMemAlloc", &[16]);
+    guest.memory.write_u16(SCRATCH, 31).unwrap();
+    guest.memory.write_u64(SCRATCH + 8, ptr).unwrap();
+    assert_eq!(guest.call("PropVariantClear", &[SCRATCH]), 0);
+    assert_eq!(guest.memory.read_u16(SCRATCH).unwrap(), 0);
+    assert!(guest.memory.read_u32(ptr).is_err());
+    guest.memory.write_u16(SCRATCH, 13).unwrap();
+    assert_ne!(
+        guest.run("PropVariantClear", &[SCRATCH]).1,
+        ExitReason::Halt
+    );
+    assert_eq!(guest.memory.read_u16(SCRATCH).unwrap(), 13);
+
+    guest.memory.write_u16(SCRATCH, 0x8003).unwrap();
+    assert_ne!(
+        guest.run("PropVariantClear", &[SCRATCH]).1,
+        ExitReason::Halt
+    );
+    assert_eq!(guest.memory.read_u16(SCRATCH).unwrap(), 0x8003);
+
+    let owned = guest.call("CoTaskMemAlloc", &[16]);
+    let mut readonly = [0u8; 24];
+    readonly[..2].copy_from_slice(&31u16.to_le_bytes());
+    readonly[8..16].copy_from_slice(&owned.to_le_bytes());
+    guest
+        .memory
+        .map_region_with_data(CPBUF, 24, MemoryPermissions::READ_ONLY, &readonly)
+        .unwrap();
+    assert_ne!(guest.run("PropVariantClear", &[CPBUF]).1, ExitReason::Halt);
+    guest.memory.write_u32(owned, 42).unwrap();
+    guest.call("CoTaskMemFree", &[owned]);
+}
+
+#[test]
+fn co_initialize_uses_the_single_threaded_model() {
+    let mut guest = Guest::new();
+    assert_eq!(guest.call("CoInitialize", &[0]), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 2]), 1);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]) as u32, 0x8001_0106);
+    guest.call("CoUninitialize", &[]);
+    guest.call("CoUninitialize", &[]);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+}
+
+#[test]
+fn iid_from_string_parses_a_guid_and_null() {
+    let mut guest = Guest::new();
+    for (i, unit) in "{00112233-4455-6677-8899-AABBCCDDEEFF}\0"
+        .encode_utf16()
+        .enumerate()
+    {
+        guest
+            .memory
+            .write_u16(SCRATCH + 2 * i as u64, unit)
+            .unwrap();
+    }
+    assert_eq!(guest.call("IIDFromString", &[SCRATCH, SCRATCH + 128]), 0);
+    assert_eq!(guest.memory.read_u32(SCRATCH + 128).unwrap(), 0x0011_2233);
+    assert_eq!(guest.call("IIDFromString", &[0, SCRATCH + 128]), 0);
+    assert_eq!(guest.memory.read_u64(SCRATCH + 128).unwrap(), 0);
+    assert_eq!(guest.memory.read_u64(SCRATCH + 136).unwrap(), 0);
+    guest.memory.write_u16(SCRATCH, 0).unwrap();
+    assert_eq!(
+        guest.call("IIDFromString", &[SCRATCH, SCRATCH + 128]) as u32,
+        0x8007_0057
+    );
+}
+
+#[test]
+fn co_get_class_object_refuses_unregistered_classes() {
+    let mut guest = Guest::new();
+    let args = [SCRATCH, 1, 0, SCRATCH + 16, SCRATCH + 64];
+    guest.memory.write_u64(SCRATCH + 64, 42).unwrap();
+    assert_eq!(
+        call6(&mut guest, "CoGetClassObject", &args) as u32,
+        0x8004_01f0
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    guest.memory.write_u64(SCRATCH + 64, 42).unwrap();
+    assert_eq!(
+        call6(&mut guest, "CoGetClassObject", &args) as u32,
+        0x8004_0154
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH + 64).unwrap(), 0);
+}
+
+#[test]
+fn co_create_instance_ex_checks_the_bounded_interface_array() {
+    let mut guest = Guest::new();
+    let record = SCRATCH + 64;
+    guest.memory.write_u64(record, SCRATCH + 16).unwrap();
+    let args = [SCRATCH, 0, 1, 0, 1, record];
+    assert_eq!(
+        call6(&mut guest, "CoCreateInstanceEx", &args) as u32,
+        0x8004_01f0
+    );
+    assert_eq!(guest.call("CoInitializeEx", &[0, 0]), 0);
+    assert_eq!(
+        call6(&mut guest, "CoCreateInstanceEx", &args) as u32,
+        0x8004_0154
+    );
+    assert_eq!(guest.memory.read_u64(record + 8).unwrap(), 0);
+    assert_eq!(guest.memory.read_u32(record + 16).unwrap(), 0);
+    guest.memory.write_u64(record + 8, 1).unwrap();
+    assert_eq!(
+        call6(&mut guest, "CoCreateInstanceEx", &args) as u32,
+        0x8007_0057
+    );
+    assert_eq!(
+        call6(
+            &mut guest,
+            "CoCreateInstanceEx",
+            &[SCRATCH, 0, 1, 0, 0, record]
+        ) as u32,
+        0x8007_0057
+    );
+    guest.memory.write_u64(STACK_TOP + 32, 65).unwrap();
+    guest.memory.write_u64(STACK_TOP + 40, record).unwrap();
+    assert_ne!(
+        guest.run("CoCreateInstanceEx", &[SCRATCH, 0, 1, 0]).1,
+        ExitReason::Halt
+    );
+}
+
+/// The narrow `ctype.h` classification and case conversion of the C locale,
+/// the surface legacy mingw binaries bind out of `msvcrt.dll`. The
+/// expectations are the ASCII table: characters at or above 128 are in no
+/// class, and EOF (-1) is in no class and converts to itself.
+#[test]
+fn narrow_classification_is_the_c_locale() {
+    let (mut guest, _) = stdio_guest();
+    // Alpha, digit and the unions and intersections of the classes.
+    for (symbol, yes, no) in [
+        ("isalpha", b'a', b'0'),
+        ("isdigit", b'7', b'a'),
+        ("isalnum", b'9', b'_'),
+        ("islower", b'z', b'Z'),
+        ("isupper", b'Q', b'q'),
+        ("isspace", b' ', b'0'),
+        ("ispunct", b'_', b'a'),
+        ("iscntrl", 0x01_u8, b' '),
+        ("isprint", b'~', 0x7f_u8),
+        ("isgraph", b'!', b' '),
+        ("isxdigit", b'F', b'g'),
+    ] {
+        assert_eq!(guest.call(symbol, &[u64::from(yes)]), 1, "{symbol} accepts");
+        assert_eq!(guest.call(symbol, &[u64::from(no)]), 0, "{symbol} refuses");
+        // Bytes at or above 128 are in no class of the C locale.
+        assert_eq!(guest.call(symbol, &[0xC0]), 0, "{symbol} above ASCII");
+        // EOF is in no class.
+        assert_eq!(
+            guest.call(symbol, &[u64::from(u32::MAX)]),
+            0,
+            "{symbol} EOF"
+        );
+    }
+    // The other whitespace bytes of the C locale.
+    for byte in [b'\t', b'\n', 0x0B_u8, 0x0C_u8, b'\r'] {
+        assert_eq!(guest.call("isspace", &[u64::from(byte)]), 1);
+    }
+    // Case conversion answers the converted character and leaves the rest.
+    assert_eq!(guest.call("tolower", &[u64::from(b'A')]), u64::from(b'a'));
+    assert_eq!(guest.call("toupper", &[u64::from(b'x')]), u64::from(b'X'));
+    assert_eq!(guest.call("tolower", &[u64::from(b'4')]), u64::from(b'4'));
+    assert_eq!(guest.call("toupper", &[u64::from(b'H')]), u64::from(b'H'));
+    // EOF converts to itself.
+    assert_eq!(
+        guest.call("tolower", &[u64::from(u32::MAX)]),
+        u64::from(u32::MAX)
+    );
+    // The same spellings import from msvcrt.dll: the harness binds the
+    // legacy module for every symbol in the legacy list above.
+}
+
+/// `atoi` and `atof` parse the decimal forms of the C contract: leading
+/// ASCII whitespace, an optional sign, digits, and for the floating form a
+/// fraction and an exponent. A string with no digits answers zero.
+#[test]
+fn narrow_decimal_parses_follow_the_c_contract() {
+    let (mut guest, _) = stdio_guest();
+    for (text, expected) in [
+        (b"42" as &[u8], 42_i32),
+        (b"  -17", -17),
+        (b"+305", 305),
+        (b"\t\n99x", 99),
+        (b"abc", 0),
+        (b"-", 0),
+        (b"", 0),
+        (b"  00012", 12),
+    ] {
+        let at = place(&mut guest, TEXT + 0x3000, text);
+        assert_eq!(
+            guest.call("atoi", &[at]) as u32 as i32,
+            expected,
+            "atoi {text:?}"
+        );
+    }
+    // The floating form, exact values a binary64 represents.
+    for (text, expected) in [
+        (b"2.5" as &[u8], 2.5_f64),
+        (b"  -0.75e2", -75.0),
+        (b"1e-3", 0.001),
+        (b".5", 0.5),
+        (b"4.", 4.0),
+        (b"xyz", 0.0),
+        (b"1.5e", 1.5),
+        (b"3e+", 3.0),
+    ] {
+        let at = place(&mut guest, TEXT + 0x3200, text);
+        let bits = math_call(&mut guest, "atof", &[], &[at]);
+        assert_eq!(f64::from_bits(bits as u64), expected, "atof {text:?}");
+    }
+    let at = place(&mut guest, TEXT + 0x3300, b"6.25");
+    let bits = math_call(&mut guest, "atof", &[], &[at]);
+    assert_eq!(f64::from_bits(bits as u64), 6.25);
 }

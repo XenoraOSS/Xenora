@@ -1,0 +1,10 @@
+[package]
+name = "xenora-xaudio2"
+description = "Bounded XAudio2 core model for Xenora: engines, voices and the buffer queue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lints]
+workspace = true

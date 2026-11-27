@@ -11,6 +11,7 @@
 // unsupported instruction, and the run reports where.
 
 import Darwin
+import AppKit
 import Foundation
 import Metal
 import SwiftUI
@@ -109,6 +110,43 @@ enum ProgramRunner {
             return nil
         }
         return bundled
+    }
+
+    /// Header-only inspection uses the same bounded file reader as the CLI.
+    static func inspectHeaders(_ file: URL) -> (Bool, String) {
+        guard let worker = workerURL() else { return (false, "The bundled xenora runner was not found.") }
+        let process = Process()
+        process.executableURL = worker
+        process.arguments = ["inspect", file.path]
+        process.standardInput = FileHandle.nullDevice
+        let out = Pipe()
+        let err = Pipe()
+        process.standardOutput = out
+        process.standardError = err
+        let stdout = BoundedCollector(out.fileHandleForReading)
+        let stderr = BoundedCollector(err.fileHandleForReading)
+        do {
+            try process.run()
+        } catch {
+            return (false, "Could not start the inspector: \(error.localizedDescription)")
+        }
+        let done = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in done.signal() }
+        if done.wait(timeout: .now() + backstopSeconds) == .timedOut {
+            process.terminate()
+            if done.wait(timeout: .now() + 2) == .timedOut {
+                _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                process.waitUntilExit()
+            }
+            _ = stdout.finish()
+            _ = stderr.finish()
+            return (false, "Header inspection exceeded its deadline.")
+        }
+        let (output, outputCut) = stdout.finish()
+        let (failure, errorCut) = stderr.finish()
+        let truncated = outputCut || errorCut ? "\nInspection output was truncated.\n" : ""
+        let ok = process.terminationReason == .exit && process.terminationStatus == 0
+        return (ok, "Header-only inspection; detailed import and instruction analysis was not run.\n" + output + failure + truncated)
     }
 
     /// The worker's command line for one run. Tracing is on when the HUD is,
@@ -354,7 +392,6 @@ struct ProgramRunView: View {
     @ObservedObject var model: ProgramRunModel
     @ObservedObject var hud: HudSettings
     @FocusState private var argumentFocus: ArgumentFocus?
-    @State private var importingStandardInput = false
     @State private var standardInputImportError: String?
 
     private var runButtonTitle: String {
@@ -402,7 +439,7 @@ struct ProgramRunView: View {
             LabeledContent("Standard input", value: model.standardInput?.lastPathComponent ?? "No input file")
                 .accessibilityIdentifier("program-stdin-file")
             HStack {
-                Button("Choose input file…") { importingStandardInput = true }
+                Button("Choose standard input file…") { chooseStandardInput() }
                     .accessibilityIdentifier("program-stdin-choose")
                 if model.standardInput != nil {
                     Button("Clear input file") {
@@ -417,18 +454,20 @@ struct ProgramRunView: View {
                 Text(standardInputImportError).foregroundStyle(.red)
             }
         }
-        .fileImporter(isPresented: $importingStandardInput, allowedContentTypes: [.item]) { result in
-            switch result {
-            case let .success(file):
-                model.standardInput = file
-                standardInputImportError = nil
-            case let .failure(error):
-                if (error as? CocoaError)?.code != .userCancelled {
-                    standardInputImportError = error.localizedDescription
-                }
-            }
-        }
         .onChange(of: url) { _, _ in standardInputImportError = nil }
+    }
+
+    private func chooseStandardInput() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Standard Input File"
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.begin { response in
+            guard response == .OK, let file = panel.url else { return }
+            model.standardInput = file
+            standardInputImportError = nil
+        }
     }
 
     private var argumentEditor: some View {

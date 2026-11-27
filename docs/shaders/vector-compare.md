@@ -98,6 +98,47 @@ forms.
 The expectations and the guide readings are in
 `tests/validation/tests/vopc_wide.rs`.
 
+### 2b. Binary32 compares (#786)
+
+The decoder, translator and both reference interpreters accept the sixteen
+`_e32` forms `v_cmp_{f,lt,eq,le,gt,lg,ge,o,u,nge,nlg,ngt,nle,neq,nlt,tru}_f32`
+(opcodes 0-15, operand rule `vopc_vcc_f32`). The per-lane tests are the
+per-opcode lines of guide Table 61 (pages 152-153):
+
+| Opcode | Form | test, S0 = SRC0, S1 = VSRC1 |
+| --- | --- | --- |
+| 0 | v_cmp_f_f32 | false |
+| 1-4 | v_cmp_{lt,eq,le,gt}_f32 | S0 < S1, S0 == S1, S0 <= S1, S0 > S1 |
+| 5 | v_cmp_lg_f32 | S0 <> S1 (S0 < S1 or S0 > S1) |
+| 6 | v_cmp_ge_f32 | S0 >= S1 |
+| 7 | v_cmp_o_f32 | !isNan(S0) && !isNan(S1) |
+| 8 | v_cmp_u_f32 | isNan(S0) \|\| isNan(S1) |
+| 9-14 | v_cmp_{nge,nlg,ngt,nle,neq,nlt}_f32 | !(S0 >= S1), !(S0 <> S1), !(S0 > S1), !(S0 <= S1), !(S0 == S1), !(S0 < S1) |
+| 15 | v_cmp_tru_f32 | true |
+
+- The operands are IEEE 754 binary32 values. A NaN, quiet or signalling and
+  of either sign, is unordered with every value, itself included, so LT..GE
+  and LG are false and the N* forms are true on it. `isNan` is read as true
+  for both NaN kinds; the guide does not distinguish them.
+- U follows the per-opcode table. The summary table's
+  `!isNaN(S0) || !isNaN(S1)` is its complement and is not used
+  (`docs/research/rdna2-errata.md`).
+- +0 and -0 compare equal. The compute ABI pins MODE input denormals allowed,
+  so a subnormal compares by its value, not as zero.
+- SRC0 accepts a VGPR, a known normal SGPR, `vcc_lo` or a literal. Integer
+  inline constants (128-208) are rejected, as for the binary32 VOP1 forms,
+  because the guide does not say how a float operation reads them. Float
+  inline constants (240-248) stay rejected. VSRC1 is a VGPR.
+- The result, EXEC masking, VCCZ and the empty-EXEC rule are those of
+  sections 3 and 5.
+- The MSL does no float arithmetic: it tests for a NaN as an exponent of all
+  ones with a nonzero fraction, and orders the other values through an
+  unsigned key on the bits with both zeros mapped to the same key. The Metal
+  math mode therefore cannot change a NaN or signed-zero result.
+
+The expectations and the guide readings are in
+`tests/validation/tests/vopc_f32.rs`.
+
 ## 3. Semantics of one supported compare, Wave32
 
 Let E = EXEC_LO before the instruction and A = the set of lanes that exist in
@@ -123,7 +164,8 @@ this wave (all 32 except in a final partial wave, see 7). As an unsigned
 
 - V_CMPX_* (writes EXEC: divergent execution; needs its own contract).
 - VOP3A compares outside the integer subset in section 11.
-- SDWA and DPP forms; float compares; v_cmp_class.
+- SDWA and DPP forms; float compares other than the binary32 forms in 2b
+  (F16 and F64); v_cmp_class.
 - 16-bit compares in the decoder and translator (the reference interpreters
   accept the subset in 2a).
 - SRC0 inline float constants (240-248), SGPRs other than s0-s106, TTMPs,
@@ -266,6 +308,22 @@ interpreters (16-bit reads of 32 bits, swapped pair halves, zero-extended
 inline integers, flipped signedness, reads under empty EXEC and others) each
 fail it.
 
+The binary32 oracle (`tests/validation/tests/vopc_f32.rs`) checks 976 cases
+on both reference interpreters: every form against 16 values (quiet and
+signalling NaNs of both signs, both zeros, both infinities, subnormals and
+ordinary values) in both operand orders, an aliased source, literal, SGPR and
+`vcc_lo` sources, five EXEC masks over a stale VCC_LO and partial waves. It
+also checks 1,456 rejected encodings (every integer and float inline
+constant and a missing literal) at their byte offset in both interpreters and
+the compiler, a hand classification of 20 operand pairs, and negative
+controls showing that the expectations reject the summary table's U, the
+complements of the N* forms, a raw-bit integer compare and denormal
+flushing. A copy of the reference with U inverted fails it. LLVM assembled
+`vector-compare-f32.s` covers the sixteen opcodes in the decoder's fixture
+inventory. On a local Apple M4 with API and shader validation, all 976 cases
+(626 programs) agree with the oracle on native Metal; independent acceptance
+is pending.
+
 For the 32-bit forms, a deliberately broken copy of each implementation fails
 the tests above: the
 reference with unsigned-only compares or with the EXEC test removed; the
@@ -279,7 +337,7 @@ reference on Apple M5 Pro. There is no RDNA 2 or Xbox hardware evidence.
 
 ## 10. Limitations
 
-- Wave32 only. No `v_cmpx`, SDWA, DPP or float compares. VOP3 encodings cover the 32-bit compares only.
+- Wave32 only. No `v_cmpx`, SDWA, DPP, or F16 and F64 compares. VOP3 encodings cover the 32-bit integer compares only.
 - A lane-derived VCC_LO cannot reach EXEC or any scalar instruction, so there
   is no divergent execution. That needs its own contract.
 - The skipped region of a runtime `s_cbranch_vccz` holds only integer vector

@@ -410,11 +410,19 @@ pub(crate) fn setup_tls_avoiding(
                 block_base = reserved.end;
             }
         }
-        memory.map_region(
-            thread_tls_base,
-            TLS_ARRAY_SIZE,
-            MemoryPermissions::READ_WRITE,
-        )?;
+        // The startup claims the array before binding imports, so that a
+        // heap allocation cannot land where it belongs. Standalone callers
+        // map it here.
+        if memory
+            .first_region_overlap(thread_tls_base, thread_tls_base + TLS_ARRAY_SIZE as u64)
+            .is_none()
+        {
+            memory.map_region(
+                thread_tls_base,
+                TLS_ARRAY_SIZE,
+                MemoryPermissions::READ_WRITE,
+            )?;
+        }
         if let Some(staged) = staged.as_deref() {
             memory.map_region_with_data(
                 block_base,
@@ -490,6 +498,34 @@ pub fn execute_tls_callbacks(
     memory: &mut GuestMemory,
     dbt: &mut DbtEngine,
 ) -> Result<usize, TlsError> {
+    execute_tls_callbacks_with_reason(
+        callbacks,
+        loaded_base,
+        preferred_base,
+        stack_top,
+        DLL_PROCESS_ATTACH,
+        cpu,
+        memory,
+        dbt,
+    )
+}
+
+/// `DLL_PROCESS_ATTACH` as defined by Microsoft's public PE format page.
+pub const DLL_PROCESS_ATTACH: u64 = 1;
+
+/// As [`execute_tls_callbacks`], with an explicit callback reason so the same
+/// bounded executor can run detach callbacks after the process ends.
+#[allow(clippy::too_many_arguments)]
+pub fn execute_tls_callbacks_with_reason(
+    callbacks: &[u64],
+    loaded_base: u64,
+    preferred_base: u64,
+    stack_top: u64,
+    reason: u64,
+    cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+    dbt: &mut DbtEngine,
+) -> Result<usize, TlsError> {
     if callbacks.is_empty() {
         return Ok(0);
     }
@@ -514,8 +550,8 @@ pub fn execute_tls_callbacks(
         // Set Win64 arguments:
         // RCX = DllHandle (image base)
         cpu.set(Register::Rcx, loaded_base);
-        // RDX = DLL_PROCESS_ATTACH (1)
-        cpu.set(Register::Rdx, 1);
+        // RDX = Reason
+        cpu.set(Register::Rdx, reason);
         // R8 = 0
         cpu.set(Register::R8, 0);
 

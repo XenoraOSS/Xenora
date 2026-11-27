@@ -133,6 +133,9 @@ impl Comparison {
     /// The per-lane result, from an exact comparison of the operands widened
     /// from their low `width` bits; higher bits are ignored.
     fn holds_at(self, width: CompareWidth, s0: u64, s1: u64) -> bool {
+        if width == CompareWidth::Binary32 {
+            return self.holds_binary32(f32::from_bits(s0 as u32), f32::from_bits(s1 as u32));
+        }
         let widen = |bits: u64| -> i128 {
             match (width, self.signed) {
                 (CompareWidth::Half, true) => i128::from(bits as u16 as i16),
@@ -141,6 +144,7 @@ impl Comparison {
                 (CompareWidth::Word, false) => i128::from(bits as u32),
                 (CompareWidth::Double, true) => i128::from(bits as i64),
                 (CompareWidth::Double, false) => i128::from(bits),
+                (CompareWidth::Binary32, _) => unreachable!("compared as binary32 above"),
             }
         };
         let (s0, s1) = (widen(s0), widen(s1));
@@ -159,6 +163,44 @@ impl Comparison {
     }
 }
 
+impl Comparison {
+    /// Guide 12.9 Table 61 (pages 152-153), `V_CMP_*_F32` offsets 0-15, as
+    /// IEEE 754 comparisons: a NaN (quiet or signalling) is unordered with
+    /// everything, +0 equals -0, and subnormals keep their value (MODE input
+    /// denormals allowed). U uses the per-opcode table, not the summary table.
+    // Written as the guide's lines: on a NaN, `S0 <> S1` is not `S0 != S1` and
+    // each N* negation is not the complementary relation, so the lints'
+    // suggested rewrites would change the result.
+    #[allow(
+        clippy::double_comparisons,
+        clippy::neg_cmp_op_on_partial_ord,
+        clippy::nonminimal_bool
+    )]
+    fn holds_binary32(self, s0: f32, s1: f32) -> bool {
+        let unordered = s0.is_nan() || s1.is_nan();
+        match self.offset {
+            0 => false,
+            1 => s0 < s1,
+            2 => s0 == s1,
+            3 => s0 <= s1,
+            4 => s0 > s1,
+            // LG: `S0 <> S1`, less or greater.
+            5 => s0 < s1 || s0 > s1,
+            6 => s0 >= s1,
+            7 => !unordered,
+            8 => unordered,
+            9 => !(s0 >= s1),
+            10 => !(s0 < s1 || s0 > s1),
+            11 => !(s0 > s1),
+            12 => !(s0 <= s1),
+            13 => !(s0 == s1),
+            14 => !(s0 < s1),
+            // V_CMP_TRU_F32: `D[threadId] = 1`.
+            _ => true,
+        }
+    }
+}
+
 /// Operand width of a VOPC integer compare (guide 6.2: the data size is the
 /// one named by the instruction).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -172,6 +214,9 @@ pub enum CompareWidth {
     /// (3.6.3 for SGPRs; for VGPRs the guide states it for 64-bit addresses,
     /// 9.1: "ADDR has the LSBs, and ADDR+1 has the MSBs").
     Double,
+    /// `_F32` (#786): one 32-bit register read as a binary32 value; the
+    /// relation offset is 0-15 and `signed` is unused.
+    Binary32,
 }
 
 impl CompareWidth {
@@ -185,6 +230,7 @@ impl CompareWidth {
             169..=174 => (168, false, Self::Half),
             160..=167 => (160, true, Self::Double),
             224..=231 => (224, false, Self::Double),
+            0..=15 => (0, false, Self::Binary32),
             _ => return None,
         };
         let offset = (opcode - base) as u8;
@@ -1300,6 +1346,8 @@ pub fn decode(code: &[u8]) -> Result<Vec<DecodedInstruction>, ReferenceError> {
                 let accepted = match width {
                     CompareWidth::Half => selector != 255,
                     CompareWidth::Word => true,
+                    // No integer inline constant for a float compare (#786).
+                    CompareWidth::Binary32 => !(128..=208).contains(&selector),
                     CompareWidth::Double => {
                         vsrc1 != 255
                             && matches!(selector, 0..=104 | 128..=208 | 256..=510)

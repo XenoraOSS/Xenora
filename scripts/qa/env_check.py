@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import re
+import subprocess
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Iterable
 
 
@@ -70,6 +72,23 @@ def check_branch_sync(*, ahead: int, behind: int) -> EnvFinding:
     ok = ahead == 0 and behind == 0
     detail = f"ahead={ahead} behind={behind}"
     return EnvFinding("branch-sync", ok, detail)
+
+
+def measure_branch_sync(root: Path) -> EnvFinding:
+    try:
+        output = subprocess.check_output(
+            ["git", "rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+            cwd=root,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return EnvFinding("branch-sync", False, "upstream unavailable")
+    try:
+        ahead_text, behind_text = output.split()
+        return check_branch_sync(ahead=int(ahead_text), behind=int(behind_text))
+    except ValueError:
+        return EnvFinding("branch-sync", False, "upstream counts unavailable")
 
 
 def summarize(findings: Iterable[EnvFinding]) -> EnvReport:

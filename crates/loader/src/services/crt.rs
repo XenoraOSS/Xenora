@@ -907,16 +907,6 @@ pub(super) fn register_utilities(registry: &mut ImportRegistry) {
         });
     }
 
-    // The missing character classes, ASCII like the rest of the C locale.
-    registry.register(UCRT, "isblank", |args, _, _| {
-        Ok(u64::from(
-            matches!(args.rcx as u8, b' ' | b'\t') && args.rcx < 0x80,
-        ))
-    });
-    registry.register(UCRT, "isgraph", |args, _, _| {
-        Ok(u64::from((0x21..=0x7e).contains(&(args.rcx as u32))))
-    });
-
     // The integer formatting family: radix 2 through 36, lowercase digits,
     // a minus sign for signed negative input in radix ten only, as
     // documented. The _s forms check the buffer size.
@@ -951,27 +941,6 @@ pub(super) fn register_utilities(registry: &mut ImportRegistry) {
             32,
             true,
         )
-    });
-
-    // getenv_s over the empty environment: every variable is undefined,
-    // which is the documented empty answer, not an error.
-    registry.register(UCRT, "getenv_s", |args, cpu, memory| {
-        let (size_at, buffer, buffer_size, name) = (args.rcx, args.rdx, args.r8, args.r9);
-        if size_at == 0 || name == 0 {
-            set_errno(memory, cpu.gs_base, EINVAL)?;
-            return Ok(u64::from(EINVAL));
-        }
-        memory
-            .write_u64(size_at, 0)
-            .map_err(ExitReason::MemoryFault)?;
-        // Undefined variable: length zero, the buffer untouched when it
-        // cannot hold even the terminator - documented as no error.
-        if buffer != 0 && buffer_size != 0 {
-            memory
-                .write_u8(buffer, 0)
-                .map_err(ExitReason::MemoryFault)?;
-        }
-        Ok(0)
     });
 
     // The copying and concatenation forms mingw inlines least often.
@@ -1252,15 +1221,12 @@ pub(super) fn register_utilities(registry: &mut ImportRegistry) {
         ("strxfrm", CRT_STRING_API),
         ("memcpy_s", CRT_STRING_API),
         ("memmove_s", CRT_STRING_API),
-        ("isblank", "api-ms-win-crt-string-l1-1-0.dll"),
-        ("isgraph", "api-ms-win-crt-string-l1-1-0.dll"),
         ("_itoa", "api-ms-win-crt-convert-l1-1-0.dll"),
         ("_ltoa", "api-ms-win-crt-convert-l1-1-0.dll"),
         ("_i64toa", "api-ms-win-crt-convert-l1-1-0.dll"),
         ("_ultoa", "api-ms-win-crt-convert-l1-1-0.dll"),
         ("_ui64toa", "api-ms-win-crt-convert-l1-1-0.dll"),
         ("_itoa_s", "api-ms-win-crt-convert-l1-1-0.dll"),
-        ("getenv_s", "api-ms-win-crt-environment-l1-1-0.dll"),
     ] {
         registry.alias(api, UCRT, symbol);
         registry.set_status(UCRT, symbol, ServiceStatus::Partial);

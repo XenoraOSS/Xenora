@@ -109,7 +109,7 @@ impl fmt::Display for ScalarSource {
     }
 }
 
-/// Relation tested by a SOPC or VOPC integer compare; S0 (SSRC0 or SRC0) is on
+/// Relation tested by a SOPC or VOPC compare; S0 (SSRC0 or SRC0) is on
 /// the left.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CompareRelation {
@@ -127,8 +127,27 @@ pub enum CompareRelation {
     GreaterOrEqual,
     /// Never holds (VOPC F, offset 0).
     False,
-    /// Always holds (VOPC T, offset 7).
+    /// Always holds (VOPC T, offset 7; `V_CMP_TRU_F32`, offset 15).
     True,
+    // ---- VOPC binary32 compares (#786): float-only relations (Table 61) ----
+    // For float forms `Less`..`GreaterOrEqual` are false on unordered inputs;
+    // `NotEqual` is the guide's LG, `S0 < S1 || S0 > S1`.
+    /// Neither operand is a NaN (`V_CMP_O_F32`, offset 7).
+    Ordered,
+    /// Either operand is a NaN (`V_CMP_U_F32`, offset 8).
+    Unordered,
+    /// `!(S0 >= S1)` (offset 9).
+    NotGreaterOrEqual,
+    /// `!(S0 <> S1)` (offset 10).
+    NotLessOrGreater,
+    /// `!(S0 > S1)` (offset 11).
+    NotGreater,
+    /// `!(S0 <= S1)` (offset 12).
+    NotLessOrEqual,
+    /// `!(S0 == S1)`: true on unordered operands (offset 13).
+    NotEqualOrUnordered,
+    /// `!(S0 < S1)` (offset 14).
+    NotLess,
 }
 
 /// Output targeted by a supported uncompressed four-component export.

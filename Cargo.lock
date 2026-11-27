@@ -243,3 +243,7 @@ dependencies = [
 [[package]]
 name = "xenora-texture"
 version = "0.1.0"
+
+[[package]]
+name = "xenora-xaudio2"
+version = "0.1.0"

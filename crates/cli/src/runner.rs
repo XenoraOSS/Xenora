@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use sha2::{Digest, Sha256};
 use xenora_loader::scheduler::DEFAULT_QUANTUM;
 use xenora_loader::startup::{
-    StartupEvent, StartupLayout, run_synthetic_startup_scheduled,
+    StartupEvent, StartupLayout, run_synthetic_startup_scheduled_with_budget,
     run_synthetic_startup_with_observer,
 };
 use xenora_loader::{
@@ -43,6 +43,8 @@ const EXPECTED_PIXEL: [u8; 4] = [255, 0, 0, 255];
 /// The longest wall deadline a program may be given with `--wall-seconds`.
 /// Its default is `WALL_LIMIT`, and it has no step limit unless one is given.
 const MAX_WALL_SECONDS: u64 = 3600;
+/// Default host memory budget for the executable snapshot.
+const DEFAULT_EXECUTABLE_BUDGET: u64 = 1024 * 1024 * 1024;
 /// How long the supervisor waits past a program's deadline for the worker to
 /// show the program's output and stop on its own.
 const DEADLINE_GRACE: Duration = Duration::from_secs(2);
@@ -51,9 +53,33 @@ const DEADLINE_GRACE: Duration = Duration::from_secs(2);
 /// the guest.
 const DEADLINE_CODE: u8 = 124;
 const FAILURE_CODE: u8 = 125;
-const USAGE: &str = "usage: xenora run --pe <executable> --experimental [--trace] [--startup-report] [--max-steps <n>] [--wall-seconds <1..=3600>] [--sha256 <64 hex digits>] [--export-guest-file <guest-path> <host-path>] [-- <program argument>...]
+const USAGE: &str = "usage: xenora run --pe <executable> --experimental [--package <module>]... [--module <name>=<path>]... [--trace] [--startup-report] [--max-steps <n>] [--wall-seconds <1..=3600>] [--sha256 <64 hex digits>] [--max-executable-bytes <n>] [--max-mapped-image-bytes <n>] [--export-guest-file <guest-path> <host-path>] [-- <program argument>...]
+       --package names another explicit image to load beside the entry executable; it may be repeated and is never searched for on the host
+       --module admits a bounded logical name for a regular-file image held in the closed-world provisioned store; it is not loaded until a later runtime-load step
        a hosted export copies up to 16 MiB from the synthetic C: drive to a new UTF-8 filename in an existing directory
        an embedded fixture takes --metal-hud instead of --wall-seconds, and its --max-steps is in 1..=10000";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ProvisionedModuleArg {
+    name: String,
+    path: PathBuf,
+}
+
+fn parse_provisioned_module(argument: &OsString) -> Result<ProvisionedModuleArg, String> {
+    let text = argument
+        .to_str()
+        .ok_or("--module needs a UTF-8 name=path argument")?;
+    let (name, path) = text
+        .split_once('=')
+        .ok_or("--module needs a name=path argument")?;
+    if name.is_empty() || path.is_empty() {
+        return Err("--module needs nonempty name and path".into());
+    }
+    Ok(ProvisionedModuleArg {
+        name: name.to_owned(),
+        path: PathBuf::from(path),
+    })
+}
 
 enum GuestExport {
     Host {
@@ -68,8 +94,14 @@ enum GuestExport {
 
 struct Options {
     path: PathBuf,
+    /// Explicit package modules loaded beside the entry executable.
+    package: Vec<PathBuf>,
+    /// Authorized module snapshots admitted to the closed-world store.
+    modules: Vec<ProvisionedModuleArg>,
     max_steps: Option<usize>,
     wall_seconds: Option<u64>,
+    executable_budget: u64,
+    mapped_image_budget: u64,
     worker: bool,
     /// Set by the supervisor for its worker: run the file as a program, not
     /// as an embedded fixture.
@@ -114,6 +146,8 @@ impl Options {
     fn parse(args: impl IntoIterator<Item = OsString>) -> Result<Self, String> {
         let mut args = args.into_iter();
         let mut path = None;
+        let mut package = Vec::new();
+        let mut modules = Vec::new();
         let mut max_steps = None;
         let mut digest = None;
         let mut arguments = Vec::new();
@@ -123,10 +157,24 @@ impl Options {
         let mut report_fd = None;
         let mut export = None;
         let mut wall_seconds = None;
+        let mut executable_budget = None;
+        let mut mapped_image_budget = None;
         while let Some(arg) = args.next() {
             match arg.to_str() {
                 Some("--pe") if path.is_none() => {
                     path = Some(PathBuf::from(args.next().ok_or("missing --pe path")?));
+                }
+                Some("--package") => {
+                    let module = args.next().ok_or("missing --package path")?;
+                    if module.is_empty() {
+                        return Err("--package needs a nonempty path".into());
+                    }
+                    package.push(PathBuf::from(module));
+                }
+                Some("--module") => {
+                    modules.push(parse_provisioned_module(
+                        &args.next().ok_or("missing --module name=path")?,
+                    )?);
                 }
                 Some("--max-steps") if max_steps.is_none() => {
                     max_steps = Some(
@@ -140,6 +188,22 @@ impl Options {
                         args.next()
                             .and_then(|arg| arg.to_str()?.parse::<u64>().ok())
                             .ok_or("--wall-seconds needs a number")?,
+                    );
+                }
+                Some("--max-executable-bytes") if executable_budget.is_none() => {
+                    executable_budget = Some(
+                        args.next()
+                            .and_then(|arg| arg.to_str()?.parse::<u64>().ok())
+                            .filter(|&value| value > 0 && value < u64::MAX)
+                            .ok_or("--max-executable-bytes needs a positive byte count")?,
+                    );
+                }
+                Some("--max-mapped-image-bytes") if mapped_image_budget.is_none() => {
+                    mapped_image_budget = Some(
+                        args.next()
+                            .and_then(|arg| arg.to_str()?.parse::<u64>().ok())
+                            .filter(|&value| value > 0)
+                            .ok_or("--max-mapped-image-bytes needs a positive byte count")?,
                     );
                 }
                 Some("--sha256") if digest.is_none() => {
@@ -196,6 +260,9 @@ impl Options {
         if program && !worker {
             return Err("unknown or repeated run argument \"--program\"".into());
         }
+        if !package.is_empty() && worker && !program {
+            return Err("--package applies to a program".into());
+        }
         if (worker && startup_report) || (!worker && report_fd.is_some()) {
             return Err("invalid startup report option for this runner".into());
         }
@@ -212,8 +279,13 @@ impl Options {
         }
         Ok(Self {
             path: path.ok_or("missing --pe path")?,
+            package,
+            modules,
             max_steps,
             wall_seconds,
+            executable_budget: executable_budget.unwrap_or(DEFAULT_EXECUTABLE_BUDGET),
+            mapped_image_budget: mapped_image_budget
+                .unwrap_or(xenora_loader::pe::DEFAULT_MAPPED_IMAGE_BUDGET),
             worker,
             program,
             trace,
@@ -276,6 +348,8 @@ pub fn command(args: impl IntoIterator<Item = OsString>) -> ExitCode {
     } else {
         options.digest.is_some()
             || !options.arguments.is_empty()
+            || !options.package.is_empty()
+            || !options.modules.is_empty()
             || verify_fixture(&options.path).is_err()
     };
     let (steps, wall) = match options.limits(program) {
@@ -347,6 +421,12 @@ fn launch_worker(
         // A program's own output is the run's output: no read-outs unless
         // they were asked for.
         command.arg("--program");
+        command
+            .arg("--max-mapped-image-bytes")
+            .arg(options.mapped_image_budget.to_string());
+        command
+            .arg("--max-executable-bytes")
+            .arg(options.executable_budget.to_string());
         if options.trace {
             command.arg("--trace");
         }
@@ -390,6 +470,15 @@ fn launch_worker(
     };
     command.arg("--pe").arg(&options.path);
     if program {
+        for module in &options.package {
+            command.arg("--package").arg(module);
+        }
+        for module in &options.modules {
+            let mut argument = OsString::from(&module.name);
+            argument.push("=");
+            argument.push(&module.path);
+            command.arg("--module").arg(argument);
+        }
         command.arg("--").args(&options.arguments);
     }
 
@@ -545,21 +634,51 @@ fn start_deadline(
 /// its bytes have it; the bytes that were hashed are the bytes that run, so a
 /// change to the file afterwards cannot matter.
 ///
-/// The file's size is not capped here. The whole file is read into memory, and
-/// the loader still refuses an image that maps to more than its own limit
-/// (`MAX_MAPPED_IMAGE_BYTES` in `crates/loader/src/pe.rs`).
-fn read_program(path: &Path, digest: Option<[u8; 32]>) -> Result<Vec<u8>, Box<dyn Error>> {
+/// The snapshot is bounded even if the file grows after its metadata is read.
+fn read_program(
+    path: &Path,
+    digest: Option<[u8; 32]>,
+    budget: u64,
+) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut file = open_regular(
         path,
         None,
         "execution denied: a program must be a regular file",
     )?;
-    let mut bytes = Vec::new();
-    file.read_to_end(&mut bytes)?;
+    if file.metadata()?.len() > budget {
+        return Err(
+            format!("execution denied: executable exceeds the {budget} byte budget").into(),
+        );
+    }
+    let bytes = read_program_snapshot(&mut file, budget)?;
     if let Some(expected) = digest
         && Sha256::digest(&bytes).as_slice() != expected
     {
         return Err("execution denied: the file's SHA-256 is not the one given".into());
+    }
+    Ok(bytes)
+}
+
+fn read_program_snapshot(file: &mut impl Read, budget: u64) -> Result<Vec<u8>, Box<dyn Error>> {
+    let mut bytes = Vec::new();
+    let mut chunk = [0u8; 64 * 1024];
+    loop {
+        let n = file.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        let next = (bytes.len() as u64)
+            .checked_add(n as u64)
+            .ok_or("execution denied: executable size overflow")?;
+        if next > budget {
+            return Err(
+                format!("execution denied: executable exceeds the {budget} byte budget").into(),
+            );
+        }
+        bytes
+            .try_reserve_exact(n)
+            .map_err(|_| "execution denied: cannot allocate executable snapshot")?;
+        bytes.extend_from_slice(&chunk[..n]);
     }
     Ok(bytes)
 }
@@ -605,7 +724,7 @@ fn run_program(
         Some((Arc::clone(&state), Arc::clone(&finishing))),
         reporter.clone(),
     )?;
-    let bytes = read_program(&options.path, options.digest)
+    let bytes = read_program(&options.path, options.digest, options.executable_budget)
         .inspect_err(|error| reporter.failed(FailurePhase::Admission, error))?;
     let name = options
         .path
@@ -650,42 +769,149 @@ fn run_program(
     state.set_standard_input(&input);
     let mut imports = ImportRegistry::new();
     register_standard_services(&mut imports, Arc::clone(&state));
+
+    // `--module` admits an image to the closed-world store. It does not load
+    // or execute the image: later lifecycle work may only name these entries.
+    let mut provisioned = xenora_loader::ProvisionedModuleStore::new();
+    let mut reserved_names = vec![name.to_ascii_lowercase()];
+    for path in &options.package {
+        if let Some(file_name) = path.file_name().and_then(|name| name.to_str()) {
+            reserved_names.push(file_name.to_ascii_lowercase());
+        }
+    }
+    for module in &options.modules {
+        let canonical = module.name.to_ascii_lowercase();
+        if reserved_names.contains(&canonical) {
+            return Err(format!(
+                "module name {:?} collides with the program or another admitted image",
+                module.name
+            )
+            .into());
+        }
+        let bytes = read_program(&module.path, None, options.executable_budget)
+            .inspect_err(|error| reporter.failed(FailurePhase::Admission, error))?;
+        provisioned
+            .insert(module.name.clone(), bytes, &imports)
+            .map_err(|error| -> Box<dyn Error> { Box::new(error) })?;
+        reserved_names.push(canonical);
+    }
+    if options.trace && !provisioned.is_empty() {
+        eprintln!(
+            "trace provisioned-modules={} store-bytes={}",
+            provisioned.len(),
+            provisioned.total_bytes()
+        );
+    }
+
     let mut entered = false;
-    // The entry point runs under the deterministic cooperative scheduler,
-    // so a program that creates threads with CreateThread runs them all,
-    // one guest thread at a time. A program that creates none behaves as
-    // before: its main thread takes every turn.
-    let startup = run_synthetic_startup_scheduled(
-        &bytes,
-        StartupLayout {
-            image_base: IMAGE_BASE,
-            stack_top: 0x200010000,
-            tls_base: 0x300000000,
-        },
-        imports,
-        Arc::clone(&state),
-        steps,
-        DEFAULT_QUANTUM,
-        |event| {
-            entered |= matches!(event, StartupEvent::Entering { .. });
-            reporter.observed(&event);
-            if options.trace {
-                eprintln!("{}", startup_line(&event));
+    let execution = if options.package.is_empty() {
+        // The entry point runs under the deterministic cooperative scheduler,
+        // so a program that creates threads with CreateThread runs them all,
+        // one guest thread at a time. A program that creates none behaves as
+        // before: its main thread takes every turn.
+        run_synthetic_startup_scheduled_with_budget(
+            &bytes,
+            StartupLayout {
+                image_base: IMAGE_BASE,
+                stack_top: 0x200010000,
+                tls_base: 0x300000000,
+            },
+            imports,
+            Arc::clone(&state),
+            steps,
+            DEFAULT_QUANTUM,
+            options.mapped_image_budget,
+            |event| {
+                entered |= matches!(event, StartupEvent::Entering { .. });
+                reporter.observed(&event);
+                if options.trace {
+                    eprintln!("{}", startup_line(&event));
+                }
+            },
+        )
+        .map(|startup| startup.execution)
+    } else {
+        let mut module_bytes = Vec::with_capacity(options.package.len());
+        for module in &options.package {
+            module_bytes.push(
+                read_program(module, None, options.executable_budget)
+                    .inspect_err(|error| reporter.failed(FailurePhase::Admission, error))?,
+            );
+        }
+        let mut package = Vec::with_capacity(1 + module_bytes.len());
+        package.push(xenora_loader::module_graph::PackageModule {
+            file_name: name,
+            bytes: &bytes,
+        });
+        let mut names = vec![name];
+        for (path, module_bytes) in options.package.iter().zip(&module_bytes) {
+            let file_name = path
+                .file_name()
+                .and_then(|file_name| file_name.to_str())
+                .ok_or("a package module's file name must be UTF-8")?;
+            if names.contains(&file_name) {
+                return Err(format!("package module {file_name:?} is named more than once").into());
             }
-        },
-    );
+            names.push(file_name);
+            package.push(xenora_loader::module_graph::PackageModule {
+                file_name,
+                bytes: module_bytes,
+            });
+        }
+        if options.trace {
+            eprintln!(
+                "trace package modules={} entry={name} entry_step_limit={} wall_limit_ms={}",
+                package.len(),
+                options
+                    .max_steps
+                    .map_or_else(|| "none".to_owned(), |steps| steps.to_string()),
+                wall.as_millis()
+            );
+        }
+        xenora_loader::run_package_startup(
+            &package,
+            xenora_loader::PackageStartupLayout {
+                arena: xenora_loader::module_layout::ModuleLayoutArena {
+                    base: IMAGE_BASE,
+                    size: options.mapped_image_budget,
+                },
+                stack_top: 0x200010000,
+                thread_tls_base: 0x300000000,
+            },
+            0,
+            imports,
+            steps,
+            Some((Arc::clone(&state), DEFAULT_QUANTUM)),
+        )
+        .map_err(|error| -> Box<dyn Error> { Box::new(error) })
+        .map(|result| {
+            entered = result
+                .diagnostics
+                .initialization
+                .iter()
+                .any(|record| record.phase == xenora_loader::InitializationPhase::ProcessEntry);
+            if options.trace {
+                eprintln!(
+                    "trace package imports={} initialization={}",
+                    result.diagnostics.imports.len(),
+                    result.diagnostics.initialization.len()
+                );
+            }
+            result.execution
+        })
+    };
     // Whatever the program wrote is shown, however the run ended. From here
     // the deadline no longer writes it.
     let _turn = finishing.lock();
-    let startup = startup.inspect_err(|error| reporter.failed(FailurePhase::Startup, error));
-    if startup.is_ok() && entered {
+    let execution = execution.inspect_err(|error| reporter.failed(FailurePhase::Startup, error));
+    if execution.is_ok() && entered {
         reporter.stage(Stage::EntryReturned);
     }
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(&state.standard_output())?;
     stdout.flush()?;
     std::io::stderr().write_all(&state.standard_error())?;
-    let execution = startup?.execution;
+    let execution = execution?;
     if options.trace {
         eprintln!(
             "trace stage=exit entry_steps={} exit={:?}",
@@ -941,7 +1167,10 @@ fn draw() -> Result<Frame, Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{GuestExport, Options, hex, host_exit_code, parse_sha256};
+    use super::{
+        GuestExport, Options, hex, host_exit_code, parse_sha256, read_program,
+        read_program_snapshot,
+    };
     use std::ffi::OsString;
 
     #[test]
@@ -1009,6 +1238,62 @@ mod tests {
         let guest = parse(&["--", "--export-guest-file", "source", "output"]).unwrap();
         assert!(guest.export.is_none());
         assert_eq!(guest.arguments, ["--export-guest-file", "source", "output"]);
+    }
+
+    #[test]
+    fn program_budget_options_are_checked() {
+        let args = |extra: &[&str]| {
+            Options::parse(
+                ["--pe", "test.exe", "--experimental"]
+                    .into_iter()
+                    .chain(extra.iter().copied())
+                    .map(OsString::from),
+            )
+        };
+        let options = args(&[
+            "--max-executable-bytes",
+            "700000000",
+            "--max-mapped-image-bytes",
+            "400000000",
+        ])
+        .unwrap();
+        assert_eq!(options.executable_budget, 700_000_000);
+        assert_eq!(options.mapped_image_budget, 400_000_000);
+        assert!(args(&["--max-mapped-image-bytes", "0"]).is_err());
+        assert!(args(&["--max-executable-bytes", "0"]).is_err());
+        assert!(
+            args(&[
+                "--max-mapped-image-bytes",
+                "1",
+                "--max-mapped-image-bytes",
+                "2"
+            ])
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn executable_snapshot_respects_budget_for_sparse_files() {
+        let path = std::env::temp_dir().join(format!("xenora-budget-{}", std::process::id()));
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(1024 * 1024 + 1).unwrap();
+        drop(file);
+        assert!(read_program(&path, None, 1024 * 1024).is_err());
+        let bytes = read_program(&path, None, 1024 * 1024 + 1).unwrap();
+        assert_eq!(bytes.len(), 1024 * 1024 + 1);
+        assert!(bytes.iter().all(|&byte| byte == 0));
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn executable_snapshot_rejects_growth_past_budget() {
+        let mut source = std::io::Cursor::new(vec![7; 65_537]);
+        assert!(read_program_snapshot(&mut source, 65_536).is_err());
+        let mut source = std::io::Cursor::new(vec![7; 65_536]);
+        assert_eq!(
+            read_program_snapshot(&mut source, 65_536).unwrap().len(),
+            65_536
+        );
     }
 
     #[test]

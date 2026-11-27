@@ -3,6 +3,206 @@
     {
       "api_set": true,
       "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CLSIDFromString",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CLSIDFromString"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoCreateGuid",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoCreateGuid"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoInitializeEx",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoInitializeEx"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemAlloc",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemAlloc"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemFree",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemFree"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemRealloc",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemRealloc"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoUninitialize",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoUninitialize"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "IIDFromString",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "IIDFromString"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "PropVariantClear",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "PropVariantClear"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "StringFromGUID2",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "StringFromGUID2"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CLSIDFromString",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "CLSIDFromString"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoCreateGuid",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "CoCreateGuid"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoInitializeEx",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "CoInitializeEx"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemAlloc",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemAlloc"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemFree",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemFree"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemRealloc",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemRealloc"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoUninitialize",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "CoUninitialize"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "IIDFromString",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "IIDFromString"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "PropVariantClear",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "PropVariantClear"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "StringFromGUID2",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "StringFromGUID2"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
       "canonical_symbol": "GetConsoleCP",
       "kind": "name",
@@ -4154,6 +4354,26 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "atof",
+      "kind": "name",
+      "library": "api-ms-win-crt-convert-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "atof"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "atoi",
+      "kind": "name",
+      "library": "api-ms-win-crt-convert-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "atoi"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "mblen",
       "kind": "name",
       "library": "api-ms-win-crt-convert-l1-1-0.dll",
@@ -4334,6 +4554,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_putenv",
+      "kind": "name",
+      "library": "api-ms-win-crt-environment-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "_putenv"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "getenv",
       "kind": "name",
       "library": "api-ms-win-crt-environment-l1-1-0.dll",
@@ -4359,6 +4589,16 @@
       "library": "api-ms-win-crt-filesystem-l1-1-0.dll",
       "status": "partial",
       "symbol": "_access"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_chmod",
+      "kind": "name",
+      "library": "api-ms-win-crt-filesystem-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "_chmod"
     },
     {
       "api_set": true,
@@ -6184,6 +6424,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "setbuf",
+      "kind": "name",
+      "library": "api-ms-win-crt-stdio-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "setbuf"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "setvbuf",
       "kind": "name",
       "library": "api-ms-win-crt-stdio-l1-1-0.dll",
@@ -6284,11 +6534,51 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isalnum",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "isalnum"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isalpha",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "isalpha"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "isblank",
       "kind": "name",
       "library": "api-ms-win-crt-string-l1-1-0.dll",
-      "status": "partial",
+      "status": "implemented",
       "symbol": "isblank"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "iscntrl",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "iscntrl"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isdigit",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "isdigit"
     },
     {
       "api_set": true,
@@ -6297,8 +6587,58 @@
       "canonical_symbol": "isgraph",
       "kind": "name",
       "library": "api-ms-win-crt-string-l1-1-0.dll",
-      "status": "partial",
+      "status": "implemented",
       "symbol": "isgraph"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "islower",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "islower"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isprint",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "isprint"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "ispunct",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "ispunct"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isspace",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "isspace"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isupper",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "isupper"
     },
     {
       "api_set": true,
@@ -6369,6 +6709,16 @@
       "library": "api-ms-win-crt-string-l1-1-0.dll",
       "status": "implemented",
       "symbol": "iswupper"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isxdigit",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "isxdigit"
     },
     {
       "api_set": true,
@@ -6559,6 +6909,26 @@
       "library": "api-ms-win-crt-string-l1-1-0.dll",
       "status": "partial",
       "symbol": "strxfrm"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "tolower",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "tolower"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "toupper",
+      "kind": "name",
+      "library": "api-ms-win-crt-string-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "toupper"
     },
     {
       "api_set": true,
@@ -6847,7 +7217,7 @@
       "canonical_symbol": "rand_s",
       "kind": "name",
       "library": "api-ms-win-crt-utility-l1-1-0.dll",
-      "status": "stub",
+      "status": "partial",
       "symbol": "rand_s"
     },
     {
@@ -7484,6 +7854,16 @@
       "api_set": false,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_putenv",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "partial",
+      "symbol": "_putenv"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "_read",
       "kind": "name",
       "library": "msvcrt.dll",
@@ -7669,6 +8049,26 @@
       "library": "msvcrt.dll",
       "status": "partial",
       "symbol": "atexit"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "atof",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "atof"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "atoi",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "atoi"
     },
     {
       "api_set": false,
@@ -7884,6 +8284,136 @@
       "api_set": false,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "getenv_s",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "partial",
+      "symbol": "getenv_s"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isalnum",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isalnum"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isalpha",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isalpha"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isblank",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isblank"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "iscntrl",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "iscntrl"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isdigit",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isdigit"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isgraph",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isgraph"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "islower",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "islower"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isprint",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isprint"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "ispunct",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "ispunct"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isspace",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isspace"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isupper",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isupper"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "isxdigit",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "isxdigit"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "ldexp",
       "kind": "name",
       "library": "msvcrt.dll",
@@ -8029,6 +8559,16 @@
       "library": "msvcrt.dll",
       "status": "partial",
       "symbol": "rewind"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "setbuf",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "partial",
+      "symbol": "setbuf"
     },
     {
       "api_set": false,
@@ -8264,6 +8804,26 @@
       "api_set": false,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "tolower",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "tolower"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "toupper",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "toupper"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "ungetc",
       "kind": "name",
       "library": "msvcrt.dll",
@@ -8359,6 +8919,146 @@
       "library": "msvcrt.dll",
       "status": "partial",
       "symbol": "wcstoull"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CLSIDFromString",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CLSIDFromString"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoCreateGuid",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoCreateGuid"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoCreateInstance",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoCreateInstance"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoCreateInstanceEx",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoCreateInstanceEx"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoGetClassObject",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoGetClassObject"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoInitialize",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoInitialize"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoInitializeEx",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoInitializeEx"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemAlloc",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemAlloc"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemFree",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemFree"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoTaskMemRealloc",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoTaskMemRealloc"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "CoUninitialize",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "CoUninitialize"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "IIDFromString",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "IIDFromString"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "PropVariantClear",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "PropVariantClear"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
+      "canonical_symbol": "StringFromGUID2",
+      "kind": "name",
+      "library": "ole32.dll",
+      "status": "partial",
+      "symbol": "StringFromGUID2"
     }
   ],
   "findings": {
@@ -8916,6 +9616,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "AccessCheck"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "advapi32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "CheckTokenMembership"
     },
     {
@@ -9127,6 +9837,146 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "_wspawnve"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CLSIDFromString"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoCreateGuid"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoCreateInstance"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoCreateInstanceEx"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoGetClassObject"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoInitialize"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoInitializeEx"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoTaskMemAlloc"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoTaskMemFree"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoTaskMemRealloc"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "CoUninitialize"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "IIDFromString"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "PropVariantClear"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "combase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "StringFromGUID2"
     },
     {
       "data_import": false,
@@ -12546,7 +13396,27 @@
       "source": "typed",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "_access"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "_amsg_exit"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_chmod"
     },
     {
       "data_import": true,
@@ -12683,6 +13553,16 @@
       "family": "c-runtime",
       "kind": "name",
       "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_unlink"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
       "source": "manual",
       "status": "implemented",
       "status_explicit": false,
@@ -12697,6 +13577,66 @@
       "status": "implemented",
       "status_explicit": false,
       "symbol": "_vsnprintf"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_waccess"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_wchmod"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_wfopen"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_wmkdir"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_wstat64i32"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_wunlink"
     },
     {
       "data_import": false,
@@ -12987,6 +13927,16 @@
       "status": "implemented",
       "status_explicit": false,
       "symbol": "_chdir"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_chmod"
     },
     {
       "data_import": false,
@@ -13493,6 +14443,16 @@
       "family": "c-runtime",
       "kind": "name",
       "library": "ucrtbase.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_putenv"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
       "source": "typed",
       "status": "implemented",
       "status_explicit": true,
@@ -13927,6 +14887,26 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "atexit"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "atof"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "atoi"
     },
     {
       "data_import": false,
@@ -14503,8 +15483,28 @@
       "family": "c-runtime",
       "kind": "name",
       "library": "ucrtbase.dll",
-      "source": "manual",
-      "status": "partial",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "isalnum"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "isalpha"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
       "status_explicit": true,
       "symbol": "isblank"
     },
@@ -14513,10 +15513,80 @@
       "family": "c-runtime",
       "kind": "name",
       "library": "ucrtbase.dll",
-      "source": "manual",
-      "status": "partial",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "iscntrl"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "isdigit"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
       "status_explicit": true,
       "symbol": "isgraph"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "islower"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "isprint"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "ispunct"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "isspace"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "isupper"
     },
     {
       "data_import": false,
@@ -14587,6 +15657,16 @@
       "status": "implemented",
       "status_explicit": true,
       "symbol": "iswupper"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "isxdigit"
     },
     {
       "data_import": false,
@@ -14954,7 +16034,7 @@
       "kind": "name",
       "library": "ucrtbase.dll",
       "source": "manual",
-      "status": "stub",
+      "status": "partial",
       "status_explicit": true,
       "symbol": "rand_s"
     },
@@ -15037,6 +16117,16 @@
       "status": "implemented",
       "status_explicit": true,
       "symbol": "roundf"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "setbuf"
     },
     {
       "data_import": false,
@@ -15406,6 +16496,26 @@
       "source": "typed",
       "status": "implemented",
       "status_explicit": true,
+      "symbol": "tolower"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "toupper"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
       "symbol": "towlower"
     },
     {
@@ -15607,6 +16717,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "IsWindowVisible"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "user32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "MsgWaitForMultipleObjects"
     },
     {
       "data_import": false,
@@ -16724,6 +17844,16 @@
       "kind": "name",
       "library": "xgameruntime.dll",
       "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "XNetworkingGetConnectivityHint"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
       "status": "partial",
       "status_explicit": true,
       "symbol": "XTaskQueueCloseHandle"
@@ -17100,21 +18230,21 @@
     }
   ],
   "summary": {
-    "aliases": 836,
-    "api_set_aliases": 703,
-    "canonical_services": 819,
+    "aliases": 906,
+    "api_set_aliases": 740,
+    "canonical_services": 862,
     "data_import_services": 7,
     "duplicate_registrations": 0,
-    "implemented": 218,
+    "implemented": 235,
     "implicit_status_services": 76,
-    "libraries": 20,
-    "manual_services": 567,
+    "libraries": 21,
+    "manual_services": 569,
     "ordinal_aliases": 0,
-    "partial": 598,
+    "partial": 625,
     "structural_consistency_findings": 0,
-    "stub": 3,
-    "typed_registry_entries": 252,
-    "typed_services": 252,
+    "stub": 2,
+    "typed_registry_entries": 293,
+    "typed_services": 293,
     "wanted_imports": null,
     "wanted_missing": null
   },

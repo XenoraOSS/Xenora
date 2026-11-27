@@ -1,0 +1,25 @@
+0000: t0 = load.u32 input[index]
+000c: t1 = const.u32 0x7fc00000
+0014: t2 = wave.mask v_cmp_f_f32_e32 t0, t1 exec=0xffffffff
+0018: t3 = wave.mask v_cmp_lt_f32_e32 t0, t1 exec=0xffffffff
+001c: t4 = wave.mask v_cmp_eq_f32_e32 t0, t1 exec=0xffffffff
+0020: t5 = wave.mask v_cmp_le_f32_e32 t0, t1 exec=0xffffffff
+0024: t6 = wave.mask v_cmp_gt_f32_e32 t0, t1 exec=0xffffffff
+0028: t7 = wave.mask v_cmp_lg_f32_e32 t0, t1 exec=0xffffffff
+002c: t8 = wave.mask v_cmp_ge_f32_e32 t0, t1 exec=0xffffffff
+0030: t9 = wave.mask v_cmp_o_f32_e32 t0, t1 exec=0xffffffff
+0034: t10 = wave.mask v_cmp_u_f32_e32 t0, t1 exec=0xffffffff
+0038: t11 = wave.mask v_cmp_nge_f32_e32 t0, t1 exec=0xffffffff
+003c: t12 = wave.mask v_cmp_nlg_f32_e32 t0, t1 exec=0xffffffff
+0040: t13 = wave.mask v_cmp_ngt_f32_e32 t0, t1 exec=0xffffffff
+0044: t14 = wave.mask v_cmp_nle_f32_e32 t0, t1 exec=0xffffffff
+0048: t15 = wave.mask v_cmp_neq_f32_e32 t0, t1 exec=0xffffffff
+004c: t16 = wave.mask v_cmp_nlt_f32_e32 t0, t1 exec=0xffffffff
+0050: t17 = wave.mask v_cmp_tru_f32_e32 t0, t1 exec=0xffffffff
+005c: t18 = const.u32 0x80000000
+005c: t19 = wave.mask v_cmp_lt_f32_e32 t18, t1 exec=0xffffffff
+0060: t20 = const.u32 0x3f800000
+0064: t21 = wave.mask v_cmp_u_f32_e32 t19, t20 exec=0xffffffff
+0068: t22 = const.u32 0x80000000
+0068: t23 = wave.mask v_cmp_neq_f32_e32 t22, t1 exec=0xffffffff
+0074: store.u32 output[index], t23

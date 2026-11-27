@@ -285,6 +285,12 @@ impl DbtEngine {
         self.import_registry = Some(registry);
     }
 
+    /// Detach the import registry so a fresh engine can continue process
+    /// cleanup after the guest ended its process.
+    pub(crate) fn take_import_registry(&mut self) -> Option<crate::imports::ImportRegistry> {
+        self.import_registry.take()
+    }
+
     /// Register a host service at a synthetic guest virtual address.
     pub fn register_service<F>(&mut self, address: u64, handler: F)
     where

@@ -456,6 +456,13 @@ fn reference_scalar(scalar: ScalarSource) -> Source {
 }
 
 fn reference_comparison(op: VectorCompareOp) -> Comparison {
+    if op.semantics().signedness == Signedness::Float {
+        // VOPC binary32 compares (#786): the opcode is the Table 61 offset.
+        return Comparison {
+            offset: op.semantics().opcode as u8,
+            signed: false,
+        };
+    }
     Comparison {
         offset: match op.relation() {
             CompareRelation::Less => 1,
@@ -466,6 +473,7 @@ fn reference_comparison(op: VectorCompareOp) -> Comparison {
             CompareRelation::GreaterOrEqual => 6,
             CompareRelation::False => 0,
             CompareRelation::True => 7,
+            relation => panic!("integer compare with float relation {relation:?}"),
         },
         signed: op.signed(),
     }
@@ -764,6 +772,9 @@ fn reference_op(instruction: Instruction) -> Op {
             };
             match op.semantics().width {
                 16 => Op::WideCompare(comparison, CompareWidth::Half, src0, src1),
+                32 if op.semantics().signedness == Signedness::Float => {
+                    Op::WideCompare(comparison, CompareWidth::Binary32, src0, src1)
+                }
                 32 => Op::Compare(comparison, src0, src1),
                 64 => Op::WideCompare(comparison, CompareWidth::Double, src0, src1),
                 width => panic!("unexpected VOPC operand width {width}"),
@@ -948,6 +959,7 @@ fn compares_fixture_instructions_against_llvm() {
         include_bytes!("../../../fixtures/rdna2/vector-round.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-f32.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-compare-16.bin"),
+        include_bytes!("../../../fixtures/rdna2/vector-compare-f32.bin"),
         include_bytes!("../../../fixtures/rdna2/vop3-integer.bin"),
         include_bytes!("../../../fixtures/rdna2/vop3-compare.bin"),
         include_bytes!("../../../fixtures/rdna2/scalar-memory.bin"),
@@ -963,7 +975,7 @@ fn compares_fixture_instructions_against_llvm() {
     ] {
         count += compare_against_llvm(fixture, &mut forms);
     }
-    assert_eq!(forms.len(), 194, "forms compared: {forms:?}");
+    assert_eq!(forms.len(), 210, "forms compared: {forms:?}");
     eprintln!(
         "{count} three-way instruction comparisons across {} forms",
         forms.len()

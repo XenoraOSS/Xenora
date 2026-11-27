@@ -266,6 +266,47 @@ fn malformed_block_sizes_are_rejected() {
 }
 
 #[test]
+fn misaligned_initial_block_start_is_rejected_before_fixups() {
+    let table = standard_table();
+    let mut bytes = build(16, &[], table.len() as u32);
+    bytes[RELOC_DIRECTORY_RVA..RELOC_DIRECTORY_RVA + 4].copy_from_slice(&0x2002u32.to_le_bytes());
+    bytes[RELOC_FILE + 2..RELOC_FILE + 2 + table.len()].copy_from_slice(&table);
+
+    let base = PREFERRED + 0x1000;
+    let (result, memory) = relocate(&bytes, base);
+    assert_eq!(
+        result.unwrap_err(),
+        RelocationError::MalformedBlockHeader {
+            offset: RELOC_FILE + 2
+        }
+    );
+    assert_eq!(
+        memory.read_u64_bypass(base + 0x1010).unwrap(),
+        PREFERRED + 0x1100
+    );
+}
+
+#[test]
+fn short_first_block_leaving_misaligned_next_start_is_rejected() {
+    let mut table = block(0x1000, &[0x0000]);
+    table.extend(block(0x1000, &[0xA018, 0x0000]));
+    let bytes = build(16, &table, table.len() as u32);
+
+    let base = PREFERRED + 0x1000;
+    let (result, memory) = relocate(&bytes, base);
+    assert_eq!(
+        result.unwrap_err(),
+        RelocationError::MalformedBlockHeader {
+            offset: RELOC_FILE + 10
+        }
+    );
+    assert_eq!(
+        memory.read_u64_bypass(base + 0x1018).unwrap(),
+        PREFERRED + 0x2000
+    );
+}
+
+#[test]
 fn block_larger_than_directory_is_rejected() {
     let table = standard_table(); // 14 bytes
     let bytes = build(16, &table, 12);
@@ -345,11 +386,10 @@ fn directory_entering_unbacked_virtual_space_is_rejected_before_fixups() {
     }
 }
 
-#[test]
-fn split_block_uses_each_sections_raw_offset() {
-    const CONTINUATION_RVA: u32 = 0x3000;
-    const CONTINUATION_FILE: usize = 0x1800;
-    let table = block(0x1000, &[0xA010, 0x0000, 0xA018, 0x0000]);
+const CONTINUATION_RVA: u32 = 0x3000;
+const CONTINUATION_FILE: usize = 0x1800;
+
+fn split_directory(table: &[u8], split_at: usize) -> Vec<u8> {
     let mut bytes = build(16, &[], table.len() as u32);
     bytes.resize(CONTINUATION_FILE + 0x200, 0);
     bytes[0x46..0x48].copy_from_slice(&3u16.to_le_bytes());
@@ -369,18 +409,24 @@ fn split_block_uses_each_sections_raw_offset() {
             .copy_from_slice(&value.to_le_bytes());
     }
 
+    let rva = CONTINUATION_RVA - split_at as u32;
+    bytes[RELOC_DIRECTORY_RVA..RELOC_DIRECTORY_RVA + 4].copy_from_slice(&rva.to_le_bytes());
+    let (prefix, suffix) = table.split_at(split_at);
+    let section_end = RELOC_FILE + 0x1000;
+    bytes[section_end - prefix.len()..section_end].copy_from_slice(prefix);
+    bytes[CONTINUATION_FILE..CONTINUATION_FILE + suffix.len()].copy_from_slice(suffix);
+    bytes
+}
+
+#[test]
+fn split_block_uses_each_sections_raw_offset() {
+    let table = block(0x1000, &[0xA010, 0x0000, 0xA018, 0x0000]);
+
     // Split either the header or the entries across two virtual sections
     // whose bytes are separated by a gap in the file.
     for split_at in [4usize, 12] {
-        let mut bytes = bytes.clone();
-        let rva = CONTINUATION_RVA - split_at as u32;
-        bytes[RELOC_DIRECTORY_RVA..RELOC_DIRECTORY_RVA + 4].copy_from_slice(&rva.to_le_bytes());
-        let (prefix, suffix) = table.split_at(split_at);
-        let section_end = RELOC_FILE + 0x1000;
-        bytes[section_end - prefix.len()..section_end].copy_from_slice(prefix);
-        let next_block_offset = CONTINUATION_FILE + suffix.len();
-        bytes[CONTINUATION_FILE..next_block_offset].copy_from_slice(suffix);
-
+        let mut bytes = split_directory(&table, split_at);
+        let next_block_offset = CONTINUATION_FILE + table.len() - split_at;
         let base = PREFERRED + 0x1000;
         let (result, memory) = relocate(&bytes, base);
         let report = result.expect("relocate split directory");
@@ -409,6 +455,44 @@ fn split_block_uses_each_sections_raw_offset() {
         assert_eq!(
             memory.read_u64_bypass(base + 0x1018).unwrap(),
             base + 0x2000
+        );
+    }
+}
+
+#[test]
+fn misaligned_later_block_start_is_rejected_across_raw_sections() {
+    let mut table = block(0x1000, &[0xA010, 0, 0]);
+    let first_size = table.len() as u32;
+    table.extend(block(0x1000, &[0xA018, 0]));
+    let base = PREFERRED + 0x1000;
+
+    for (split_at, offset) in [(12, CONTINUATION_FILE + 2), (16, RELOC_FILE + 0xffe)] {
+        let mut bytes = split_directory(&table, split_at);
+        let (result, memory) = relocate(&bytes, base);
+        assert_eq!(
+            result.unwrap_err(),
+            RelocationError::MalformedBlockHeader { offset }
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + 0x1010).unwrap(),
+            base + 0x1100
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + 0x1018).unwrap(),
+            PREFERRED + 0x2000
+        );
+
+        bytes[RELOC_DIRECTORY_RVA + 4..RELOC_DIRECTORY_RVA + 8]
+            .copy_from_slice(&first_size.to_le_bytes());
+        let (result, memory) = relocate(&bytes, base);
+        assert_eq!(result.unwrap().applied_dir64, 1);
+        assert_eq!(
+            memory.read_u64_bypass(base + 0x1010).unwrap(),
+            base + 0x1100
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + 0x1018).unwrap(),
+            PREFERRED + 0x2000
         );
     }
 }

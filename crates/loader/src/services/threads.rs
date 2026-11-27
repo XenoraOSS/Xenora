@@ -495,6 +495,7 @@ impl ServicesState {
         }
         self.abandon_mutexes(thread.teb);
         self.retire_thread_last_error(thread.teb);
+        self.com().retire_thread(thread.teb);
         self.synch
             .lock()
             .expect("guest synchronization state")

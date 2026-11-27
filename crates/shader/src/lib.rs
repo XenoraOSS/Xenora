@@ -377,8 +377,54 @@ fn relation_symbol(relation: CompareRelation) -> Option<&'static str> {
         CompareRelation::Greater => ">",
         CompareRelation::NotEqual => "!=",
         CompareRelation::GreaterOrEqual => ">=",
-        CompareRelation::False | CompareRelation::True => return None,
+        // F and T read no operand; the float-only relations (#786) have no
+        // single MSL operator and are lowered by `float_compare_expression`.
+        CompareRelation::False
+        | CompareRelation::True
+        | CompareRelation::Ordered
+        | CompareRelation::Unordered
+        | CompareRelation::NotGreaterOrEqual
+        | CompareRelation::NotLessOrGreater
+        | CompareRelation::NotGreater
+        | CompareRelation::NotLessOrEqual
+        | CompareRelation::NotEqualOrUnordered
+        | CompareRelation::NotLess => return None,
     })
+}
+
+/// A VOPC binary32 compare (#786) on the raw `uint` bits, with no float
+/// arithmetic, so the result cannot depend on the Metal math mode: a NaN is an
+/// exponent of all ones with a nonzero fraction (quiet or signalling), and an
+/// ordered pair compares through a key that maps the binary32 order onto
+/// unsigned order with both zeros mapped to one key (+0 == -0).
+fn float_compare_expression(relation: CompareRelation, left: &str, right: &str) -> String {
+    let nan = |v: &str| format!("(({v} & 0x7fffffffu) > 0x7f800000u)");
+    let key = |v: &str| {
+        format!(
+            "((({v} << 1u) == 0u) ? 0x80000000u : ((({v} & 0x80000000u) != 0u) ? ~{v} : ({v} | 0x80000000u)))"
+        )
+    };
+    let ordered = format!("!({} || {})", nan(left), nan(right));
+    let holds = |symbol: &str| format!("({ordered} && {} {symbol} {})", key(left), key(right));
+    match relation {
+        CompareRelation::False => "false".to_string(),
+        CompareRelation::True => "true".to_string(),
+        CompareRelation::Less => holds("<"),
+        CompareRelation::Equal => holds("=="),
+        CompareRelation::LessOrEqual => holds("<="),
+        CompareRelation::Greater => holds(">"),
+        // LG: S0 < S1 || S0 > S1, false on unordered operands.
+        CompareRelation::NotEqual => holds("!="),
+        CompareRelation::GreaterOrEqual => holds(">="),
+        CompareRelation::Ordered => format!("({ordered})"),
+        CompareRelation::Unordered => format!("!({ordered})"),
+        CompareRelation::NotGreaterOrEqual => format!("!{}", holds(">=")),
+        CompareRelation::NotLessOrGreater => format!("!{}", holds("!=")),
+        CompareRelation::NotGreater => format!("!{}", holds(">")),
+        CompareRelation::NotLessOrEqual => format!("!{}", holds("<=")),
+        CompareRelation::NotEqualOrUnordered => format!("!{}", holds("==")),
+        CompareRelation::NotLess => format!("!{}", holds("<")),
+    }
 }
 
 /// A 32-bit integer relation.
@@ -393,6 +439,9 @@ fn relation_expression(relation: CompareRelation, signed: bool, left: &str, righ
 }
 
 fn compare_expression(op: VectorCompareOp, left: &str, right: &str) -> String {
+    if op.semantics().signedness == Signedness::Float {
+        return float_compare_expression(op.relation(), left, right);
+    }
     let Some(symbol) = relation_symbol(op.relation()) else {
         return (op.relation() == CompareRelation::True).to_string();
     };

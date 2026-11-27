@@ -584,7 +584,8 @@ final class InspectionModel: ObservableObject {
         } catch InspectionInputError.notRegular {
             return (Int32(XENORA_INVALID_ARGUMENT), "Expected a regular file.")
         } catch InspectionInputError.tooLarge {
-            return (Int32(XENORA_LIMIT_EXCEEDED), "The file exceeds the \(limit)-byte inspection limit.")
+            let (ok, report) = ProgramRunner.inspectHeaders(url)
+            return (ok ? Int32(XENORA_OK) : Int32(XENORA_PE_ERROR), report)
         } catch InspectionInputError.cannotRead(let code) {
             let error = NSError(domain: NSPOSIXErrorDomain, code: Int(code))
             return (Int32(XENORA_INVALID_ARGUMENT), "Could not read the file: \(error.localizedDescription)")

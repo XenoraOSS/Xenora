@@ -243,6 +243,46 @@ mechanism. Root process entries, host services, thread attach/detach
 notifications, loader-lock reentrancy, dynamic loading, unloading and reference
 counting remain outside this layer.
 
+Package startup composes those seams for one explicit set of images.
+`run_package_startup` takes positional package modules, an entry index, a
+layout arena, an import registry and a step budget. It builds the dependency
+graph, plans and maps every image, applies relocations, registers exception
+directories, classifies and binds each import, prepares TLS, then runs TLS
+callbacks and `DllMain` in provider-before-consumer order before the entry
+point. Detach runs in reverse order only for modules whose attach completed.
+An export from another package image takes precedence over a same-named host
+registration; a missing module or export, an unresolved API set and an
+explicit stub are refused with structured per-import diagnostics before any
+guest code runs. The ordinary runner exposes this as
+`xenora run --pe <entry> --package <module>...`, with one bounded regular-file
+snapshot per supplied image, distinct file names and the existing mapped-image
+budget as the arena limit. The tested package is an original no-CRT executable
+with two dependent provider DLLs built by the native ARM64 toolchain; console
+compatibility and game execution are not claimed.
+
+A separate closed-world provisioned module store admits immutable PE32+ images
+under bounded, printable logical names. Host callers populate it before
+execution; guest strings are never converted to host paths. Admission rejects
+duplicate canonical names, any name owned by a registered service module,
+malformed images and the store's aggregate byte and module limits. The ordinary
+runner exposes this admission as `--module <name>=<path>`: each value must name
+an existing regular file and is read as a bounded snapshot. Admission alone
+does not load or execute the image.
+
+`prepare_runtime_load` is a crate-internal preparation seam rather than a
+guest-visible `LoadLibrary` implementation. It takes logical roots, collects
+their in-package transitive dependencies and refuses circular components before
+any memory mutation. It uses the existing layout planner with caller-supplied
+occupied ranges, then composes batch mapping, relocation, exception-directory
+registration, transactional IAT writing and TLS preparation. Service registry
+keys are resolved first; provisioned images cannot claim a service module name,
+and package exports resolve forwarded requests inside the selected dependency
+closure. All imports are inspected before the first write, an explicit stub is
+refused, and any failure after mapping restores the caller's whole
+`GuestMemory` snapshot. Success returns reservations, per-stage reports and
+IAT diagnostics but runs no guest code: TLS callbacks are discovered only, and
+initialization, unloading and reference counting remain later lifecycle work.
+
 `xenora probe --mode static` inventories ordinary and delay-loaded PE imports
 without guest execution. Without `--report` it writes to `diagnostics/probe`,
 where `xenora imports sync` also looks. `missing_imports.csv` lists unresolved ordinary keys
@@ -1801,6 +1841,14 @@ addresses are not modelled. `UnmapViewOfFile` releases the view.
 process information structure, because the guest is the only process.
 This is implemented behaviour verified through the unit tests. Nothing
 here was compared with Windows or with an Xbox console.
+
+## XNetworking connectivity hint
+
+`xgameruntime.dll!XNetworkingGetConnectivityHint` writes the documented 16-byte `XNetworkingConnectivityHint`: three little-endian 32-bit fields followed by four one-byte boolean fields. Xenora reports `networkInitialized` as true because its bounded networking facility exists, `connectivityLevel` as `None` (1), `connectivityCost` as `Unknown` (0), and `ianaInterfaceType` as IANA `softwareLoopback` (24). The data-limit and roaming booleans are false. This is the honest state of the current machine: it has process-local loopback sockets but no external network route, DNS, proxy, TLS or Internet connectivity truth. The query must not be read as evidence that a title endpoint is reachable.
+
+A null, unmapped or partially unwritable output pointer returns `HRESULT_FROM_WIN32(ERROR_INVALID_PARAMETER)` and writes no success result. Registration, change callbacks, security-information queries and configuration settings are not implemented. This is locally verified behavior only; it has not been compared with Windows or Xbox hardware.
+
+Sources: [XNetworkingGetConnectivityHint](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/networking/xnetworking/functions/xnetworkinggetconnectivityhint), [XNetworkingConnectivityHint](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/networking/xnetworking/structs/xnetworkingconnectivityhint), [XNetworkingConnectivityLevelHint](https://learn.microsoft.com/en-us/gaming/gdk/docs/reference/networking/xnetworking/enums/xnetworkingconnectivitylevelhint), and [network initialization and connectivity](https://docs.xbox.com/build/console-features/networking/initialization-connectivity-networking).
 
 ## Opt-in synthetic Gaming Runtime lifecycle
 

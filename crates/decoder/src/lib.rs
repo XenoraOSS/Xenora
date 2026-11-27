@@ -777,6 +777,14 @@ fn vector_compare(
     if op.semantics().width == 16 && first & 0x1ff == 255 {
         return Err(unsupported(mnemonic, "literal in 16-bit compare"));
     }
+    // VOPC binary32 compares (#786): the guide does not define how a float
+    // operation reads an integer inline constant (selectors 128-208).
+    if op.semantics().operands == OperandRule::VopcVccF32 && matches!(first & 0x1ff, 128..=208) {
+        return Err(unsupported(
+            mnemonic,
+            "expected a VGPR, normal SGPR, vcc_lo or literal binary32 source",
+        ));
+    }
     let (src0, len) = vector_src0(first, bytes, mnemonic)?;
     Ok((Instruction::VectorCompare { op, src0, src1 }, len))
 }

@@ -11,12 +11,15 @@
 
 mod advapi;
 mod codepages;
+mod com;
+pub mod com_fixture;
 mod compare;
 mod console;
 mod crt;
 mod crt_arguments;
 mod crt_callbacks;
 mod crt_clock;
+mod crt_ctype;
 mod crt_files;
 mod crt_format;
 mod crt_jump;
@@ -52,6 +55,7 @@ mod user32;
 mod winhttp;
 mod winsock;
 mod xinput;
+mod xnetworking;
 
 use crate::runtime::HResult;
 pub use crt_arguments::{MAX_PROGRAM_ARGUMENT_BYTES, ProgramArgumentsError};
@@ -265,6 +269,9 @@ pub struct ServicesState {
     file_apis_ansi: AtomicBool,
     crt_arguments: Mutex<crt_arguments::CrtArguments>,
     console: Mutex<ConsoleState>,
+    /// The COM apartment of each guest thread and the task allocator.
+    com: Mutex<com::Com>,
+    com_fixture: Mutex<com_fixture::Fixture>,
     startup: Mutex<startup_info::StartupState>,
     synch: Mutex<synch::Synch>,
     crt_streams: Mutex<crt_streams::StandardStreams>,
@@ -281,6 +288,11 @@ pub struct ServicesState {
     /// follow it, which is the real Windows behaviour: the CRT keeps its own
     /// copy, and only `_putenv` would update that one.
     pub(crate) environment: Mutex<Vec<(String, String)>>,
+    /// The C runtime's own environment copy, separate from the kernel32
+    /// block as it is on Windows: only `_putenv` writes it, and `getenv`
+    /// reads it. Each entry is the variable's original name casing and the
+    /// guest address of the CRT-owned `NAME=VALUE` string copy.
+    pub(crate) crt_environment: Mutex<Vec<(String, u64)>>,
     /// Emulated thread-local storage: the block each guest thread owns for
     /// each thread-local variable, keyed by the guest thread and then by the
     /// address of the variable's descriptor.
@@ -361,10 +373,13 @@ impl ServicesState {
             crt_clock: Mutex::default(),
             crt_directory: Mutex::new(String::new()),
             console: Mutex::default(),
+            com: Mutex::default(),
+            com_fixture: Mutex::default(),
             threads: Mutex::default(),
             hooks: Arc::default(),
             atexit: Mutex::default(),
             environment: Mutex::default(),
+            crt_environment: Mutex::default(),
             emutls: Mutex::default(),
             exit_status: Mutex::default(),
             crt_startup: Mutex::default(),
@@ -545,6 +560,10 @@ impl ServicesState {
         self.console.lock().expect("console state")
     }
 
+    fn com(&self) -> std::sync::MutexGuard<'_, com::Com> {
+        self.com.lock().expect("COM state")
+    }
+
     /// Read the last-error value for a guest thread's TEB.
     pub fn last_error(&self, teb: u64) -> u32 {
         self.last_errors
@@ -663,9 +682,10 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     crate::runtime_table::register(registry, &state);
     registry.hooks = Some(Arc::clone(&state.hooks));
     threads::register(registry, &state);
-    static_cxx::register(registry);
+    static_cxx::register(registry, &state);
     crate::exceptions::register(registry);
     crt_jump::register(registry);
+    xnetworking::register(registry);
 
     // The legacy CRT variables a msvcrt.dll-linked image imports as data
     // (#643). Each cell is the one the modern accessors maintain, so the
@@ -1100,6 +1120,15 @@ pub(crate) mod handlers {
     use crate::softfloat::{Control, F32, F64, square_root};
 
     type Outcome<T> = Result<T, ExitReason>;
+
+    // The COM base surface lives in `services/com.rs` so its state and its
+    // handlers stay together; the generated adapters still reach them here.
+    pub(crate) use super::com::{
+        clsid_from_string, co_create_guid, co_create_instance, co_create_instance_ex,
+        co_get_class_object, co_initialize, co_initialize_ex, co_task_mem_alloc, co_task_mem_free,
+        co_task_mem_realloc, co_uninitialize, iid_from_string, prop_variant_clear,
+        string_from_guid2,
+    };
 
     /// The exit for a request the runtime does not model.
     const RUNTIME_LIMIT: ExitReason = ExitReason::IllegalInstruction(0xFE);
@@ -1656,6 +1685,11 @@ pub(crate) mod handlers {
         or_errno(context, outcome)
     }
 
+    pub fn setbuf(context: &mut ServiceContext<'_>, stream: u64, _buffer: u64) -> Outcome<()> {
+        let outcome = context.state.crt_streams().set_buffer_legacy(stream);
+        or_errno(context, outcome)
+    }
+
     pub fn fopen(context: &mut ServiceContext<'_>, name: u64, mode: u64) -> Outcome<u64> {
         let outcome = {
             let mut streams = context.state.crt_streams();
@@ -1944,6 +1978,15 @@ pub(crate) mod handlers {
         or_errno(context, outcome)
     }
 
+    pub fn _chmod(context: &mut ServiceContext<'_>, name: u64, mode: i32) -> Outcome<i32> {
+        let outcome = {
+            let streams = context.state.crt_streams();
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.chmod(context.memory, &mut drive, name, mode as u32)
+        };
+        or_errno(context, outcome)
+    }
+
     pub fn _wchmod(context: &mut ServiceContext<'_>, name: u64, mode: i32) -> Outcome<i32> {
         let outcome = {
             let streams = context.state.crt_streams();
@@ -2207,8 +2250,8 @@ pub(crate) mod handlers {
     pub fn _access(context: &mut ServiceContext<'_>, name: u64, mode: i32) -> Outcome<i32> {
         let outcome = {
             let streams = context.state.crt_streams();
-            let drive = context.state.objects.lock().expect("guest object state");
-            streams.access(context.memory, &drive, name, mode)
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            streams.access_file(context.memory, &mut drive, name, false, mode as u32)
         };
         or_errno(context, outcome)
     }
@@ -3757,6 +3800,86 @@ pub(crate) mod handlers {
         count: u64,
     ) -> Outcome<u64> {
         crt_wide::wcsncat(context.memory, context.teb, start, end, count)
+    }
+
+    // The narrow ctype.h of the C locale, `atoi` and `atof` (#459 measured
+    // gap): `crt_ctype.rs` documents the honest edges.
+    pub fn isalpha(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isalpha(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn isdigit(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isdigit(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn isalnum(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isalnum(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn islower(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::islower(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn isupper(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isupper(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn isspace(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isspace(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn ispunct(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::ispunct(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn iscntrl(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::iscntrl(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn isprint(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isprint(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn isgraph(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isgraph(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn isblank(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isblank(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn isxdigit(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::isxdigit(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn tolower(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::tolower(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn toupper(context: &mut ServiceContext<'_>, character: i32) -> Outcome<i32> {
+        crt_ctype::toupper(context.memory, context.teb, character as u32 as u64)
+            .map(|value| value as i32)
+    }
+
+    pub fn atoi(context: &mut ServiceContext<'_>, text: u64) -> Outcome<i32> {
+        crt_ctype::atoi(context.memory, context.teb, text).map(|value| value as u32 as i32)
+    }
+
+    pub fn atof(context: &mut ServiceContext<'_>, text: u64) -> Outcome<Float64> {
+        crt_ctype::atof(context.memory, context.teb, text).map(Float64)
     }
 
     pub fn wcscpy(context: &mut ServiceContext<'_>, start: u64, end: u64) -> Outcome<u64> {

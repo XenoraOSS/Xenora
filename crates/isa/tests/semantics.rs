@@ -195,6 +195,10 @@ fn vector_compare_dispatch_selects_exactly_the_registry_vopc_forms() {
                 Wave::Wave32
             )
         );
+        if row.signedness == Signedness::Float {
+            check_binary32_compare(op);
+            continue;
+        }
         // The per-lane test is the declared relation over the declared
         // signedness, with SRC0 on the left.
         let operands = match row.width {
@@ -226,6 +230,7 @@ fn vector_compare_dispatch_selects_exactly_the_registry_vopc_forms() {
                     CompareRelation::GreaterOrEqual => ordering.is_ge(),
                     CompareRelation::False => false,
                     CompareRelation::True => true,
+                    relation => panic!("{}: float relation {relation:?}", row.name),
                 };
                 assert_eq!(
                     op.test_bits(src0, src1),
@@ -236,7 +241,7 @@ fn vector_compare_dispatch_selects_exactly_the_registry_vopc_forms() {
             }
         }
     }
-    // v_cmpx and the float compares must not be dispatched.
+    // v_cmpx, V_CMP_CLASS and the other float widths must not be dispatched.
     dispatch_selects_exactly(EncodingFamily::Vopc, |word| {
         VectorCompareOp::from_word(word).map(|op| op.semantics().name)
     });
@@ -267,7 +272,8 @@ fn vop3_variant_dispatch_selects_exactly_the_registry_vop3_rows() {
         let mut variants = VectorCompareVop3Op::ALL
             .into_iter()
             .filter(|op| op.base() == base_op);
-        if base.width != 32 {
+        // The VOP3A encodings of the binary32 compares (#786) are a later batch.
+        if base.width != 32 || base.signedness == Signedness::Float {
             assert_eq!(variants.next(), None, "{}", base.name);
             continue;
         }
@@ -313,5 +319,63 @@ fn vop3_variant_dispatch_selects_exactly_the_registry_vop3_rows() {
             "{}",
             meta.name
         );
+    }
+}
+
+/// VOPC binary32 compares (#786): the per-lane test against IEEE 754 order on
+/// NaNs (quiet, signalling, either sign), both zeros, both infinities,
+/// subnormals and ordinary values; guide 12.9 Table 61, pages 152-153.
+fn check_binary32_compare(op: VectorCompareOp) {
+    use std::cmp::Ordering;
+    const VALUES: [u32; 14] = [
+        0x0000_0000,
+        0x8000_0000,
+        0x7f80_0000,
+        0xff80_0000,
+        0x7fc0_0000,
+        0xffc0_0001,
+        0x7f80_0001,
+        0xffbf_ffff,
+        0x0000_0001,
+        0x8000_0001,
+        0x3f80_0000,
+        0xbf80_0000,
+        0x7f7f_ffff,
+        0x3f80_0001,
+    ];
+    let row = op.semantics();
+    assert_eq!(row.operands, OperandRule::VopcVccF32, "{}", row.name);
+    assert_eq!(row.width, 32);
+    assert!(!op.signed());
+    for a in VALUES {
+        for b in VALUES {
+            let order = f32::from_bits(a).partial_cmp(&f32::from_bits(b));
+            let unordered = order.is_none();
+            let is = |o: Ordering| order == Some(o);
+            let (lt, eq, gt) = (
+                is(Ordering::Less),
+                is(Ordering::Equal),
+                is(Ordering::Greater),
+            );
+            let expected = match op.relation() {
+                CompareRelation::False => false,
+                CompareRelation::Less => lt,
+                CompareRelation::Equal => eq,
+                CompareRelation::LessOrEqual => lt || eq,
+                CompareRelation::Greater => gt,
+                CompareRelation::NotEqual => lt || gt,
+                CompareRelation::GreaterOrEqual => gt || eq,
+                CompareRelation::Ordered => !unordered,
+                CompareRelation::Unordered => unordered,
+                CompareRelation::NotGreaterOrEqual => !(gt || eq),
+                CompareRelation::NotLessOrGreater => !(lt || gt),
+                CompareRelation::NotGreater => !gt,
+                CompareRelation::NotLessOrEqual => !(lt || eq),
+                CompareRelation::NotEqualOrUnordered => !eq,
+                CompareRelation::NotLess => !lt,
+                CompareRelation::True => true,
+            };
+            assert_eq!(op.test(a, b), expected, "{} {a:#x} {b:#x}", row.name);
+        }
     }
 }

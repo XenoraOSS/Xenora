@@ -256,6 +256,15 @@ service ucrtbase.dll setvbuf(stream: ptr, buffer: ptr, mode: i32, size: u64) -> 
     ref stdio.h setvbuf
     test fflush_and_setvbuf_return_their_documented_results
 
+service ucrtbase.dll setbuf(stream: ptr, buffer: ptr) -> void
+    handler setbuf
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
+    fails errno EINVAL for a null stream; stops the guest for a pointer that is no stream
+    ref stdio.h setbuf
+    test fflush_and_setvbuf_return_their_documented_results
+
 # Files for a hosted C program, on the in-memory drive the handle services use.
 
 service ucrtbase.dll fread(buffer: ptr, size: u64, count: u64, stream: ptr) -> u64
@@ -975,6 +984,150 @@ service ucrtbase.dll towupper(wide: u32) -> u32
     ref wctype.h towupper
     test wide_characters_convert_in_the_c_locale
 
+service ucrtbase.dll isalpha(character: i32) -> i32
+    handler isalpha
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isalpha
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll isdigit(character: i32) -> i32
+    handler isdigit
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isdigit
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll isalnum(character: i32) -> i32
+    handler isalnum
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isalnum
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll islower(character: i32) -> i32
+    handler islower
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h islower
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll isupper(character: i32) -> i32
+    handler isupper
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isupper
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll isspace(character: i32) -> i32
+    handler isspace
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isspace
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll ispunct(character: i32) -> i32
+    handler ispunct
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h ispunct
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll iscntrl(character: i32) -> i32
+    handler iscntrl
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h iscntrl
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll isprint(character: i32) -> i32
+    handler isprint
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isprint
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll isgraph(character: i32) -> i32
+    handler isgraph
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isgraph
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll isblank(character: i32) -> i32
+    handler isblank
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isblank
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll isxdigit(character: i32) -> i32
+    handler isxdigit
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h isxdigit
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll tolower(character: i32) -> i32
+    handler tolower
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h tolower
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll toupper(character: i32) -> i32
+    handler toupper
+    status implemented
+    alias api-ms-win-crt-string-l1-1-0.dll
+    alias msvcrt.dll
+    fails never
+    ref ctype.h toupper
+    test narrow_classification_is_the_c_locale
+
+service ucrtbase.dll atoi(text: ptr) -> i32
+    handler atoi
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    alias msvcrt.dll
+    fails never; stops the guest for memory it cannot read
+    ref stdlib.h atoi
+    test narrow_decimal_parses_follow_the_c_contract
+
+service ucrtbase.dll atof(text: ptr) -> f64
+    handler atof
+    status implemented
+    alias api-ms-win-crt-convert-l1-1-0.dll
+    alias msvcrt.dll
+    fails never; stops the guest for memory it cannot read
+    ref stdlib.h atof
+    test narrow_decimal_parses_follow_the_c_contract
+
 service ucrtbase.dll wcsncat(start: ptr, end: ptr, count: u64) -> ptr
     handler wcsncat
     status implemented
@@ -1026,12 +1179,26 @@ service ucrtbase.dll _wfopen(name: ptr, mode: ptr) -> ptr
     ref corecrt_wstdio.h _wfopen
     test the_wide_file_operations_follow_the_drive
 
+service msvcrt.dll _wfopen(name: ptr, mode: ptr) -> ptr
+    handler _wfopen
+    status partial
+    fails null with errno EINVAL or ENOENT
+    ref corecrt_wstdio.h _wfopen; the legacy dll exports the same entry
+    test the_wide_file_operations_follow_the_drive
+
 service ucrtbase.dll _unlink(name: ptr) -> i32
     handler _unlink
     status partial
     alias api-ms-win-crt-filesystem-l1-1-0.dll
     fails -1 with errno EINVAL, ENOENT or EACCES for a directory or a read-only file
     ref io.h _unlink
+    test the_wide_file_operations_follow_the_drive
+
+service msvcrt.dll _unlink(name: ptr) -> i32
+    handler _unlink
+    status partial
+    fails -1 with errno EINVAL, ENOENT or EACCES
+    ref io.h _unlink; the legacy dll exports the same entry
     test the_wide_file_operations_follow_the_drive
 
 service ucrtbase.dll _wunlink(name: ptr) -> i32
@@ -1042,12 +1209,26 @@ service ucrtbase.dll _wunlink(name: ptr) -> i32
     ref corecrt_wio.h _wunlink
     test the_wide_file_operations_follow_the_drive
 
+service msvcrt.dll _wunlink(name: ptr) -> i32
+    handler _wunlink
+    status partial
+    fails -1 with errno EINVAL, ENOENT or EACCES
+    ref corecrt_wio.h _wunlink; the legacy dll exports the same entry
+    test the_wide_file_operations_follow_the_drive
+
 service ucrtbase.dll _access(name: ptr, mode: i32) -> i32
     handler _access
     status partial
     alias api-ms-win-crt-filesystem-l1-1-0.dll
     fails -1 with errno EINVAL, ENOENT or EACCES for a write mode on a read-only file
     ref io.h _access
+    test the_wide_file_operations_follow_the_drive
+
+service msvcrt.dll _access(name: ptr, mode: i32) -> i32
+    handler _access
+    status partial
+    fails -1 with errno EINVAL, ENOENT or EACCES
+    ref io.h _access; the legacy dll exports the same entry
     test the_wide_file_operations_follow_the_drive
 
 service ucrtbase.dll _waccess(name: ptr, mode: i32) -> i32
@@ -1058,6 +1239,13 @@ service ucrtbase.dll _waccess(name: ptr, mode: i32) -> i32
     ref corecrt_wio.h _waccess
     test the_wide_file_operations_follow_the_drive
 
+service msvcrt.dll _waccess(name: ptr, mode: i32) -> i32
+    handler _waccess
+    status partial
+    fails -1 with errno EINVAL, ENOENT or EACCES
+    ref corecrt_wio.h _waccess; the legacy dll exports the same entry
+    test the_wide_file_operations_follow_the_drive
+
 service ucrtbase.dll _wmkdir(name: ptr) -> i32
     handler _wmkdir
     status partial
@@ -1065,6 +1253,29 @@ service ucrtbase.dll _wmkdir(name: ptr) -> i32
     fails -1 with errno EINVAL, ENOENT, ENOSPC or EACCES when the name is taken
     ref corecrt_wdirect.h _wmkdir
     test the_wide_file_operations_follow_the_drive
+
+service msvcrt.dll _wmkdir(name: ptr) -> i32
+    handler _wmkdir
+    status partial
+    fails -1 with errno EINVAL, ENOENT or EACCES
+    ref corecrt_wdirect.h _wmkdir; the legacy dll exports the same entry
+    test the_wide_file_operations_follow_the_drive
+
+service ucrtbase.dll _chmod(name: ptr, mode: i32) -> i32
+    handler _chmod
+    status partial
+    alias api-ms-win-crt-filesystem-l1-1-0.dll
+    fails -1 with errno EINVAL or ENOENT
+    ref corecrt_io.h _chmod
+    test the_wide_file_operations_follow_the_drive
+
+service msvcrt.dll _chmod(name: ptr, mode: i32) -> i32
+    handler _chmod
+    status partial
+    fails -1 with errno EINVAL or ENOENT
+    ref corecrt_io.h _chmod; the legacy dll exports the same entry
+    test the_wide_file_operations_follow_the_drive
+
 
 service ucrtbase.dll _wchmod(name: ptr, mode: i32) -> i32
     handler _wchmod
@@ -1074,12 +1285,26 @@ service ucrtbase.dll _wchmod(name: ptr, mode: i32) -> i32
     ref corecrt_wio.h _wchmod
     test the_wide_file_operations_follow_the_drive
 
+service msvcrt.dll _wchmod(name: ptr, mode: i32) -> i32
+    handler _wchmod
+    status partial
+    fails -1 with errno EINVAL or ENOENT
+    ref corecrt_wio.h _wchmod; the legacy dll exports the same entry
+    test the_wide_file_operations_follow_the_drive
+
 service ucrtbase.dll _wstat64i32(name: ptr, output: ptr) -> i32
     handler _wstat64i32
     status partial
     alias api-ms-win-crt-filesystem-l1-1-0.dll
     fails -1 with errno EINVAL or ENOENT; the times answer -1 because the drive has no time stamps
     ref corecrt_wio.h _wstat64i32, _mingw_stat64.h struct _stat64i32
+    test the_wide_file_operations_follow_the_drive
+
+service msvcrt.dll _wstat64i32(name: ptr, output: ptr) -> i32
+    handler _wstat64i32
+    status partial
+    fails -1 with errno EINVAL or ENOENT
+    ref corecrt_wstat.h _wstat64i32; the legacy dll exports the same entry
     test the_wide_file_operations_follow_the_drive
 
 service ucrtbase.dll _assert(expression: ptr, file: ptr, line: u32) -> void
@@ -2203,3 +2428,140 @@ service ucrtbase.dll _getpid() -> i32
     fails never
     ref process.h _getpid
     test crt_getpid_matches_the_process_identity
+
+# The COM base surface: the per-thread apartment, the GUID constructors and
+# parsers, the task allocator and the PROPVARIANT clear. The runtime has no
+# class registry, so CoCreateInstance answers the documented "class not
+# registered" failure. crates/loader/src/services/com.rs
+
+service combase.dll CoInitialize(reserved: ptr) -> i32
+    handler co_initialize
+    status partial
+    alias ole32.dll
+    fails E_INVALIDARG for a non-null reserved pointer; RPC_E_CHANGED_MODE for an existing multithreaded apartment
+    ref https://learn.microsoft.com/en-us/windows/win32/api/objbase/nf-objbase-coinitialize
+    test co_initialize_uses_the_single_threaded_model
+
+service combase.dll CoInitializeEx(reserved: ptr, model: u32) -> i32
+    handler co_initialize_ex
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails E_INVALIDARG for a non-null reserved pointer or a COINIT bit outside the documented set; RPC_E_CHANGED_MODE when the thread already initialized the other apartment model
+    ref combaseapi.h CoInitializeEx and the COINIT enumeration
+    test co_initialize_ex_tracks_the_apartment_per_thread
+
+service combase.dll CoUninitialize() -> void
+    handler co_uninitialize
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails never; a thread with no outstanding initialization is left unchanged
+    ref combaseapi.h CoUninitialize
+    test co_uninitialize_balances_each_initialization
+
+service combase.dll CoCreateGuid(guid: out<16>) -> i32
+    handler co_create_guid
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails E_UNEXPECTED when the host has no entropy; a guest fault for an address it cannot write
+    ref combaseapi.h CoCreateGuid; RFC 4122 version 4 and variant bits
+    test co_create_guid_returns_a_version_four_guid
+
+service combase.dll StringFromGUID2(guid: ptr, text: ptr, capacity: i32) -> i32
+    handler string_from_guid2
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails 0 and no write when capacity is below 39 units; a guest fault for a GUID or buffer address it cannot access
+    ref combaseapi.h StringFromGUID2 and the CLSID text form
+    test string_from_guid2_renders_the_documented_text_form
+
+service combase.dll CLSIDFromString(text: ptr, clsid: out<16>) -> i32
+    handler clsid_from_string
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails CO_E_CLASSSTRING and no write for text that is not the braced or bare CLSID form; NULL produces GUID_NULL; a guest fault for an address it cannot read
+    ref combaseapi.h CLSIDFromString
+    test clsid_from_string_parses_the_braced_and_bare_forms
+
+service combase.dll IIDFromString(text: ptr, clsid: out<16>) -> i32
+    handler iid_from_string
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails E_INVALIDARG for malformed text by Xenora policy; NULL produces GUID_NULL; invalid guest pointers fault
+    ref https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-iidfromstring
+    test iid_from_string_parses_a_guid_and_null
+
+service combase.dll CoTaskMemAlloc(size: u64) -> ptr
+    handler co_task_mem_alloc
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails null when the task allocator cannot map the block; a zero size requests the smallest block
+    ref combaseapi.h CoTaskMemAlloc
+    test co_task_memory_owns_its_blocks
+
+service combase.dll CoTaskMemFree(address: ptr) -> void
+    handler co_task_mem_free
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails never for the null pointer; Xenora faults the guest for a block the task allocator does not own
+    ref combaseapi.h CoTaskMemFree
+    test co_task_memory_owns_its_blocks
+
+service combase.dll CoTaskMemRealloc(address: ptr, size: u64) -> ptr
+    handler co_task_mem_realloc
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails null with the original block unchanged when the grow fails, null after freeing for a zero size, and a guest fault for a block the task allocator does not own
+    ref combaseapi.h CoTaskMemRealloc
+    test co_task_mem_realloc_preserves_contents_and_refuses_foreign_blocks
+
+service combase.dll CoCreateInstance(clsid: ptr, outer: ptr, class_context: u32, iid: ptr, object: ptr) -> i32
+    handler co_create_instance
+    status partial
+    alias ole32.dll
+    fails E_POINTER for a null out pointer, E_INVALIDARG for a null CLSID or IID, CO_E_NOTINITIALIZED for an uninitialized thread, and REGDB_E_CLASSNOTREG for unregistered classes; the out pointer is nulled first; a synthetic class exists only with explicit fixture registration
+    ref combaseapi.h CoCreateInstance
+    test co_create_instance_reports_an_unregistered_class
+
+service combase.dll CoGetClassObject(clsid: ptr, class_context: u32, server_info: ptr, iid: ptr, object: ptr) -> i32
+    handler co_get_class_object
+    status partial
+    alias ole32.dll
+    fails uninitialized threads return CO_E_NOTINITIALIZED; ordinary runtime has no registered classes; remote activation is unsupported
+    ref https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cogetclassobject
+    test co_get_class_object_refuses_unregistered_classes
+
+service combase.dll CoCreateInstanceEx(clsid: ptr, outer: ptr, class_context: u32, server_info: ptr, count: u32, results: ptr) -> i32
+    handler co_create_instance_ex
+    status partial
+    alias ole32.dll
+    fails validates up to 64 MULTI_QI records; refuses remote or larger requests; ordinary runtime has no registered classes and output records remain unchanged on class lookup failure
+    ref https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cocreateinstanceex
+    test co_create_instance_ex_checks_the_bounded_interface_array
+
+service combase.dll PropVariantClear(variant: ptr) -> i32
+    handler prop_variant_clear
+    status partial
+    alias api-ms-win-core-com-l1-1-0.dll
+    alias api-ms-win-core-com-l1-1-1.dll
+    alias ole32.dll
+    fails stops the guest for a null pointer, array, vector and by-reference forms, VT_BSTR, VT_UNKNOWN and VT_DISPATCH; their results or release paths are not modelled
+    ref propidl.h PROPVARIANT and PropVariantClear
+    test prop_variant_clear_clears_values_and_frees_task_strings

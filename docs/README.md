@@ -42,10 +42,16 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 - [Guest experiment guide](../experiments/x1/README.md) — Bounded x86-64 execution, executable loading, experimental services, native compute, and offscreen rendering.
 - [x86-64 instruction registry](cpu/instruction-registry.md) — Shared decoder, generated tables, semantics, native lowering and how to add a verified instruction form.
 - [Runtime service registry](runtime/registry.md), [typed service coverage](runtime/services.md) and the [live inventory](runtime/inventory.md) — Import resolution, typed Win64 adapters, manual registrations, aliases and status metadata.
+- [COM base services](runtime/com.md) — Partial apartment, GUID, task allocation and class lookup behavior, with explicit object-model limits.
 - [Guest threads](runtime/threads.md) — Deterministic scheduler, thread services, limits and tests.
 - [Guest graphics command path](runtime/guest-graphics.md) — The guest-callable graphics ABI, ordered resource destruction, and the path from a guest program to a rendered framebuffer.
+- [Bounded XAudio2 core](runtime/xaudio2.md) — Engine, mastering voice and source voice lifetimes, the source buffer queue, the sample clock and its events, the wave format rules, and what the model deliberately leaves out.
 - [Guest CPU research](research/cpu-boundary.md) — Public specifications and unresolved console requirements.
 - [Synthetic import fixtures](../tests/compat_fixtures/README.md) — Reproducible PE32+ builds and expected service behavior.
+
+## Native media middleware
+
+- [Native video playback foundation](video-playback.md) — AVFoundation-backed lifecycle, frame timing, seeking, ownership and explicit codec/Bink limitations.
 
 ## Testing, validation, and benchmarks
 
@@ -58,6 +64,7 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 - [Baseline acceptance](testing/phase-02-baseline.md), [Phase 01 assurance](testing/phase01-assurance.md), and [independent reviews](testing/review-log.md) — Candidate-specific results and release findings.
 - [Structured startup reports](testing/startup-reports.md) — Interpret the CLI worker’s live startup stages and termination details.
 - [Gate A: a compiled C program](testing/gate-a.md) — The two milestones, what the A1 and A2 tests check and what they do not show.
+- [Application fixture runner](../scripts/compat/README.md) — Run selected original fixture tests and compare their recorded outcomes.
 - [Mutation testing](testing/mutation.md) and [benchmark protocol](testing/benchmarks.md) — Test sensitivity, benchmark inputs, and timing requirements.
 
 ## Research and engineering decisions

@@ -2319,6 +2319,198 @@ decoded = true
 llvm = "three-way passed"
 
 [[instruction]]
+form = "v_cmp_f_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = 0, fully written"
+representation = "`7C000702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_lt_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (S0 < S1), fully written"
+representation = "`7C020702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_eq_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (S0 == S1), fully written"
+representation = "`7C040702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_le_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (S0 <= S1), fully written"
+representation = "`7C060702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_gt_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (S0 > S1), fully written"
+representation = "`7C080702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_lg_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (S0 <> S1 (less or greater)), fully written"
+representation = "`7C0A0702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_ge_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (S0 >= S1), fully written"
+representation = "`7C0C0702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_o_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (!isNan(S0) && !isNan(S1)), fully written"
+representation = "`7C0E0702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_u_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (isNan(S0) || isNan(S1)), fully written"
+representation = "`7C100702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_nge_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (!(S0 >= S1)), fully written"
+representation = "`7C120702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_nlg_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (!(S0 <> S1)), fully written"
+representation = "`7C140702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_ngt_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (!(S0 > S1)), fully written"
+representation = "`7C160702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_nle_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (!(S0 <= S1)), fully written"
+representation = "`7C180702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_neq_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (!(S0 == S1)), fully written"
+representation = "`7C1A0702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_nlt_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n] & (!(S0 < S1)), fully written"
+representation = "`7C1C0702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_cmp_tru_f32_e32"
+encoding = "VOPC, Wave32; VGPR, normal SGPR, vcc_lo or literal SRC0 (no integer or float inline constant); VGPR VSRC1; binary32 operands, NaN (quiet or signalling) unordered, +0 == -0, MODE pinned to input denormals allowed; VCC_LO[n] = EXEC_LO[n], fully written"
+representation = "`7C1E0702`"
+lowering = "per-thread Wave32 mask from integer tests on the binary32 bits (no Metal float compare)"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
 form = "v_mul_i32_i24_e32"
 encoding = "VOP2, Wave32; VGPR, normal SGPR (known during translation), vcc_lo, inline integer or literal SRC0; VGPR VSRC1 and VDST; inactive lanes keep VDST; D = low 32 bits of sext(S0[23:0]) * sext(S1[23:0])"
 representation = "`120402C3`"
