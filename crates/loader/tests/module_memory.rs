@@ -606,6 +606,7 @@ mod module_memory {
                 as fn(&mut xenora_loader::ModuleReservation),
             |reservation| reservation.end += 0x1000,
             |reservation| reservation.entry_point = None,
+            |reservation| reservation.used_preferred_base = !reservation.used_preferred_base,
         ] {
             let mut memory = GuestMemory::new();
             let mut reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
@@ -625,5 +626,88 @@ mod module_memory {
                 Ok(original)
             );
         }
+    }
+
+    #[test]
+    fn shuffled_reservation_order_is_matched_by_image_index() {
+        let (first_bytes, first_pe, second_bytes, second_pe) = relocation_pair();
+        let occupied = occupied_preferred_bases();
+        let layout = plan(&[&first_pe, &second_pe], &occupied).unwrap();
+        let images = [
+            explicit(&first_bytes, &first_pe),
+            explicit(&second_bytes, &second_pe),
+        ];
+        let mut memory = GuestMemory::new();
+        let mut reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
+        reservations.swap(0, 1);
+
+        let reports = relocate_module_batch(&images, &reservations, &mut memory).unwrap();
+
+        assert_eq!(reports.len(), 2);
+        assert!(reports.iter().all(|report| report.applied_dir64 == 2));
+        for reservation in reservations {
+            assert_relocated_image(&memory, reservation.base);
+        }
+    }
+
+    #[test]
+    fn image_without_relocation_directory_is_an_honest_noop() {
+        let (bytes, pe) = relocation_image(ImageSpec::dll(0, FIRST_BASE, 0x11, 0x51));
+        let occupied = [AddressInterval::new(FIRST_BASE, FIRST_BASE + 0x4000)];
+        let layout = plan(&[&pe], &occupied).unwrap();
+        let images = [explicit(&bytes, &pe)];
+        let mut memory = GuestMemory::new();
+        let reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
+        let base = reservations[0].base;
+        assert_ne!(base, FIRST_BASE);
+
+        let reports = relocate_module_batch(&images, &reservations, &mut memory).unwrap();
+
+        assert_eq!(reports.len(), 1);
+        assert_eq!(reports[0].total_entries, 0);
+        assert_eq!(reports[0].applied_dir64, 0);
+        assert_ne!(reports[0].delta, 0);
+        assert_eq!(
+            memory.read_u64_bypass(base + u64::from(DATA_RVA)),
+            Ok(FIRST_BASE + u64::from(DATA_RVA) + 0x20)
+        );
+        assert_eq!(
+            memory.read_u64_bypass(base + IMAGE_BASE_FIELD_OFFSET),
+            Ok(base)
+        );
+    }
+
+    #[test]
+    fn overlapping_reservations_are_rejected_before_relocation_mutation() {
+        let (first_bytes, first_pe, second_bytes, second_pe) = relocation_pair();
+        let occupied = occupied_preferred_bases();
+        let layout = plan(&[&first_pe, &second_pe], &occupied).unwrap();
+        let images = [
+            explicit(&first_bytes, &first_pe),
+            explicit(&second_bytes, &second_pe),
+        ];
+        let mut memory = GuestMemory::new();
+        let mut reservations = map_module_batch(&images, &layout, &mut memory).unwrap();
+        let first_base = reservations[0].base;
+        let first_original = memory
+            .read_u64_bypass(first_base + u64::from(DATA_RVA))
+            .unwrap();
+        reservations[1].base = reservations[0].base;
+        reservations[1].end = reservations[0].end;
+        reservations[1].entry_point = Some(reservations[1].base + u64::from(TEXT_RVA));
+
+        let error = relocate_module_batch(&images, &reservations, &mut memory).unwrap_err();
+
+        assert_eq!(
+            error,
+            ModuleRelocationError::OverlappingReservations {
+                first_image_index: 0,
+                second_image_index: 1,
+            }
+        );
+        assert_eq!(
+            memory.read_u64_bypass(first_base + u64::from(DATA_RVA)),
+            Ok(first_original)
+        );
     }
 }

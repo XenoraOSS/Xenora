@@ -19,7 +19,6 @@ pub mod module_binding;
 pub mod module_graph;
 pub mod module_layout;
 pub mod module_memory;
-pub mod module_relocation;
 pub mod output_path;
 pub mod pe;
 pub mod probe;
@@ -58,9 +57,6 @@ pub use memory::{GuestMemory, MemoryError, MemoryPermissions};
 pub use module_memory::{
     ExplicitModuleImage, ModuleMemoryError, ModuleRelocationError, ModuleReservation,
     ModuleReservationError, map_module_batch, relocate_module_batch,
-};
-pub use module_relocation::{
-    ModuleRelocationError, ModuleRelocationOutcome, relocate_module_batch,
 };
 pub use pe::{LoadedImage, ParsedPe, PeError, PeSection};
 pub use probe::{
