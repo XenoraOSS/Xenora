@@ -20,6 +20,7 @@ pub mod module_exceptions;
 pub mod module_graph;
 pub mod module_iat;
 pub mod module_init;
+pub mod module_init_exec;
 pub mod module_layout;
 pub mod module_memory;
 pub mod module_tls;
@@ -65,6 +66,10 @@ pub use module_init::{
     ModuleInitializationComponent, ModuleInitializationEntry, ModuleInitializationError,
     ModuleInitializationMetadata, ModuleInitializationPlan, ModuleInspectionUncertainty,
     plan_module_initialization,
+};
+pub use module_init_exec::{
+    ModuleInitializationExecutionError, ModuleInitializationExecutionReport,
+    ModuleInitializerReport, execute_module_initialization,
 };
 pub use module_memory::{
     ExplicitModuleImage, ModuleMemoryError, ModuleRelocationError, ModuleReservation,

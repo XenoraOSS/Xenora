@@ -228,8 +228,20 @@ non-DLL process entries; neither kind is executed. Circular strongly connected
 components remain grouped without an invented member order, and incomplete
 import or export table inspection is reported as ordering uncertainty because
 hidden dependencies could change the correct order. Loader-lock behavior,
-thread policy, initialization execution, unloading and reference counting
-remain unsupported.
+thread policy, unloading and reference counting remain unsupported.
+
+A narrow service-free initializer execution layer can run a fully prepared
+acyclic package after that planning. It rebuilds and compares the plan, rejects
+incomplete inspection, circular components and unresolved ordinary imports, and
+checks resolved ordinary-IAT slots plus TLS index, array-slot and template-copy
+state before running guest code. It invokes TLS callbacks and then potential
+`DllMain` routines in provider-before-consumer order with the Win64
+`DLL_PROCESS_ATTACH` arguments, bounded per-routine and total instruction
+budgets. A zero `DllMain` result, fault or budget exhaustion restores the exact
+pre-execution memory and CPU state through the same costly whole-memory snapshot
+mechanism. Root process entries, host services, thread attach/detach
+notifications, loader-lock reentrancy, dynamic loading, unloading and reference
+counting remain outside this layer.
 
 `xenora probe --mode static` inventories ordinary and delay-loaded PE imports
 without guest execution. Without `--report` it writes to `diagnostics/probe`,
