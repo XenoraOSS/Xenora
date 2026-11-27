@@ -275,10 +275,12 @@ The original fixture in `fixtures/pe/loadlib/` is authored for the later
 dynamic-load slice. `build.sh` reproduces its x86-64 PE32+ EXE and DLL with the
 native ARM64 LLVM toolchain. The DLL exports a function plus initialization and
 TLS evidence; the EXE calls `LoadLibraryA`, resolves those exports by name with
-`GetProcAddress`, calls the function indirectly and calls `FreeLibrary`. The
-committed images are currently verified only for PE shape, imports, exports and
-a prepared TLS directory; runtime dynamic loading is not claimed until the
-registry and initializer slices are integrated.
+`GetProcAddress`, calls the function indirectly and calls `FreeLibrary`. Two
+additional DLLs reuse the same logical identity as negative controls: one omits
+the function export and one refuses `DLL_PROCESS_ATTACH`. The committed images
+are currently verified only for PE shape, imports, exports and a prepared TLS
+directory; runtime dynamic loading is not claimed until the registry and
+initializer slices are integrated.
 
 `xenora probe --mode static` inventories ordinary and delay-loaded PE imports
 without guest execution. Without `--report` it writes to `diagnostics/probe`,

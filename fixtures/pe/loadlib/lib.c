@@ -13,9 +13,11 @@ __declspec(dllexport) u32 XenoraLibInit;
 __declspec(dllexport) u32 XenoraLibTls;
 __declspec(dllexport) u32 XenoraLibDetach;
 
+#ifndef XENORA_NO_TRIPLE
 __declspec(dllexport) u32 XenoraTriple(u32 value) {
     return value * 3u;
 }
+#endif
 
 /* One thread's TLS template. The loader copies it into the thread block. */
 __declspec(allocate(".data")) static unsigned char xenora_tls_template[4] = {
@@ -59,9 +61,16 @@ int DllMain(void *module, u32 reason, void *reserved) {
     (void)module;
     (void)reserved;
     if (reason == 1) {
+#ifndef XENORA_FAIL_INIT
         XenoraLibInit = 0xA5A5u;
+#endif
     } else if (reason == 0) {
         XenoraLibDetach = 1;
     }
+#ifdef XENORA_FAIL_INIT
+    /* Negative control: the initializer refuses PROCESS_ATTACH. */
+    return 0;
+#else
     return 1;
+#endif
 }

@@ -18,6 +18,8 @@ use xenora_loader::{
 
 const APP: &[u8] = include_bytes!("../../../fixtures/pe/loadlib/loadlib.exe");
 const LIB: &[u8] = include_bytes!("../../../fixtures/pe/loadlib/xenoralib.dll");
+const NO_TRIPLE: &[u8] = include_bytes!("../../../fixtures/pe/loadlib/xenoralib_no_triple.dll");
+const FAIL_INIT: &[u8] = include_bytes!("../../../fixtures/pe/loadlib/xenoralib_fail_init.dll");
 
 const ARENA_BASE: u64 = 0x1_0000_0000;
 const ARENA_SIZE: u64 = 0x1000_0000;
@@ -135,4 +137,47 @@ fn provider_tls_directory_is_prepared_without_running_callbacks() {
             .as_ref()
             .is_some_and(|prepared| !prepared.callbacks.is_empty())
     }));
+}
+
+#[test]
+fn negative_controls_have_the_expected_export_shapes() {
+    let packages = [
+        PackageModule {
+            file_name: "xenoralib_no_triple.dll",
+            bytes: NO_TRIPLE,
+        },
+        PackageModule {
+            file_name: "xenoralib_fail_init.dll",
+            bytes: FAIL_INIT,
+        },
+    ];
+    let graph = ModuleGraph::build(&packages).expect("both negative controls are valid PE32+ DLLs");
+    let exports_of = |file_name: &str| -> BTreeSet<String> {
+        graph
+            .modules()
+            .iter()
+            .find(|node| node.file_name == file_name)
+            .and_then(|node| node.exports.as_ref())
+            .expect("the control has an export table")
+            .entries
+            .iter()
+            .flat_map(|entry| entry.names.iter().cloned())
+            .collect()
+    };
+
+    let no_triple = exports_of("xenoralib_no_triple.dll");
+    assert!(
+        !no_triple.contains("XenoraTriple"),
+        "the missing-export control must not expose the function"
+    );
+    assert!(
+        no_triple.contains("XenoraLibInit"),
+        "the control still needs a resolvable data export"
+    );
+
+    let fail_init = exports_of("xenoralib_fail_init.dll");
+    assert!(
+        fail_init.contains("XenoraTriple"),
+        "the failed-initializer control keeps the full export surface"
+    );
 }

@@ -45,6 +45,13 @@ EXPORTS
     XenoraLibTls DATA
     XenoraLibDetach DATA
 DEF
+cat > xenoralib_no_triple.def <<'DEF'
+LIBRARY xenoralib.dll
+EXPORTS
+    XenoraLibInit DATA
+    XenoraLibTls DATA
+    XenoraLibDetach DATA
+DEF
 cat > kernel32.def <<'DEF'
 LIBRARY kernel32.dll
 EXPORTS
@@ -59,11 +66,18 @@ done
 
 flags="--target=x86_64-pc-windows-msvc -O1 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-vectorize -fno-slp-vectorize"
 "$clang" $flags -c "$here/lib.c" -o lib.obj
+"$clang" $flags -DXENORA_NO_TRIPLE -c "$here/lib.c" -o lib-no-triple.obj
+"$clang" $flags -DXENORA_FAIL_INIT -c "$here/lib.c" -o lib-fail-init.obj
 "$clang" $flags -c "$here/app.c" -o app.obj
 
 link /dll /entry:DllMain /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
     "/out:$outdir/xenoralib.dll" lib.obj
+link /dll /entry:DllMain /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
+    "/out:$outdir/xenoralib_no_triple.dll" lib-no-triple.obj
+link /dll /entry:DllMain /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
+    "/out:$outdir/xenoralib_fail_init.dll" lib-fail-init.obj
 link /entry:entry /subsystem:console /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
     "/out:$outdir/loadlib.exe" app.obj kernel32.lib
 
-chmod 644 "$outdir/xenoralib.dll" "$outdir/loadlib.exe"
+chmod 644 "$outdir/xenoralib.dll" "$outdir/xenoralib_no_triple.dll" \
+    "$outdir/xenoralib_fail_init.dll" "$outdir/loadlib.exe"
