@@ -3239,9 +3239,9 @@ pub static SERVICES: [ServiceMetadata; 296] = [
         result: "i32",
         status: ServiceStatus::Partial,
         aliases: &[],
-        failure: "-1 with ERROR_INVALID_PARAMETER for a null, unaligned, unmapped or contended guard",
+        failure: "stops the guest for a null, unaligned, unmapped, recursive or contended guard",
         reference: "Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)",
-        tests: &["guard_acquire_once_release_and_second_acquire_returns_zero", "contended_and_reentrant_guard_acquire_fail_without_mutating"],
+        tests: &["guard_acquire_once_release_and_second_acquire_returns_zero", "contended_and_reentrant_guard_acquire_stop_without_mutating"],
     },
     ServiceMetadata {
         library: "libstdc++-6.dll",

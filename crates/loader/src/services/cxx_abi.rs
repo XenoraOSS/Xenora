@@ -9,13 +9,11 @@
 //! state rather than interpreting the rest of a guest pointer as host data.
 //!
 //! The scheduler runs one guest thread at a time, so a guard already held by
-//! another guest thread cannot be waited on here. Contention and recursive
-//! acquisition fail with `-1` and `ERROR_INVALID_PARAMETER` instead of
-//! silently initializing twice. Because the compiler-generated caller treats
-//! every nonzero acquire result as permission to initialize, these unsupported
-//! acquisitions stop the guest instead of returning -1. This is a documented
-//! Xenora limitation, not a general implementation of the host ABI's blocking
-//! behavior.
+//! another guest thread cannot be waited on here. Because the compiler-generated
+//! caller treats every nonzero acquire result as permission to initialize,
+//! recursive or contended acquisition cannot honestly return `-1`: it stops the
+//! guest instead of authorizing a second initialization. This is a documented
+//! Xenora limitation, not a general implementation of blocking behavior.
 
 use std::collections::BTreeMap;
 
