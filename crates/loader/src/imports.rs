@@ -560,6 +560,13 @@ impl ImportRegistry {
         self.index(module, name).map(|index| &self.handlers[index])
     }
 
+    /// Whether this exact import key resolves to a service that can install a
+    /// new guest context instead of returning to the Win64 caller.
+    pub fn is_context_service(&self, module: &str, name: &ImportName) -> bool {
+        self.index(module, name)
+            .is_some_and(|index| self.context_services.contains(&index))
+    }
+
     /// Iterate all canonical registered (module, symbol, status) tuples.
     ///
     /// Each entry is returned exactly once regardless of how many API-set alias

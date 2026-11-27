@@ -9,7 +9,8 @@
 //! ones, pointers into writable, read-only and unmapped memory, raw values,
 //! small integers or an earlier result (so handles flow between calls). After
 //! every call the driver checks that read-only and code memory are unchanged
-//! and that the Win64 nonvolatile registers are preserved. A panic, a broken
+//! and that ordinary Win64 service returns preserve nonvolatile registers.
+//! Declared context transfers can install another CPU state. A panic, a broken
 //! invariant or a hang is a bug.
 
 use std::collections::BTreeSet;
@@ -37,13 +38,13 @@ pub const ARG_REUSE_RESULT: u8 = 8;
 #[allow(dead_code)] // used by the stable-toolchain regression test
 pub const ARG_ZERO: u8 = 0;
 
+/// Argument encoding mode that supplies an executable guest address.
+pub const ARG_CODE: u8 = 4;
+
 /// Services that wait on real time, run guest code or reach native Metal are
 /// left out, so each input runs quickly and deterministically. `longjmp` is
-/// left out as well, and for a stronger reason than speed: it is a context
-/// service whose documented behaviour is to replace the callee-saved
-/// registers, so the nonvolatile invariant the driver asserts does not apply
-/// to it. The jump's real contract is covered end to end by the guest fixture
-/// of `guest_crt_jump.rs`.
+/// left out because a meaningful jump requires a saved caller context.
+/// The compiler-linked fixture in `guest_crt_jump.rs` covers that contract.
 fn excluded(module: &str, symbol: &str) -> bool {
     module.eq_ignore_ascii_case("xenora_fixture.dll")
         || module.eq_ignore_ascii_case("xenora_graphics.dll")
@@ -188,11 +189,13 @@ impl Driver {
                 .expect("registered service");
             let outcome = (service.handler)(&Win64Args::new(&cpu), &mut cpu, &mut memory);
 
-            assert_eq!(
-                preserved.map(|register| cpu.get(register)),
-                before,
-                "{module}!{symbol} changed a nonvolatile register"
-            );
+            if !registry.is_context_service(module, symbol) {
+                assert_eq!(
+                    preserved.map(|register| cpu.get(register)),
+                    before,
+                    "{module}!{symbol} changed a nonvolatile register"
+                );
+            }
             let mut check = vec![0; REGION_LEN];
             memory.read_bytes(READ_ONLY, &mut check).unwrap();
             assert_eq!(check, read_only, "{module}!{symbol} wrote read-only memory");
@@ -238,7 +241,7 @@ impl Input<'_> {
             1 => u64::MAX,
             2 => WRITABLE + offset % WRITABLE_LEN as u64,
             3 => READ_ONLY + offset % REGION_LEN as u64,
-            4 => CODE + offset % REGION_LEN as u64,
+            ARG_CODE => CODE + offset % REGION_LEN as u64,
             5 => UNMAPPED + offset,
             6 => self.take::<8>().map_or(offset, u64::from_le_bytes),
             7 => offset % 512,

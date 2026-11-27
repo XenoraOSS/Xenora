@@ -5,7 +5,7 @@
 
 mod support;
 
-use support::robustness::{ARG_REUSE_RESULT, ARG_ZERO, Driver};
+use support::robustness::{ARG_CODE, ARG_REUSE_RESULT, ARG_ZERO, Driver};
 
 /// xorshift64*, so every run uses the same inputs.
 fn inputs(seed: u64, count: usize, length: usize) -> impl Iterator<Item = Vec<u8>> {
@@ -76,6 +76,26 @@ fn encoded_sequences_invoke_handlers_and_reuse_handles() {
     let stats = driver.run(&input);
     assert_eq!(stats.calls, 4);
     assert_eq!(stats.distinct_services, 4);
+}
+
+#[test]
+fn debug_break_may_enter_an_installed_exception_filter() {
+    let driver = Driver::new();
+    let set_filter = driver
+        .service_index("kernel32.dll", "SetUnhandledExceptionFilter")
+        .expect("SetUnhandledExceptionFilter");
+    let debug_break = driver
+        .service_index("kernel32.dll", "DebugBreak")
+        .expect("DebugBreak");
+    let mut filter = [ARG_ZERO; 7];
+    filter[0] = ARG_CODE;
+    let input = driver.encode_sequence(&[(set_filter, filter), (debug_break, [ARG_ZERO; 7])]);
+
+    // The raw DebugBreak handler enters the guest filter by installing its
+    // instruction pointer and stack. Both calls still run in the driver.
+    let stats = driver.run(&input);
+    assert_eq!(stats.calls, 2);
+    assert_eq!(stats.distinct_services, 2);
 }
 
 #[test]
