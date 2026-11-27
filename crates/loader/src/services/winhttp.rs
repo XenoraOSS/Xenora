@@ -1750,7 +1750,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let textual_content_type = info_level == WINHTTP_QUERY_CONTENT_TYPE;
             let textual_content_length = info_level == WINHTTP_QUERY_CONTENT_LENGTH;
             let textual_server = info_level == WINHTTP_QUERY_SERVER;
+            let textual_date = matches!(
+                info_level,
+                WINHTTP_QUERY_DATE | WINHTTP_QUERY_EXPIRES | WINHTTP_QUERY_LAST_MODIFIED
+            );
             let supported = (systemtime_date && date_header.is_some())
+                || (textual_date && date_header.is_some())
                 || numeric_status
                 || numeric_length
                 || textual_status
@@ -1775,7 +1780,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let Some(response) = &transport_guard.response else {
                 return query_headers.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
             };
-            let named_header = if systemtime_date {
+            let named_header = if systemtime_date || textual_date {
                 date_header
             } else if textual_content_type {
                 Some("content-type")
@@ -3134,6 +3139,103 @@ mod tests {
     }
 
     #[test]
+    fn query_headers_reads_documented_date_headers_as_text() {
+        let (port, _, server) = serve_once(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nDate: Sun, 06 Nov 1994 08:49:37 GMT\r\nExpires: Sunday, 06-Nov-94 08:49:37 GMT\r\nLast-Modified: Sun Nov  6 08:49:37 1994\r\n\r\n",
+        );
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+
+        for (level, text) in [
+            (WINHTTP_QUERY_DATE, "Sun, 06 Nov 1994 08:49:37 GMT"),
+            (WINHTTP_QUERY_EXPIRES, "Sunday, 06-Nov-94 08:49:37 GMT"),
+            (WINHTTP_QUERY_LAST_MODIFIED, "Sun Nov  6 08:49:37 1994"),
+        ] {
+            let required = ((text.len() + 1) * 2) as u32;
+            let success_len = (text.len() * 2) as u32;
+            fixture.memory.write_u32(0x2908, 0).unwrap();
+            assert_eq!(
+                fixture.call(
+                    "WinHttpQueryHeaders",
+                    &[request, u64::from(level), 0, 0, 0x2908, 0]
+                ),
+                0
+            );
+            assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+            assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), required);
+
+            fixture.memory.write_u32(0x2908, required - 1).unwrap();
+            assert_eq!(
+                fixture.call(
+                    "WinHttpQueryHeaders",
+                    &[request, u64::from(level), 0, 0x2a00, 0x2908, 0]
+                ),
+                0
+            );
+            assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+            assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), required);
+
+            fixture.memory.write_bytes(0x2a00, &[0xaa; 128]).unwrap();
+            fixture.memory.write_u32(0x2908, required).unwrap();
+            assert_eq!(
+                fixture.call(
+                    "WinHttpQueryHeaders",
+                    &[request, u64::from(level), 0, 0x2a00, 0x2908, 0]
+                ),
+                1
+            );
+            assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), success_len);
+            assert_eq!(read_test_wide(&fixture.memory, 0x2a00, success_len), text);
+            assert_eq!(
+                fixture
+                    .memory
+                    .read_u16(0x2a00 + u64::from(success_len))
+                    .unwrap(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn query_headers_textual_date_reports_missing_header_and_incomplete_response() {
+        let (port, _, server) = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        fixture.memory.write_u32(0x2908, 128).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[request, u64::from(WINHTTP_QUERY_DATE), 0, 0x2a00, 0x2908, 0,]
+            ),
+            0
+        );
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_STATE
+        );
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[request, u64::from(WINHTTP_QUERY_DATE), 0, 0x2a00, 0x2908, 0,]
+            ),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_WINHTTP_HEADER_NOT_FOUND);
+    }
+
+    #[test]
     fn query_headers_system_time_rejects_unsupported_forms_and_incomplete_responses() {
         let mut fixture = Fixture::new();
         let (_session, connection) = fixture.open_connection();
@@ -3143,7 +3245,6 @@ mod tests {
             WINHTTP_QUERY_CONTENT_TYPE | WINHTTP_QUERY_FLAG_SYSTEMTIME,
             WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_SYSTEMTIME,
             WINHTTP_QUERY_DATE | WINHTTP_QUERY_FLAG_SYSTEMTIME | WINHTTP_QUERY_FLAG_NUMBER,
-            WINHTTP_QUERY_DATE,
         ] {
             assert_eq!(
                 fixture.call(
@@ -3176,7 +3277,7 @@ mod tests {
     }
 
     #[test]
-    fn query_headers_system_time_invalid_memory_is_a_memory_fault() {
+    fn query_headers_date_output_invalid_memory_is_a_memory_fault() {
         let (port, _, server) = serve_once(
             b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nDate: Sun, 06 Nov 1994 08:49:37 GMT\r\n\r\n",
         );
@@ -3188,15 +3289,25 @@ mod tests {
         );
         assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
         server.join().unwrap();
-        fixture.memory.write_u32(0x2908, 16).unwrap();
+        fixture.memory.write_u32(0x2908, 128).unwrap();
 
-        for (output, length_ptr) in [(0x9000, 0x2908), (0x2a00, 0x9000)] {
+        for (level, output, length_ptr) in [
+            (
+                WINHTTP_QUERY_DATE | WINHTTP_QUERY_FLAG_SYSTEMTIME,
+                0x9000,
+                0x2908,
+            ),
+            (
+                WINHTTP_QUERY_DATE | WINHTTP_QUERY_FLAG_SYSTEMTIME,
+                0x2a00,
+                0x9000,
+            ),
+            (WINHTTP_QUERY_DATE, 0x9000, 0x2908),
+        ] {
+            fixture.memory.write_u32(0x2908, 128).unwrap();
             let mut cpu = CpuState::default();
             cpu.set(Register::Rcx, request);
-            cpu.set(
-                Register::Rdx,
-                u64::from(WINHTTP_QUERY_DATE | WINHTTP_QUERY_FLAG_SYSTEMTIME),
-            );
+            cpu.set(Register::Rdx, u64::from(level));
             cpu.set(Register::R9, output);
             cpu.set(Register::Rsp, 0x7000);
             fixture.memory.write_u64(0x7028, length_ptr).unwrap();
