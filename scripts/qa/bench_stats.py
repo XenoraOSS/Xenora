@@ -56,6 +56,8 @@ def summarize(samples: Sequence[float]) -> SampleStats:
     if not samples:
         raise ValueError("summarize requires at least one sample")
     ordered = sorted(float(x) for x in samples)
+    if any(not math.isfinite(x) for x in ordered):
+        raise ValueError("benchmark samples must be finite")
     q1 = _percentile(ordered, 25)
     q3 = _percentile(ordered, 75)
     stdev = statistics.pstdev(ordered) if len(ordered) > 1 else 0.0

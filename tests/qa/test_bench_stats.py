@@ -24,6 +24,14 @@ class BenchStats(unittest.TestCase):
         self.assertTrue(bad.regressing)
         self.assertGreater(bad.ratio, 1.10)
 
+    def test_rejects_non_finite_samples(self):
+        for value in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError):
+                    summarize([1.0, value, 2.0])
+                with self.assertRaises(ValueError):
+                    compare_medians([1.0, 1.0, 1.0], [1.0, value, 1.0])
+
 
 if __name__ == "__main__":
     unittest.main()

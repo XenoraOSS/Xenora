@@ -1687,6 +1687,23 @@ size and alignment and passes the descriptor's address; the runtime returns the
 calling thread's own block for that descriptor, so two guest threads never
 share a thread-local variable.
 
+`libstdc++-6.dll` also provides the three guard-variable services of the public
+[Itanium C++ ABI](https://itanium-cxx-abi.github.io/cxx-abi/abi.html#guard-variables)
+for thread-safe function-local statics. `__cxa_guard_acquire` reads one byte at
+the aligned guest guard address through bounded guest memory: it returns 1 when
+the caller takes ownership, 0 when the guard is already initialized, and -1 with
+`ERROR_INVALID_PARAMETER` for a null, unaligned, unmapped or contended guard.
+`__cxa_guard_release` writes the initialized byte and clears ownership;
+`__cxa_guard_abort` clears ownership without writing it. Ownership is keyed by
+guest guard address and the calling thread's TEB; no guest address is treated as
+a host pointer. A release or abort by any other thread stops the guest with the
+runtime-limit fault. Because the scheduler runs one guest thread at a time,
+Xenora refuses contention and recursive acquisition instead of blocking; this
+is a documented deviation from a general host ABI implementation. An original
+no-CRT C++ fixture exercises the compiler-emitted guard calls and all three
+services directly, and the hosted C++ fixture now uses the default thread-safe
+initialization.
+
 C++ exceptions and stack unwinding are **not** implemented. They need a
 guest-side SEH unwinder that walks the guest stack through its
 `RUNTIME_FUNCTION` tables, not a service, so a C++ guest is built with

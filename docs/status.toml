@@ -48,9 +48,9 @@ correctness = "guest-cpp-program-passed"
 hardware_verification = "not-applicable"
 claims = ["CLAIM-GUEST-CPP-PATH"]
 architecture = "arm64 macOS"
-semantics = "A hosted C++ guest runs its constructors, standard library containers, threads, thread-local storage and file input and output through the loader and the ARM64 dynamic binary translation"
+semantics = "A hosted C++ guest runs its constructors, thread-safe function-local statics through the Itanium C++ ABI guard services, standard library containers, threads, thread-local storage and file input and output through the loader and the ARM64 dynamic binary translation"
 metal_mapping = "Not applicable; this milestone exercises the guest CPU and runtime, not the GPU"
-limitations = "C++ exceptions and stack unwinding are not implemented and are not exercised; the program is built with -fno-exceptions and -fno-rtti. One worker thread, one guest at a time under the deterministic cooperative scheduler, and a bounded command-line and file environment."
+limitations = "The hosted program uses the Itanium C++ ABI guard services for thread-safe function-local statics. C++ exceptions and stack unwinding are not implemented and are not exercised; the program is built with -fno-exceptions and -fno-rtti. One worker thread, one guest at a time under the deterministic cooperative scheduler, and a bounded command-line and file environment."
 test = "cargo test --locked -p xenora-loader --test guest_cpp_path"
 
 [[feature]]

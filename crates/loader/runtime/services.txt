@@ -2565,3 +2565,30 @@ service combase.dll PropVariantClear(variant: ptr) -> i32
     fails stops the guest for a null pointer, array, vector and by-reference forms, VT_BSTR, VT_UNKNOWN and VT_DISPATCH; their results or release paths are not modelled
     ref propidl.h PROPVARIANT and PropVariantClear
     test prop_variant_clear_clears_values_and_frees_task_strings
+
+# Itanium C++ ABI thread-safe static initialization (#934). The guard is an
+# eight-byte guest object whose first byte is set after initialization.
+# Xenora keeps the in-progress owner in service state and refuses contention
+# instead of blocking, because its scheduler runs one guest thread at a time.
+service libstdc++-6.dll __cxa_guard_acquire(guard: ptr) -> i32
+    handler cxx_guard_acquire
+    status partial
+    fails -1 with ERROR_INVALID_PARAMETER for a null, unaligned, unmapped or contended guard
+    ref Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)
+    test guard_acquire_once_release_and_second_acquire_returns_zero
+    test contended_and_reentrant_guard_acquire_fail_without_mutating
+
+service libstdc++-6.dll __cxa_guard_release(guard: ptr) -> void
+    handler cxx_guard_release
+    status partial
+    fails stops the guest for a guard the calling thread did not acquire
+    ref Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)
+    test guard_acquire_once_release_and_second_acquire_returns_zero
+    test invalid_guard_release_and_abort_fail_closed
+
+service libstdc++-6.dll __cxa_guard_abort(guard: ptr) -> void
+    handler cxx_guard_abort
+    status partial
+    fails stops the guest for a guard the calling thread did not acquire
+    ref Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)
+    test invalid_guard_release_and_abort_fail_closed

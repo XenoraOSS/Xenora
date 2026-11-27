@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 293] = [
+pub static SERVICES: [ServiceMetadata; 296] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -3232,6 +3232,39 @@ pub static SERVICES: [ServiceMetadata; 293] = [
         reference: "propidl.h PROPVARIANT and PropVariantClear",
         tests: &["prop_variant_clear_clears_values_and_frees_task_strings"],
     },
+    ServiceMetadata {
+        library: "libstdc++-6.dll",
+        symbol: "__cxa_guard_acquire",
+        parameters: &[Parameter { name: "guard", kind: "ptr" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "-1 with ERROR_INVALID_PARAMETER for a null, unaligned, unmapped or contended guard",
+        reference: "Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)",
+        tests: &["guard_acquire_once_release_and_second_acquire_returns_zero", "contended_and_reentrant_guard_acquire_fail_without_mutating"],
+    },
+    ServiceMetadata {
+        library: "libstdc++-6.dll",
+        symbol: "__cxa_guard_release",
+        parameters: &[Parameter { name: "guard", kind: "ptr" }],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "stops the guest for a guard the calling thread did not acquire",
+        reference: "Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)",
+        tests: &["guard_acquire_once_release_and_second_acquire_returns_zero", "invalid_guard_release_and_abort_fail_closed"],
+    },
+    ServiceMetadata {
+        library: "libstdc++-6.dll",
+        symbol: "__cxa_guard_abort",
+        parameters: &[Parameter { name: "guard", kind: "ptr" }],
+        result: "void",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "stops the guest for a guard the calling thread did not acquire",
+        reference: "Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)",
+        tests: &["invalid_guard_release_and_abort_fail_closed"],
+    },
 ];
 
 /// Register every generated service and its API-set aliases.
@@ -5812,6 +5845,30 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: i32 = handlers::prop_variant_clear(&mut context, a0)?;
         Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("libstdc++-6.dll", "__cxa_guard_acquire", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::cxx_guard_acquire(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("libstdc++-6.dll", "__cxa_guard_release", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::cxx_guard_release(&mut context, a0)?;
+        Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("libstdc++-6.dll", "__cxa_guard_abort", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let () = handlers::cxx_guard_abort(&mut context, a0)?;
+        Ok(0)
     });
     for service in &SERVICES {
         for alias in service.aliases {

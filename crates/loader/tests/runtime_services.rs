@@ -8513,3 +8513,87 @@ fn narrow_decimal_parses_follow_the_c_contract() {
     let bits = math_call(&mut guest, "atof", &[], &[at]);
     assert_eq!(f64::from_bits(bits as u64), 6.25);
 }
+
+// Itanium C++ ABI guard variables (#934). The -1 results are low 32-bit
+// values, the same RAX shape a C++ compiler reads after an `int` result.
+
+const GUARD_MINUS_ONE: u64 = 0xFFFF_FFFF;
+const INVALID_GUARD_ERROR: u64 = 87; // ERROR_INVALID_PARAMETER
+
+#[test]
+fn guard_acquire_once_release_and_second_acquire_returns_zero() {
+    let mut guest = Guest::new();
+    guest.memory.write_u8(SCRATCH, 0).unwrap();
+
+    assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 1);
+    // Acquiring ownership does not write the initialized byte.
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
+    guest.call("__cxa_guard_release", &[SCRATCH]);
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 1);
+    assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 0);
+
+    // A null, unaligned or unmapped guard is refused before it can be read.
+    for guard in [0, SCRATCH + 1, 0x7000_0000] {
+        assert_eq!(
+            guest.call("__cxa_guard_acquire", &[guard]),
+            GUARD_MINUS_ONE,
+            "guard {guard:#x}"
+        );
+        assert_eq!(guest.last_error(), INVALID_GUARD_ERROR);
+    }
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 1);
+}
+
+#[test]
+fn contended_and_reentrant_guard_acquire_fail_without_mutating() {
+    let mut guest = Guest::new();
+    guest.memory.write_u8(SCRATCH, 0).unwrap();
+    assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 1);
+
+    // A different guest thread cannot wait on this single-threaded machine.
+    guest.teb = 0x10000;
+    assert_eq!(
+        guest.call("__cxa_guard_acquire", &[SCRATCH]),
+        GUARD_MINUS_ONE
+    );
+    assert_eq!(guest.last_error(), INVALID_GUARD_ERROR);
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
+
+    // The owning thread cannot recursively acquire its own guard either.
+    guest.teb = 0;
+    assert_eq!(
+        guest.call("__cxa_guard_acquire", &[SCRATCH]),
+        GUARD_MINUS_ONE
+    );
+    assert_eq!(guest.last_error(), INVALID_GUARD_ERROR);
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
+
+    // Refusing the other callers leaves the original owner in charge.
+    guest.call("__cxa_guard_release", &[SCRATCH]);
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 1);
+    assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 0);
+}
+
+#[test]
+fn invalid_guard_release_and_abort_fail_closed() {
+    let mut guest = Guest::new();
+    guest.memory.write_u8(SCRATCH, 0).unwrap();
+
+    let (_, exit) = guest.run("__cxa_guard_release", &[SCRATCH]);
+    assert_eq!(exit, LIMIT);
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
+
+    let (_, exit) = guest.run("__cxa_guard_abort", &[SCRATCH]);
+    assert_eq!(exit, LIMIT);
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
+
+    assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 1);
+    guest.teb = 0x10000;
+    let (_, exit) = guest.run("__cxa_guard_release", &[SCRATCH]);
+    assert_eq!(exit, LIMIT, "a different thread cannot release the guard");
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
+    guest.teb = 0;
+    guest.call("__cxa_guard_abort", &[SCRATCH]);
+    assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
+    assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 1);
+}

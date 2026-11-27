@@ -410,11 +410,19 @@ pub(crate) fn setup_tls_avoiding(
                 block_base = reserved.end;
             }
         }
-        memory.map_region(
-            thread_tls_base,
-            TLS_ARRAY_SIZE,
-            MemoryPermissions::READ_WRITE,
-        )?;
+        // The startup claims the array before binding imports, so that a
+        // heap allocation cannot land where it belongs. Standalone callers
+        // map it here.
+        if memory
+            .first_region_overlap(thread_tls_base, thread_tls_base + TLS_ARRAY_SIZE as u64)
+            .is_none()
+        {
+            memory.map_region(
+                thread_tls_base,
+                TLS_ARRAY_SIZE,
+                MemoryPermissions::READ_WRITE,
+            )?;
+        }
         if let Some(staged) = staged.as_deref() {
             memory.map_region_with_data(
                 block_base,

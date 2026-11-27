@@ -31,6 +31,7 @@ mod crt_streams;
 mod crt_wformat;
 mod crt_wide;
 mod cxx;
+mod cxx_abi;
 mod environment;
 mod errors;
 mod events;
@@ -297,6 +298,8 @@ pub struct ServicesState {
     /// each thread-local variable, keyed by the guest thread and then by the
     /// address of the variable's descriptor.
     pub(crate) emutls: Mutex<BTreeMap<u64, BTreeMap<u64, u64>>>,
+    /// Itanium C++ ABI guard variables for thread-safe function-local statics.
+    pub(crate) cxx_guards: Mutex<cxx_abi::GuardTable>,
     /// The status the guest process exited with. Set once.
     exit_status: Mutex<Option<u32>>,
     crt_startup: Mutex<crt_startup::CrtStartup>,
@@ -381,6 +384,7 @@ impl ServicesState {
             environment: Mutex::default(),
             crt_environment: Mutex::default(),
             emutls: Mutex::default(),
+            cxx_guards: Mutex::default(),
             exit_status: Mutex::default(),
             crt_startup: Mutex::default(),
             winhttp: Mutex::default(),
@@ -1129,6 +1133,9 @@ pub(crate) mod handlers {
         co_task_mem_realloc, co_uninitialize, iid_from_string, prop_variant_clear,
         string_from_guid2,
     };
+
+    // The Itanium C++ ABI guard protocol lives in `services/cxx_abi.rs`.
+    pub(crate) use super::cxx_abi::{cxx_guard_abort, cxx_guard_acquire, cxx_guard_release};
 
     /// The exit for a request the runtime does not model.
     const RUNTIME_LIMIT: ExitReason = ExitReason::IllegalInstruction(0xFE);

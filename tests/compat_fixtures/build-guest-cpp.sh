@@ -108,11 +108,10 @@ cd "$out"
 printf '%s' "$native" > toolchain-native.txt
 
 # The program is built without exceptions and without RTTI, because the guest
-# runtime provides neither. It is also built without the thread-safe
-# initialisation of function-local statics, because the guest runtime's C++
-# surface is the allocation operators and not the guard ABI. The function-local
-# static is still built once, on first use, in the main thread.
-cxxflags="-fno-exceptions -fno-rtti -fno-threadsafe-statics"
+# runtime provides neither. Function-local statics use the Itanium C++ ABI
+# guard services now, so the compiler's default thread-safe initialisation is
+# left enabled and exercises those services in the hosted C++ path too.
+cxxflags="-fno-exceptions -fno-rtti"
 
 # The control's missing service. The program references the symbol without
 # calling it, so the four running variants need a local definition of it and

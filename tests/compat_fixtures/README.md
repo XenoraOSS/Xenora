@@ -126,7 +126,7 @@ Compiler configuration:
 
 | Step | Command |
 | --- | --- |
-| Compile and link | `x86_64-w64-mingw32-g++ -O<level> -fno-rtti -fno-exceptions -fno-threadsafe-statics -o <name>.exe guest_cpp.cpp` |
+| Compile and link | `x86_64-w64-mingw32-g++ -O<level> -fno-rtti -fno-exceptions -o <name>.exe guest_cpp.cpp` |
 
 It is built at `-O0`, `-O1`, `-O2` and `-Os`, and once more as a control that
 imports a service no Xenora service provides, so the loader must refuse the
@@ -146,6 +146,24 @@ otherwise to the `x86_64-w64-mingw32-g++` on `PATH`. As with the other
 mingw-built fixtures, the script requires the compiler driver, the compiler
 proper, the assembler and the linker, and every library they load that is a
 file on disk, to be ARM64, and checks each with `file` and `lipo -archs`.
+
+## A C++ guard-variable program
+
+`cxx_guard.cpp` is an original no-CRT C++ program for the Itanium C++ ABI
+guard services (#934). A function-local static with a noinline initializer
+makes the compiler emit `__cxa_guard_acquire` and `__cxa_guard_release`; the
+program also calls all three guard services directly with its own aligned
+guards. It checks that release sets the ABI's initialized byte, abort clears
+ownership, a second acquire reports completion, and null, unaligned and
+unmapped guards return -1. It reports the observed values in a `.gate` section
+and exits with zero when every check passes.
+
+`build-cxx-guard.sh [output directory]` builds four optimization levels from
+that one source, plus controls for recursive acquisition and for release and
+abort by a non-owner. `cargo test -p xenora-loader --test guest_cxx_guard_abi`
+builds the fixtures and runs them through the loader, the standard services and
+the DBT. The test fails, and does not skip, when the native ARM64 clang++ or
+LLD is missing. No executable is committed.
 
 ## A C++ program that throws
 

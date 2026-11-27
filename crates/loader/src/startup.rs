@@ -268,12 +268,20 @@ fn run_startup_with(
     .map_err(|why| std::io::Error::new(std::io::ErrorKind::InvalidData, why))?;
     #[cfg(test)]
     stage_finished(StartupStage::RegisterExceptions);
-    let bound_imports = imports.bind_imports(pe, bytes, layout.image_base, memory)?;
-    #[cfg(test)]
-    stage_finished(StartupStage::BindImports);
-    observe(StartupEvent::ImportsBound {
-        count: bound_imports,
-    });
+    // The thread's TLS array, data block and environment block belong to
+    // thread initialization, which Windows performs before the process heap
+    // serves its first allocation. Binding imports allocates from the guest
+    // heap for service state, and the dynamic allocator scans upward from
+    // the same base the harness layout gives the TLS array, so the thread
+    // complex is claimed first: a heap allocation landing where the array
+    // belongs would otherwise fail the TLS setup of any image that uses
+    // static TLS, and the TEB of any image at all. The array exists for
+    // every thread, whether or not the image has a TLS directory.
+    memory.map_region(
+        layout.tls_base,
+        crate::tls::TLS_ARRAY_SIZE,
+        MemoryPermissions::READ_WRITE,
+    )?;
     let tls = parse_tls_directory(bytes, pe)?;
     if let Some(tls) = &tls {
         setup_tls_avoiding(
@@ -285,9 +293,21 @@ fn run_startup_with(
             Some(teb_base..teb_base + TEB_SIZE as u64),
         )?;
     }
-
+    map_teb(
+        memory,
+        teb_base,
+        layout.stack_top,
+        layout.tls_base,
+        stack_base,
+    )?;
     #[cfg(test)]
     stage_finished(StartupStage::SetupTls);
+    let bound_imports = imports.bind_imports(pe, bytes, layout.image_base, memory)?;
+    #[cfg(test)]
+    stage_finished(StartupStage::BindImports);
+    observe(StartupEvent::ImportsBound {
+        count: bound_imports,
+    });
     memory.map_region(stack_base, STACK_SIZE, MemoryPermissions::READ_WRITE)?;
     // Keep guest code and data out of the page that holds the return
     // addresses the engine intercepts. An image or layout that already covers
@@ -296,14 +316,6 @@ fn run_startup_with(
         crate::imports::RETURN_SENTINEL_PAGE,
         RETURN_SENTINEL_PAGE_SIZE,
         MemoryPermissions::NO_ACCESS,
-    )?;
-
-    map_teb(
-        memory,
-        teb_base,
-        layout.stack_top,
-        layout.tls_base,
-        stack_base,
     )?;
 
     let mut engine = DbtEngine::new(JIT_CAPACITY)?;

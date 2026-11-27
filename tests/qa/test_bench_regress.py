@@ -45,6 +45,12 @@ class BenchRegress(unittest.TestCase):
         with self.assertRaises(ValueError):
             compare_records(_rec([1]), _rec([1, 2, 3]), min_samples=3)
 
+    def test_rejects_non_finite_record_samples(self):
+        base = _rec([100, 100, 100])
+        cur = _rec([100, float("nan"), 100], rev="b")
+        with self.assertRaises(ValueError):
+            compare_records(base, cur)
+
 
 if __name__ == "__main__":
     unittest.main()

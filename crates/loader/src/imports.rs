@@ -852,6 +852,7 @@ impl ImportRegistry {
 
     /// Enter a guest callback from the task frame whose return slot is `slot`.
     fn enter_task_callback(
+        &self,
         cpu: &mut CpuState,
         memory: &mut GuestMemory,
         frame: CallbackFrame,
@@ -865,9 +866,21 @@ impl ImportRegistry {
         {
             return Err(ExitReason::ServiceAbiViolation);
         }
-        memory
-            .fetch_instruction_byte(entry)
-            .map_err(ExitReason::MemoryFault)?;
+        // A callback entry can be an imported function's resolved address:
+        // the mingw runtime registers WSACleanup through `_onexit` this way
+        // after WSAStartup, which is valid on Windows because the pointer
+        // the import address table holds is the callable function. Service
+        // trampolines are synthetic and have no guest bytes to pre-flight;
+        // the dispatcher recognizes them when execution reaches them. Any
+        // other entry must be backed by guest memory, exactly as jumping to
+        // unmapped memory faults on Windows.
+        let trampoline = self.trampoline_to_service.contains_key(&entry)
+            || self.dynamic_trampolines.get(entry).is_some();
+        if !trampoline {
+            memory
+                .fetch_instruction_byte(entry)
+                .map_err(ExitReason::MemoryFault)?;
+        }
         memory
             .write_u64(slot, CALLBACK_RETURN)
             .map_err(ExitReason::MemoryFault)?;
@@ -954,7 +967,7 @@ impl ImportRegistry {
             return match step {
                 CallbackStep::Call { entry, args } => {
                     let slot = key.1 - 8;
-                    Self::enter_task_callback(cpu, memory, frame, slot, entry, args)
+                    self.enter_task_callback(cpu, memory, frame, slot, entry, args)
                 }
                 CallbackStep::Return(value) => {
                     cpu.set(Register::Rax, value);
@@ -1008,7 +1021,7 @@ impl ImportRegistry {
                         task: Some(Arc::new(Mutex::new(task))),
                         after,
                     };
-                    Self::enter_task_callback(cpu, memory, frame, slot, entry, args)?;
+                    self.enter_task_callback(cpu, memory, frame, slot, entry, args)?;
                 }
             }
             return Ok(());

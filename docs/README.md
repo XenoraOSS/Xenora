@@ -64,6 +64,7 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 - [Baseline acceptance](testing/phase-02-baseline.md), [Phase 01 assurance](testing/phase01-assurance.md), and [independent reviews](testing/review-log.md) — Candidate-specific results and release findings.
 - [Structured startup reports](testing/startup-reports.md) — Interpret the CLI worker’s live startup stages and termination details.
 - [Gate A: a compiled C program](testing/gate-a.md) — The two milestones, what the A1 and A2 tests check and what they do not show.
+- [Application fixture runner](../scripts/compat/README.md) — Run selected original fixture tests and compare their recorded outcomes.
 - [Mutation testing](testing/mutation.md) and [benchmark protocol](testing/benchmarks.md) — Test sensitivity, benchmark inputs, and timing requirements.
 
 ## Research and engineering decisions
