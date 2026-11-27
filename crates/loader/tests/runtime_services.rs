@@ -3197,7 +3197,6 @@ fn fopen_modes_follow_the_documentation() {
         ("w.txt", "r,ccs=UTF-8"),
         ("w.txt", "R"),
         ("bad*name", "w"),
-        ("a\\..\\b", "w"),
         ("con", "w"),
         (long.as_str(), "w"),
     ] {
@@ -8852,4 +8851,34 @@ fn invalid_guard_release_and_abort_fail_closed() {
     guest.call("__cxa_guard_abort", &[SCRATCH]);
     assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
     assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 1);
+}
+
+#[test]
+fn dot_components_resolve_before_crt_descriptor_lookup() {
+    let (mut guest, [_, _, _]) = stdio_guest();
+    // Create through `./`; the stored object is the root file itself.
+    guest.memory.write_bytes(NAME, b".\\crtdot.bin\0").unwrap();
+    let fd = guest.call("_open", &[NAME, 2 | 0x100 | 0x200 | 0x8000, 0]) & 0xFFFF_FFFF;
+    assert!((3..0x8000).contains(&fd), "{fd:x}");
+    assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
+
+    // Open it through lexical spellings whose intermediate components do not
+    // exist. Resolution happens before any existence lookup.
+    for name in [
+        b".\\crtdot.bin\0".as_slice(),
+        b"missing\\..\\crtdot.bin\0",
+        b"..\\crtdot.bin\0",
+        b"a\\..\\crtdot.bin\0",
+    ] {
+        guest.memory.write_bytes(NAME, name).unwrap();
+        let fd = guest.call("_open", &[NAME, 0x8000, 0]) & 0xFFFF_FFFF;
+        assert!((3..0x8000).contains(&fd), "{fd:x} for {name:?}");
+        assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
+    }
+
+    // A real file name ending in a dot remains invalid.
+    guest.memory.write_bytes(NAME, b"bad.\0").unwrap();
+    guest.set_errno(0);
+    let fd = guest.call("_open", &[NAME, 2, 0]) & 0xFFFF_FFFF;
+    assert_eq!(fd, (-1i32) as u32 as u64);
 }

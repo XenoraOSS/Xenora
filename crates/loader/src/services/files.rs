@@ -91,14 +91,37 @@ fn strip_root_anchor(name: &str) -> &str {
     name.strip_prefix('\\').unwrap_or(name)
 }
 
-fn valid_key(name: &str) -> bool {
-    !name.is_empty() && name.split('\\').all(valid_component)
+/// Resolve dot components before object validation. Dot components are not
+/// file names: `.` drops out, `..` pops one component and stays at the root
+/// when there is nothing to pop. An empty result names the root. It is valid
+/// only as a directory; object paths use `normalized_key` because the drive
+/// has no root object to create, delete or open as a file.
+fn normalize_components(name: &str) -> Option<String> {
+    let mut resolved = Vec::new();
+    for component in name.split('\\') {
+        match component {
+            "." => {}
+            ".." => {
+                resolved.pop();
+            }
+            _ if valid_component(component) => resolved.push(component),
+            _ => return None,
+        }
+    }
+    Some(resolved.join("\\"))
+}
+
+fn normalized_key(name: &str) -> Option<String> {
+    let normalized = normalize_components(name)?;
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn normalized_directory(name: &str) -> Option<String> {
+    normalize_components(name)
 }
 
 fn guest_path(memory: &GuestMemory, address: u64) -> Result<Option<String>, MemoryError> {
-    Ok(read_guest_path(memory, address)?
-        .map(|name| strip_root_anchor(&name).to_owned())
-        .filter(|name| valid_key(name)))
+    Ok(read_guest_path(memory, address)?.and_then(|name| normalized_key(strip_root_anchor(&name))))
 }
 
 /// The narrow form of `read_guest_path`: the process code page is UTF-8, so
@@ -127,8 +150,7 @@ fn read_guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String
 
 fn guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String>, MemoryError> {
     Ok(read_guest_path_a(memory, address)?
-        .map(|name| strip_root_anchor(&name).to_owned())
-        .filter(|name| valid_key(name)))
+        .and_then(|name| normalized_key(strip_root_anchor(&name))))
 }
 
 // The operations the wide and narrow forms share. Each answers the error
@@ -339,12 +361,12 @@ fn find_first(
     output: u64,
     write: fn(&mut GuestMemory, u64, &SearchEntry) -> Result<(), MemoryError>,
 ) -> Result<u64, u32> {
-    let directory = parent(path);
+    let Some(directory) = normalized_directory(parent(path)) else {
+        return Err(INVALID_NAME);
+    };
+    let directory = directory.as_str();
     let pattern = path.rsplit('\\').next().unwrap_or_default();
-    if path.starts_with('\\')
-        || (!directory.is_empty() && !directory.split('\\').all(valid_component))
-        || !valid_component(&pattern.replace(['*', '?'], "x"))
-    {
+    if path.starts_with('\\') || !valid_component(&pattern.replace(['*', '?'], "x")) {
         return Err(INVALID_NAME);
     }
     let pattern = if pattern == "*.*" { "*" } else { pattern };
@@ -2206,7 +2228,7 @@ impl super::ObjectState {
             .to_ascii_lowercase();
         let path = path.strip_prefix("c:\\").unwrap_or(&path);
         let path = strip_root_anchor(path).to_owned();
-        valid_key(&path).then_some(path)
+        normalized_key(&path)
     }
 
     pub(super) fn drive_entry(&self, path: &str) -> DriveEntry {

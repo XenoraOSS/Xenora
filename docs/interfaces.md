@@ -1435,7 +1435,10 @@ CreateDirectoryW and RemoveDirectoryW manage up to 256 directories. Parents
 must exist, and directories must be empty before removal. DeleteFileW
 deletes closed files. MoveFileW moves closed files to an unused name under
 an existing directory. GetFileAttributesW distinguishes files and directories.
-Traversal components and device names are rejected.
+Exact `.` and `..` components resolve lexically before validation: `.` drops,
+`..` pops one component, and `..` at the root stays there. Device names and
+real file names ending with a dot remain rejected. The drive has no root object
+for a bare dot path to open as a file.
 FindFirstFileW, FindNextFileW, and FindClose enumerate a sorted snapshot of
 direct children. The final path component accepts literal names, * and ?
 wildcards, and *.* matches every name. Results include attributes, byte size,

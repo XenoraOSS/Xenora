@@ -37,6 +37,8 @@ const IMPORTS: &[(&str, &str)] = &[
     (KERNEL32, "UnlockFileEx"),
     (KERNEL32, "ReadFile"),
     (KERNEL32, "CreateFileA"),
+    (KERNEL32, "FindFirstFileW"),
+    (KERNEL32, "FindClose"),
     (KERNEL32, "GetFileAttributesA"),
     (KERNEL32, "SetFileAttributesA"),
     (KERNEL32, "MoveFileExW"),
@@ -632,4 +634,39 @@ fn device_control_library_ex_and_the_fixed_environment() {
         guest.call("GetEnvironmentVariableA", &[VAR, SCRATCH + 0x300, 64]),
         0
     );
+}
+
+/// Dot components resolve lexically before object lookup: `.` drops, `..`
+/// pops one component and stays at the root when there is nothing to pop.
+#[test]
+fn dot_components_resolve_before_file_lookup() {
+    let mut guest = Guest::new(IMPORTS, &[]);
+    let handle = create_file(&mut guest, "plain.bin", GENERIC_WRITE);
+    assert_ne!(handle, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[handle]), 1);
+
+    // The intermediate component does not have to exist: resolution is
+    // lexical, so every spelling below is exactly `plain.bin` at the root.
+    for name in [
+        ".\\plain.bin",
+        "missing\\..\\plain.bin",
+        "..\\plain.bin",
+        "a\\..\\plain.bin",
+    ] {
+        let opened = create_file_disposition(&mut guest, name, GENERIC_READ, 3);
+        assert_ne!(opened, INVALID_HANDLE_VALUE, "{name}");
+        assert_eq!(guest.call("CloseHandle", &[opened]), 1, "{name}");
+    }
+
+    // The busybox directory enumeration form resolves to a root search.
+    const FIND_DATA: u64 = SCRATCH + 0x900;
+    let pattern = wide(&mut guest, ".\\*");
+    let search = guest.call("FindFirstFileW", &[pattern, FIND_DATA]);
+    assert_ne!(search, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("FindClose", &[search]), 1);
+
+    // A real file name ending in a dot remains invalid; only the exact dot
+    // components receive path-resolution treatment.
+    let bad = create_file_disposition(&mut guest, "bad.", GENERIC_WRITE, 1);
+    assert_eq!(bad, INVALID_HANDLE_VALUE);
 }
