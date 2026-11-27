@@ -197,6 +197,61 @@ void main_tq_termination_owner_scope(void) {
     S->out[21] = S->out[11];
 }
 
+static void record_pool(void *context, u32 cancelled) {
+    u64 slot = (u64)context;
+    S->out[slot] = ++S->counter;
+    S->out[slot + 10] = GetCurrentThreadId();
+    S->out[slot + 20] = cancelled;
+}
+
+// ThreadPool work runs on an implementation worker without a manual pump.
+// The manual completion port still waits for XTaskQueueDispatch.
+void main_tq_threadpool_work_manual_completion(void) {
+    S->main_thread = GetCurrentThreadId();
+    S->out[0] = XTaskQueueCreate(1, 0, (HANDLE *)(void *)&S->queue) == 0;
+    S->out[1] = XTaskQueueSubmitCallback((HANDLE)S->queue, 0, THREAD(8), record_pool) == 0;
+    for (int i = 0; i < 30; i++) SwitchToThread();
+    S->out[2] = S->out[8];
+    S->out[3] = XTaskQueueSubmitCallback((HANDLE)S->queue, 1, THREAD(9), record_pool) == 0;
+    for (int i = 0; i < 30; i++) SwitchToThread();
+    S->out[4] = S->out[9];
+    S->out[5] = XTaskQueueDispatch((HANDLE)S->queue, 1, 0);
+    S->out[6] = S->out[9];
+}
+
+// When both ports use ThreadPool, both callbacks run without a manual pump.
+void main_tq_threadpool_both_ports(void) {
+    S->main_thread = GetCurrentThreadId();
+    S->out[0] = XTaskQueueCreate(1, 1, (HANDLE *)(void *)&S->queue) == 0;
+    S->out[1] = XTaskQueueSubmitCallback((HANDLE)S->queue, 0, THREAD(8), record_pool) == 0;
+    S->out[2] = XTaskQueueSubmitCallback((HANDLE)S->queue, 1, THREAD(9), record_pool) == 0;
+    for (int i = 0; i < 40; i++) SwitchToThread();
+    S->out[3] = S->out[8];
+    S->out[4] = S->out[9];
+}
+
+// A synchronous terminate before the worker's first turn cancels the pending
+// ThreadPool callback and returns only after that worker has finished.
+void main_tq_threadpool_termination_wait(void) {
+    S->out[0] = XTaskQueueCreate(1, 1, (HANDLE *)(void *)&S->queue) == 0;
+    S->out[1] = XTaskQueueSubmitCallback((HANDLE)S->queue, 0, THREAD(8), record_pool) == 0;
+    S->out[2] = XTaskQueueTerminate((HANDLE)S->queue, 1, 0, 0) == 0;
+    S->out[3] = S->out[8];
+    S->out[4] = S->out[28];
+    S->out[5] = S->counter;
+}
+
+// SerializedThreadPool and Immediate remain explicit errors. Delayed
+// ThreadPool submission is also refused rather than silently becoming immediate.
+void main_tq_threadpool_unsupported_modes(void) {
+    HANDLE queue = 0;
+    S->out[0] = XTaskQueueCreate(2, 0, &queue);
+    S->out[1] = XTaskQueueCreate(0, 3, &queue);
+    S->out[2] = XTaskQueueCreate(4, 0, &queue);
+    S->out[3] = XTaskQueueCreate(1, 0, (HANDLE *)(void *)&S->queue);
+    S->out[4] = XTaskQueueSubmitDelayedCallback((HANDLE)S->queue, 0, 1, THREAD(8), record_pool);
+}
+
 // Delayed work uses the scheduler clock too: an INFINITE dispatcher sleeps
 // until the delay instead of deadlocking behind host time.
 void main_tq_delayed_infinite(void) {

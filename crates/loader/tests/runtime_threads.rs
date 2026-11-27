@@ -1423,6 +1423,46 @@ fn task_queue_termination_follows_queue_object_ownership() {
 }
 
 #[test]
+fn threadpool_work_is_automatic_while_manual_completion_waits() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_threadpool_work_manual_completion", quantum, BUDGET).halted();
+        assert_eq!(run.outs(7), [1, 1, 1, 1, 0, 1, 2], "quantum {quantum}");
+        assert_ne!(run.out(18), u64::from(MAIN_ID), "work thread");
+        assert_eq!(run.out(19), u64::from(MAIN_ID), "completion thread");
+        assert_eq!((run.out(28), run.out(29)), (0, 0), "not cancelled");
+    }
+}
+
+#[test]
+fn threadpool_both_ports_run_without_a_manual_pump() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_threadpool_both_ports", quantum, BUDGET).halted();
+        assert_eq!((run.out(0), run.out(1), run.out(2)), (1, 1, 1));
+        assert!(run.out(3) != 0 && run.out(4) != 0, "both callbacks ran");
+        assert_ne!(run.out(18), u64::from(MAIN_ID), "work thread");
+        assert_ne!(run.out(19), u64::from(MAIN_ID), "completion thread");
+    }
+}
+
+#[test]
+fn synchronous_termination_covers_a_not_yet_started_threadpool_worker() {
+    let run = run_with("main_tq_threadpool_termination_wait", 1_000_000, BUDGET).halted();
+    assert_eq!(run.outs(6), [1, 1, 1, 1, 1, 1]);
+}
+
+#[test]
+fn unsupported_task_queue_modes_fail_explicitly() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_threadpool_unsupported_modes", quantum, BUDGET).halted();
+        assert_eq!(
+            run.outs(5),
+            [0x8007_0032, 0x8007_0032, 0x8007_0057, 0, 0x8007_0032],
+            "quantum {quantum}"
+        );
+    }
+}
+
+#[test]
 fn delayed_task_queue_work_uses_the_scheduler_clock() {
     for quantum in [64, 1024, 1_000_000] {
         let run = run_with("main_tq_delayed_infinite", quantum, BUDGET).halted();
