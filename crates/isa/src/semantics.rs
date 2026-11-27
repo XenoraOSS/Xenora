@@ -82,6 +82,10 @@ pub enum Operation {
     BitfieldMask,
     /// Low 32 bits of the product.
     Multiply,
+    /// Binary32 product with the DX9 legacy rule that zero times anything is zero.
+    MultiplyLegacy,
+    /// Median of three binary32 inputs under the guide's MED3 NaN branch.
+    Median,
     /// High 32 bits of the 64-bit product.
     MultiplyHigh,
     /// The field of S0 at offset S1[4:0] with width S1[22:16]; sign-extended when signed.
@@ -196,6 +200,8 @@ pub enum VectorBinary {
     SubF32,
     /// Binary32 `a * b`, round to nearest even (guide 12.7).
     MulF32,
+    /// Binary32 `a * b` with the DX9 legacy rule: zero times anything is zero.
+    MulLegacyF32,
     /// Binary32 minimum by the guide 12.7 V_MIN_F32 rule: a quiet NaN gives
     /// the other operand and a signed-zero pair gives -0.
     MinF32,
@@ -209,9 +215,21 @@ impl VectorBinary {
     pub fn is_float(self) -> bool {
         matches!(
             self,
-            Self::AddF32 | Self::SubF32 | Self::MulF32 | Self::MinF32 | Self::MaxF32
+            Self::AddF32
+                | Self::SubF32
+                | Self::MulF32
+                | Self::MulLegacyF32
+                | Self::MinF32
+                | Self::MaxF32
         )
     }
+}
+
+/// Per-lane operation with three inputs and one result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VectorTernary {
+    /// Binary32 median under the guide 12.12 V_MED3_F32 pseudocode.
+    Med3F32,
 }
 
 /// How the operands are interpreted. `Bitwise` exactly when the operation is logical.
@@ -371,6 +389,15 @@ pub enum OperandRule {
     Vop1F32,
     /// VOP2 binary32 arithmetic: as `Vop2Vgpr` without integer inline constants.
     Vop2F32,
+    /// VOP2 DX9 legacy binary32 multiply: as `Vop2F32`, except NaN sources are
+    /// part of the accepted operand domain because zero wins over NaN.
+    Vop2F32Legacy,
+    /// VOP3 DX9 legacy binary32 multiply: two narrowed float sources with
+    /// per-source ABS/NEG; OP_SEL, CLAMP, OMOD and SRC2 are refused.
+    Vop3F32Legacy,
+    /// VOP3 binary32 three-input form: three narrowed float sources with
+    /// per-source ABS/NEG; OP_SEL, CLAMP and OMOD are refused.
+    Vop3F32Ternary,
     /// VOP1 swap: VDST and SRC0 each read and write a VGPR.
     Vop1Swap,
     /// MIMG 2D sample (IMAGE_SAMPLE_LZ and IMAGE_SAMPLE_L): VDATA is the first

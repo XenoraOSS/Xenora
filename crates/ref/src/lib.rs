@@ -102,6 +102,11 @@ pub enum Op {
     /// VOP2 binary32 form: VDST, SRC0 (VGPR, SGPR, `vcc_lo` or literal; no
     /// integer inline constant) and VSRC1. Writes neither VCC nor SCC.
     VectorFloat(VectorFloat, u8, CompareSource, u8),
+    /// VOP3 binary32 form: VDST, two narrowed float sources (VGPR, SGPR,
+    /// `vcc_lo` or literal) and per-source ABS/NEG modifiers.
+    VectorFloatVop3(VectorFloat, u8, CompareSource, CompareSource, u8, u8),
+    /// VOP3 three-input binary32 form with per-source ABS/NEG modifiers.
+    VectorTernaryVop3(u8, CompareSource, CompareSource, CompareSource, u8, u8),
     /// VOP1 32-bit integer or bit form: VDST and SRC0 (VGPR, SGPR, `vcc_lo`,
     /// inline integer or literal). Writes neither VCC nor SCC.
     VectorUnary(VectorUnary, u8, CompareSource),
@@ -578,6 +583,8 @@ pub enum VectorFloat {
     Subtract,
     /// 5: D = S1 - S0.
     SubtractReverse,
+    /// 7: D = S0 * S1; the DX9 rule makes zero times anything zero.
+    MultiplyLegacy,
     /// 8: D = S0 * S1.
     Multiply,
     /// 15: the page 132 minimum.
@@ -593,6 +600,7 @@ impl VectorFloat {
             3 => Self::Add,
             4 => Self::Subtract,
             5 => Self::SubtractReverse,
+            7 => Self::MultiplyLegacy,
             8 => Self::Multiply,
             15 => Self::Minimum,
             16 => Self::Maximum,
@@ -606,12 +614,20 @@ impl VectorFloat {
     /// an arithmetic result that is NaN or whose exact value is nonzero and
     /// below 2^-126 in magnitude.
     fn apply(self, a: u32, b: u32) -> Option<u32> {
+        const SIGN: u32 = 0x8000_0000;
+        // The DX9 zero rule is tested before the arithmetic denormal domain:
+        // an exact zero operand wins even when the other input is subnormal.
+        if self == Self::MultiplyLegacy {
+            return f32_multiply_legacy(a, b);
+        }
         if f32_subnormal(a) || f32_subnormal(b) {
             return None;
         }
-        const SIGN: u32 = 0x8000_0000;
         match self {
             Self::Minimum | Self::Maximum => f32_select(self == Self::Minimum, a, b),
+            Self::MultiplyLegacy => {
+                unreachable!("legacy multiply returned before the common domain")
+            }
             _ if f32_nan(a) || f32_nan(b) => None,
             Self::Add => f32_add(a, b),
             Self::Subtract => f32_add(a, b ^ SIGN),
@@ -718,6 +734,44 @@ fn f32_add(a: u32, b: u32) -> Option<u32> {
         return Some(0);
     }
     f32_round(sum < 0, sum.unsigned_abs(), power)
+}
+
+/// Guide 12.12 V_MED3_F32. Quiet NaNs take the MIN3 branch through the
+/// guide's V_MIN_F32 selection rule; signalling NaNs stay outside the modeled
+/// domain because IEEE_MODE/Quiet() are not pinned.
+fn f32_median(a: u32, b: u32, c: u32) -> Option<u32> {
+    let signalling = |x: u32| f32_nan(x) && x & 0x0040_0000 == 0;
+    if signalling(a) || signalling(b) || signalling(c) {
+        return None;
+    }
+    let min3 = f32_select(true, f32_select(true, a, b)?, c)?;
+    if f32_nan(a) || f32_nan(b) || f32_nan(c) {
+        return Some(min3);
+    }
+    let max3 = f32_select(false, f32_select(false, a, b)?, c)?;
+    let equal = |x: u32, y: u32| f32::from_bits(x) == f32::from_bits(y);
+    if equal(max3, a) {
+        f32_select(false, b, c)
+    } else if equal(max3, b) {
+        f32_select(false, a, c)
+    } else {
+        f32_select(false, a, b)
+    }
+}
+
+/// Binary32 product under the DX9 legacy rule: zero times anything is zero.
+/// The guide does not pin the sign of that forced zero; this reference keeps
+/// the ordinary multiplication sign bit and the verification does not treat
+/// the sign as specified.
+fn f32_multiply_legacy(a: u32, b: u32) -> Option<u32> {
+    let zero = |x: u32| x & 0x7fff_ffff == 0;
+    if zero(a) || zero(b) {
+        return Some((a ^ b) & 0x8000_0000);
+    }
+    if f32_subnormal(a) || f32_subnormal(b) || f32_nan(a) || f32_nan(b) {
+        return None;
+    }
+    f32_multiply(a, b)
 }
 
 /// Correctly rounded (nearest even) binary32 product of two non-NaN words.
@@ -1293,6 +1347,128 @@ pub fn decode(code: &[u8]) -> Result<Vec<DecodedInstruction>, ReferenceError> {
                 let dst = (third >> 1) | ((opcode & 1) << 7);
                 let src1 = (second >> 1) | ((third & 1) << 7);
                 (Op::Vector(kind, dst, *first, src1), 4)
+            }
+            // VOP3 V_MED3_F32 (opcode 343): three narrowed float sources with
+            // per-source ABS/NEG; OP_SEL, CLAMP and OMOD are refused.
+            [
+                dst,
+                modifier_byte,
+                0x57,
+                0xd5,
+                lo,
+                middle,
+                hi,
+                flags,
+                tail @ ..,
+            ] => {
+                let abs = modifier_byte & 7;
+                let neg = flags >> 5;
+                if modifier_byte & 0xf8 != 0 || flags & 0x18 != 0 {
+                    return Err(error(offset, "unsupported VOP3 output modifiers"));
+                }
+                let selectors = [
+                    u16::from(*lo) | (u16::from(middle & 1) << 8),
+                    u16::from(middle >> 1) | (u16::from(hi & 3) << 7),
+                    u16::from(hi >> 2) | (u16::from(flags & 7) << 6),
+                ];
+                let mut sources = [None, None, None];
+                let mut literals = 0;
+                for (index, selector) in selectors.into_iter().enumerate() {
+                    sources[index] = match selector {
+                        0..=106 => Some(CompareSource::Scalar(selector as u8)),
+                        256..=511 => Some(CompareSource::Vector(selector as u8)),
+                        255 => {
+                            literals += 1;
+                            let Some(bits) = tail
+                                .get(..4)
+                                .and_then(|word| <[u8; 4]>::try_from(word).ok())
+                            else {
+                                return Err(error(offset, "truncated VOP3 literal"));
+                            };
+                            Some(CompareSource::Immediate(u32::from_le_bytes(bits)))
+                        }
+                        _ => None,
+                    };
+                }
+                if literals > 1 || sources.iter().any(Option::is_none) {
+                    return Err(error(offset, "unsupported VOP3 float source"));
+                }
+                (
+                    Op::VectorTernaryVop3(
+                        *dst,
+                        sources[0].unwrap(),
+                        sources[1].unwrap(),
+                        sources[2].unwrap(),
+                        abs,
+                        neg,
+                    ),
+                    if literals == 0 { 8 } else { 12 },
+                )
+            }
+            // VOP3 V_MUL_LEGACY_F32 (opcode 263 = VOP2 opcode 7 + 0x100):
+            // the scoped form accepts VGPR, normal SGPR/vcc_lo and one literal
+            // source, transports per-source ABS/NEG and refuses OP_SEL, CLAMP,
+            // OMOD, inline constants, two literals and a nonzero SRC2 field.
+            [
+                dst,
+                modifier_byte,
+                7,
+                0xd5,
+                lo,
+                middle,
+                hi,
+                flags,
+                tail @ ..,
+            ] => {
+                let abs = modifier_byte & 7;
+                let neg = flags >> 5;
+                if modifier_byte & 0xf8 != 0 || flags & 0x18 != 0 {
+                    return Err(error(offset, "unsupported VOP3 output modifiers"));
+                }
+                if abs & 4 != 0 || neg & 4 != 0 {
+                    return Err(error(offset, "unsupported VOP3 SRC2 modifier"));
+                }
+                // SRC2 is unused by this two-source form and must select inline zero.
+                if u16::from(hi >> 2) | (u16::from(flags & 7) << 6) != 128 {
+                    return Err(error(offset, "unsupported VOP3 SRC2 source"));
+                }
+                let selectors = [
+                    u16::from(*lo) | (u16::from(middle & 1) << 8),
+                    u16::from(middle >> 1) | (u16::from(hi & 3) << 7),
+                ];
+                let mut sources = [None, None];
+                let mut literals = 0;
+                for (index, selector) in selectors.into_iter().enumerate() {
+                    sources[index] = match selector {
+                        0..=106 => Some(CompareSource::Scalar(selector as u8)),
+                        256..=511 => Some(CompareSource::Vector(selector as u8)),
+                        255 => {
+                            literals += 1;
+                            let Some(bits) = tail
+                                .get(..4)
+                                .and_then(|word| <[u8; 4]>::try_from(word).ok())
+                            else {
+                                return Err(error(offset, "truncated VOP3 literal"));
+                            };
+                            Some(CompareSource::Immediate(u32::from_le_bytes(bits)))
+                        }
+                        _ => None,
+                    };
+                }
+                if literals > 1 || sources.iter().any(Option::is_none) {
+                    return Err(error(offset, "unsupported VOP3 float source"));
+                }
+                (
+                    Op::VectorFloatVop3(
+                        VectorFloat::MultiplyLegacy,
+                        *dst,
+                        sources[0].unwrap(),
+                        sources[1].unwrap(),
+                        abs,
+                        neg,
+                    ),
+                    if literals == 0 { 8 } else { 12 },
+                )
             }
             // Guide §§12.7.1, 12.9.1, 12.12 and 13.3.4: VOP3A extends
             // VOP2 by 0x100 and preserves the VOPC opcode. This subset
@@ -1886,6 +2062,87 @@ fn execute_wave(
                     let value = kind.apply(s0, read(lane, src1)?).ok_or_else(|| {
                         error(offset, "binary32 operand or result outside domain")
                     })?;
+                    results[lane] = Some((dst, value));
+                }
+            }
+            Op::VectorFloatVop3(kind, dst, src0, src1, abs, neg) => {
+                let check_source = |source: CompareSource| -> Result<(), ReferenceError> {
+                    match source {
+                        CompareSource::Vector(register) => {
+                            (0..lanes).try_for_each(|lane| read(lane, register).map(|_| ()))
+                        }
+                        CompareSource::Scalar(register) => {
+                            read_scalar(Source::Register(register)).map(|_| ())
+                        }
+                        CompareSource::Immediate(_) => Ok(()),
+                    }
+                };
+                if exec != 0 {
+                    check_source(src0)?;
+                    check_source(src1)?;
+                }
+                for lane in (0..lanes).filter(|&lane| executes(lane)) {
+                    let read_source = |source: CompareSource| match source {
+                        CompareSource::Vector(register) => read(lane, register),
+                        CompareSource::Scalar(register) => read_scalar(Source::Register(register)),
+                        CompareSource::Immediate(bits) => Ok(bits),
+                    };
+                    let modify = |value: u32, bit: u8| {
+                        let mut value = value;
+                        if abs & (1 << bit) != 0 {
+                            value &= 0x7fff_ffff;
+                        }
+                        if neg & (1 << bit) != 0 {
+                            value ^= 0x8000_0000;
+                        }
+                        value
+                    };
+                    let left = modify(read_source(src0)?, 0);
+                    let right = modify(read_source(src1)?, 1);
+                    let value = kind.apply(left, right).ok_or_else(|| {
+                        error(offset, "binary32 operand or result outside domain")
+                    })?;
+                    results[lane] = Some((dst, value));
+                }
+            }
+            Op::VectorTernaryVop3(dst, src0, src1, src2, abs, neg) => {
+                let check_source = |source: CompareSource| -> Result<(), ReferenceError> {
+                    match source {
+                        CompareSource::Vector(register) => {
+                            (0..lanes).try_for_each(|lane| read(lane, register).map(|_| ()))
+                        }
+                        CompareSource::Scalar(register) => {
+                            read_scalar(Source::Register(register)).map(|_| ())
+                        }
+                        CompareSource::Immediate(_) => Ok(()),
+                    }
+                };
+                if exec != 0 {
+                    check_source(src0)?;
+                    check_source(src1)?;
+                    check_source(src2)?;
+                }
+                for lane in (0..lanes).filter(|&lane| executes(lane)) {
+                    let read_source = |source: CompareSource| match source {
+                        CompareSource::Vector(register) => read(lane, register),
+                        CompareSource::Scalar(register) => read_scalar(Source::Register(register)),
+                        CompareSource::Immediate(bits) => Ok(bits),
+                    };
+                    let modify = |value: u32, bit: u8| {
+                        let mut value = value;
+                        if abs & (1 << bit) != 0 {
+                            value &= 0x7fff_ffff;
+                        }
+                        if neg & (1 << bit) != 0 {
+                            value ^= 0x8000_0000;
+                        }
+                        value
+                    };
+                    let first = modify(read_source(src0)?, 0);
+                    let second = modify(read_source(src1)?, 1);
+                    let third = modify(read_source(src2)?, 2);
+                    let value = f32_median(first, second, third)
+                        .ok_or_else(|| error(offset, "binary32 operand outside median domain"))?;
                     results[lane] = Some((dst, value));
                 }
             }
