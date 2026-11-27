@@ -8,6 +8,7 @@ use xenora_isa::semantics::{
 use xenora_isa::{
     CompareRelation, ScalarAluOp, ScalarCompareOp, ScalarImmediateCompareOp, ScalarImmediateOp,
     ScalarUnaryOp, VectorAluOp, VectorAluVop3Op, VectorCompareOp, VectorCompareVop3Op,
+    VectorFloatAluVop3Op, VectorTernaryVop3Op,
 };
 
 #[test]
@@ -298,9 +299,17 @@ fn vop3_variant_dispatch_selects_exactly_the_registry_vop3_rows() {
     dispatch_selects_exactly(EncodingFamily::Vop3, |word| {
         let alu = VectorAluVop3Op::from_word(word);
         let compare = VectorCompareVop3Op::from_word(word);
-        assert!(alu.is_none() || compare.is_none(), "{word:#x}");
+        let float = VectorFloatAluVop3Op::from_word(word);
+        let ternary = VectorTernaryVop3Op::from_word(word);
+        let selected = usize::from(alu.is_some())
+            + usize::from(compare.is_some())
+            + usize::from(float.is_some())
+            + usize::from(ternary.is_some());
+        assert!(selected <= 1, "{word:#x}");
         alu.map(|op| op.semantics().name)
             .or_else(|| compare.map(|op| op.semantics().name))
+            .or_else(|| float.map(|op| op.semantics().name))
+            .or_else(|| ternary.map(|op| op.semantics().name))
     });
     // No first word of the other 64-bit families (VOP3B shares VOP3's
     // encoding bits) selects a variant.
