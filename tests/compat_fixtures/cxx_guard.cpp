@@ -27,6 +27,8 @@ extern "C" __declspec(dllimport) int __cxa_guard_acquire(u64 *guard);
 extern "C" __declspec(dllimport) void __cxa_guard_release(u64 *guard);
 extern "C" __declspec(dllimport) void __cxa_guard_abort(u64 *guard);
 extern "C" __declspec(dllimport) void ExitProcess(u32 status);
+extern "C" __declspec(dllimport) void *CreateThread(void *security, u64 stack, u32 (*start)(void *), void *parameter, u32 flags, u32 *id);
+extern "C" __declspec(dllimport) u32 WaitForSingleObject(void *object, u32 milliseconds);
 
 #define MAGIC 0x63786764u // "cgxd"
 
@@ -55,7 +57,7 @@ __declspec(allocate(".gate")) ResultBlock result = {
 static volatile u32 initialization_count;
 alignas(8) u64 direct_guard;
 alignas(8) u64 abort_guard;
-#ifdef REENTRANT_CONTROL
+#if defined(REENTRANT_CONTROL) || defined(CONTENDED_CONTROL)
 alignas(8) u64 reentrant_guard;
 #endif
 
@@ -70,6 +72,16 @@ __declspec(noinline) static u32 lazy_value() {
     static u32 value = make_lazy_value();
     return value;
 }
+
+#ifdef CONTENDED_CONTROL
+static u32 contended_worker(void *parameter) {
+    (void)parameter;
+    const int acquired = __cxa_guard_acquire(&reentrant_guard);
+    result.reentrant = static_cast<u32>(acquired);
+    initialization_count = initialization_count + 1;
+    return 0;
+}
+#endif
 
 extern "C" void guest_cxx_guard_entry() {
     const u32 first = lazy_value();
@@ -111,16 +123,26 @@ extern "C" void guest_cxx_guard_entry() {
     __cxa_guard_release(&abort_guard);
     result.abort_guard = abort_guard;
 
-    // Invalid addresses fail with -1 instead of faulting or initializing.
-    const int unmapped = __cxa_guard_acquire(reinterpret_cast<u64 *>(0x7000'0000u));
-    result.unmapped = static_cast<u32>(unmapped);
-    if (unmapped != -1)
-        ExitProcess(8);
-    const int unaligned = __cxa_guard_acquire(
+#ifdef UNMAPPED_ACQUIRE_CONTROL
+    __cxa_guard_acquire(reinterpret_cast<u64 *>(0x7000'0000u));
+    ExitProcess(92);
+#endif
+
+#ifdef UNALIGNED_ACQUIRE_CONTROL
+    __cxa_guard_acquire(
         reinterpret_cast<u64 *>(reinterpret_cast<unsigned char *>(&direct_guard) + 1));
-    result.unaligned = static_cast<u32>(unaligned);
-    if (unaligned != -1)
-        ExitProcess(8);
+    ExitProcess(93);
+#endif
+
+#ifdef CONTENDED_CONTROL
+    if (__cxa_guard_acquire(&reentrant_guard) != 1)
+        ExitProcess(44);
+    void *worker = CreateThread(0, 0, contended_worker, 0, 0, 0);
+    if (worker == 0)
+        ExitProcess(45);
+    WaitForSingleObject(worker, 0xFFFFFFFFu);
+    ExitProcess(46);
+#endif
 
 #ifdef REENTRANT_CONTROL
     if (__cxa_guard_acquire(&reentrant_guard) != 1)

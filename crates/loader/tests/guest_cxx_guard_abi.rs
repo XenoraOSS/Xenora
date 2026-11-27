@@ -20,7 +20,9 @@ use std::sync::{Arc, OnceLock};
 use xenora_loader::cpu::ExitReason;
 use xenora_loader::imports::ImportRegistry;
 use xenora_loader::services::{MockClock, ServicesState, register_standard_services};
-use xenora_loader::startup::{StartupLayout, StartupResult, run_synthetic_startup};
+use xenora_loader::startup::{
+    StartupLayout, StartupResult, run_synthetic_startup, run_synthetic_startup_scheduled,
+};
 
 /// The load address of the guest image. It differs from the preferred base,
 /// so the image's relocations matter.
@@ -32,7 +34,6 @@ const BUDGET: usize = 5_000_000;
 
 const MAGIC: u32 = 0x6378_6764;
 const LAZY_VALUE: u32 = 41;
-const GUARD_MINUS_ONE: u32 = u32::MAX;
 const LIMIT: ExitReason = ExitReason::IllegalInstruction(0xFE);
 
 // ---------------------------------------------------------------------------
@@ -109,6 +110,31 @@ fn run(name: &str, budget: usize) -> Result<Outcome, String> {
             assert_eq!(state.open_handle_count(), 0, "{name}");
             Err(error.to_string())
         }
+    }
+}
+
+fn run_scheduled(name: &str) -> Result<Outcome, String> {
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    let bytes =
+        std::fs::read(built().join(format!("{name}.exe"))).expect("read the built guest program");
+    let mut registry = ImportRegistry::new();
+    register_standard_services(&mut registry, Arc::clone(&state));
+    let layout = StartupLayout {
+        image_base: IMAGE_BASE,
+        stack_top: STACK_TOP,
+        tls_base: TLS_BASE,
+    };
+    match run_synthetic_startup_scheduled(
+        &bytes,
+        layout,
+        registry,
+        Arc::clone(&state),
+        BUDGET,
+        1024,
+        |_| {},
+    ) {
+        Ok(result) => Ok(Outcome { result, state }),
+        Err(error) => Err(error.to_string()),
     }
 }
 
@@ -285,14 +311,8 @@ fn assert_common_expectations(name: &str, outcome: &Outcome) {
     assert_eq!(block.direct_second, 0, "{name}: second direct acquire");
     assert_eq!(block.abort_first, 1, "{name}: first abort-guard acquire");
     assert_eq!(block.abort_after, 1, "{name}: acquire after abort");
-    assert_eq!(
-        block.unmapped, GUARD_MINUS_ONE,
-        "{name}: unmapped guard result"
-    );
-    assert_eq!(
-        block.unaligned, GUARD_MINUS_ONE,
-        "{name}: unaligned guard result"
-    );
+    assert_eq!(block.unmapped, 0, "{name}: no unmapped control ran");
+    assert_eq!(block.unaligned, 0, "{name}: no unaligned control ran");
     assert_eq!(
         block.direct_guard & 0xff,
         1,
@@ -334,20 +354,19 @@ fn cxx_guard_abi_runs_at_every_optimization_level() {
 }
 
 #[test]
-fn reentrant_guard_acquire_is_refused_without_mutating() {
+fn reentrant_guard_acquire_stops_before_initializer_control_returns() {
     let name = "guest-cxx-guard-reentrant";
     let outcome = run(name, BUDGET).unwrap_or_else(|error| panic!("{name}: {error}"));
     assert_eq!(
-        outcome.result.execution.exit_reason,
-        ExitReason::ProcessExit(42),
-        "{name}: the second acquire was not refused"
+        outcome.result.execution.exit_reason, LIMIT,
+        "{name}: the recursive acquire returned to the caller"
     );
-    assert_eq!(outcome.state.exit_status(), Some(42), "{name}");
+    assert_eq!(outcome.state.exit_status(), None, "{name}");
     assert_common_expectations(name, &outcome);
     assert_eq!(
         result_block(&outcome).reentrant,
-        GUARD_MINUS_ONE,
-        "{name}: reentrant acquire result"
+        0,
+        "{name}: initializer evidence after the refused acquire never ran"
     );
 }
 
@@ -367,4 +386,44 @@ fn invalid_guard_release_and_abort_stop_the_guest() {
         // The control's ExitProcess call after the invalid service never ran.
         assert_eq!(result_block(&outcome).reentrant, 0, "{name}");
     }
+}
+
+#[test]
+fn invalid_acquire_addresses_fault_before_control_exits() {
+    for name in [
+        "guest-cxx-guard-unmapped-acquire",
+        "guest-cxx-guard-unaligned-acquire",
+    ] {
+        let outcome = run(name, BUDGET).unwrap_or_else(|error| panic!("{name}: {error}"));
+        assert!(
+            matches!(
+                outcome.result.execution.exit_reason,
+                ExitReason::MemoryFault(_) | LIMIT
+            ),
+            "{name}: invalid acquire returned: {:?}",
+            outcome.result.execution.exit_reason
+        );
+        assert_eq!(outcome.state.exit_status(), None, "{name}");
+    }
+}
+
+#[test]
+fn contended_guard_acquire_stops_before_worker_initializer_evidence() {
+    let name = "guest-cxx-guard-contended";
+    let outcome = run_scheduled(name).unwrap_or_else(|error| panic!("{name}: {error}"));
+    assert_eq!(
+        outcome.result.execution.exit_reason, LIMIT,
+        "{name}: contended acquire returned to the worker"
+    );
+    assert_eq!(outcome.state.exit_status(), None, "{name}");
+    assert_eq!(
+        result_block(&outcome).reentrant,
+        0,
+        "{name}: worker continuation evidence never ran"
+    );
+    assert_eq!(
+        result_block(&outcome).init_count,
+        1,
+        "{name}: only the original lazy initializer ran"
+    );
 }

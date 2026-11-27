@@ -106,6 +106,8 @@ cat > kernel32.def <<'DEF'
 LIBRARY kernel32.dll
 EXPORTS
     ExitProcess
+    CreateThread
+    WaitForSingleObject
 DEF
 link /lib /machine:x64 /def:libstdc++.def /out:libstdc++.lib
 link /lib /machine:x64 /def:kernel32.def /out:kernel32.lib
@@ -126,3 +128,6 @@ done
 build guest-cxx-guard-reentrant O1 REENTRANT_CONTROL
 build guest-cxx-guard-invalid-release O1 INVALID_RELEASE_CONTROL
 build guest-cxx-guard-invalid-abort O1 INVALID_ABORT_CONTROL
+build guest-cxx-guard-unmapped-acquire O1 UNMAPPED_ACQUIRE_CONTROL
+build guest-cxx-guard-unaligned-acquire O1 UNALIGNED_ACQUIRE_CONTROL
+build guest-cxx-guard-contended O1 CONTENDED_CONTROL

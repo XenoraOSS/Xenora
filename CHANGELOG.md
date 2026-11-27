@@ -80,6 +80,7 @@ exact revision and known limitations.
 - An original hosted C record and compression fixture, with O0–O3 guest builds, independently specified output and file-byte checks, and malformed-input controls (#796).
 
 ### Fixed
+- Corrected Itanium guard acquisition failure behavior (#946): unsupported null, unaligned, unmapped, recursive or contended `__cxa_guard_acquire` outcomes now stop the guest before compiler-generated initializer control can resume, rather than returning the ABI-unsafe nonzero `-1`. Original no-CRT C++ recursive and contended controls prove initializer evidence never runs after refusal; successful acquire/release/abort semantics are unchanged. Local verification only.
 
 - QA benchmark statistics now reject NaN and infinite samples instead of producing meaningless ordering statistics or non-standard JSON evidence (#827).
 - QA verification evidence is now bound to the selected checkout: profile suites run with that repository as their working directory, `qa verify` rejects a revision other than the checkout HEAD, and `--check-stale` requires matching profile and revision metadata and passing suites while reporting staleness separately (#277).

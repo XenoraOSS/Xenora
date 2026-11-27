@@ -11,12 +11,14 @@
 //! The scheduler runs one guest thread at a time, so a guard already held by
 //! another guest thread cannot be waited on here. Contention and recursive
 //! acquisition fail with `-1` and `ERROR_INVALID_PARAMETER` instead of
-//! silently initializing twice. This is a documented Xenora limitation, not a
-//! general implementation of the host ABI's blocking behavior.
+//! silently initializing twice. Because the compiler-generated caller treats
+//! every nonzero acquire result as permission to initialize, these unsupported
+//! acquisitions stop the guest instead of returning -1. This is a documented
+//! Xenora limitation, not a general implementation of the host ABI's blocking
+//! behavior.
 
 use std::collections::BTreeMap;
 
-use super::ERROR_INVALID_PARAMETER;
 use crate::cpu::ExitReason;
 use crate::runtime::ServiceContext;
 
@@ -35,33 +37,28 @@ pub(crate) struct GuardTable {
     guards: BTreeMap<u64, GuardState>,
 }
 
-fn reject<T>(context: &ServiceContext<'_>, value: T) -> Result<T, ExitReason> {
-    context
-        .state
-        .fail(context.teb, ERROR_INVALID_PARAMETER, value)
-}
-
 fn aligned_guard(guard: u64) -> bool {
     guard != 0 && guard.is_multiple_of(8)
 }
 
-/// Return 1 when the caller owns initialization, 0 when it is already done,
-/// and -1 for an invalid or contended guard.
+/// Return 1 when the caller owns initialization and 0 when it is already done.
+/// Invalid, recursive or contended acquisition cannot safely return to the
+/// compiler-generated caller, so it stops the guest.
 pub(crate) fn cxx_guard_acquire(
     context: &mut ServiceContext<'_>,
     guard: u64,
 ) -> Result<i32, ExitReason> {
     if !aligned_guard(guard) {
-        return reject(context, -1);
+        return Err(UNSUPPORTED);
     }
     let initialized = match context.memory.read_u8(guard) {
         Ok(byte) => byte != 0,
-        Err(_) => return reject(context, -1),
+        Err(error) => return Err(ExitReason::MemoryFault(error)),
     };
     let mut table = context.state.cxx_guards.lock().expect("C++ guard table");
     match table.guards.get(&guard) {
         Some(GuardState::Initialized) => return Ok(0),
-        Some(GuardState::Initializing(_)) => return reject(context, -1),
+        Some(GuardState::Initializing(_)) => return Err(UNSUPPORTED),
         None => {}
     }
     if initialized {
