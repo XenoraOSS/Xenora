@@ -17,6 +17,7 @@ pub mod jit;
 pub mod memory;
 pub mod module_binding;
 pub mod module_graph;
+pub mod module_iat;
 pub mod module_layout;
 pub mod module_memory;
 pub mod output_path;
