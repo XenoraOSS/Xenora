@@ -45,6 +45,9 @@ const IMPORTS: &[(&str, &str)] = &[
     ("msvcrt.dll", "_chdir"),
     ("msvcrt.dll", "_fullpath"),
     (KERNEL32, "CreateDirectoryA"),
+    (KERNEL32, "FindFirstFileW"),
+    (KERNEL32, "FindNextFileW"),
+    (KERNEL32, "FindClose"),
     ("msvcrt.dll", "strstr"),
     ("msvcrt.dll", "strtok"),
     ("msvcrt.dll", "strcspn"),
@@ -218,6 +221,64 @@ fn create_file_opens_directories_only_with_backup_semantics() {
     );
     assert_ne!(reopened, INVALID_HANDLE_VALUE);
     assert_eq!(guest.call("CloseHandle", &[reopened]), 1);
+}
+
+/// FindFirstFile enumerates the root through an anchored search pattern,
+/// exactly as a drive-root-relative path is ordinary on Windows, and the
+/// enumeration of any directory begins with the `.` and `..` entries the
+/// real enumeration always returns - so even an empty directory answers
+/// entries for a `*` pattern, while a pattern that matches nothing keeps
+/// its honest ERROR_FILE_NOT_FOUND.
+#[test]
+fn find_first_enumerates_the_root_with_the_dot_entries() {
+    let mut guest = Guest::new(IMPORTS, &[]);
+    // The wide find data stores the name as UTF-16 units at offset 44.
+    let find_name = |guest: &mut Guest, at: u64| -> Vec<u8> {
+        let mut name = Vec::new();
+        for index in 0..12u64 {
+            match guest.memory.read_u16(at + 44 + index * 2).unwrap() {
+                0 => break,
+                unit => name.push(unit as u8),
+            }
+        }
+        name
+    };
+    // The anchored pattern `\*` enumerates the root: it is no invalid name.
+    let pattern = wide(&mut guest, "\\*");
+    let search = guest.call("FindFirstFileW", &[pattern, SCRATCH + 0x600]);
+    assert_ne!(search, INVALID_HANDLE_VALUE);
+    // The first entries are the dot entries, both directories, even though
+    // the root holds nothing yet.
+    assert_eq!(guest.u32_at(SCRATCH + 0x600), 0x10);
+    assert_eq!(find_name(&mut guest, SCRATCH + 0x600), b".");
+    assert_eq!(guest.call("FindNextFileW", &[search, SCRATCH + 0x600]), 1);
+    assert_eq!(find_name(&mut guest, SCRATCH + 0x600), b"..");
+    // The empty root ends after them, with the honest no-more-files answer.
+    assert_eq!(guest.call("FindNextFileW", &[search, SCRATCH + 0x600]), 0);
+    assert_eq!(last_error(&mut guest), 18);
+    assert_eq!(guest.call("FindClose", &[search]), 1);
+    // A pattern that matches nothing keeps ERROR_FILE_NOT_FOUND.
+    let pattern = wide(&mut guest, "\\*.zzz");
+    assert_eq!(
+        guest.call("FindFirstFileW", &[pattern, SCRATCH + 0x600]),
+        INVALID_HANDLE_VALUE
+    );
+    assert_eq!(last_error(&mut guest), 2);
+    // A real entry enumerates after the dots. A directory the filesystem
+    // has at the root appears once the dots are consumed.
+    narrow_at(&mut guest, SCRATCH + 0x40, "c:\\realdir");
+    assert_eq!(guest.call("CreateDirectoryA", &[SCRATCH + 0x40, 0]), 1);
+    let pattern = wide(&mut guest, "\\*");
+    let search = guest.call("FindFirstFileW", &[pattern, SCRATCH + 0x600]);
+    assert_ne!(search, INVALID_HANDLE_VALUE);
+    assert_eq!(find_name(&mut guest, SCRATCH + 0x600), b".");
+    let mut names = Vec::new();
+    while guest.call("FindNextFileW", &[search, SCRATCH + 0x600]) == 1 {
+        names.push(find_name(&mut guest, SCRATCH + 0x600));
+        assert!(names.len() <= 8, "enumeration never ends");
+    }
+    assert_eq!(names, [b"..".to_vec(), b"realdir".to_vec()]);
+    assert_eq!(guest.call("FindClose", &[search]), 1);
 }
 
 /// The hosted machine has one fixed disk, letter C: bit 2 of the drive mask,

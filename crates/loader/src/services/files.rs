@@ -485,6 +485,20 @@ fn find_first(
             });
         }
     }
+    // The real enumeration of a directory always begins with the dot
+    // entries: `.` is the directory itself and `..` its parent, both
+    // directories, and even an empty directory answers them to a `*`
+    // pattern. They go through the same wildcard match as real names.
+    for dot in [".", ".."] {
+        if wildcard_match(pattern, dot) {
+            entries.push(SearchEntry {
+                name: dot.to_owned(),
+                attributes: 0x10,
+                size: 0,
+                times: EPOCH_FILETIME3,
+            });
+        }
+    }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     let Some(first) = entries.first() else {
         return Err(FILE_NOT_FOUND);
