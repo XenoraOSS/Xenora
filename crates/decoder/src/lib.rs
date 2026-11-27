@@ -9,8 +9,8 @@ pub use xenora_isa::{
     VectorSource, VectorSwapOp, VectorUnaryOp,
 };
 use xenora_isa::{
-    BUFFER_LOAD_DWORD, BUFFER_STORE_DWORD, EXP, IMAGE_SAMPLE_LZ, S_WAITCNT_VSCNT, V_ADD_F32,
-    V_INTERP_P1_F32, V_INTERP_P2_F32, V_MOV_B32, V_MUL_F32, VCC_LO,
+    BUFFER_LOAD_DWORD, BUFFER_STORE_DWORD, EXP, IMAGE_SAMPLE_LZ, S_WAITCNT_VSCNT, V_INTERP_P1_F32,
+    V_INTERP_P2_F32, V_MOV_B32, VCC_LO,
 };
 
 use xenora_isa::meta::EncodingFamily;
@@ -40,7 +40,7 @@ const fn concat_forms<const N: usize>() -> [(&'static str, EncodingFamily); N] {
 }
 
 /// Decoded forms not yet described by the semantic registry.
-const HANDWRITTEN_FORMS: [(&str, EncodingFamily); 13] = [
+const HANDWRITTEN_FORMS: [(&str, EncodingFamily); 11] = [
     ("BUFFER_LOAD_DWORD", EncodingFamily::Mubuf),
     ("BUFFER_STORE_DWORD", EncodingFamily::Mubuf),
     ("EXP", EncodingFamily::Exp),
@@ -49,11 +49,9 @@ const HANDWRITTEN_FORMS: [(&str, EncodingFamily); 13] = [
     ("S_BUFFER_LOAD_DWORDX2", EncodingFamily::Smem),
     ("S_BUFFER_LOAD_DWORDX4", EncodingFamily::Smem),
     ("S_WAITCNT_VSCNT", EncodingFamily::Sopk),
-    ("V_ADD_F32", EncodingFamily::Vop2),
     ("V_INTERP_P1_F32", EncodingFamily::Vintrp),
     ("V_INTERP_P2_F32", EncodingFamily::Vintrp),
     ("V_MOV_B32", EncodingFamily::Vop1),
-    ("V_MUL_F32", EncodingFamily::Vop2),
 ];
 
 /// A successfully decoded instruction and its location in the input stream.
@@ -466,6 +464,15 @@ fn decode_gfx1030(bytes: &[u8], offset: usize) -> Result<(Instruction, u8), Deco
             OperandRule::Vop2Vgpr | OperandRule::Vop2Vcc => {
                 vector_src0(first, bytes, op.assembly_name())?
             }
+            // Operand rule `vop2_f32`: the guide does not define how a binary32
+            // form reads an integer inline constant (selectors 128-208).
+            OperandRule::Vop2F32 if matches!(first & 0x1ff, 128..=208) => {
+                return Err(unsupported(
+                    op.assembly_name(),
+                    "expected a VGPR, normal SGPR, vcc_lo or literal binary32 source",
+                ));
+            }
+            OperandRule::Vop2F32 => vector_src0(first, bytes, op.assembly_name())?,
             _ => unreachable!("non-VOP2 operand rule for VOP2 instruction"),
         };
         return Ok((
@@ -476,20 +483,6 @@ fn decode_gfx1030(bytes: &[u8], offset: usize) -> Result<(Instruction, u8), Deco
                 src1,
             },
             len,
-        ));
-    }
-    if V_ADD_F32.matches(first) {
-        let (dst, src0, src1) = vop2_registers(first, "v_add_f32_e32")?;
-        return Ok((
-            Instruction::VectorAddF32 { dst, src0, src1 },
-            V_ADD_F32.byte_len(),
-        ));
-    }
-    if V_MUL_F32.matches(first) {
-        let (dst, src0, src1) = vop2_registers(first, "v_mul_f32_e32")?;
-        return Ok((
-            Instruction::VectorMulF32 { dst, src0, src1 },
-            V_MUL_F32.byte_len(),
         ));
     }
     if S_WAITCNT_VSCNT.matches(first) {

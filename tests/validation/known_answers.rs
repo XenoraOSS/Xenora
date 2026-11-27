@@ -440,6 +440,24 @@ mod review {
         assert_eq!(independent.as_deref().ok(), expected, "{independent:?}");
     }
 
+    /// The encoding is valid, so the compiler accepts it, but the value is
+    /// outside the modelled domain, so both interpreters refuse it at run
+    /// time. The compiler cannot see the operands when they are in VGPRs.
+    fn verify_refused_at_run_time(code: &[u8], input: &[u32]) {
+        assert!(
+            compile(Architecture::Gfx1030, code).is_ok(),
+            "the compiler must accept the encoding"
+        );
+        let reference = xenora_ref::execute(code, input).unwrap_err();
+        assert_eq!(reference.offset, 16, "{reference:?}");
+        assert_eq!(
+            reference.detail, "binary32 operand or result outside domain",
+            "{reference:?}"
+        );
+        let independent = independent_ref::execute(code, input).unwrap_err();
+        assert!(independent.starts_with("0x10:"), "{independent}");
+    }
+
     fn check(input: &[u32]) {
         let expected: Vec<_> = input
             .iter()
@@ -516,7 +534,7 @@ mod review {
     }
 
     #[test]
-    fn float_results_and_rejections_follow_the_exact_domain() {
+    fn float_results_and_rejections_follow_the_guide_domain() {
         let fixture = include_bytes!("../../fixtures/rdna2/float-exact.bin");
         let input = [
             0,
@@ -542,19 +560,38 @@ mod review {
         assert_eq!(xenora_ref::execute(fixture, &input).unwrap(), expected);
         assert!(compile(Architecture::Gfx1030, fixture).is_ok());
 
-        for rejected_literal in [1_u32, 0x3380_0000, 0x0080_0000, 0xff80_0000] {
-            // Subnormal, midpoint rounding at 1, binary64 absorption, infinity.
+        // The guide's rule for the arithmetic forms (12.7, page 131) is a plain
+        // IEEE binary32 operation: it has no sign restriction and no
+        // exactness requirement, so these constants are computed rather than
+        // refused. The values are hand-derived; the fixture computes
+        // (x + c) * c with x = 1 for the input below.
+        //   c = 2^-24: 1 + 2^-24 is the midpoint between 1 and 1 + 2^-23, so it
+        //     rounds to the even one, 1, and 1 * 2^-24 = 2^-24.
+        //   c = 2^-126: 1 + 2^-126 rounds to 1, and 1 * 2^-126 = 2^-126.
+        //   c = -inf: 1 + (-inf) = -inf, and (-inf) * (-inf) = +inf.
+        for (constant, value) in [
+            (0x3380_0000u32, 0x3380_0000u32),
+            (0x0080_0000, 0x0080_0000),
+            (0xff80_0000, 0x7f80_0000),
+        ] {
             let mut changed = *fixture;
-            changed[36..40].copy_from_slice(&rejected_literal.to_le_bytes());
+            changed[36..40].copy_from_slice(&constant.to_le_bytes());
             assert!(
-                compile(Architecture::Gfx1030, &changed).is_err(),
-                "{rejected_literal:08x}"
+                compile(Architecture::Gfx1030, &changed).is_ok(),
+                "{constant:08x}"
             );
-            assert!(
-                xenora_ref::execute(&changed, &[0]).is_err(),
-                "{rejected_literal:08x}"
+            assert_eq!(
+                xenora_ref::execute(&changed, &[0]).unwrap(),
+                vec![value],
+                "{constant:08x}"
             );
         }
+        // A subnormal operand is outside the domain: Metal flushes it, so the
+        // interpreters refuse it at run time rather than return a value the
+        // two paths would not agree on.
+        let mut subnormal = *fixture;
+        subnormal[36..40].copy_from_slice(&1u32.to_le_bytes());
+        assert!(xenora_ref::execute(&subnormal, &[0]).is_err());
     }
 
     #[test]
@@ -606,37 +643,37 @@ mod review {
     }
 
     #[test]
-    fn binary32_boundaries_follow_exact_significand_arithmetic() {
+    fn binary32_boundaries_follow_the_guide_domain() {
         const ADD: u32 = 0x0602_0702;
         const MUL: u32 = 0x1002_0702;
         let input = [0, 0x0040_0000, u32::MAX];
         let one = 0x3f80_0000;
         let min_normal = 0x0080_0000;
         let max_normal = 0x7f7f_ffff;
+        // The guide's arithmetic forms (12.7, page 131) are plain IEEE
+        // binary32 operations, so a value outside the old "positive, normal,
+        // exact" subset is computed whenever the two paths agree on it. The
+        // expectations are hand-derived: the rounding is to nearest with ties
+        // to even (MODE.FP_ROUND pinned to 0, guide 3.5 page 15), an overflow
+        // gives a signed infinity, and +0 equals -0.
         for (op, a, b, expected) in [
             (ADD, one, 0x3400_0000, Some(0x3f80_0001)), // 1 + 2^-23
             (ADD, 0x3f7f_ffff, 0x3380_0000, Some(one)), // (1 - 2^-24) + 2^-24
             (ADD, min_normal, min_normal, Some(0x0100_0000)), // 2^-125
-            (ADD, one, 0x3380_0000, None),              // Midpoint 1 + 2^-24
-            (ADD, one, min_normal, None), // Absorbed in binary64 if computed in host FP
-            (ADD, max_normal, max_normal, None), // Overflow
             (MUL, 0x3fc0_0000, 0x3fc0_0000, Some(0x4010_0000)), // (3/2)^2 = 9/4
-            (MUL, 0x7e80_0000, min_normal, Some(one)), // 2^126 × 2^-126
+            (MUL, 0x7e80_0000, min_normal, Some(one)),  // 2^126 × 2^-126
             (MUL, max_normal, one, Some(max_normal)),
-            (MUL, 0x4580_0800, 0x4580_0800, None), // 4097² = 16,785,409, an odd integer
-            (MUL, min_normal, 0x3f00_0000, None),  // 2^-127 is subnormal
-            (MUL, max_normal, 0x4000_0000, None),  // Overflow
-            (ADD, 0, one, None),                   // Positive zero
-            (ADD, one, 0x8000_0000, None),         // Negative zero
-            (ADD, 0xbf80_0000, 0x4000_0000, None), // Result normal, operand negative
-            (ADD, 0x4000_0000, 0xbf80_0000, None), // Same result, other operand negative
-            (ADD, one, 1, None),                   // Smallest positive subnormal
-            (MUL, 1, 0x7e80_0000, None), // Subnormal operand would yield exact normal 2^-23
-            (MUL, 0x7e80_0000, 1, None),
-            (ADD, one, 0x7f80_0000, None), // Infinity
-            (MUL, 0xff80_0000, one, None), // Negative infinity
-            (ADD, one, 0x7fc0_0001, None), // Quiet NaN with payload
-            (MUL, 0x7f80_0001, one, None), // Signaling NaN with payload
+            (ADD, one, 0x3380_0000, Some(one)), // Midpoint 1 + 2^-24, ties to even
+            (ADD, one, min_normal, Some(one)),  // 1 + 2^-126 rounds to 1
+            (ADD, max_normal, max_normal, Some(0x7f80_0000)), // Overflow
+            (MUL, 0x4580_0800, 0x4580_0800, Some(0x4b80_1000)), // 4097² is a midpoint, so it rounds to even
+            (MUL, max_normal, 0x4000_0000, Some(0x7f80_0000)),  // Overflow
+            (ADD, 0, one, Some(one)),                           // Positive zero
+            (ADD, one, 0x8000_0000, Some(one)),                 // Negative zero
+            (ADD, 0xbf80_0000, 0x4000_0000, Some(one)),         // Result normal, operand negative
+            (ADD, 0x4000_0000, 0xbf80_0000, Some(one)), // Same result, other operand negative
+            (ADD, one, 0x7f80_0000, Some(0x7f80_0000)), // Infinity
+            (MUL, 0xff80_0000, one, Some(0xff80_0000)), // Negative infinity
         ] {
             // Force literal moves into v2 and v3. VOP2 writes v1, the existing
             // store source. The exact words were cross-checked with gfx1030 llvm-mc.
@@ -648,6 +685,22 @@ mod review {
                 &input,
                 expected.as_ref().map(|values| values.as_slice()),
             );
+        }
+        // A subnormal operand or result is outside the domain: Metal flushes
+        // it, so the interpreters refuse it at run time. The encoding itself is
+        // valid and the compiler accepts it, because the operands are in
+        // VGPRs and it cannot see their values.
+        for (op, a, b) in [
+            (MUL, min_normal, 0x3f00_0000), // 2^-127 is subnormal
+            (ADD, one, 1),                  // Smallest positive subnormal
+            (MUL, 1, 0x7e80_0000),          // Subnormal operand would yield exact normal 2^-23
+            (MUL, 0x7e80_0000, 1),
+            (ADD, one, 0x7fc0_0001), // Quiet NaN with payload
+            (MUL, 0x7f80_0001, one), // Signaling NaN with payload
+        ] {
+            let mut code = words(&[0x7e04_02ff, a, 0x7e06_02ff, b, op]);
+            code.extend_from_slice(&FIXTURE[28..]);
+            verify_refused_at_run_time(&code, &input);
         }
     }
 

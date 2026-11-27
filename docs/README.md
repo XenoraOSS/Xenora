@@ -18,6 +18,7 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 - [Translated offscreen stages](interfaces.md#translated-offscreen-stages) — Translated vertex and pixel stages for the bounded gfx1030 subset.
 - [Blend and depth passes](interfaces.md) — Native blend and depth graphics passes with per-draw state.
 - [Apple GPU evidence](research/apple-gpu.md) and [host lab record](research/host-lab.md) — Observed behavior and historical floating-point results.
+- [Metal acceleration-structure boundaries](research/metal-acceleration-structures.md) — Public build/refit/copy lifetime, scratch ownership, synchronization and deterministic fixture requirements.
 
 ## RDNA 2 decoding and shader translation
 
@@ -30,6 +31,7 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 - [Scalar buffer loads](shaders/scalar-memory.md) — SMEM loads, their bounds and wait rules, and where a loaded SGPR may be used.
 - [Run-time uniform branches](shaders/runtime-branches.md) — `s_cbranch_scc0` on a loaded value, if/else regions and their limits.
 - [VOP1 vector unary and swap](shaders/vector-unary.md) — Wave32 integer bit operations, register exchange, and operand limits.
+- [VOP2 binary32 arithmetic](shaders/vector-binary-f32.md) — Wave32 binary32 add, subtract both ways, multiply, and the guide's minimum and maximum with their NaN and signed-zero rules.
 - [VOP2 select and carry](shaders/vector-vcc.md) — Wave32 lane selection, carry and borrow through the vector condition code.
 - [VOPC integer compares](shaders/vector-compare.md) — Wave32 compare forms, the VCC/EXEC contract, runtime `s_cbranch_vccz` and the Metal mapping.
 - [Metal Shading Language generation](shaders/msl.md) and [independent CPU reference](shaders/reference-interpreter.md) — Translation rules and separate CPU execution models.

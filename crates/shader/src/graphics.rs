@@ -3,10 +3,12 @@
 use std::fmt::Write;
 
 use xenora_decoder::{
-    DecodedInstruction, ExportTarget, Instruction, InterpolationPhase, VectorSource,
+    DecodedInstruction, ExportTarget, Instruction, InterpolationPhase, VectorAluOp, VectorSource,
 };
 
-use super::{Architecture, Binary, CompileError, CompiledShader, Value, decode_fixture};
+use super::{
+    Architecture, Binary, CompileError, CompiledShader, Value, VectorBinary, decode_fixture,
+};
 
 /// Entry point of the translated vertex stage.
 pub const VERTEX_ENTRY_POINT: &str = "xenora_vertex";
@@ -229,14 +231,16 @@ fn lift(
                 };
                 registers[usize::from(dst)] = Some(value);
             }
-            Instruction::VectorAddF32 { dst, src0, src1 }
-            | Instruction::VectorMulF32 { dst, src0, src1 }
-                if stage == Stage::Vertex && !exporting =>
-            {
-                let operator = match instruction {
-                    Instruction::VectorAddF32 { .. } => Binary::FloatAdd,
-                    _ => Binary::FloatMul,
-                };
+            Instruction::VectorAlu {
+                op: op @ (VectorAluOp::AddF32 | VectorAluOp::MulF32),
+                dst,
+                src0: VectorSource::Register(src0),
+                src1,
+            } if stage == Stage::Vertex && !exporting => {
+                let operator = Binary::Vector(match op {
+                    VectorAluOp::AddF32 => VectorBinary::AddF32,
+                    _ => VectorBinary::MulF32,
+                });
                 let value = ir.push(Some(offset), Op::Binary(operator, read(src0)?, read(src1)?));
                 registers[usize::from(dst)] = Some(value);
             }

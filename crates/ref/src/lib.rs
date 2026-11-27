@@ -89,6 +89,9 @@ pub enum Op {
     /// VOP2 32-bit integer form: VDST, SRC0 (VGPR, SGPR, `vcc_lo`, inline
     /// integer or literal) and VSRC1, with implicit VCC for select/carry forms.
     VectorInteger(VectorInteger, u8, CompareSource, u8),
+    /// VOP2 binary32 form: VDST, SRC0 (VGPR, SGPR, `vcc_lo` or literal; no
+    /// integer inline constant) and VSRC1. Writes neither VCC nor SCC.
+    VectorFloat(VectorFloat, u8, CompareSource, u8),
     /// VOP1 32-bit integer or bit form: VDST and SRC0 (VGPR, SGPR, `vcc_lo`,
     /// inline integer or literal). Writes neither VCC nor SCC.
     VectorUnary(VectorUnary, u8, CompareSource),
@@ -370,8 +373,6 @@ pub enum VectorAlu {
     And,
     Or,
     Xor,
-    FloatAdd,
-    FloatMultiply,
 }
 
 /// VOP2 32-bit integer forms with a general SRC0 (AMD RDNA 2 ISA guide
@@ -498,6 +499,206 @@ impl VectorInteger {
             }
         }
     }
+}
+
+/// VOP2 binary32 arithmetic (AMD RDNA 2 ISA guide section 12.7: ADD, SUB,
+/// SUBREV and MUL on page 131, MIN on page 132, MAX on page 133).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum VectorFloat {
+    /// 3: D = S0 + S1.
+    Add,
+    /// 4: D = S0 - S1.
+    Subtract,
+    /// 5: D = S1 - S0.
+    SubtractReverse,
+    /// 8: D = S0 * S1.
+    Multiply,
+    /// 15: the page 132 minimum.
+    Minimum,
+    /// 16: the page 133 maximum.
+    Maximum,
+}
+
+impl VectorFloat {
+    /// Opcode bits 30-25 of the VOP2 word.
+    fn from_opcode(opcode: u8) -> Option<Self> {
+        Some(match opcode {
+            3 => Self::Add,
+            4 => Self::Subtract,
+            5 => Self::SubtractReverse,
+            8 => Self::Multiply,
+            15 => Self::Minimum,
+            16 => Self::Maximum,
+            _ => return None,
+        })
+    }
+
+    /// D for S0 = `a`, S1 = `b`, or `None` for an input or result outside the
+    /// modeled domain (docs/shaders/vector-binary-f32.md): a subnormal input,
+    /// a NaN input to ADD/SUB/SUBREV/MUL or a signalling NaN to MIN/MAX, and
+    /// an arithmetic result that is NaN or whose exact value is nonzero and
+    /// below 2^-126 in magnitude.
+    fn apply(self, a: u32, b: u32) -> Option<u32> {
+        if f32_subnormal(a) || f32_subnormal(b) {
+            return None;
+        }
+        const SIGN: u32 = 0x8000_0000;
+        match self {
+            Self::Minimum | Self::Maximum => f32_select(self == Self::Minimum, a, b),
+            _ if f32_nan(a) || f32_nan(b) => None,
+            Self::Add => f32_add(a, b),
+            Self::Subtract => f32_add(a, b ^ SIGN),
+            Self::SubtractReverse => f32_add(b, a ^ SIGN),
+            Self::Multiply => f32_multiply(a, b),
+        }
+    }
+}
+
+fn f32_nan(bits: u32) -> bool {
+    bits & 0x7fff_ffff > 0x7f80_0000
+}
+
+fn f32_subnormal(bits: u32) -> bool {
+    bits & 0x7f80_0000 == 0 && bits & 0x007f_ffff != 0
+}
+
+/// Sign, integer significand and power of two of a finite binary32 value
+/// that is zero or normal: |x| = significand * 2^power.
+fn f32_split(bits: u32) -> (bool, u128, i32) {
+    let biased = ((bits >> 23) & 0xff) as i32;
+    let significand = if biased == 0 {
+        0
+    } else {
+        u128::from(bits & 0x007f_ffff | 0x0080_0000)
+    };
+    (bits >> 31 == 1, significand, biased - 150)
+}
+
+/// Guide pages 132 and 133, IEEE_MODE read as irrelevant once signalling NaNs
+/// are refused: a quiet NaN gives the other operand (S1 when both are NaN), a
+/// +0/-0 pair gives -0 for MIN and +0 for MAX, otherwise S0 < S1 ? S0 : S1
+/// (MIN) or S0 >= S1 ? S0 : S1 (MAX; S0 > S1 outside IEEE mode selects the
+/// same bits). The order is the integer order of the sign-magnitude words.
+fn f32_select(minimum: bool, a: u32, b: u32) -> Option<u32> {
+    let signalling = |x: u32| f32_nan(x) && x & 0x0040_0000 == 0;
+    if signalling(a) || signalling(b) {
+        return None;
+    }
+    if f32_nan(a) {
+        return Some(b);
+    }
+    if f32_nan(b) {
+        return Some(a);
+    }
+    if (a | b) & 0x7fff_ffff == 0 {
+        return Some(if minimum { a | b } else { a & b });
+    }
+    // Negative values order by decreasing magnitude, positive by increasing.
+    let key = |x: u32| -> i64 {
+        let magnitude = i64::from(x & 0x7fff_ffff);
+        if x >> 31 == 1 { -magnitude } else { magnitude }
+    };
+    let take_a = if minimum {
+        key(a) < key(b)
+    } else {
+        key(a) >= key(b)
+    };
+    Some(if take_a { a } else { b })
+}
+
+/// Correctly rounded (nearest even) binary32 sum of two non-NaN words.
+fn f32_add(a: u32, b: u32) -> Option<u32> {
+    const INFINITY: u32 = 0x7f80_0000;
+    let infinite = |x: u32| x & 0x7fff_ffff == INFINITY;
+    match (infinite(a), infinite(b)) {
+        // +inf + -inf is NaN.
+        (true, true) => return (a == b).then_some(a),
+        (true, false) => return Some(a),
+        (false, true) => return Some(b),
+        (false, false) => {}
+    }
+    let (sign_a, mut significand_a, power_a) = f32_split(a);
+    let (sign_b, mut significand_b, power_b) = f32_split(b);
+    if significand_a == 0 && significand_b == 0 {
+        // Only -0 + -0 is -0 under round to nearest.
+        return Some(a & b);
+    }
+    if significand_a == 0 {
+        return Some(b);
+    }
+    if significand_b == 0 {
+        return Some(a);
+    }
+    // Align on the lower power. A gap above 100 leaves the smaller operand
+    // far below a quarter unit of the larger normal one, which is then exact.
+    let power = power_a.min(power_b);
+    let gap = power_a.abs_diff(power_b);
+    if gap > 100 {
+        return Some(if power_a > power_b { a } else { b });
+    }
+    if power_a > power_b {
+        significand_a <<= gap;
+    } else {
+        significand_b <<= gap;
+    }
+    let signed = |negative: bool, value: u128| {
+        let value = value as i128;
+        if negative { -value } else { value }
+    };
+    let sum = signed(sign_a, significand_a) + signed(sign_b, significand_b);
+    if sum == 0 {
+        // An exact cancellation is +0 under round to nearest.
+        return Some(0);
+    }
+    f32_round(sum < 0, sum.unsigned_abs(), power)
+}
+
+/// Correctly rounded (nearest even) binary32 product of two non-NaN words.
+fn f32_multiply(a: u32, b: u32) -> Option<u32> {
+    let sign = (a ^ b) & 0x8000_0000;
+    let infinite = |x: u32| x & 0x7fff_ffff == 0x7f80_0000;
+    let zero = |x: u32| x & 0x7fff_ffff == 0;
+    if infinite(a) || infinite(b) {
+        // 0 * inf is NaN.
+        return (!zero(a) && !zero(b)).then_some(sign | 0x7f80_0000);
+    }
+    let (_, significand_a, power_a) = f32_split(a);
+    let (_, significand_b, power_b) = f32_split(b);
+    if significand_a == 0 || significand_b == 0 {
+        return Some(sign);
+    }
+    f32_round(sign != 0, significand_a * significand_b, power_a + power_b)
+}
+
+/// Encode `magnitude * 2^power` (nonzero) rounded to nearest even, or `None`
+/// when the exact value is below 2^-126 (MODE.FP_DENORM output flushing is
+/// not pinned). Overflow gives infinity.
+fn f32_round(negative: bool, magnitude: u128, power: i32) -> Option<u32> {
+    let width = 128 - magnitude.leading_zeros() as i32;
+    // magnitude * 2^power lies in [2^(width - 1 + power), 2^(width + power)).
+    if width - 1 + power < -126 {
+        return None;
+    }
+    let shift = width - 24;
+    let (mut significand, mut shift) = if shift > 0 {
+        let kept = magnitude >> shift;
+        let remainder = magnitude - (kept << shift);
+        let half = 1_u128 << (shift - 1);
+        let up = remainder > half || (remainder == half && kept % 2 == 1);
+        (kept + u128::from(up), shift)
+    } else {
+        (magnitude << -shift, shift)
+    };
+    if significand == 1 << 24 {
+        significand >>= 1;
+        shift += 1;
+    }
+    let biased = shift + power + 23 + 127;
+    let sign = u32::from(negative) << 31;
+    if biased >= 255 {
+        return Some(sign | 0x7f80_0000);
+    }
+    Some(sign | (biased as u32) << 23 | (significand as u32 & 0x007f_ffff))
 }
 
 /// VOP1 32-bit integer and bit forms with a general SRC0, and the binary32
@@ -940,14 +1141,10 @@ pub fn decode(code: &[u8]) -> Result<Vec<DecodedInstruction>, ReferenceError> {
                 )
             }
             [first, second, third, opcode, ..]
-                if matches!(
-                    opcode & 0xfe,
-                    0x06 | 0x10 | 0x2c | 0x30 | 0x34 | 0x36 | 0x38 | 0x3a
-                ) && second & 1 != 0 =>
+                if matches!(opcode & 0xfe, 0x2c | 0x30 | 0x34 | 0x36 | 0x38 | 0x3a)
+                    && second & 1 != 0 =>
             {
                 let kind = match opcode & 0xfe {
-                    0x06 => VectorAlu::FloatAdd,
-                    0x10 => VectorAlu::FloatMultiply,
                     0x34 => VectorAlu::ShiftLeft,
                     0x2c => VectorAlu::ShiftRight,
                     0x30 => VectorAlu::ArithmeticShiftRight,
@@ -1038,6 +1235,21 @@ pub fn decode(code: &[u8]) -> Result<Vec<DecodedInstruction>, ReferenceError> {
                     Op::WideCompare(comparison, width, src0, vsrc1)
                 };
                 (op, length)
+            }
+            // VOP2 binary32 forms (bit 31 = 0), same fields as the integer forms.
+            [lo, packed, upper, tag @ 0x00..=0x7b, tail @ ..]
+                if VectorFloat::from_opcode(tag >> 1).is_some() =>
+            {
+                let kind = VectorFloat::from_opcode(tag >> 1).unwrap();
+                let dst = (upper >> 1) | ((tag & 1) << 7);
+                let vsrc1 = (packed >> 1) | ((upper & 1) << 7);
+                let selector = u16::from(*lo) | (u16::from(packed & 1) << 8);
+                if (128..=208).contains(&selector) {
+                    return Err(error(offset, "integer inline constant as binary32 source"));
+                }
+                let (src0, length) =
+                    decode_vector_source(*lo, *packed, tail, offset, "unsupported VOP2 source")?;
+                (Op::VectorFloat(kind, dst, src0, vsrc1), length)
             }
             // VOP2 integer forms (bit 31 = 0): OP bits 25-30, VDST 17-24,
             // VSRC1 9-16, SRC0 0-8.
@@ -1187,49 +1399,15 @@ fn decode_vector_source(
     })
 }
 
-fn vector_alu(op: VectorAlu, a: u32, b: u32, offset: usize) -> Result<u32, ReferenceError> {
-    let error = || {
-        error(
-            offset,
-            "float operation outside positive, normal, exact binary32 domain",
-        )
-    };
+fn vector_alu(op: VectorAlu, a: u32, b: u32) -> u32 {
     match op {
-        VectorAlu::ShiftLeft => return Ok(b << (a & 31)),
-        VectorAlu::ShiftRight => return Ok(b >> (a & 31)),
-        VectorAlu::ArithmeticShiftRight => return Ok(((b as i32) >> (a & 31)) as u32),
-        VectorAlu::And => return Ok(a & b),
-        VectorAlu::Or => return Ok(a | b),
-        VectorAlu::Xor => return Ok(a ^ b),
-        _ => {}
+        VectorAlu::ShiftLeft => b << (a & 31),
+        VectorAlu::ShiftRight => b >> (a & 31),
+        VectorAlu::ArithmeticShiftRight => ((b as i32) >> (a & 31)) as u32,
+        VectorAlu::And => a & b,
+        VectorAlu::Or => a | b,
+        VectorAlu::Xor => a ^ b,
     }
-    let (a, b) = (f32::from_bits(a), f32::from_bits(b));
-    if !a.is_normal() || !b.is_normal() || a.is_sign_negative() || b.is_sign_negative() {
-        return Err(error());
-    }
-    let (a, b) = (f64::from(a), f64::from(b));
-    let exact = match op {
-        VectorAlu::FloatAdd => {
-            let sum = a + b;
-            // Recover the smaller input to detect even a binary64 addition rounding.
-            if sum - a.max(b) != a.min(b) {
-                return Err(error());
-            }
-            sum
-        }
-        VectorAlu::FloatMultiply => a * b, // Two 24-bit significands fit in binary64.
-        VectorAlu::ShiftLeft
-        | VectorAlu::ShiftRight
-        | VectorAlu::ArithmeticShiftRight
-        | VectorAlu::And
-        | VectorAlu::Or
-        | VectorAlu::Xor => unreachable!(),
-    };
-    let result = exact as f32;
-    if !result.is_normal() || f64::from(result) != exact {
-        return Err(error());
-    }
-    Ok(result.to_bits())
 }
 
 const VCC_LO: usize = 106;
@@ -1303,6 +1481,7 @@ fn execute_wave(
                 | Op::Add(dst, ..)
                 | Op::Vector(_, dst, ..)
                 | Op::VectorInteger(_, dst, ..)
+                | Op::VectorFloat(_, dst, ..)
                 | Op::VectorUnary(_, dst, _)
                 | Op::Swap(dst, _) => {
                     if exec != 0
@@ -1415,7 +1594,7 @@ fn execute_wave(
             }
             Op::Vector(operator, dst, lhs, rhs) => {
                 for lane in (0..lanes).filter(|&lane| executes(lane)) {
-                    let value = vector_alu(operator, read(lane, lhs)?, read(lane, rhs)?, offset)?;
+                    let value = vector_alu(operator, read(lane, lhs)?, read(lane, rhs)?);
                     results[lane] = Some((dst, value));
                 }
             }
@@ -1462,6 +1641,32 @@ fn execute_wave(
                     scalars[VCC_LO] = Some(outgoing);
                     scalars[VCC_HI] = None;
                     lane_derived_vcc = exec != 0;
+                }
+            }
+            Op::VectorFloat(kind, dst, src0, src1) => {
+                if exec != 0 {
+                    // Sources are checked once for the wave, as for VOP2 integers.
+                    match src0 {
+                        CompareSource::Vector(register) => {
+                            (0..lanes).try_for_each(|lane| read(lane, register).map(|_| ()))?
+                        }
+                        CompareSource::Scalar(register) => {
+                            read_scalar(Source::Register(register))?;
+                        }
+                        CompareSource::Immediate(_) => {}
+                    }
+                    (0..lanes).try_for_each(|lane| read(lane, src1).map(|_| ()))?;
+                }
+                for lane in (0..lanes).filter(|&lane| executes(lane)) {
+                    let s0 = match src0 {
+                        CompareSource::Vector(register) => read(lane, register)?,
+                        CompareSource::Scalar(register) => read_scalar(Source::Register(register))?,
+                        CompareSource::Immediate(bits) => bits,
+                    };
+                    let value = kind.apply(s0, read(lane, src1)?).ok_or_else(|| {
+                        error(offset, "binary32 operand or result outside domain")
+                    })?;
+                    results[lane] = Some((dst, value));
                 }
             }
             Op::VectorUnary(kind, dst, src0) => {
@@ -2002,11 +2207,7 @@ fn check_runtime_region(
             Op::Move(dst, Source::Immediate(_)) => (dst, vec![], None),
             Op::MoveScalar(dst, src) => (dst, vec![], Some(src)),
             Op::Add(dst, lhs, rhs) => (dst, vec![lhs, rhs], None),
-            Op::Vector(kind, dst, lhs, rhs)
-                if !matches!(kind, VectorAlu::FloatAdd | VectorAlu::FloatMultiply) =>
-            {
-                (dst, vec![lhs, rhs], None)
-            }
+            Op::Vector(_, dst, lhs, rhs) => (dst, vec![lhs, rhs], None),
             _ => {
                 return Err(error(
                     offset,
@@ -2089,7 +2290,7 @@ mod tests {
         broken[36..40].copy_from_slice(&1u32.to_le_bytes());
         assert_eq!(
             execute(&broken, &[0]).unwrap_err().detail,
-            "float operation outside positive, normal, exact binary32 domain"
+            "binary32 operand or result outside domain"
         );
     }
 

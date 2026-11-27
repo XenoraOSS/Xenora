@@ -22,7 +22,10 @@
 //! guide's loops over bits from integer division), the binary32 rounding
 //! forms TRUNC, CEIL, RNDNE and FLOOR (host binary64 rounding of the exactly
 //! widened input; NaN inputs and integer inline constants are refused) and SWAP_B32 (VGPR SRC0),
-//! VOP2 bitwise, shift, arithmetic-shift and float, the VOP2 integer forms
+//! VOP2 bitwise, shift and arithmetic-shift, the VOP2 binary32 forms
+//! ADD/SUB/SUBREV/MUL/MIN/MAX_F32 (host binary32 arithmetic; subnormal and
+//! NaN inputs, signalling NaNs to MIN/MAX, NaN results and results below
+//! 2^-126 are refused; integer inline constants are refused), the VOP2 integer forms
 //! MUL_I32_I24, MUL_HI_I32_I24, MUL_U32_U24, MUL_HI_U32_U24, MIN/MAX (I32,
 //! U32), XNOR and ADD/SUB/SUBREV_NC_U32 (any SRC0 a VOPC compare takes; a
 //! shift-and-add multiplier and floor division for the high half, the ripple
@@ -111,15 +114,14 @@ enum Insn {
     VShiftRight(u8, u8, u8),
     VShiftRightArithmetic(u8, u8, u8),
     VXor(u8, u8, u8),
-    /// VOP2 integer opcode 9-12, 17-20, 30 or 37-39: VDST, SRC0, VSRC1.
+    /// VOP2 integer opcode 9-12, 17-20, 30 or 37-39, or binary32 opcode 3-5,
+    /// 8, 15 or 16: VDST, SRC0, VSRC1.
     VInt(u32, u8, CmpSrc, u8),
     VIntVcc(u32, u8, CmpSrc, u8),
     /// VOP1 integer opcode 55-59 or binary32 rounding opcode 33-36: VDST, SRC0.
     VUnary(u32, u8, CmpSrc),
     /// `v_swap_b32 vD, vS` (VOP1 opcode 101).
     VSwap(u8, u8),
-    VAddF(u8, u8, u8),
-    VMulF(u8, u8, u8),
     Load(u8),
     Store(u8),
     WaitRead,
@@ -951,9 +953,7 @@ fn lane_step(
             | Insn::VShiftRightArithmetic(dst, ..)
             | Insn::VInt(_, dst, ..)
             | Insn::VUnary(_, dst, _)
-            | Insn::VSwap(dst, _)
-            | Insn::VAddF(dst, ..)
-            | Insn::VMulF(dst, ..) => {
+            | Insn::VSwap(dst, _) => {
                 if execution_mask != 0 && lane.vgpr[usize::from(dst)].is_none() {
                     return Err(format!("{offset:#x}: partial EXEC on uninitialized VGPR"));
                 }
@@ -1100,7 +1100,13 @@ fn lane_step(
                 CmpSrc::Imm(value) => value,
                 CmpSrc::Vgpr(reg) => read_v(reg)?,
             };
-            (dst, vector_integer(opcode, a, read_v(src1)?))
+            let b = read_v(src1)?;
+            let d = if matches!(opcode, 3..=5 | 8 | 15 | 16) {
+                vector_float(opcode, a, b, offset)?
+            } else {
+                vector_integer(opcode, a, b)
+            };
+            (dst, d)
         }
         Insn::VUnary(opcode, dst, src0) => {
             check_destination(dst, pending_read, offset)?;
@@ -1125,14 +1131,6 @@ fn lane_step(
             lane.vgpr[dst as usize] = Some(old_src0);
             lane.vgpr[src0 as usize] = Some(old_dst);
             return Ok(());
-        }
-        Insn::VAddF(dst, a, b) => {
-            check_destination(dst, pending_read, offset)?;
-            (dst, exact_float(true, read_v(a)?, read_v(b)?, offset)?)
-        }
-        Insn::VMulF(dst, a, b) => {
-            check_destination(dst, pending_read, offset)?;
-            (dst, exact_float(false, read_v(a)?, read_v(b)?, offset)?)
         }
         _ => unreachable!("scalar instruction in lane_step"),
     };
@@ -1274,42 +1272,64 @@ fn index_of(program: &[(usize, Insn)], target: usize, offset: usize) -> Result<u
         .ok_or_else(|| format!("{offset:#x}: branch target {target:#x} is not a boundary"))
 }
 
-fn exact_float(add: bool, a_bits: u32, b_bits: u32, offset: usize) -> Result<u32, String> {
-    fn unpack(bits: u32) -> Option<(u64, i32)> {
-        let biased = ((bits >> 23) & 0xff) as i32;
-        if bits >> 31 != 0 || !(1..=254).contains(&biased) {
-            return None;
-        }
-        let significand = (1 << 23) | (bits & 0x007f_ffff);
-        Some((u64::from(significand), biased - 127 - 23))
-    }
-
-    let operand_error = || format!("{offset:#x}: float outside positive normal domain");
-    let (a, scale_a) = unpack(a_bits).ok_or_else(operand_error)?;
-    let (b, scale_b) = unpack(b_bits).ok_or_else(operand_error)?;
-    let result_error = || format!("{offset:#x}: float result not exact normal binary32");
-    let (integer, scale) = if add {
-        let scale = scale_a.min(scale_b);
-        // A nonzero operand at least 24 exponents lower is strictly
-        // less than one ULP of the larger operand and cannot sum exactly.
-        if scale_a.abs_diff(scale_b) >= 24 {
-            return Err(result_error());
-        }
-        ((a << (scale_a - scale)) + (b << (scale_b - scale)), scale)
-    } else {
-        // Two 24-bit significands multiply exactly in an unsigned 64-bit word.
-        (a * b, scale_a + scale_b)
+/// D of VOP2 binary32 opcode 3, 4, 5, 8, 15 or 16 (guide 12.7: ADD, SUB,
+/// SUBREV and MUL on page 131, MIN on page 132, MAX on page 133) for S0 =
+/// `a_bits`, S1 = `b_bits`, from host binary32 arithmetic and comparisons.
+///
+/// Refused: subnormal inputs (Metal flushes them; MODE.FP_DENORM is pinned
+/// only for inputs), NaN inputs to the arithmetic forms, signalling NaN inputs
+/// to MIN and MAX (IEEE_MODE and Quiet() are not pinned), and arithmetic
+/// results that are NaN or whose exact value is nonzero and below 2^-126.
+/// Binary64 holds the exact product, and the exact sum whenever it is that
+/// small, so the size check is made on the binary64 result.
+fn vector_float(opcode: u32, a_bits: u32, b_bits: u32, offset: usize) -> Result<u32, String> {
+    let refuse = |what: &str| {
+        Err(format!(
+            "{offset:#x}: binary32 {what} is outside the domain"
+        ))
     };
-
-    let leading = integer.ilog2();
-    let trailing = integer.trailing_zeros();
-    let exponent = scale + leading as i32;
-    let significant_width = leading - trailing + 1;
-    if significant_width > 24 || !(-126..=127).contains(&exponent) {
-        return Err(result_error());
+    let (a, b) = (f32::from_bits(a_bits), f32::from_bits(b_bits));
+    if a.is_subnormal() || b.is_subnormal() {
+        return refuse("subnormal input");
     }
-    let normalized = ((integer >> trailing) << (24 - significant_width)) as u32;
-    Ok((((exponent + 127) as u32) << 23) | (normalized & 0x007f_ffff))
+    if opcode == 15 || opcode == 16 {
+        let signalling = |x: f32, bits: u32| x.is_nan() && bits & 0x0040_0000 == 0;
+        if signalling(a, a_bits) || signalling(b, b_bits) {
+            return refuse("signalling NaN input");
+        }
+        // The pseudocode's order of cases.
+        return Ok(if a.is_nan() {
+            b_bits
+        } else if b.is_nan() {
+            a_bits
+        } else if a == 0.0 && b == 0.0 && a.is_sign_negative() != b.is_sign_negative() {
+            if opcode == 15 {
+                (-0.0f32).to_bits()
+            } else {
+                0.0f32.to_bits()
+            }
+        } else if (opcode == 15 && a < b) || (opcode == 16 && a >= b) {
+            a_bits
+        } else {
+            b_bits
+        });
+    }
+    if a.is_nan() || b.is_nan() {
+        return refuse("NaN input");
+    }
+    let (wide, d) = match opcode {
+        3 => (f64::from(a) + f64::from(b), a + b),
+        4 => (f64::from(a) - f64::from(b), a - b),
+        5 => (f64::from(b) - f64::from(a), b - a),
+        _ => (f64::from(a) * f64::from(b), a * b),
+    };
+    if d.is_nan() {
+        return refuse("NaN result");
+    }
+    if wide != 0.0 && wide.abs() < f64::from(f32::MIN_POSITIVE) {
+        return refuse("result below 2^-126");
+    }
+    Ok(d.to_bits())
 }
 
 fn decode(code: &[u8]) -> Result<Vec<(usize, Insn)>, String> {
@@ -1446,7 +1466,14 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
             len,
         ));
     }
-    if first >> 31 == 0 && matches!(vop2_op, 9..=12 | 17..=20 | 30 | 37..=39) {
+    // Binary32 forms: integer inline constants (128-208) are refused.
+    if first >> 31 == 0
+        && matches!(vop2_op, 3..=5 | 8 | 15 | 16)
+        && (128..=208).contains(&(first & 0x1ff))
+    {
+        return Err(fail("integer inline constant as a binary32 source"));
+    }
+    if first >> 31 == 0 && matches!(vop2_op, 3..=5 | 8..=12 | 15..=20 | 30 | 37..=39) {
         let (src0, len) = vector_src0(code, offset, first, "VOP2")?;
         let insn = Insn::VInt(vop2_op, (first >> 17) as u8, src0, (first >> 9) as u8);
         return Ok((insn, len));
@@ -1591,8 +1618,6 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
     for (mask, value, kind) in [
         (0xfe00_0000, 0x3600_0000u32, 0u8),
         (0xfe00_0000, 0x3a00_0000, 1),
-        (0xfe00_0000, 0x0600_0000, 2),
-        (0xfe00_0000, 0x1000_0000, 3),
         (0xfe00_0000, 0x3800_0000, 4),
         (0xfe00_0000, 26 << 25, 5),
         (0xfe00_0000, 22 << 25, 6),
@@ -1608,8 +1633,6 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
             let insn = match kind {
                 0 => Insn::VAnd(dst, a, b),
                 1 => Insn::VXor(dst, a, b),
-                2 => Insn::VAddF(dst, a, b),
-                3 => Insn::VMulF(dst, a, b),
                 4 => Insn::VOr(dst, a, b),
                 5 => Insn::VShiftLeft(dst, a, b),
                 6 => Insn::VShiftRight(dst, a, b),

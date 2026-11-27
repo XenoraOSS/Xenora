@@ -17,7 +17,7 @@ fixtures='add bitwise-branch float-exact or shifts ashr
     scalar-arith
     scalar-immediate vector-integer vector-compare-ft vector-vcc vop3-integer
     vop3-compare vector-unary vector-compare-64 vector-compare-16 scalar-memory runtime-branch
-    vector-round'
+    vector-round vector-f32'
 
 for name in $fixtures; do
     "$llvm_bin/llvm-mc" -triple=amdgcn-amd-amdhsa -mcpu=gfx1030 -mattr=+wavefrontsize32 \

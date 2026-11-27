@@ -191,12 +191,14 @@ fn compiles_only_proven_exact_float_operations() {
         include_str!("../../../fixtures/golden/float-exact.metal")
     );
 
+    // The guide's rule for the arithmetic forms (12.7, page 131) is a rounded
+    // binary32 operation, so the compiler does not refuse a value whose
+    // domain it cannot see: the operands are in VGPRs and their values are
+    // only known at run time. A value outside the domain is refused there by
+    // the interpreters, which the semantic-review crate checks.
     let mut invalid = FLOAT.to_vec();
     invalid[16..20].copy_from_slice(&0x007f_ffffu32.to_le_bytes());
-    assert!(matches!(
-        compile(Architecture::Gfx1030, &invalid),
-        Err(CompileError::Verify { offset: 40, .. })
-    ));
+    assert!(compile(Architecture::Gfx1030, &invalid).is_ok());
 }
 
 #[test]
@@ -816,11 +818,19 @@ fn folds_ffbh_i32_on_zero_all_ones_and_one() {
 }
 
 #[test]
-fn folds_exact_positive_normal_float_add() {
-    // 1.0 + 2.0 = 3.0 exactly (positive normals). Bits: 0x3f800000 + 0x40000000
-    // → 0x40400000. VOP2 add_f32 OP=3.
+fn does_not_fold_a_constant_float_add() {
+    // 1.0 + 2.0 = 3.0 exactly, but a float add is not folded: the guide's
+    // rule (12.7, page 131) is a rounded binary32 operation, so the value is
+    // computed where the two paths agree on it.
     let code = binary_const_fixture(3, 0x3f80_0000, 0x4000_0000, false);
-    assert_folds_to(&code, "add.f32", 0x4040_0000);
+    let plain = compile_fold_off(&code);
+    let folded = compile_fold_on(&code);
+    assert!(plain.ir.contains("add.f32"), "{}", plain.ir);
+    assert_eq!(
+        folded.ir, plain.ir,
+        "the fold pass must not fold a float add"
+    );
+    assert!(!plain.ir.contains("0x40400000"));
 }
 
 #[test]
@@ -850,37 +860,30 @@ fn float_add_from_load_stays_unfolded_with_fold_on() {
 }
 
 #[test]
-fn rejects_inexact_float_add_of_constants_at_verify() {
-    // Both operands are positive normals, but 1.0 + 2^-24 is not representable
-    // in f32 (ulp of 1.0 is 2^-23), so exact_float_result refuses. Lift/verify
-    // rejects before fold_constant_ops runs; the op cannot "stay unfolded".
-    // Probed: fold_off and fold_on both return Verify at the add_f32 word.
+fn accepts_an_inexact_float_add_of_constants() {
+    // Both operands are positive normals, but 1.0 + 2^-24 is not
+    // representable in f32 (ulp of 1.0 is 2^-23). The guide's rule (12.7,
+    // page 131) rounds it to nearest even, so the program is compiled and
+    // the value is computed at run time.
     let code = binary_const_fixture(3, 0x3f80_0000, 0x3380_0000, false);
-    let off = compile_with(
-        Architecture::Gfx1030,
-        &code,
-        CompileOptions {
-            fold_constants: false,
-            ..CompileOptions::default()
-        },
-    );
-    let on = compile_with(
-        Architecture::Gfx1030,
-        &code,
-        CompileOptions {
-            fold_constants: true,
-            ..CompileOptions::default()
-        },
-    );
-    assert!(
-        matches!(off, Err(CompileError::Verify { .. })),
-        "fold-off must reject inexact constant add.f32 at verify: {off:?}"
-    );
-    assert!(
-        matches!(on, Err(CompileError::Verify { .. })),
-        "fold-on must reject inexact constant add.f32 at verify: {on:?}"
-    );
-    // Folder unchanged: no stay-unfolded path exists for this pair.
+    for fold in [false, true] {
+        let result = compile_with(
+            Architecture::Gfx1030,
+            &code,
+            CompileOptions {
+                fold_constants: fold,
+                ..CompileOptions::default()
+            },
+        );
+        assert!(
+            result.is_ok(),
+            "fold={fold} must accept the constant add.f32: {result:?}"
+        );
+        assert!(
+            result.unwrap().ir.contains("add.f32"),
+            "fold={fold} must keep the add"
+        );
+    }
 }
 
 // --- Opt-in common-subexpression elimination (#142) ---------------------------
@@ -1460,11 +1463,10 @@ fn cse_interacts_with_constant_folding() {
 }
 
 #[test]
-fn cse_does_not_fold_exact_float_add() {
-    // 1.0 + 2.0 = 3.0 exactly. Bits 0x3f800000 + 0x40000000 = 0x40400000.
-    // CSE reuses the add and leaves the operation. Folding replaces both
-    // adds with that constant. Enabling both matches folding alone: the adds
-    // are gone before reuse, and the two result constants are not merged.
+fn cse_reuses_a_float_add_without_folding_it() {
+    // 1.0 + 2.0 = 3.0 exactly, but a float add is not folded, so CSE reuses
+    // the operation itself: the second add becomes a reuse of the first.
+    // The fold pass does not fold a float add, so it changes nothing.
     let code = words(&[
         mov_lit(2),
         0x3f80_0000,
@@ -1477,19 +1479,19 @@ fn cse_does_not_fold_exact_float_add() {
         0xbbfd_0000,
         0xbf81_0000,
     ]);
+    let plain_ir = "\
+0000: t0 = const.u32 0x3f800000
+0008: t1 = const.u32 0x40000000
+0010: t2 = add.f32 t0, t1
+0014: t3 = add.f32 t0, t1
+0018: store.u32 output[index], t3
+";
     let cse_ir = "\
 0000: t0 = const.u32 0x3f800000
 0008: t1 = const.u32 0x40000000
 0010: t2 = add.f32 t0, t1
 0014: t3 = reuse.u32 t2
 0018: store.u32 output[index], t2
-";
-    let fold_ir = "\
-0000: t0 = const.u32 0x3f800000
-0008: t1 = const.u32 0x40000000
-0010: t2 = const.u32 0x40400000
-0014: t3 = const.u32 0x40400000
-0018: store.u32 output[index], t3
 ";
     let cse_msl = "\
 #include <metal_stdlib>
@@ -1507,21 +1509,19 @@ kernel void xenora_compute(
     output[index] = t2;
 }
 ";
-    let folded = compile_options(&code, true, false);
-    let both = compile_options(&code, true, true);
+    assert_eq!(compile_options(&code, false, false).ir, plain_ir);
     assert_eq!(compile_options(&code, false, true).ir, cse_ir);
     assert_eq!(compile_options(&code, false, true).msl, cse_msl);
-    assert_eq!(folded.ir, fold_ir);
-    assert_eq!(both.ir, folded.ir);
-    assert_eq!(both.msl, folded.msl);
+    assert_eq!(compile_options(&code, true, false).ir, plain_ir);
+    assert_eq!(compile_options(&code, true, true).ir, cse_ir);
     assert!(!cse_ir.contains("0x40400000"));
-    assert_eq!(fold_ir.matches("const.u32 0x40400000").count(), 2);
 }
 
 #[test]
-fn cse_does_not_bypass_inexact_float_verification() {
-    // Same pair the folder refuses: 1.0 + 2^-24 is not an f32 value. Verify
-    // rejects it before either optional pass.
+fn cse_does_not_change_an_inexact_float_add() {
+    // Same pair as accepts_an_inexact_float_add_of_constants: 1.0 + 2^-24 is
+    // not an f32 value, but the guide's rule rounds it, so the program is
+    // compiled whichever optional pass runs.
     let code = binary_const_fixture(3, 0x3f80_0000, 0x3380_0000, false);
     for fold in [false, true] {
         for cse in [false, true] {
@@ -1534,8 +1534,8 @@ fn cse_does_not_bypass_inexact_float_verification() {
                 },
             );
             assert!(
-                matches!(result, Err(CompileError::Verify { .. })),
-                "fold={fold} cse={cse} must reject at verify: {result:?}"
+                result.is_ok(),
+                "fold={fold} cse={cse} must accept the add: {result:?}"
             );
         }
     }

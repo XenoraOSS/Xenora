@@ -257,13 +257,8 @@ impl Op {
             }
             Self::Binary(operator, left, right) => {
                 let (left, right) = (name(left), name(right));
-                let (_, symbol) = operator.operator();
-                match operator {
-                    Binary::FloatAdd | Binary::FloatMul => format!(
-                        "as_type<uint>(as_type<float>({left}) {symbol} as_type<float>({right}))"
-                    ),
-                    Binary::Vector(operation) => vector_expression(operation, &left, &right),
-                }
+                let Binary::Vector(operation) = operator;
+                vector_expression(operation, &left, &right)
             }
             Self::MergeLanes {
                 mask,
@@ -378,18 +373,18 @@ fn compare_expression(op: VectorCompareOp, left: &str, right: &str) -> String {
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Binary {
-    FloatAdd,
-    FloatMul,
-    /// A registry VOP2 integer operation (or its VOP3 encoding), lowered by its
-    /// typed template.
+    /// A registry VOP2 integer or binary32 operation (or a VOP3 integer
+    /// encoding), lowered by its typed template.
     Vector(VectorBinary),
 }
 
 impl Binary {
     fn operator(self) -> (&'static str, &'static str) {
         match self {
-            Self::FloatAdd => ("add.f32", "+"),
-            Self::FloatMul => ("mul.f32", "*"),
+            // The graphics path prints binary32 values with these symbols.
+            Self::Vector(VectorBinary::AddF32) => ("add.f32", "+"),
+            Self::Vector(VectorBinary::SubF32) => ("sub.f32", "-"),
+            Self::Vector(VectorBinary::MulF32) => ("mul.f32", "*"),
             Self::Vector(operation) => (
                 match operation {
                     VectorBinary::Add => "add.u32",
@@ -409,6 +404,11 @@ impl Binary {
                     VectorBinary::ShiftLeft => "lshl.b32",
                     VectorBinary::ShiftRight => "lshr.b32",
                     VectorBinary::ArithmeticShiftRight => "ashr.i32",
+                    VectorBinary::MinF32 => "min.f32",
+                    VectorBinary::MaxF32 => "max.f32",
+                    VectorBinary::AddF32 | VectorBinary::SubF32 | VectorBinary::MulF32 => {
+                        unreachable!("binary32 arithmetic has a symbol")
+                    }
                 },
                 "",
             ),
@@ -452,7 +452,45 @@ fn vector_expression(operation: VectorBinary, left: &str, right: &str) -> String
         VectorBinary::ArithmeticShiftRight => {
             format!("as_type<uint>(as_type<int>({left}) >> ({right} & 31u))")
         }
+        // Guide 12.7 page 131: IEEE binary32 arithmetic, rounded to nearest
+        // even. The kernel turns off contraction and reassociation, and the
+        // library is built in safe math mode. Metal flushes subnormal inputs
+        // and results, which the interpreters refuse (vector-binary-f32.md).
+        VectorBinary::AddF32 => float_arithmetic(left, "+", right),
+        VectorBinary::SubF32 => float_arithmetic(left, "-", right),
+        VectorBinary::MulF32 => float_arithmetic(left, "*", right),
+        VectorBinary::MinF32 => float_select_expression(true, left, right),
+        VectorBinary::MaxF32 => float_select_expression(false, left, right),
     }
+}
+
+fn float_arithmetic(left: &str, symbol: &str, right: &str) -> String {
+    format!("as_type<uint>(as_type<float>({left}) {symbol} as_type<float>({right}))")
+}
+
+/// Guide 12.7 V_MIN_F32 (page 132) and V_MAX_F32 (page 133) on the register
+/// bits, with no Metal float operation (`fmin` and `fmax` differ on signed
+/// zeros): a NaN operand gives the other operand (S1 when both are NaN; the
+/// interpreters refuse signalling NaNs), a +0/-0 pair gives -0 for MIN and +0
+/// for MAX, and otherwise the sign-magnitude words are compared as ordered
+/// keys (S0 < S1 ? S0 : S1, or S0 >= S1 ? S0 : S1).
+fn float_select_expression(minimum: bool, left: &str, right: &str) -> String {
+    let nan = |value: &str| format!("({value} & 0x7fffffffu) > 0x7f800000u");
+    let key = |value: &str| {
+        format!("({value} ^ (as_type<uint>(as_type<int>({value}) >> 31) | 0x80000000u))")
+    };
+    let (zeros, order) = if minimum {
+        (format!("{left} | {right}"), "<")
+    } else {
+        (format!("{left} & {right}"), ">=")
+    };
+    format!(
+        "{} ? {right} : {} ? {left} : (({left} | {right}) & 0x7fffffffu) == 0u ? ({zeros}) : {} {order} {} ? {left} : {right}",
+        nan(left),
+        nan(right),
+        key(left),
+        key(right)
+    )
 }
 
 // Each bit is either known zero, known one or unconstrained.
@@ -501,62 +539,6 @@ impl KnownBits {
             values: None,
         }
     }
-
-    fn positive_normal_candidates(self) -> Option<[f32; 2]> {
-        let values = match self.values {
-            Some(values) => values,
-            None => {
-                let unknown = !(self.zero | self.one);
-                if unknown.count_ones() > 1 {
-                    return None;
-                }
-                [self.one, self.one | unknown]
-            }
-        };
-        let candidates = values.map(f32::from_bits);
-        candidates
-            .iter()
-            .all(|n| n.is_normal() && n.is_sign_positive())
-            .then_some(candidates)
-    }
-}
-
-fn exact_float_result(operator: Binary, left: KnownBits, right: KnownBits) -> Option<KnownBits> {
-    let left = left.positive_normal_candidates()?;
-    let right = right.positive_normal_candidates()?;
-    let mut zero = u32::MAX;
-    let mut one = u32::MAX;
-    let mut results = Vec::with_capacity(4);
-    for a in left.map(f64::from) {
-        for b in right.map(f64::from) {
-            let exact = match operator {
-                Binary::FloatAdd => a + b,
-                Binary::FloatMul => a * b,
-                _ => return None,
-            };
-            let value = exact as f32;
-            if !value.is_normal() || f64::from(value) != exact {
-                return None;
-            }
-            // Binary64 can round away the smaller operand of a widely separated
-            // binary32 sum. Require that subtraction recovers the smaller input.
-            if matches!(operator, Binary::FloatAdd) && exact - a.max(b) != a.min(b) {
-                return None;
-            }
-            let bits = value.to_bits();
-            zero &= !bits;
-            one &= bits;
-            if !results.contains(&bits) {
-                results.push(bits);
-            }
-        }
-    }
-    let values = match results.as_slice() {
-        [only] => Some([*only; 2]),
-        [first, second] => Some([*first, *second]),
-        _ => None,
-    };
-    Some(KnownBits { zero, one, values })
 }
 
 /// Compiles explicitly tagged raw machine code to a synthetic Metal compute kernel.
@@ -604,7 +586,11 @@ pub fn compile_with(
     if operations.iter().any(|(_, operation)| {
         matches!(
             operation,
-            Op::Binary(Binary::FloatAdd | Binary::FloatMul, _, _)
+            Op::Binary(
+                Binary::Vector(VectorBinary::AddF32 | VectorBinary::SubF32 | VectorBinary::MulF32),
+                _,
+                _
+            )
         )
     }) {
         msl.push_str("    #pragma clang fp contract(off)\n    #pragma clang fp reassociate(off)\n");
@@ -1147,8 +1133,6 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                 }
                 Instruction::MoveB32 { .. }
                 | Instruction::VectorAluVop3 { .. }
-                | Instruction::VectorAddF32 { .. }
-                | Instruction::VectorMulF32 { .. }
                 | Instruction::VectorAlu { .. }
                 | Instruction::VectorUnary { .. }
                 | Instruction::VectorSwap { .. } => continue,
@@ -1783,14 +1767,6 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                 }
                 continue;
             }
-            Instruction::VectorAddF32 { dst, src0, src1 } => (
-                Some(dst),
-                Op::Binary(Binary::FloatAdd, read(src0)?, read(src1)?),
-            ),
-            Instruction::VectorMulF32 { dst, src0, src1 } => (
-                Some(dst),
-                Op::Binary(Binary::FloatMul, read(src0)?, read(src1)?),
-            ),
             Instruction::Export { .. }
             | Instruction::Interpolate { .. }
             | Instruction::ImageSampleLz { .. } => {
@@ -1801,12 +1777,14 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
         };
         let value_bits = match operation {
             Op::Constant(bits) => KnownBits::constant(bits),
-            Op::Binary(Binary::Vector(VectorBinary::And), left, right) => facts[left.0].and(facts[right.0]),
-            Op::Binary(Binary::Vector(VectorBinary::Or), left, right) => facts[left.0].or(facts[right.0]),
-            Op::Binary(Binary::Vector(VectorBinary::Xor), left, right) => facts[left.0].xor(facts[right.0]),
-            Op::Binary(operator @ (Binary::FloatAdd | Binary::FloatMul), left, right) => {
-                exact_float_result(operator, facts[left.0], facts[right.0])
-                    .ok_or_else(|| error("FP32 operation is not proven exact for positive normal operands and results"))?
+            Op::Binary(Binary::Vector(VectorBinary::And), left, right) => {
+                facts[left.0].and(facts[right.0])
+            }
+            Op::Binary(Binary::Vector(VectorBinary::Or), left, right) => {
+                facts[left.0].or(facts[right.0])
+            }
+            Op::Binary(Binary::Vector(VectorBinary::Xor), left, right) => {
+                facts[left.0].xor(facts[right.0])
             }
             _ => KnownBits::UNKNOWN,
         };
@@ -2038,17 +2016,6 @@ fn const_value(operations: &[(usize, Op)], value: Value) -> Option<u32> {
     }
 }
 
-fn concrete_bits(facts: KnownBits) -> Option<u32> {
-    if let Some([first, second]) = facts.values {
-        return (first == second).then_some(first);
-    }
-    if facts.zero | facts.one == u32::MAX {
-        Some(facts.one)
-    } else {
-        None
-    }
-}
-
 /// MSL for a binary32 rounding form, on the register bits only: no Metal
 /// float operation runs, so fast math, subnormal flushing and NaN
 /// canonicalization cannot change the result. A magnitude of at least 2^23
@@ -2128,11 +2095,9 @@ fn eval_unary(operator: VectorUnary, source: u32) -> Option<u32> {
 
 fn eval_binary(operator: Binary, left: u32, right: u32) -> Option<u32> {
     match operator {
-        Binary::FloatAdd | Binary::FloatMul => concrete_bits(exact_float_result(
-            operator,
-            KnownBits::constant(left),
-            KnownBits::constant(right),
-        )?),
+        // Binary32 results are not folded on the CPU: the MSL is the only
+        // translator path for them.
+        Binary::Vector(operation) if operation.is_float() => None,
         Binary::Vector(operation) => Some(eval_vector_binary(operation, left, right)),
     }
 }
@@ -2162,6 +2127,11 @@ fn eval_vector_binary(operation: VectorBinary, left: u32, right: u32) -> u32 {
         VectorBinary::ShiftLeft => left << (right & 31),
         VectorBinary::ShiftRight => left >> (right & 31),
         VectorBinary::ArithmeticShiftRight => ((left as i32) >> (right & 31)) as u32,
+        VectorBinary::AddF32
+        | VectorBinary::SubF32
+        | VectorBinary::MulF32
+        | VectorBinary::MinF32
+        | VectorBinary::MaxF32 => unreachable!("binary32 operations are not folded"),
     }
 }
 
@@ -2214,8 +2184,8 @@ fn merge_lanes(
 #[cfg(test)]
 mod tests {
     use super::{
-        Binary, KnownBits, Op, Value, VectorBinary, VectorUnary, eval_unary, eval_vector_binary,
-        exact_float_result, vector_expression,
+        KnownBits, Op, Value, VectorBinary, VectorUnary, eval_unary, eval_vector_binary,
+        vector_expression,
     };
 
     /// Every foldable vector op must keep a matching MSL template and eval arm
@@ -2284,35 +2254,5 @@ mod tests {
         assert_eq!((and.zero, and.one), (!0b1000, 0b1000));
         let xor = left.xor(right);
         assert_eq!((xor.zero, xor.one), (!0b0110, 0b0110));
-    }
-
-    #[test]
-    fn rejects_unbounded_or_invalid_float_operands() {
-        let one = KnownBits::constant(1.0f32.to_bits());
-        let varying = KnownBits::UNKNOWN
-            .and(KnownBits::constant(0x0040_0000))
-            .xor(one);
-        assert_eq!(varying.positive_normal_candidates(), Some([1.0, 1.5]));
-        assert_eq!(one.and(one).positive_normal_candidates(), Some([1.0; 2]));
-        assert!(KnownBits::UNKNOWN.positive_normal_candidates().is_none());
-        for invalid in [0x8000_0000, 0xbf80_0000, 1, 0x7f80_0000] {
-            assert!(
-                KnownBits::constant(invalid)
-                    .positive_normal_candidates()
-                    .is_none()
-            );
-        }
-    }
-
-    #[test]
-    fn keeps_only_bits_shared_by_every_exact_result() {
-        let operand = KnownBits::UNKNOWN
-            .and(KnownBits::constant(0x0040_0000))
-            .xor(KnownBits::constant(1.0f32.to_bits()));
-        let sum = exact_float_result(Binary::FloatAdd, operand, operand).unwrap();
-        // The sums 2, 2.5 and 3 differ only in the two highest fraction bits.
-        assert_eq!(sum.zero, 0xbf9f_ffff);
-        assert_eq!(sum.one, 0x4000_0000);
-        assert!(sum.values.is_none());
     }
 }

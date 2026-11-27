@@ -266,10 +266,6 @@ pub enum Instruction {
     BranchVccZero { target: usize },
     /// SOPP unconditional jump to a stream byte offset.
     Branch { target: usize },
-    /// VOP2 single-precision addition. Execution requires an explicit FP mode.
-    VectorAddF32 { dst: u8, src0: u8, src1: u8 },
-    /// VOP2 single-precision multiplication. Execution requires an explicit FP mode.
-    VectorMulF32 { dst: u8, src0: u8, src1: u8 },
     /// Full, uncompressed four-component graphics export.
     Export {
         target: ExportTarget,
@@ -340,8 +336,6 @@ impl Instruction {
             Self::BranchExecZero { .. } => "s_cbranch_execz",
             Self::BranchVccZero { .. } => "s_cbranch_vccz",
             Self::Branch { .. } => "s_branch",
-            Self::VectorAddF32 { .. } => "v_add_f32_e32",
-            Self::VectorMulF32 { .. } => "v_mul_f32_e32",
             Self::Export { .. } => "exp",
             Self::Interpolate {
                 phase: InterpolationPhase::First,
@@ -407,9 +401,7 @@ impl fmt::Display for Instruction {
             Self::VectorSwap { dst, src, .. } => write!(formatter, " v{dst}, v{src}"),
             Self::VectorAluVop3 {
                 dst, src0, src1, ..
-            }
-            | Self::VectorAddF32 { dst, src0, src1 }
-            | Self::VectorMulF32 { dst, src0, src1 } => {
+            } => {
                 write!(formatter, " v{dst}, v{src0}, v{src1}")
             }
             Self::ScalarUnary { dst, src, .. } => {

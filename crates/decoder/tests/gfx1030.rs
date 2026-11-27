@@ -10,7 +10,7 @@ use xenora_decoder::{
 use xenora_isa::semantics::Signedness;
 use xenora_ref::{
     BranchCondition, CompareSource, CompareWidth, Comparison, Op, ScalarAlu, ScalarImmediate,
-    ScalarUnary, Source, VectorAlu, VectorInteger, VectorUnary,
+    ScalarUnary, Source, VectorAlu, VectorFloat, VectorInteger, VectorUnary,
 };
 
 const FIXTURE: &[u8] = include_bytes!("../../../fixtures/rdna2/add.bin");
@@ -692,12 +692,6 @@ fn reference_op(instruction: Instruction) -> Op {
             src0,
             src1,
         ),
-        Instruction::VectorAddF32 { dst, src0, src1 } => {
-            Op::Vector(VectorAlu::FloatAdd, dst, src0, src1)
-        }
-        Instruction::VectorMulF32 { dst, src0, src1 } => {
-            Op::Vector(VectorAlu::FloatMultiply, dst, src0, src1)
-        }
         Instruction::Export { .. }
         | Instruction::Interpolate { .. }
         | Instruction::ImageSampleLz { .. } => {
@@ -727,6 +721,34 @@ fn reference_op(instruction: Instruction) -> Op {
             sdst,
             reference_comparison(op.base()),
             CompareSource::Vector(src0),
+            src1,
+        ),
+        Instruction::VectorAlu {
+            op:
+                op @ (VectorAluOp::AddF32
+                | VectorAluOp::SubF32
+                | VectorAluOp::SubrevF32
+                | VectorAluOp::MulF32
+                | VectorAluOp::MinF32
+                | VectorAluOp::MaxF32),
+            dst,
+            src0,
+            src1,
+        } => Op::VectorFloat(
+            match op {
+                VectorAluOp::AddF32 => VectorFloat::Add,
+                VectorAluOp::SubF32 => VectorFloat::Subtract,
+                VectorAluOp::SubrevF32 => VectorFloat::SubtractReverse,
+                VectorAluOp::MulF32 => VectorFloat::Multiply,
+                VectorAluOp::MinF32 => VectorFloat::Minimum,
+                _ => VectorFloat::Maximum,
+            },
+            dst,
+            match src0 {
+                VectorSource::Register(reg) => CompareSource::Vector(reg),
+                VectorSource::Scalar(reg) => CompareSource::Scalar(reg),
+                VectorSource::Immediate(bits) => CompareSource::Immediate(bits),
+            },
             src1,
         ),
         Instruction::VectorAlu {
@@ -835,6 +857,7 @@ fn compares_fixture_instructions_against_llvm() {
         include_bytes!("../../../fixtures/rdna2/vector-compare-ft.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-unary.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-round.bin"),
+        include_bytes!("../../../fixtures/rdna2/vector-f32.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-compare-16.bin"),
         include_bytes!("../../../fixtures/rdna2/vop3-integer.bin"),
         include_bytes!("../../../fixtures/rdna2/vop3-compare.bin"),
@@ -845,7 +868,7 @@ fn compares_fixture_instructions_against_llvm() {
     ] {
         count += compare_against_llvm(fixture, &mut forms);
     }
-    assert_eq!(forms.len(), 188, "forms compared: {forms:?}");
+    assert_eq!(forms.len(), 192, "forms compared: {forms:?}");
     eprintln!(
         "{count} three-way instruction comparisons across {} forms",
         forms.len()
@@ -948,6 +971,15 @@ fn assemble_matrix() -> Vec<u8> {
     for name in ["trunc", "ceil", "rndne", "floor"] {
         for src0 in ["v255", "v0", "s0", "s105", "vcc_lo", "0x80000001"] {
             writeln!(assembly, "v_{name}_f32_e32 v128, {src0}").unwrap();
+        }
+    }
+    // Every VOP2 binary32 form with each accepted SRC0 class (no integer
+    // inline) and VSRC1 at both ends.
+    for name in ["add", "sub", "subrev", "mul", "min", "max"] {
+        for src0 in ["v255", "v0", "s0", "s105", "vcc_lo", "0x80000001"] {
+            for vsrc1 in ["v0", "v255"] {
+                writeln!(assembly, "v_{name}_f32_e32 v128, {src0}, {vsrc1}").unwrap();
+            }
         }
     }
     // Every SOPK compare on the lowest and highest readable SGPR.

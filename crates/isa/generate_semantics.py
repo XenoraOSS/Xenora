@@ -85,6 +85,12 @@ UNARY = {
 }
 # Binary32 rounding to an integral value (guide 12.8). They take float operands only.
 FLOAT_ROUNDING = {"trunc", "ceil", "rndne", "floor"}
+# ---- VOP2 binary32 arithmetic (#784) ----
+# V_ADD/SUB/SUBREV/MUL/MIN/MAX_F32 (guide 12.7, pages 131-133) reuse these
+# operation names with signedness float; only the vop2_f32 rule takes them.
+VOP2_FLOAT_ARITHMETIC = {"add", "sub", "mul", "min", "max"}
+FLOAT_OPERATIONS = FLOAT_ROUNDING | VOP2_FLOAT_ARITHMETIC
+# ---- end VOP2 binary32 arithmetic (#784) ----
 # Sign extension reads only the low source_bits of S0 (required for sext only).
 SOURCE_BITS_KEY = "source_bits"
 SOURCE_BITS = {8, 16}
@@ -282,6 +288,14 @@ VECTOR_PRIMITIVES = {
     ("lshl", "bitwise"): "ShiftLeft",
     ("lshr", "bitwise"): "ShiftRight",
     ("ashr", "signed"): "ArithmeticShiftRight",
+    # ---- VOP2 binary32 arithmetic (#784) ----
+    # V_SUBREV_F32 is ("sub", "float") with source_order = "reversed".
+    ("add", "float"): "AddF32",
+    ("sub", "float"): "SubF32",
+    ("mul", "float"): "MulF32",
+    ("min", "float"): "MinF32",
+    ("max", "float"): "MaxF32",
+    # ---- end VOP2 binary32 arithmetic (#784) ----
 }
 
 # Operand rules the decoder implements, each exactly once. A registry rule must
@@ -641,6 +655,29 @@ OPERAND_RULES = {
         },
         "kind": "vector",
     },
+    # ---- VOP2 binary32 arithmetic (#784) ----
+    # As vop1_f32: the guide does not say how a float operation reads an
+    # integer inline constant, so SRC0 is a VGPR, normal SGPR, vcc_lo or a
+    # literal; NaN source values are an unsupported variant.
+    "vop2_f32": {
+        "rust": "Vop2F32",
+        "enum": "VectorAluOp",
+        "shape": {
+            "family": "VOP2",
+            "dst": {"field": "VDST", "class": "vgpr", "min": 0, "max": 255},
+            "src": [
+                {"field": "SRC0", "class": "vector_source"},
+                {"field": "VSRC1", "class": "vgpr"},
+            ],
+            "max_literals": 1,
+        },
+        "unsupported": {
+            "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+            "src_float_inline", "src_special", "src_nan",
+        },
+        "kind": "vector",
+    },
+    # ---- end VOP2 binary32 arithmetic (#784) ----
 }
 
 VARIANT = re.compile(r"^[A-Z][A-Za-z0-9]*$")
@@ -1027,7 +1064,9 @@ def validate(registry, snapshot):
         if (
             (form["operation"] in LOGICAL and form["signedness"] != "bitwise")
             or (form["operation"] in ARITHMETIC and form["signedness"] == "bitwise")
-            or ((form["operation"] in FLOAT_ROUNDING) != (form["signedness"] == "float"))
+            or (form["operation"] in FLOAT_ROUNDING and form["signedness"] != "float")
+            # #784: float signedness also admits the VOP2 binary32 arithmetic.
+            or (form["signedness"] == "float" and form["operation"] not in FLOAT_OPERATIONS)
         ):
             errors.append(
                 f"{label}: signedness {form['signedness']} contradicts operation {form['operation']}"
