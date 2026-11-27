@@ -100,6 +100,11 @@ def cases():
         for op in ("blsi", "blsmsk", "blsr"):
             out += [f"{op} {reg(3, bits)}, {reg(9, bits)}", f"{op} {reg(10, bits)}, {mem(bits)}",
                     f"{op} {reg(2, bits)}, {reg(2, bits)}"]
+        for op in ("bextr", "bzhi"):
+            out += [f"{op} {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
+                    f"{op} {reg(10, bits)}, {mem(bits)}, {reg(12, bits)}",
+                    f"{op} {reg(2, bits)}, {reg(2, bits)}, {reg(2, bits)}",
+                    f"{op} {reg(5, bits)}, {reg(9, bits)}, {reg(5, bits)}"]
         for op in ("shlx", "shrx", "sarx"):
             out += [f"{op} {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
                     f"{op} {reg(10, bits)}, {mem(bits)}, {reg(12, bits)}",
