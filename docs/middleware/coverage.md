@@ -10,7 +10,7 @@ Xbox hardware agreement or game compatibility.
 
 | Area | Current status | Evidence and limits |
 | --- | --- | --- |
-| Winsock loopback | Implemented, partial | TCP loopback streams, datagram primitives, select, shutdown, limited options and localhost-only name forms exist. External routing, DNS truth, TLS and Internet reachability do not. See the Winsock entries in `CHANGELOG.md` and the service inventory. |
+| Winsock loopback | Implemented, partial | TCP loopback streams, datagram primitives, select, shutdown, limited options, localhost-only name forms and AMD64 ordinal aliases for implemented named services exist. External routing, DNS truth, TLS and Internet reachability do not. See the Winsock entries in `CHANGELOG.md` and the service inventory. |
 | WinHTTP object layer | Implemented, partial | Session, connection, request and close-handle ownership exist with bounded UTF-16 copying and honest refusal of unsupported async/proxy/transport flags. This layer alone does not perform HTTP. |
 | WinHTTP synchronous cleartext transport | Implemented, partial | One direct HTTP/1.1 exchange with `Connection: close`, bounded response parsing, selected header queries, body reads, chunked decoding and timeout handling exist. TLS, reuse, redirects, authentication, proxying, callbacks, cancellation, streaming writes and most transfer-coding combinations remain unsupported. Evidence is controlled loopback testing on Apple Silicon only. |
 | XNetworking connectivity hint | Implemented, very narrow | `XNetworkingGetConnectivityHint` honestly reports process-local loopback capability with no external route. It must not be read as endpoint reachability or Xbox network compatibility. |

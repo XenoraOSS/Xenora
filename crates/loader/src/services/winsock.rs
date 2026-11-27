@@ -287,6 +287,36 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         set.set_last_error(cpu.gs_base, args.rcx as u32);
         Ok(0)
     });
+    // Published desktop AMD64 export tables agree on these ordinal slots.
+    // They are aliases of the same named implementations, not separate ABI
+    // surfaces; ordinals without a named implementation stay unresolved.
+    for (symbol, ordinal) in [
+        ("accept", 1),
+        ("bind", 2),
+        ("closesocket", 3),
+        ("connect", 4),
+        ("getsockname", 6),
+        ("getsockopt", 7),
+        ("htons", 9),
+        ("inet_addr", 11),
+        ("listen", 13),
+        ("recv", 16),
+        ("recvfrom", 17),
+        ("select", 18),
+        ("send", 19),
+        ("sendto", 20),
+        ("setsockopt", 21),
+        ("shutdown", 22),
+        ("socket", 23),
+        ("gethostname", 57),
+        ("WSAGetLastError", 111),
+        ("WSAStartup", 115),
+        ("__WSAFDIsSet", 151),
+    ] {
+        registry
+            .try_ordinal_alias(MODULE, symbol, ordinal)
+            .expect("documented Winsock ordinal alias");
+    }
     for symbol in ["WSAStartup", "WSACleanup", "socket", "closesocket"] {
         registry.set_status(MODULE, symbol, ServiceStatus::Partial);
     }

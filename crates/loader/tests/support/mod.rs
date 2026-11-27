@@ -43,9 +43,35 @@ pub fn import_slot(imports: &[(&str, &str)], index: usize) -> u64 {
     BASE + u64::from(build_image(imports, &[]).1[index])
 }
 
+#[derive(Clone, Copy)]
+enum ImageSymbol<'a> {
+    Name(&'a str),
+    Ordinal(u16),
+}
+
 /// The code for import `n`, at RVA 0x1000 + 16n, is `call [its slot]; hlt`.
 /// Each import has its own descriptor.
-fn build_image(imports: &[(&str, &str)], routines: &[Vec<u8>]) -> (Vec<u8>, Vec<u32>) {
+pub fn build_image(imports: &[(&str, &str)], routines: &[Vec<u8>]) -> (Vec<u8>, Vec<u32>) {
+    let symbols: Vec<_> = imports
+        .iter()
+        .map(|(module, symbol)| (*module, ImageSymbol::Name(symbol)))
+        .collect();
+    build_image_symbols(&symbols, routines)
+}
+
+/// Build the same kind of original PE32+ image with ordinal import entries.
+pub fn build_ordinal_image(imports: &[(&str, u16)]) -> (Vec<u8>, Vec<u32>) {
+    let symbols: Vec<_> = imports
+        .iter()
+        .map(|(module, ordinal)| (*module, ImageSymbol::Ordinal(*ordinal)))
+        .collect();
+    build_image_symbols(&symbols, &[])
+}
+
+fn build_image_symbols(
+    imports: &[(&str, ImageSymbol<'_>)],
+    routines: &[Vec<u8>],
+) -> (Vec<u8>, Vec<u32>) {
     let mut pe = vec![0u8; IDATA_RAW + IDATA_LEN];
     fn put(pe: &mut [u8], at: usize, bytes: &[u8]) {
         pe[at..at + bytes.len()].copy_from_slice(bytes);
@@ -96,11 +122,17 @@ fn build_image(imports: &[(&str, &str)], routines: &[Vec<u8>]) -> (Vec<u8>, Vec<
     for (index, (module, symbol)) in imports.iter().enumerate() {
         let module_rva = take(module.len() + 1);
         put(&mut pe, file(module_rva), module.as_bytes());
-        let hint = take(symbol.len() + 3);
-        put(&mut pe, file(hint) + 2, symbol.as_bytes());
+        let lookup_value = match *symbol {
+            ImageSymbol::Name(symbol) => {
+                let hint = take(symbol.len() + 3);
+                put(&mut pe, file(hint) + 2, symbol.as_bytes());
+                u64::from(hint)
+            }
+            ImageSymbol::Ordinal(ordinal) => (1u64 << 63) | u64::from(ordinal),
+        };
         let (lookup, slot) = (take(16), take(16));
-        put(&mut pe, file(lookup), &u64::from(hint).to_le_bytes());
-        put(&mut pe, file(slot), &u64::from(hint).to_le_bytes());
+        put(&mut pe, file(lookup), &lookup_value.to_le_bytes());
+        put(&mut pe, file(slot), &lookup_value.to_le_bytes());
         let descriptor = file(IDATA_RVA) + 20 * index;
         put(&mut pe, descriptor, &lookup.to_le_bytes());
         put(&mut pe, descriptor + 12, &module_rva.to_le_bytes());
