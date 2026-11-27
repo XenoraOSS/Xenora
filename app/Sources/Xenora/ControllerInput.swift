@@ -142,19 +142,22 @@ func pollGameController(current: GCController?, controllers: [GCController]) -> 
 
 @MainActor
 func pollGameControllers(current: GCController?, controllers: [GCController]) -> [DetectedController] {
+    var prioritized: [GCController] = []
+    if let current, current.extendedGamepad != nil { prioritized.append(current) }
+    for controller in controllers where controller.extendedGamepad != nil { prioritized.append(controller) }
+    if let current, current.microGamepad != nil { prioritized.append(current) }
+    for controller in controllers where controller.microGamepad != nil { prioritized.append(controller) }
+
     var ordered: [GCController] = []
-    func appendPlayable(_ controller: GCController) {
+    for controller in prioritized {
+        guard controller.extendedGamepad != nil || controller.microGamepad != nil else { continue }
         var duplicate = false
         for existing in ordered where existing === controller {
             duplicate = true
+            break
         }
-        guard controller.extendedGamepad != nil || controller.microGamepad != nil, !duplicate else { return }
-        ordered.append(controller)
+        if !duplicate { ordered.append(controller) }
     }
-    if let current, current.extendedGamepad != nil { appendPlayable(current) }
-    for controller in controllers where controller.extendedGamepad != nil { appendPlayable(controller) }
-    if let current, current.microGamepad != nil { appendPlayable(current) }
-    for controller in controllers where controller.microGamepad != nil { appendPlayable(controller) }
     return ordered.prefix(4).compactMap(detectController)
 }
 
