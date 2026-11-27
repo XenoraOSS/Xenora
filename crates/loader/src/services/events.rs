@@ -347,6 +347,24 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             wait_for_objects(&single, cpu.gs_base, &[handle], false, timeout)
         });
     }
+    let combined = Arc::clone(state);
+    registry.register_with_status(
+        KERNEL32,
+        "SignalObjectAndWait",
+        ServiceStatus::Partial,
+        move |args, cpu, _| {
+            let teb = cpu.gs_base;
+            // A blocked import restarts here. Only the wait is pending.
+            if let Some(result) = resume_wait(&combined, teb) {
+                return result;
+            }
+            if args.r9 as u32 != 0 {
+                return combined.fail(teb, ERROR_NOT_SUPPORTED, WAIT_FAILED);
+            }
+            signal_and_wait(&combined, teb, args.rcx, args.rdx, args.r8 as u32)
+        },
+    );
+
     for (symbol, extended) in [
         ("WaitForMultipleObjects", false),
         ("WaitForMultipleObjectsEx", true),
@@ -429,6 +447,102 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     }
 }
 
+fn waitable_for_handle(
+    object: Option<&GuestObject>,
+    handle: u64,
+) -> Result<&Arc<Mutex<Waitable>>, u32> {
+    match object {
+        Some(GuestObject::Waitable { state, access }) => {
+            if access & SYNCHRONIZE == 0 {
+                return Err(ERROR_ACCESS_DENIED);
+            }
+            Ok(state)
+        }
+        // A spawned child is a process that already ended: its signal is set
+        // for good, so the wait treats it like any signaled object.
+        Some(GuestObject::ChildProcess { signal, .. }) => Ok(signal),
+        Some(_) => Err(ERROR_NOT_SUPPORTED),
+        None if matches!(handle, super::CURRENT_THREAD | super::CURRENT_PROCESS) => {
+            Err(ERROR_NOT_SUPPORTED)
+        }
+        None => Err(ERROR_INVALID_HANDLE),
+    }
+}
+
+fn signal_and_wait(
+    state: &ServicesState,
+    teb: u64,
+    signal_handle: u64,
+    wait_handle: u64,
+    timeout: u32,
+) -> Result<u64, ExitReason> {
+    let (signal, access, wait) = {
+        let objects = state.objects.lock().expect("guest object state");
+        let Some(GuestObject::Waitable {
+            state: signal,
+            access,
+        }) = objects.handles.get(&signal_handle)
+        else {
+            return state.fail(teb, ERROR_INVALID_HANDLE, WAIT_FAILED);
+        };
+        let wait = match waitable_for_handle(objects.handles.get(&wait_handle), wait_handle) {
+            Ok(wait) => wait,
+            Err(error) => return state.fail(teb, error, WAIT_FAILED),
+        };
+        (Arc::clone(signal), *access, Arc::clone(wait))
+    };
+    let wake = match signal_waitable(
+        &mut signal.lock().expect("guest waitable state"),
+        access,
+        teb,
+    ) {
+        Ok(wake) => wake,
+        Err(error) => return state.fail(teb, error, WAIT_FAILED),
+    };
+    if wake {
+        state.hooks.signal();
+    }
+    // The scheduler only switches after the service returns. Drop the signal
+    // lock before waiting, including when the two handles name one object.
+    wait_for_resolved_objects(state, teb, &[&wait], false, timeout)
+}
+
+fn signal_waitable(object: &mut Waitable, access: u32, teb: u64) -> Result<bool, u32> {
+    match object {
+        Waitable::Event { signaled, .. } => {
+            if access & EVENT_MODIFY_STATE == 0 {
+                return Err(ERROR_ACCESS_DENIED);
+            }
+            *signaled = true;
+            Ok(true)
+        }
+        Waitable::Semaphore { count, maximum } => {
+            if access & SEMAPHORE_MODIFY_STATE == 0 {
+                return Err(ERROR_ACCESS_DENIED);
+            }
+            if *count == *maximum {
+                return Err(ERROR_TOO_MANY_POSTS);
+            }
+            *count += 1;
+            Ok(true)
+        }
+        Waitable::Mutex {
+            owner, recursion, ..
+        } => {
+            if *owner != Some(teb) {
+                return Err(ERROR_NOT_OWNER);
+            }
+            *recursion -= 1;
+            if *recursion == 0 {
+                *owner = None;
+                return Ok(true);
+            }
+            Ok(false)
+        }
+        Waitable::Thread { .. } => Err(ERROR_INVALID_HANDLE),
+    }
+}
+
 pub(super) fn wait_for_objects(
     state: &ServicesState,
     teb: u64,
@@ -443,43 +557,30 @@ pub(super) fn wait_for_objects(
         if handles[..index].contains(handle) {
             return state.fail(teb, ERROR_INVALID_PARAMETER, WAIT_FAILED);
         }
-        match objects.handles.get(handle) {
-            Some(GuestObject::Waitable {
-                state: event,
-                access,
-            }) => {
-                if access & SYNCHRONIZE == 0 {
-                    return state.fail(teb, ERROR_ACCESS_DENIED, WAIT_FAILED);
-                }
-                if all
-                    && waitables
-                        .iter()
-                        .any(|existing| Arc::ptr_eq(existing, event))
-                {
-                    return state.fail(teb, ERROR_INVALID_PARAMETER, WAIT_FAILED);
-                }
-                waitables.push(event);
-            }
-            // A spawned child is a process that already ended: its signal is
-            // set for good, so the wait treats it like any signaled object.
-            Some(GuestObject::ChildProcess { signal, .. }) => {
-                if all
-                    && waitables
-                        .iter()
-                        .any(|existing| Arc::ptr_eq(existing, signal))
-                {
-                    return state.fail(teb, ERROR_INVALID_PARAMETER, WAIT_FAILED);
-                }
-                waitables.push(signal);
-            }
-            Some(_) => return state.fail(teb, ERROR_NOT_SUPPORTED, WAIT_FAILED),
-            None if matches!(*handle, super::CURRENT_THREAD | super::CURRENT_PROCESS) => {
-                return state.fail(teb, ERROR_NOT_SUPPORTED, WAIT_FAILED);
-            }
-            None => return state.fail(teb, ERROR_INVALID_HANDLE, WAIT_FAILED),
+        let event = match waitable_for_handle(objects.handles.get(handle), *handle) {
+            Ok(event) => event,
+            Err(error) => return state.fail(teb, error, WAIT_FAILED),
+        };
+        if all
+            && waitables
+                .iter()
+                .any(|existing| Arc::ptr_eq(existing, event))
+        {
+            return state.fail(teb, ERROR_INVALID_PARAMETER, WAIT_FAILED);
         }
+        waitables.push(event);
     }
-    if let Some(result) = try_satisfy(&waitables, all, teb) {
+    wait_for_resolved_objects(state, teb, &waitables, all, timeout)
+}
+
+fn wait_for_resolved_objects(
+    state: &ServicesState,
+    teb: u64,
+    waitables: &[&Arc<Mutex<Waitable>>],
+    all: bool,
+    timeout: u32,
+) -> Result<u64, ExitReason> {
+    if let Some(result) = try_satisfy(waitables, all, teb) {
         return result;
     }
     if timeout == 0 {
@@ -491,7 +592,7 @@ pub(super) fn wait_for_objects(
     // Keep the objects themselves: closing a handle or changing the guest's
     // handle array does not change a wait already in progress.
     let pending = Pending::Objects(PendingWait {
-        objects: waitables.into_iter().map(Arc::clone).collect(),
+        objects: waitables.iter().copied().map(Arc::clone).collect(),
         all,
         deadline: state.deadline(timeout),
     });
