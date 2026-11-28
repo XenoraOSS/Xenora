@@ -774,21 +774,49 @@ impl FileStreams {
         }
     }
 
-    /// The path and length a `_fstat64` reports, of the file a descriptor
+    /// The length and mode a `_fstat64` reports, of the file a descriptor
     /// has open. A removed file reports the length it would have had, as the
     /// descriptor still has it open: zero, the drive carries no content for
-    /// it anymore.
-    pub(super) fn descriptor_stat(&self, drive: &ObjectState, fd: u32) -> Result<u64, u32> {
+    /// it anymore. A pipe end reports the FIFO mode and no size, exactly as
+    /// the CRT stats an anonymous pipe; a handle that is no file at all -
+    /// a thread, an event - is not a valid file descriptor to stat.
+    pub(super) fn descriptor_stat(
+        &self,
+        drive: &ObjectState,
+        fd: u32,
+    ) -> Result<(u64, u16), u32> {
+        const REGULAR: u16 = 0x8000; // _S_IFREG
+        const FIFO: u16 = 0x1000; // _S_IFIFO
         let fd = self.descriptor_terminal(fd)?;
-        let stream = match self.descriptors.get(&fd).ok_or(EBADF)? {
-            Descriptor::Shared(file) => self.open.get(file).ok_or(EBADF)?,
-            Descriptor::Owned(stream) => stream,
-            _ => return Err(EBADF),
-        };
-        let _ = stream;
-        Ok(drive
-            .drive_file(&stream.path)
-            .map_or(0, |data| data.len() as u64))
+        match self.descriptors.get(&fd).ok_or(EBADF)? {
+            Descriptor::Shared(file) => {
+                let stream = self.open.get(file).ok_or(EBADF)?;
+                let _ = stream;
+                Ok((
+                    drive
+                        .drive_file(&stream.path)
+                        .map_or(0, |data| data.len() as u64),
+                    REGULAR,
+                ))
+            }
+            Descriptor::Owned(stream) => Ok((
+                drive
+                    .drive_file(&stream.path)
+                    .map_or(0, |data| data.len() as u64),
+                REGULAR,
+            )),
+            Descriptor::Handle(handle) => match drive.handles.get(handle) {
+                Some(GuestObject::Pipe { .. }) => Ok((0, FIFO)),
+                Some(GuestObject::File(file)) => Ok((
+                    drive
+                        .drive_file(file.path())
+                        .map_or(0, |data| data.len() as u64),
+                    REGULAR,
+                )),
+                _ => Err(EBADF),
+            },
+            _ => Err(EBADF),
+        }
     }
 
     /// The terminal descriptor's stream, mutably: the owned state of an

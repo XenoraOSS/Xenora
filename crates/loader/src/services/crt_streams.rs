@@ -1507,12 +1507,12 @@ impl StandardStreams {
         if fd < 0 || buffer == 0 {
             return Ok(Err(Failed(-1, EINVAL)));
         }
-        let length = match self.opened.descriptor_stat(drive, fd as u32) {
-            Ok(length) => length,
+        let (length, kind) = match self.opened.descriptor_stat(drive, fd as u32) {
+            Ok(stat) => stat,
             Err(errno) => return Ok(Err(Failed(-1, errno))),
         };
         let mut stat = [0u8; 56];
-        stat[6..8].copy_from_slice(&(0x8000_u16 | 0o666).to_le_bytes()); // _S_IFREG | rw
+        stat[6..8].copy_from_slice(&(kind | 0o666).to_le_bytes());
         stat[8..10].copy_from_slice(&1_i16.to_le_bytes()); // one link
         stat[24..32].copy_from_slice(&length.to_le_bytes());
         memory.write_bytes(buffer, &stat).map_err(fault)?;

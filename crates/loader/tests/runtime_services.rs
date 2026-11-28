@@ -7980,6 +7980,38 @@ fn legacy_fstat64_fills_the_legacy_structure() {
     assert_eq!(guest.errno(), EINVAL);
 }
 
+/// `_fstat64` of a pipe end answers the FIFO mode, as the CRT stats an
+/// anonymous pipe: busybox-w32's `tar cf -` stats its standard output to
+/// refuse a terminal, and the failure killed archive creation before any
+/// byte moved. A handle-wrapped file answers the regular-file mode and the
+/// content's length, exactly as a CRT-opened one does.
+#[test]
+fn legacy_fstat64_stats_pipe_ends_and_handle_wrapped_files() {
+    let mut guest = Guest::new();
+    let buf = guest.call("malloc", &[64]);
+    let stat = guest.call("malloc", &[64]);
+    let fds = guest.call("malloc", &[16]);
+    assert_eq!(guest.call("_pipe", &[fds, 4096, 0]) & 0xFFFF_FFFF, 0);
+    let read = guest.memory.read_u32(fds).unwrap() as u64;
+    let write = guest.memory.read_u32(fds + 4).unwrap() as u64;
+    for fd in [read, write] {
+        assert_eq!(guest.call("_fstat64", &[fd, stat]) & 0xFFFF_FFFF, 0);
+        assert_eq!(
+            guest.memory.read_u16(stat + 6).unwrap() & 0xF000,
+            0x1000,
+            "pipe ends answer the FIFO mode"
+        );
+    }
+    // A file opened through the descriptor table keeps the regular mode.
+    guest.memory.write_bytes(buf, b"hf.bin\0").unwrap();
+    let fd = guest.call("_open", &[buf, 2 | 0x100 | 0x200 | 0x8000, 0]) & 0xFFFF_FFFF;
+    guest.memory.write_bytes(buf + 16, b"abc").unwrap();
+    assert_eq!(guest.call("_write", &[fd, buf + 16, 3]) & 0xFFFF_FFFF, 3);
+    assert_eq!(guest.call("_fstat64", &[fd, stat]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.memory.read_u16(stat + 6).unwrap() & 0xF000, 0x8000);
+    assert_eq!(guest.memory.read_u64(stat + 24).unwrap(), 3);
+}
+
 #[test]
 fn legacy_directories_are_made_and_removed() {
     let mut guest = Guest::new();
