@@ -266,6 +266,14 @@ pabsb = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 pabsw = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 pabsd = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 palignr = { ref = "sdm PALIGNR" }
+# AES-NI: six legacy SSE forms. None reads or writes RFLAGS. The VEX and EVEX
+# AES forms are not declared and remain refused.
+aesenc = { ref = "sdm AESENC" }
+aesenclast = { ref = "sdm AESENCLAST" }
+aesdec = { ref = "sdm AESDEC" }
+aesdeclast = { ref = "sdm AESDECLAST" }
+aesimc = { ref = "sdm AESIMC" }
+aeskeygenassist = { ref = "sdm AESKEYGENASSIST" }
 pclmulqdq = { ref = "sdm PCLMULQDQ" }
 # SSE4.1, integer. PTEST writes ZF and CF and clears the other four.
 pblendvb = { ref = "sdm PBLENDVB" }
@@ -1294,9 +1302,68 @@ size = "x"
 src = "x"
 imm = "ub"
 
-# PCLMULQDQ has no VEX form. imm8[1:0] and imm8[3:2] select the low or high
-# qword of the destination and source; the remaining bits are reserved and are
-# rejected by the executor rather than silently masked.
+# AES-NI legacy forms. The SDM lists ShiftRows/InvShiftRows,
+# SubBytes/InvSubBytes, optional MixColumns/InvMixColumns and the final
+# round-key XOR in that order. AESIMC is only the inverse column mix, and
+# AESKEYGENASSIST uses X1 and X3 with a zero-extended immediate as RCON.
+[[form]]
+op = "aesimc"
+map = "0f38"
+prefix = "66"
+opcode = 0xDB
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "aesenc"
+map = "0f38"
+prefix = "66"
+opcode = 0xDC
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "aesenclast"
+map = "0f38"
+prefix = "66"
+opcode = 0xDD
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "aesdec"
+map = "0f38"
+prefix = "66"
+opcode = 0xDE
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "aesdeclast"
+map = "0f38"
+prefix = "66"
+opcode = 0xDF
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "aeskeygenassist"
+map = "0f3a"
+prefix = "66"
+opcode = 0xDF
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+# PCLMULQDQ has no VEX form. SDM Table 4-13 names imm8[0] and imm8[4] as the
+# qword selectors for the first and second sources; all other immediate bits
+# are ignored by the operation.
 [[form]]
 op = "pclmulqdq"
 map = "0f3a"

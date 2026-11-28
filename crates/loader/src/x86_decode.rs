@@ -587,6 +587,12 @@ pub fn decode<E>(
     if rep && repne {
         return Err(DecodeError::Unsupported(0xF2));
     }
+    // In 64-bit mode E0 through E3 count or test RCX; a 67H prefix selects
+    // ECX instead (JECXZ and the narrow LOOP forms). Xenora does not model
+    // that narrow count, so refuse rather than silently test the full RCX.
+    if address_size && matches!(byte, 0xE0..=0xE3) {
+        return Err(DecodeError::Unsupported(0x67));
+    }
     let two_byte = byte == 0x0F;
     let mut opcode = if two_byte { cursor.u8()? } else { byte };
     // 0F 38 and 0F 3A are escapes to maps with a third opcode byte. Every

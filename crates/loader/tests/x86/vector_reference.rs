@@ -6,6 +6,8 @@
 //! arithmetic, following the operation sections of the Intel SDM Vol. 2. It shares
 //! nothing with the registry, decoder, production semantics or NEON lowering.
 
+use std::sync::OnceLock;
+
 use xenora_loader::cpu::RFlags;
 
 pub type Bytes = [u8; 16];
@@ -312,6 +314,162 @@ pub fn packed(name: &str, a: &Bytes, b: &Bytes) -> Bytes {
         "movaps" | "movapd" | "movups" | "movupd" | "movdqa" | "movdqu" | "movntdqa" => *b,
         other => panic!("no reference for {other}"),
     }
+}
+
+// --- AES-NI reference -------------------------------------------------------
+//
+// These helpers follow FIPS 197 and the operation sections of the Intel SDM.
+// They deliberately use a different field-arithmetic route from the executor:
+// a whole u16 product reduced one high bit at a time, and multiplicative
+// inverse by exhaustive search rather than exponentiation. Nothing is shared
+// with the registry, decoder, production semantics or ARM64 lowering.
+
+static AES_SBOX: OnceLock<[u8; 256]> = OnceLock::new();
+static AES_INVERSE_SBOX: OnceLock<[u8; 256]> = OnceLock::new();
+
+fn aes_ref_mul(a: u8, b: u8) -> u8 {
+    let mut product = 0u16;
+    for bit in 0..8 {
+        if (b >> bit) & 1 != 0 {
+            product ^= u16::from(a) << bit;
+        }
+    }
+    for bit in (8..=15).rev() {
+        if product & (1 << bit) != 0 {
+            product ^= 0x11B << (bit - 8);
+        }
+    }
+    product as u8
+}
+
+fn aes_ref_xtime(value: u8) -> u8 {
+    (value << 1) ^ if value & 0x80 != 0 { 0x1B } else { 0 }
+}
+
+fn aes_ref_inverse(value: u8) -> u8 {
+    if value == 0 {
+        return 0;
+    }
+    (1..=u8::MAX)
+        .find(|&candidate| aes_ref_mul(value, candidate) == 1)
+        .expect("a nonzero AES field element has an inverse")
+}
+
+fn aes_ref_sbox(value: u8) -> u8 {
+    let table = AES_SBOX.get_or_init(|| {
+        let mut table = [0; 256];
+        for byte in 0..=u8::MAX {
+            let inverse = aes_ref_inverse(byte);
+            table[usize::from(byte)] = inverse
+                ^ inverse.rotate_left(1)
+                ^ inverse.rotate_left(2)
+                ^ inverse.rotate_left(3)
+                ^ inverse.rotate_left(4)
+                ^ 0x63;
+        }
+        table
+    });
+    table[usize::from(value)]
+}
+
+fn aes_ref_inverse_sbox(value: u8) -> u8 {
+    let table = AES_INVERSE_SBOX.get_or_init(|| {
+        let mut table = [0; 256];
+        for candidate in 0..=u8::MAX {
+            table[usize::from(aes_ref_sbox(candidate))] = candidate;
+        }
+        table
+    });
+    table[usize::from(value)]
+}
+
+/// Row r moves r columns left on ShiftRows and right on InvShiftRows.
+fn aes_ref_shift_rows(state: Bytes, inverse: bool) -> Bytes {
+    let mut out = [0; 16];
+    for row in 0..4 {
+        for column in 0..4 {
+            let from = (column + if inverse { 4 - row } else { row }) % 4;
+            out[4 * column + row] = state[4 * from + row];
+        }
+    }
+    out
+}
+
+fn aes_ref_sub_bytes(state: Bytes, inverse: bool) -> Bytes {
+    let mut out = state;
+    for byte in &mut out {
+        *byte = if inverse {
+            aes_ref_inverse_sbox(*byte)
+        } else {
+            aes_ref_sbox(*byte)
+        };
+    }
+    out
+}
+
+/// The column formulas are the XOR/xtime form of the two SDM matrices. The
+/// inverse first cancels the doubled cross terms, then uses the forward form.
+fn aes_ref_mix_columns(state: Bytes, inverse: bool) -> Bytes {
+    let mut out = [0; 16];
+    for column in 0..4 {
+        let at = 4 * column;
+        let input = [state[at], state[at + 1], state[at + 2], state[at + 3]];
+        let mixed = if inverse {
+            let u = aes_ref_xtime(aes_ref_xtime(input[0] ^ input[2]));
+            let v = aes_ref_xtime(aes_ref_xtime(input[1] ^ input[3]));
+            let reduced = [input[0] ^ u, input[1] ^ v, input[2] ^ u, input[3] ^ v];
+            let all = reduced.iter().fold(0, |acc, byte| acc ^ byte);
+            [
+                reduced[0] ^ all ^ aes_ref_xtime(reduced[0] ^ reduced[1]),
+                reduced[1] ^ all ^ aes_ref_xtime(reduced[1] ^ reduced[2]),
+                reduced[2] ^ all ^ aes_ref_xtime(reduced[2] ^ reduced[3]),
+                reduced[3] ^ all ^ aes_ref_xtime(reduced[3] ^ reduced[0]),
+            ]
+        } else {
+            let all = input.iter().fold(0, |acc, byte| acc ^ byte);
+            [
+                input[0] ^ all ^ aes_ref_xtime(input[0] ^ input[1]),
+                input[1] ^ all ^ aes_ref_xtime(input[1] ^ input[2]),
+                input[2] ^ all ^ aes_ref_xtime(input[2] ^ input[3]),
+                input[3] ^ all ^ aes_ref_xtime(input[3] ^ input[0]),
+            ]
+        };
+        out[at..at + 4].copy_from_slice(&mixed);
+    }
+    out
+}
+
+fn aes_ref_round(name: &str, state: Bytes, round_key: Bytes) -> Bytes {
+    let inverse = name == "aesdec" || name == "aesdeclast";
+    let mut out = aes_ref_shift_rows(state, inverse);
+    out = aes_ref_sub_bytes(out, inverse);
+    if name == "aesenc" || name == "aesdec" {
+        out = aes_ref_mix_columns(out, inverse);
+    }
+    for (byte, key_byte) in out.iter_mut().zip(&round_key) {
+        *byte ^= key_byte;
+    }
+    out
+}
+
+fn aes_ref_keygen_assist(source: Bytes, imm: usize) -> Bytes {
+    let x1: [u8; 4] = source[4..8].try_into().unwrap();
+    let x3: [u8; 4] = source[12..16].try_into().unwrap();
+    let sub_word = |word: [u8; 4]| word.map(aes_ref_sbox);
+    let rot_word = |word: [u8; 4]| [word[1], word[2], word[3], word[0]];
+    let w1 = sub_word(x1);
+    let w3 = sub_word(x3);
+    let r1 = rot_word(w1);
+    let r3 = rot_word(w3);
+    let rcon = [imm as u8, 0, 0, 0];
+    let mut out = [0; 16];
+    for index in 0..4 {
+        out[index] = w1[index];
+        out[4 + index] = r1[index] ^ rcon[index];
+        out[8 + index] = w3[index];
+        out[12 + index] = r3[index] ^ rcon[index];
+    }
+    out
 }
 
 pub fn register(text: &str) -> Option<usize> {
@@ -673,6 +831,9 @@ pub fn reference(m: &mut Machine, text: &str) {
             out[..8].copy_from_slice(&old[low..low + 8]);
             out[8..].copy_from_slice(&source[high..high + 8]);
         }
+        "aesenc" | "aesenclast" | "aesdec" | "aesdeclast" => out = aes_ref_round(name, old, source),
+        "aesimc" => out = aes_ref_mix_columns(source, true),
+        "aeskeygenassist" => out = aes_ref_keygen_assist(source, imm.unwrap()),
         _ => out = packed(name, &old, &source),
     }
     m.xmm[target] = out;
