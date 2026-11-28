@@ -753,7 +753,6 @@ fn undeclared_vex_encodings_are_rejected() {
         &[0xC5, 0xF9, 0xF7, 0xC1],             // vmaskmovdqu (not implemented)
         &[0xC4, 0xE2, 0x71, 0xDC, 0xC2],       // vaesenc
         &[0xC4, 0xE3, 0x71, 0x44, 0xC2, 0],    // vpclmulqdq
-        &[0xC5, 0xF5, 0x71, 0xF1, 0x01],       // vpsllw ymm by an immediate (AVX2)
         &[0xC5, 0xFD, 0xD7, 0xC1],             // vpmovmskb ymm (AVX2)
         &[0xC4, 0xE3, 0x75, 0x4C, 0xC2, 0x30], // vpblendvb ymm (AVX2)
         &[0xC5, 0xF1, 0x71, 0x31, 0x01],       // vpsllw of memory
@@ -1238,5 +1237,46 @@ fn mixed_vex_legacy_and_integer_sequences_agree() {
             "{round}: {text:#?}"
         );
         assert_eq!(data(&first), data(&second), "{round}: {text:#?}");
+    }
+}
+
+/// The uniform count of a 256-bit shift is the low 64 bits of an xmm operand,
+/// so both halves shift by the same count even when the rest of the count
+/// register is noise.
+#[test]
+fn uniform_count_shifts_use_one_count_for_both_halves() {
+    let code = [0xC5, 0xF5, 0xF1, 0xC2]; // vpsllw ymm0, ymm1, xmm2
+    let mut machine = Machine {
+        gpr: [0; 16],
+        ymm: [[0; 32]; 16],
+        operand: [0; 32],
+        mxcsr: 0x1F80,
+    };
+    for lane in 0..16u16 {
+        machine.ymm[1][2 * lane as usize..2 * lane as usize + 2]
+            .copy_from_slice(&(lane + 1).to_le_bytes());
+    }
+    machine.ymm[2][..8].copy_from_slice(&3u64.to_le_bytes());
+    // Noise above the low 64 bits of the count register, including its whole
+    // high half: a shift that read any of it would not shift by 3.
+    machine.ymm[2][8..].copy_from_slice(&[0xE1; 24]);
+    let (cpu, mut memory) = load(&machine, &code, READ_WRITE);
+    for native in [false, true] {
+        let result = run(native, &cpu, &mut memory, 1);
+        let state = result.final_state;
+        for lane in 0..8u16 {
+            let low = lane + 1;
+            let high = lane + 9;
+            assert_eq!(
+                state.xmm[0] >> (16 * lane) & 0xFFFF,
+                u128::from(low << 3),
+                "low lane {lane} on native={native}"
+            );
+            assert_eq!(
+                state.ymm_high[0] >> (16 * lane) & 0xFFFF,
+                u128::from(high << 3),
+                "high lane {lane} on native={native}"
+            );
+        }
     }
 }

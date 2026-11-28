@@ -253,6 +253,15 @@ fn integer(state: &State, text: &str) -> State {
             [index(first), index(second), control]
         };
         let mut m = machine(state, half, sources);
+        // The count of a uniform-count shift is an xmm operand even in the
+        // 256-bit forms, so both halves read the low memory or register half.
+        if by_count && registers.len() == 3 {
+            if let Some(count_index) = index(second) {
+                m.xmm[9] = halves(&state.ymm[count_index])[0];
+            } else {
+                m.operand.copy_from_slice(&state.operand[..16]);
+            }
+        }
         // Blends and VSHUFPD use further immediate bits for the high half.
         let imm = imm.map(|imm| match legacy {
             "blendps" => imm >> (4 * half),
