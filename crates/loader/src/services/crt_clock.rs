@@ -418,27 +418,27 @@ impl ClockServices {
             return Ok(0);
         }
         let format_bytes = c_string(memory, format, 65_536).map_err(fault)?;
-        let text = render_strftime(&format_bytes, &tm);
-        if text.len() + 1 > size as usize {
+        let mut bytes = render_strftime(&format_bytes, &tm);
+        if bytes.len() + 1 > size as usize {
             return Ok(0);
         }
-        let mut bytes = text.into_bytes();
         bytes.push(0);
         memory.write_bytes(out, &bytes).map_err(fault)?;
         Ok((bytes.len() - 1) as u64)
     }
 }
 
-/// Renders the strftime conversions. Separated from the service so the
-/// table stays readable.
-fn render_strftime(format: &[u8], tm: &Tm) -> String {
+/// Renders the strftime conversions without recoding literal format bytes.
+fn render_strftime(format: &[u8], tm: &Tm) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(format.len());
     let mut out = String::new();
     let mut index = 0;
     let weekday = usize::try_from(tm.wday).unwrap_or(0).min(6);
     let month = usize::try_from(tm.mon).unwrap_or(0).min(11);
+    let year = i64::from(tm.year) + 1900;
     while index < format.len() {
         if format[index] != b'%' {
-            out.push(format[index] as char);
+            bytes.push(format[index]);
             index += 1;
             continue;
         }
@@ -448,7 +448,6 @@ fn render_strftime(format: &[u8], tm: &Tm) -> String {
         }
         let conversion = format[index];
         index += 1;
-        let year = tm.year + 1900;
         match conversion {
             b'a' => out.push_str(WEEKDAYS[weekday]),
             b'A' => out.push_str(WEEKDAYS_LONG[weekday]),
@@ -460,6 +459,7 @@ fn render_strftime(format: &[u8], tm: &Tm) -> String {
             )),
             b'd' => out.push_str(&format!("{:02}", tm.mday)),
             b'e' => out.push_str(&format!("{:2}", tm.mday)),
+            b'F' => out.push_str(&format!("{year}-{:02}-{:02}", tm.mon + 1, tm.mday)),
             b'H' => out.push_str(&format!("{:02}", tm.hour)),
             b'I' => {
                 let hour = if tm.hour % 12 == 0 { 12 } else { tm.hour % 12 };
@@ -469,29 +469,34 @@ fn render_strftime(format: &[u8], tm: &Tm) -> String {
             b'm' => out.push_str(&format!("{:02}", tm.mon + 1)),
             b'M' => out.push_str(&format!("{:02}", tm.min)),
             b'p' => out.push_str(if tm.hour < 12 { "AM" } else { "PM" }),
+            b'R' => out.push_str(&format!("{:02}:{:02}", tm.hour, tm.min)),
             b'S' => out.push_str(&format!("{:02}", tm.sec)),
             b'U' => out.push_str(&format!("{:02}", week_of_year(tm, 0))),
             b'w' => out.push_str(&format!("{weekday}")),
             b'W' => out.push_str(&format!("{:02}", week_of_year(tm, 1))),
-            b'x' => out.push_str(&format!(
+            b'D' | b'x' => out.push_str(&format!(
                 "{:02}/{:02}/{:02}",
                 tm.mon + 1,
                 tm.mday,
                 year % 100
             )),
-            b'X' => out.push_str(&format!("{:02}:{:02}:{:02}", tm.hour, tm.min, tm.sec)),
+            b'T' | b'X' => out.push_str(&format!("{:02}:{:02}:{:02}", tm.hour, tm.min, tm.sec)),
             b'y' => out.push_str(&format!("{:02}", year % 100)),
             b'Y' => out.push_str(&format!("{year}")),
             b'z' => out.push_str("+0000"),
             b'Z' => out.push_str("UTC"),
+            b'n' => out.push('\n'),
+            b't' => out.push('\t'),
             b'%' => out.push('%'),
             other => {
-                out.push('%');
-                out.push(other as char);
+                bytes.extend_from_slice(&[b'%', other]);
+                continue;
             }
         }
+        bytes.extend_from_slice(out.as_bytes());
+        out.clear();
     }
-    out
+    bytes
 }
 
 /// The week number for `%U` (first Sunday starts week 1) or `%W` (first
