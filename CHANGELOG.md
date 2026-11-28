@@ -541,6 +541,7 @@ remains unsupported.
 
 ### Fixed
 
+- The macOS Run Program panel uses the supervisor report to show the guest's full 32-bit exit status, even when the displayed stderr is truncated. Guest exit codes 2, 124, and 125 retain their guest meaning (#1346).
 - QA verification now fingerprints tracked and non-ignored checkout inputs, including binary fixtures. A source change detected during the suites makes the evidence stale even if the original files are restored later. Suite exit codes are preserved (#1237).
 - `xenora-pe-session` refuses a DLL selected as the root before guest startup, including sessions without companion modules (#1275).
 - The typed CRT registry regenerates the existing `_locking` and `_commit` imports from its source catalog and checks both generated reports in the normal test suite (#1264). Both services are partial. The guest drive stores writes in memory, and lock conflicts return immediately.

@@ -2331,16 +2331,20 @@ differences already recorded for BC decoding remain per-device observations.
 `Xenora.app` runs a chosen executable only through the `xenora run` worker,
 which `scripts/build-app.sh` bundles as `Contents/MacOS/xenora-cli` (not
 `xenora`: the default macOS file system ignores case, so that name would be
-the app's own `Xenora`). The Run action passes `run --experimental --pe
-<file>`, then `--trace` when the Metal HUD is on, then `--` and the program
-arguments typed in the window. The worker's separate process and 15-second
+the app's own `Xenora`). The Run action passes `--experimental`, `--pe`
+and `--startup-report` to the bundled `xenora run`. It adds `--trace` when
+the Metal HUD is on and passes the typed program arguments after `--`.
+The separate process and 15-second
 wall deadline apply exactly as on the command line, where a program has no
 step limit unless `--max-steps` gives one (#448), and the app
-adds no execution path of its own. The app shows the worker's exit status
-(the program's own; 124 is the wall deadline, 125 any other runner or guest
-failure, 2 a refused command line), the last `trace stage=` it printed, and
-up to 256 KiB of each output stream. `XENORA_CLI` names another worker, for
-`swift run`.
+adds no execution path of its own. The app shows the guest's full 32-bit exit
+status when a complete supervisor report matches the observed process exit.
+Without a matching guest result it uses the host exit code, where 124 denotes
+the wall deadline, 125 a runner or guest failure, and 2 a refused command line.
+It shows the last captured `trace stage=` and up to 256 KiB of each output
+stream. A validated final report is removed from the displayed stderr.
+`XENORA_CLI` names another worker for `swift run`. The app keeps the legacy
+arguments and host-code display for that override.
 
 The optional guest file export takes an absolute path on the synthetic C:
 drive and a new host filename chosen in the Run Program panel. The app passes
