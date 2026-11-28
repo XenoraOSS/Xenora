@@ -1153,7 +1153,10 @@ descriptor moves where `fgets` reads, and closing it closes the underlying
 file, leaving the stream dangling — undefined behaviour in C, a guest stop
 here. The standard descriptors are 0, 1 and 2: `_read` consumes what the
 host supplied, `_write` appends to the captured output, and neither can be
-sought. Descriptors are the lowest free number from 3, at most 8192. Text
+sought. Descriptors are the lowest free number, at most 8192: a standard
+number the guest closed is free exactly as the CRT models, so the
+close-then-open redirection idiom lands the open on the number just freed,
+while an undisturbed one stays the standard stream's own. Text
 mode translates CR LF both ways as the streams do. `_O_TEMPORARY` deletes
 the file when the descriptor closes; the wide text modes are not modelled
 and stop the guest; the hint bits change nothing. `_lseek` positions are

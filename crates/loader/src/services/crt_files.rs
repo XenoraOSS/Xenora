@@ -177,8 +177,13 @@ pub(super) struct FileStreams {
     open: BTreeMap<u64, FileStream>,
     /// The counter `tmpnam` and `tmpfile` names come from.
     temporary_counter: u32,
-    /// Open file descriptors by their number, from 3.
+    /// Open file descriptors by their number.
     descriptors: BTreeMap<u32, Descriptor>,
+    /// The standard descriptors the guest closed. The CRT does not reserve
+    /// 0, 1 and 2: a closed one is free for the next allocation, exactly as
+    /// any other number, and the close-then-open redirection idiom depends
+    /// on landing on it.
+    pub(super) closed: [bool; 3],
 }
 
 impl FileStreams {
@@ -192,6 +197,7 @@ impl FileStreams {
     /// the `FILE` streams do not carry - they are objects of the parent's
     /// own address space, which the child does not have.
     pub(super) fn inherit_for_spawn(&self) -> FileStreams {
+        let closed = self.closed;
         // Kernel-backed and positional descriptors carry: pipes share the
         // one state, wrapped handles name machine-wide objects, aliases and
         // standard wirings are numbers. The file streams a descriptor owns
@@ -215,6 +221,7 @@ impl FileStreams {
             open: BTreeMap::new(),
             temporary_counter: self.temporary_counter,
             descriptors,
+            closed,
         }
     }
 
@@ -235,12 +242,19 @@ impl FileStreams {
         if self.open.len() >= MAX_OPEN_STREAMS {
             return Err(EMFILE);
         }
-        let create = match drive.drive_entry(&path) {
-            DriveEntry::Directory => return Err(EACCES),
-            DriveEntry::File => false,
-            DriveEntry::Missing { .. } if mode.existing => return Err(ENOENT),
-            DriveEntry::Missing { parent: false } => return Err(ENOENT),
-            DriveEntry::Missing { parent: true } => true,
+        // The NUL device is no drive entry: it exists under every open and
+        // creates nothing, exactly as the descriptor open models it.
+        let device = is_nul_path(&path);
+        let create = if device {
+            false
+        } else {
+            match drive.drive_entry(&path) {
+                DriveEntry::Directory => return Err(EACCES),
+                DriveEntry::File => false,
+                DriveEntry::Missing { .. } if mode.existing => return Err(ENOENT),
+                DriveEntry::Missing { parent: false } => return Err(ENOENT),
+                DriveEntry::Missing { parent: true } => true,
+            }
         };
         // The FILE object is allocated before the drive is touched, so a
         // failed fopen neither creates a file nor destroys the contents of
@@ -654,8 +668,16 @@ impl FileStreams {
     }
 
     fn insert_descriptor(&mut self, entry: Descriptor) -> Result<u32, u32> {
-        let mut fd = 3;
-        while self.descriptors.contains_key(&fd) {
+        // The CRT allocates the lowest free descriptor. A standard number is
+        // free exactly when the guest closed it and no table entry rewires
+        // it; an undisturbed one is the standard stream itself, which no
+        // allocation may take.
+        let mut fd = 0;
+        loop {
+            let free = !self.descriptors.contains_key(&fd) && (fd >= 3 || self.closed[fd as usize]);
+            if free {
+                break;
+            }
             fd += 1;
             if fd >= MAX_DESCRIPTORS {
                 return Err(EMFILE);
@@ -1508,10 +1530,57 @@ fn handle_write(drive: &mut super::ObjectState, handle: u64, bytes: &[u8]) -> Re
 
 #[cfg(test)]
 mod tests {
-    use super::parse_mode;
+    use super::super::ObjectState;
+    use super::{FileStreams, parse_mode};
+    use crate::memory::GuestMemory;
 
     /// The six access types of the `fopen` page, each alone and with `t` or
     /// `b`, and what the page says of each.
+    #[test]
+    fn allocation_returns_the_lowest_free_descriptor_including_closed_standard_numbers() {
+        let mut streams = FileStreams::default();
+        let mut drive = ObjectState::default();
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x1000, 0x4000, crate::memory::MemoryPermissions::READ_WRITE)
+            .unwrap();
+
+        // Undisturbed standard descriptors are the standard streams: no
+        // allocation may take them, so the first open lands at 3.
+        let first = streams
+            .open(&mut memory, &mut drive, b"first", b"w")
+            .expect("first open");
+        assert!(first != 0);
+        let fd = streams
+            .open_descriptor(&mut drive, b"first", 1)
+            .expect("first descriptor");
+        assert_eq!(fd, 3);
+
+        // Once fd 0 is closed, the next open must land on it: the
+        // close-then-open redirection idiom depends on the number.
+        streams.closed[0] = true;
+        let zero = streams
+            .open_descriptor(&mut drive, b"first", 0)
+            .expect("open onto the closed number");
+        assert_eq!(zero, 0);
+
+        // The table now carries 0, so the next open skips it and every
+        // undisturbed standard number, landing at 4.
+        let four = streams
+            .open_descriptor(&mut drive, b"first", 0)
+            .expect("next descriptor");
+        assert_eq!(four, 4);
+
+        // `_dup` allocates by the same rule: closing 1 and 2 frees them
+        // lowest-first.
+        streams.closed[1] = true;
+        streams.closed[2] = true;
+        let duped = streams.descriptor_duplicate(0).expect("dup");
+        assert_eq!(duped, 1);
+        let duped = streams.descriptor_duplicate(0).expect("dup");
+        assert_eq!(duped, 2);
+    }
+
     #[test]
     fn modes_follow_the_fopen_page() {
         // (mode, readable, writable, append, must exist, truncates)
