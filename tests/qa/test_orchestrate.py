@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import json
+import sys
+import tempfile
 import unittest
+from pathlib import Path
 
 from qa.orchestrate import (
     SuiteSpec,
@@ -12,6 +15,97 @@ from qa.orchestrate import (
 
 
 class Orchestrate(unittest.TestCase):
+    def run_unittest(self, source):
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "test_fixture.py").write_text(source, encoding="utf-8")
+            return run_suites(
+                [SuiteSpec("unittest", (sys.executable, "-m", "unittest", "test_fixture"))],
+                cwd=tmp,
+            )
+
+    def test_unittest_records_counts_without_changing_suite_meaning(self):
+        report = self.run_unittest("""
+import unittest
+
+class Fixture(unittest.TestCase):
+    def test_pass(self):
+        print("standalone output")
+
+    @unittest.skip("fixture skip")
+    def test_skip(self):
+        pass
+""")
+        payload = json.loads(dumps_report(report))
+        self.assertEqual(payload["counts"], {
+            "passed": 1, "failed": 0, "ignored": 0, "unexecuted": 0,
+        })
+        self.assertEqual(report.overall_returncode(), 0)
+        suite = payload["suites"][0]
+        self.assertEqual(suite["tests_total"], 2)
+        self.assertEqual(suite["tests_skipped"], 1)
+        self.assertIn("standalone output", suite["stdout"])
+        self.assertIn("OK (skipped=1)", suite["stderr"])
+
+    def test_failed_unittest_reports_counts_and_preserves_exit_code(self):
+        report = self.run_unittest("""
+import unittest
+
+class Fixture(unittest.TestCase):
+    def test_fail(self):
+        self.fail("fixture failure")
+
+    def test_pass(self):
+        pass
+
+    @unittest.skip("fixture skip")
+    def test_skip(self):
+        pass
+""")
+        suite = report.suites[0]
+        self.assertEqual((suite.tests_total, suite.tests_skipped), (3, 1))
+        self.assertEqual(suite.status, "failed")
+        self.assertEqual(suite.returncode, 1)
+        self.assertEqual(report.overall_returncode(), 1)
+        self.assertIn("FAILED (failures=1, skipped=1)", suite.stderr)
+
+    def test_unittest_without_skips_reports_zero_skips(self):
+        report = self.run_unittest("""
+import unittest
+
+class Fixture(unittest.TestCase):
+    def test_pass(self):
+        pass
+""")
+        suite = report.suites[0]
+        self.assertEqual((suite.tests_total, suite.tests_skipped), (1, 0))
+
+    def test_counts_require_unittest_stderr_terminal_summary(self):
+        summary = "-" * 70 + "\nRan 1 test in 0.001s\n\nOK\n"
+        commands = [
+            (sys.executable, "-m", "unittest", "--help"),
+            (sys.executable, "-c", "import sys; sys.stderr.write(sys.argv[1])", summary),
+        ]
+        report = run_suites([SuiteSpec("unknown", command) for command in commands])
+        self.assertEqual(report.passed, 2)
+        for suite in report.suites:
+            self.assertIsNone(suite.tests_total)
+            self.assertIsNone(suite.tests_skipped)
+
+        trailing = self.run_unittest("""
+import atexit
+import sys
+import unittest
+
+atexit.register(lambda: sys.stderr.write("trailing output\\n"))
+
+class Fixture(unittest.TestCase):
+    def test_pass(self):
+        pass
+""").suites[0]
+        self.assertTrue(trailing.stderr.endswith("trailing output\n"))
+        self.assertIsNone(trailing.tests_total)
+        self.assertIsNone(trailing.tests_skipped)
+
     def test_records_pass_and_fail_with_durations(self):
         report = run_suites([
             SuiteSpec("ok", ("python3", "-c", "print(1)"), "cpu"),

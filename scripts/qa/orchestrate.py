@@ -7,8 +7,10 @@ failed command to passed because output was filtered.
 from __future__ import annotations
 
 import json
+import re
 import time
 from dataclasses import asdict, dataclass, field
+from pathlib import Path
 from typing import Any, Sequence
 
 from .exit_pipe import classify_status, run_preserving_status
@@ -32,6 +34,10 @@ class SuiteResult:
     stdout: str
     stderr: str
     reproduction: str
+    # Counts as reported by unittest. Skipped fixtures/subtests can outnumber
+    # testsRun, which counts test cases.
+    tests_total: int | None = None
+    tests_skipped: int | None = None
 
 
 @dataclass
@@ -86,6 +92,36 @@ def shell_quote(part: str) -> str:
     return "'" + part.replace("'", "'\"'\"'") + "'"
 
 
+def unittest_counts(command: tuple[str, ...], stderr: str) -> tuple[int | None, int | None]:
+    if command[1:3] != ("-m", "unittest") or not re.fullmatch(
+        r"python(?:[0-9]+(?:\.[0-9]+)?)?", Path(command[0]).name
+    ):
+        return None, None
+
+    # Only read the terminal TextTestRunner summary from stderr.
+    lines = stderr.rstrip("\n").rsplit("\n", 4)[-4:]
+    if len(lines) != 4 or lines[0] != "-" * 70 or lines[2]:
+        return None, None
+    ran = re.fullmatch(r"Ran ([0-9]+) tests? in [0-9]+\.[0-9]+s", lines[1])
+    outcome = re.fullmatch(r"(?:OK|FAILED|NO TESTS RAN)(?: \(([^()]+)\))?", lines[3])
+    if ran is None or outcome is None:
+        return None, None
+
+    details = {}
+    if outcome[1] is not None:
+        for item in outcome[1].split(", "):
+            counter = re.fullmatch(
+                r"(failures|errors|skipped|expected failures|unexpected successes)=([0-9]+)", item
+            )
+            if counter is None or counter[1] in details:
+                return None, None
+            details[counter[1]] = counter[2]
+    try:
+        return int(ran[1]), int(details.get("skipped", "0"))
+    except ValueError:
+        return None, None
+
+
 def run_suites(
     specs: Sequence[SuiteSpec],
     *,
@@ -129,6 +165,7 @@ def run_suites(
         result = run_preserving_status(spec.command, cwd=cwd)
         finished = time.time()
         status = classify_status(result.returncode)
+        tests_total, tests_skipped = unittest_counts(spec.command, result.stderr)
         report.suites.append(
             SuiteResult(
                 name=spec.name,
@@ -140,6 +177,8 @@ def run_suites(
                 stdout=result.stdout,
                 stderr=result.stderr,
                 reproduction=" ".join(shell_quote(p) for p in spec.command),
+                tests_total=tests_total,
+                tests_skipped=tests_skipped,
             )
         )
         if stop_on_fail and status == "failed":
