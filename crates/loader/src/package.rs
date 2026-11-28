@@ -726,50 +726,52 @@ pub fn run_package_startup_with_entry_observer(
 
     let mut process_exit = None;
     let mut attached: Vec<usize> = Vec::new();
-    for (order_index, metadata) in order.iter().enumerate() {
+    'initialize: for (order_index, metadata) in order.iter().enumerate() {
         if process_exit.is_some() {
             break;
         }
-        if !metadata.tls_callbacks.is_empty() {
-            // The prepared callbacks are already rebased; passing the same
-            // base as preferred makes the executor's delta zero.
-            match execute_tls_callbacks_with_reason(
-                &metadata.tls_callbacks,
-                metadata_base(metadata, &reservations),
-                metadata_base(metadata, &reservations),
+        let base = metadata_base(metadata, &reservations);
+        for (callback_index, &address) in metadata.tls_callbacks.iter().enumerate() {
+            // Report each callback before the next can fault or exit. The
+            // prepared address is already rebased, so the bases agree.
+            let outcome = match execute_tls_callbacks_with_reason(
+                std::slice::from_ref(&address),
+                base,
+                base,
                 layout.stack_top,
                 DLL_PROCESS_ATTACH,
                 &mut cpu,
                 &mut memory,
                 &mut engine,
             ) {
-                Ok(count) => {
-                    for index in 0..count {
-                        diagnostics.initialization.push(InitializationRecord {
-                            image_index: metadata.package_index,
-                            file_name: metadata.file_name.clone(),
-                            phase: InitializationPhase::TlsCallback {
-                                callback_index: index,
-                            },
-                            address: metadata.tls_callbacks[index],
-                            steps: 0,
-                            outcome: InitializationOutcome::Completed,
-                        });
-                    }
-                }
+                Ok(_) => InitializationOutcome::Completed,
                 Err(TlsError::CallbackExecutionFault(ExitReason::ProcessExit(status))) => {
-                    process_exit = Some(status);
-                    break;
+                    InitializationOutcome::ProcessExit(status)
                 }
                 Err(TlsError::CallbackExecutionFault(reason)) => {
-                    diagnostics.initialization.push(InitializationRecord {
-                        image_index: metadata.package_index,
-                        file_name: metadata.file_name.clone(),
-                        phase: InitializationPhase::TlsCallback { callback_index: 0 },
-                        address: metadata.tls_callbacks.first().copied().unwrap_or(0),
-                        steps: 0,
-                        outcome: InitializationOutcome::Fault(reason),
+                    InitializationOutcome::Fault(reason)
+                }
+                Err(error) => {
+                    return Err(PackageStartupError::Initialization {
+                        detail: format!("TLS callback for {} failed: {error}", metadata.file_name),
+                        diagnostics: Box::new(diagnostics),
                     });
+                }
+            };
+            diagnostics.initialization.push(InitializationRecord {
+                image_index: metadata.package_index,
+                file_name: metadata.file_name.clone(),
+                phase: InitializationPhase::TlsCallback { callback_index },
+                address,
+                steps: 0,
+                outcome,
+            });
+            match outcome {
+                InitializationOutcome::ProcessExit(status) => {
+                    process_exit = Some(status);
+                    break 'initialize;
+                }
+                InitializationOutcome::Fault(reason) => {
                     return Err(PackageStartupError::Initialization {
                         detail: format!(
                             "TLS callback for {} stopped: {reason:?}",
@@ -778,12 +780,7 @@ pub fn run_package_startup_with_entry_observer(
                         diagnostics: Box::new(diagnostics),
                     });
                 }
-                Err(error) => {
-                    return Err(PackageStartupError::Initialization {
-                        detail: format!("TLS callback for {} failed: {error}", metadata.file_name),
-                        diagnostics: Box::new(diagnostics),
-                    });
-                }
+                _ => {}
             }
         }
 
@@ -799,11 +796,7 @@ pub fn run_package_startup_with_entry_observer(
             address,
             layout.stack_top,
             teb_base,
-            [
-                metadata_base(metadata, &reservations),
-                DLL_PROCESS_ATTACH,
-                0,
-            ],
+            [base, DLL_PROCESS_ATTACH, 0],
             &mut cpu,
             INITIALIZATION_STEP_BUDGET,
         );
