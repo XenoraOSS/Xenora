@@ -3775,4 +3775,108 @@ mod tests {
         assert_eq!(engine.metrics.native_bytes_emitted, emitted);
         assert!(engine.link_metrics.links_followed > followed);
     }
+
+    /// Legacy and VEX RIP-relative operands must both use the end of their own
+    /// instruction. The four displacements below are derived from each
+    /// instruction's byte length, not copied from the emitter:
+    ///
+    /// - `mov rax, [rip-0x807]` at 0x1000 ends at 0x1007 and loads 0x0800.
+    /// - `mov [rip+0xffa], rbx` at 0x1007 ends at 0x100e and stores 0x2008.
+    /// - `vmovaps ymm1, [rip-0x816]` at 0x100e ends at 0x1016 and loads 0x0800.
+    /// - `vmovaps [rip+0x7e2], ymm0` at 0x1016 ends at 0x101e and stores 0x1800.
+    ///
+    /// The load region is 32-byte aligned and the legacy store region is
+    /// 8-byte aligned, so a miscomputed end RIP would fault or read the wrong
+    /// bytes instead of silently passing.
+    #[test]
+    fn rip_relative_legacy_and_vex_operands_use_instruction_end() {
+        const CODE: [u8; 31] = [
+            0x48, 0x8B, 0x05, 0xF9, 0xF7, 0xFF, 0xFF, // mov rax, [rip-0x807]
+            0x48, 0x89, 0x1D, 0xFA, 0x0F, 0x00, 0x00, // mov [rip+0xffa], rbx
+            0xC5, 0xFC, 0x28, 0x0D, 0xEA, 0xF7, 0xFF, 0xFF, // vmovaps ymm1, [rip-0x816]
+            0xC5, 0xFC, 0x29, 0x05, 0xE2, 0x07, 0x00, 0x00, // vmovaps [rip+0x7e2], ymm0
+            0xF4, // hlt
+        ];
+        const LOAD: u64 = 0x0800;
+        const LEGACY_STORE: u64 = 0x2008;
+        const VEX_STORE: u64 = 0x1800;
+        const STORED: u64 = 0xAABB_CCDD_EEFF_0011;
+        const SEED: [u64; 4] = [
+            0x0807_0605_0403_0201,
+            0x100F_0E0D_0C0B_0A09,
+            0x1817_1615_1413_1211,
+            0x201F_1E1D_1C1B_1A19,
+        ];
+        const STORE_WORDS: [u64; 4] = [
+            0xA0A1_A2A3_A4A5_A6A7,
+            0xB0B1_B2B3_B4B5_B6B7,
+            0xC0C1_C2C3_C4C5_C6C7,
+            0xD0D1_D2D3_D4D5_D6D7,
+        ];
+        let seed_vector = [
+            u128::from(SEED[0]) | u128::from(SEED[1]) << 64,
+            u128::from(SEED[2]) | u128::from(SEED[3]) << 64,
+        ];
+        let store_vector = [
+            u128::from(STORE_WORDS[0]) | u128::from(STORE_WORDS[1]) << 64,
+            u128::from(STORE_WORDS[2]) | u128::from(STORE_WORDS[3]) << 64,
+        ];
+        let store_bytes: Vec<u8> = STORE_WORDS.iter().flat_map(|w| w.to_le_bytes()).collect();
+
+        let setup = |cpu: &mut CpuState, memory: &mut GuestMemory| {
+            cpu.set(Register::Rbx, STORED);
+            cpu.xmm[0] = store_vector[0];
+            cpu.ymm_high[0] = store_vector[1];
+            cpu.xmm[1] = u128::MAX;
+            cpu.ymm_high[1] = u128::MAX;
+            for base in [LOAD, VEX_STORE, LEGACY_STORE & !7] {
+                memory
+                    .map_region(base, 0x100, MemoryPermissions::READ_WRITE)
+                    .unwrap();
+            }
+            for (index, word) in SEED.iter().enumerate() {
+                memory.write_u64(LOAD + index as u64 * 8, *word).unwrap();
+            }
+        };
+        let check = |state: &CpuState, memory: &GuestMemory, path: &str| {
+            assert_eq!(state.get(Register::Rax), SEED[0], "{path}: legacy load");
+            assert_eq!(state.get(Register::Rbx), STORED, "{path}: store source");
+            assert_eq!(state.xmm[0], store_vector[0], "{path}: YMM0 low");
+            assert_eq!(state.ymm_high[0], store_vector[1], "{path}: YMM0 high");
+            assert_eq!(state.xmm[1], seed_vector[0], "{path}: VEX load low");
+            assert_eq!(state.ymm_high[1], seed_vector[1], "{path}: VEX load high");
+            assert_eq!(
+                memory.read_u64(LEGACY_STORE).unwrap(),
+                STORED,
+                "{path}: legacy store"
+            );
+            assert_eq!(
+                region_bytes(memory, VEX_STORE, 32),
+                store_bytes,
+                "{path}: VEX store"
+            );
+        };
+
+        let (mut engine, mut native_cpu, mut native_memory) = fixture(&CODE);
+        setup(&mut native_cpu, &mut native_memory);
+        let native = engine.run(&mut native_cpu, &mut native_memory, 16);
+        assert_eq!(native.exit_reason, ExitReason::Halt);
+        check(&native.final_state, &native_memory, "native DBT");
+
+        let (_, mut interpreted_cpu, mut interpreted_memory) = fixture(&CODE);
+        setup(&mut interpreted_cpu, &mut interpreted_memory);
+        let interpreted =
+            crate::cpu::Interpreter::new(interpreted_cpu, &mut interpreted_memory, 16).run();
+        assert_eq!(interpreted.exit_reason, ExitReason::Halt);
+        assert_eq!(interpreted.final_state, native.final_state);
+        check(&interpreted.final_state, &interpreted_memory, "interpreter");
+
+        for base in [LOAD, VEX_STORE, LEGACY_STORE & !7] {
+            assert_eq!(
+                region_bytes(&native_memory, base, 0x100),
+                region_bytes(&interpreted_memory, base, 0x100),
+                "RIP-relative data region at {base:#x}"
+            );
+        }
+    }
 }
