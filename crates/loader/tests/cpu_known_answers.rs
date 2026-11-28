@@ -3066,7 +3066,6 @@ const UNSUPPORTED: &[(&str, usize)] = &[
     ("bts_memory_negative_offset", 0),
     ("enter_leave_round_trip", 0),
     ("haddps_hsubpd_addsubps", 0),
-    ("maskmovdqu_selects_bytes", 0),
     ("movddup_movsldup_movshdup", 0),
     ("push16_moves_rsp_by_two", 0),
     ("pushfq_popfq_status_round_trip", 0),

@@ -312,6 +312,9 @@ f3 44 0f 7e 54 be 10 | movq xmm10, qword ptr [rsi + 4*rdi + 16]
 66 44 0f 50 d3 | movmskpd r10d, xmm3
 66 41 0f d7 d9 | pmovmskb ebx, xmm9
 66 44 0f d7 d3 | pmovmskb r10d, xmm3
+66 41 0f f7 d9 | maskmovdqu xmm3, xmm9
+66 44 0f f7 e3 | maskmovdqu xmm12, xmm3
+66 0f f7 db | maskmovdqu xmm3, xmm3
 66 0f 71 f3 00 | psllw xmm3, 0
 66 41 0f 71 f1 01 | psllw xmm9, 1
 66 41 0f 71 f1 07 | psllw xmm9, 7
