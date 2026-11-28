@@ -141,69 +141,16 @@ fn unit_single_byte(page: CodePage, unit: u16) -> Option<u8> {
     }
 }
 
-/// Decode UTF-8 exactly, every malformed sequence producing one error
-/// position (the caller turns them into replacements or a failure). A
-/// sequence is malformed when it is overlong, when it encodes a surrogate
-/// or a value past the maximum scalar, or when it ends or breaks early —
-/// the malformed byte is consumed and the next one starts afresh, as the
-/// Unicode standard's substitution of maximal subparts describes.
+/// Decode UTF-8 with one replacement per Unicode maximal subpart.
+/// The malformed positions are offsets in the resulting UTF-16 units.
 fn decode_utf8(bytes: &[u8]) -> (Vec<u16>, Vec<usize>) {
     let mut units = Vec::new();
     let mut malformed = Vec::new();
-    let mut at = 0;
-    while at < bytes.len() {
-        let byte = bytes[at];
-        if byte < 0x80 {
-            units.push(u16::from(byte));
-            at += 1;
-            continue;
-        }
-        // The length the lead byte announces, and the smallest value it may
-        // hold: longer forms of small values are overlong.
-        let (len, mut bits, minimum) = match byte {
-            0xC0..=0xDF => (2usize, u32::from(byte & 0x1F), 0x80u32),
-            0xE0..=0xEF => (3, u32::from(byte & 0x0F), 0x800),
-            0xF0..=0xF4 => (4, u32::from(byte & 0x07), 0x10000),
-            _ => {
-                malformed.push(units.len());
-                units.push(REPLACEMENT);
-                at += 1;
-                continue;
-            }
-        };
-        let mut valid = true;
-        let mut used = 1;
-        for offset in 1..len {
-            match bytes.get(at + offset) {
-                Some(cont) if cont & 0xC0 == 0x80 => {
-                    bits = bits << 6 | u32::from(cont & 0x3F);
-                    used += 1;
-                }
-                _ => {
-                    valid = false;
-                    break;
-                }
-            }
-        }
-        if valid {
-            valid = bits >= minimum && !(0xD800..=0xDFFF).contains(&bits) && bits <= 0x10FFFF;
-        }
-        if valid {
-            // Values past the BMP take two units: surrogates are a UTF-16
-            // fact, never malformed.
-            if bits > 0xFFFF {
-                let high = 0xD800 + ((bits - 0x10000) >> 10) as u16;
-                let low = 0xDC00 + ((bits - 0x10000) & 0x3FF) as u16;
-                units.push(high);
-                units.push(low);
-            } else {
-                units.push(bits as u16);
-            }
-            at += len;
-        } else {
+    for chunk in bytes.utf8_chunks() {
+        units.extend(chunk.valid().encode_utf16());
+        if !chunk.invalid().is_empty() {
             malformed.push(units.len());
             units.push(REPLACEMENT);
-            at += used.max(1);
         }
     }
     (units, malformed)
