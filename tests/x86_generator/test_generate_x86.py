@@ -123,7 +123,7 @@ class GenerateX86(unittest.TestCase):
     def test_vex_forms_are_validated(self):
         operations, forms = generate_x86.load(self.vex())
         self.assertEqual(forms[-1]["vex"], {"key": 3 << 10 | 1 << 8 | 0xF0, "digit": None, "length": True, "w": False,
-                                            "memory": 0, "nds": True})
+                                            "memory": 0, "nds": True, "vsib": False})
         rejected = [({"map": '"1"'}, "unknown map"), ({"prefix": '"67"'}, "unknown prefix"),
                     ({"length": '"512"'}, "unknown length"), ({"length": None}, "unknown length"),
                     ({"w": '"2"'}, "unknown w"), ({"op": '"nothing"'}, "unknown op"), ({"lock": "true"}, "unknown keys"),
