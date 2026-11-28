@@ -1365,8 +1365,16 @@ the input or copy a NUL-terminated component into a caller-provided buffer.
 The result reports the scheme, port and UTF-16 units written before the
 terminator. A zero extra-info length keeps query and fragment text in the
 path. An empty view returns a null pointer and zero units. Short, invalid or
-overlapping output spans fail before any output changes. The supported flags
-are zero and `ICU_REJECT_USERPWD`. Percent escapes remain intact.
+overlapping output spans fail before any output changes. The raw mode and
+`ICU_REJECT_USERPWD` preserve percent escapes. `ICU_DECODE` converts `%xx`
+sequences once in each copied component, using one wide unit per escaped
+byte. Caller-provided buffers are sized against the decoded lengths,
+including the trailing terminator. A requested view with `ICU_DECODE`
+fails with `ERROR_INVALID_PARAMETER`. Xenora finds component boundaries in
+the original canonical URL and keeps incomplete escape sequences literal
+in accepted path and extra text. Other transformation flags, including
+`ICU_ESCAPE` on `WinHttpCrackUrl`, remain unsupported.
+[Microsoft `WinHttpCrackUrl`](https://learn.microsoft.com/en-us/windows/win32/api/winhttp/nf-winhttp-winhttpcrackurl).
 
 `WinHttpCreateUrl` composes a URL from the same record without opening a
 connection. A null component pointer omits the component; a zero length reads
