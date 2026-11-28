@@ -255,7 +255,13 @@ pub(crate) fn execute(
         // The result is a general register, memory or flags, as in the legacy form.
         (_, Encoding::RegXmm | Encoding::GprXmmImm | Encoding::RegXmmImm)
         | (
-            Op::Comiss | Op::Comisd | Op::Ucomiss | Op::Ucomisd | Op::Pcmpestri | Op::Pcmpistri,
+            Op::Comiss
+            | Op::Comisd
+            | Op::Ucomiss
+            | Op::Ucomisd
+            | Op::Pcmpestri
+            | Op::Pcmpistri
+            | Op::Maskmovdqu,
             _,
         ) => execute_legacy(cpu, memory, insn)?,
         (Op::Pcmpestrm | Op::Pcmpistrm, _) => {

@@ -138,6 +138,12 @@ fn every_vector_fixture_matches_the_reference_in_both_engines() {
     let mut native_forms = 0;
     for case in cases() {
         let text = case.text;
+        // MASKMOVDQU stores through the implicit RDI address rather than the
+        // memory operand this harness models; `x86_maskmov.rs` validates it
+        // against its own byte-array reference.
+        if text.starts_with("maskmovdqu") {
+            continue;
+        }
         let insn = decode(ENTRY, |address| {
             case.code.get((address - ENTRY) as usize).copied().ok_or(())
         })

@@ -283,7 +283,9 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("MMX", 1, EDX, 23, &[0x0F, 0x77]),              // emms
         ("FXSR", 1, EDX, 24, &[0x0F, 0xAE, 0x06]),       // fxsave [rsi]
         ("SSE", 1, EDX, 25, &[0x0F, 0x52, 0xC1]),        // rsqrtps xmm0, xmm1
-        ("SSE2", 1, EDX, 26, &[0x66, 0x0F, 0xF7, 0xC1]), // maskmovdqu xmm0, xmm1
+        // MASKMOVDQU itself now runs; its memory form is architecturally
+        // invalid (both operands are registers), an honest permanent refusal.
+        ("SSE2", 1, EDX, 26, &[0x66, 0x0F, 0xF7, 0x01]), // maskmovdqu xmm0, [rcx]
         ("SSE3", 1, ECX, 0, &[0xF2, 0x0F, 0x7C, 0xC1]),  // haddps xmm0, xmm1
         // Every legacy imm8 is accepted: SDM Table 4-13 ignores all bits but
         // 0 and 4. The VEX form remains refused and is the witness.

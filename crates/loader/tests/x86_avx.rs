@@ -445,6 +445,12 @@ fn every_form_matches_the_reference_in_both_engines() {
     let mut random = Random(0xA5A5_5A5A_1234_5678);
     for case in cases() {
         let text = case.text;
+        // VMASKMOVDQU stores through the implicit RDI address rather than the
+        // memory operand this harness models; `x86_maskmov.rs` validates it
+        // against its own byte-array reference.
+        if text.starts_with("vmaskmovdqu") {
+            continue;
+        }
         let insn = at(&case.code).unwrap_or_else(|error| panic!("{text}: {error:?}"));
         assert!(!is_native(&insn), "{text}");
         assert_eq!(insn.name().split('_').next(), Some(&*insn.name()), "{text}");
@@ -482,6 +488,11 @@ fn legacy_instructions_keep_the_upper_halves() {
     ];
     let mut checked = 0;
     for case in fixtures.into_iter().flat_map(parse) {
+        // MASKMOVDQU stores through the implicit RDI address rather than the
+        // memory operand this harness maps; `x86_maskmov.rs` validates it.
+        if case.text.starts_with("maskmovdqu") {
+            continue;
+        }
         let mut machine = random.machine();
         machine.mxcsr |= 0x1F80;
         for native in [false, true] {
@@ -564,6 +575,11 @@ fn the_three_byte_prefix_and_an_ignored_w_change_nothing() {
     let mut ignored = 0;
     for case in all_cases() {
         let name = case.name();
+        // VMASKMOVDQU stores through the implicit RDI address, which this
+        // harness does not map; `x86_maskmov.rs` validates it.
+        if name == "vmaskmovdqu" {
+            continue;
+        }
         let machine = random.machine();
         let (cpu, _) = load(&machine, &case.code, READ_WRITE);
         for native in [false, true] {
@@ -673,6 +689,7 @@ fn an_unused_vvvv_must_be_all_ones() {
 #[test]
 fn a_vector_length_without_a_form_is_invalid() {
     let only_128 = [
+        "vmaskmovdqu",
         "vmovd",
         "vmovq",
         "vmovlps",
@@ -756,7 +773,6 @@ fn undeclared_vex_encodings_are_rejected() {
         &[0xC5, 0xFB, 0x7C, 0xC1],             // vhaddps (not implemented)
         &[0xC4, 0xE2, 0x79, 0x0E, 0xC1],       // vtestps (not implemented)
         &[0xC4, 0xE2, 0x71, 0x2C, 0x01],       // vmaskmovps (not implemented)
-        &[0xC5, 0xF9, 0xF7, 0xC1],             // vmaskmovdqu (not implemented)
         &[0xC4, 0xE2, 0x71, 0xDC, 0xC2],       // vaesenc
         &[0xC4, 0xE3, 0x71, 0x44, 0xC2, 0],    // vpclmulqdq
         &[0xC5, 0xF1, 0x71, 0x31, 0x01],       // vpsllw of memory

@@ -692,6 +692,28 @@ pub(crate) fn execute_legacy(
                 ..RFlags::default()
             };
         }
+        // The memory address is implicit in RDI: the sign bit of each mask
+        // byte decides whether the source byte is stored, and a masked byte
+        // is never accessed, so its fault is suppressed. The non-temporal
+        // hint is an ordinary store here: there is no cache to bypass.
+        (Op::Maskmovdqu, _) => {
+            let RmOperand::Reg(mask_register) = rm_operand(insn)? else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let data = cpu.xmm[reg];
+            let mask = cpu.xmm[xmm(mask_register)];
+            let base = cpu.gpr[7];
+            for byte in 0..16u128 {
+                if mask >> (byte * 8 + 7) & 1 == 1 {
+                    write_mem(
+                        memory,
+                        base.wrapping_add(byte as u64),
+                        1,
+                        (data >> (byte * 8)) as u64 & 0xFF,
+                    )?;
+                }
+            }
+        }
         // The sign bits of XMM0's lanes select the source.
         (Op::Pblendvb | Op::Blendvps | Op::Blendvpd, _) => {
             let source = read_rm(cpu, memory, insn)?;

@@ -199,6 +199,9 @@ def vector_cases():
             "movq r9, xmm3", f"movd xmm3, {dword}", f"movd {dword}, xmm9"]
     for op in "movmskps movmskpd pmovmskb".split():
         out += [f"{op} ebx, xmm9", f"{op} r10d, xmm3"]
+    # MASKMOVDQU stores through the implicit RDI address: both operands are
+    # registers, and aliasing the data and the mask is valid.
+    out += ["maskmovdqu xmm3, xmm9", "maskmovdqu xmm12, xmm3", "maskmovdqu xmm3, xmm3"]
     for op, bits in (("w", 16), ("d", 32), ("q", 64)):
         for name in ("psll", "psrl", "psra"):
             if name + op != "psraq":
@@ -315,6 +318,8 @@ def avx_cases():
             out.append(f"{op} {v}12, {whole[v]}")
         for op in ("vmovmskps", "vmovmskpd", "vpmovmskb"):
             out += [f"{op} ebx, {v}9", f"{op} r10d, {v}3"]
+        if v == "xmm":
+            out += ["vmaskmovdqu xmm3, xmm9", "vmaskmovdqu xmm12, xmm3", "vmaskmovdqu xmm3, xmm3"]
         out.append(f"vbroadcastss {v}12, {dword}")
         for op in ("vpermilps", "vpermilpd"):
             out += [f"{op} {v}3, {v}9, {n}" for n in (0, 1, 2, 5, 27, 78, 177, 228, 255)]

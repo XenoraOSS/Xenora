@@ -91,6 +91,9 @@ c4 c1 79 50 d9 | vmovmskpd ebx, xmm9
 c5 79 50 d3 | vmovmskpd r10d, xmm3
 c4 c1 79 d7 d9 | vpmovmskb ebx, xmm9
 c5 79 d7 d3 | vpmovmskb r10d, xmm3
+c4 c1 79 f7 d9 | vmaskmovdqu xmm3, xmm9
+c5 79 f7 e3 | vmaskmovdqu xmm12, xmm3
+c5 f9 f7 db | vmaskmovdqu xmm3, xmm3
 c4 62 79 18 64 be 10 | vbroadcastss xmm12, dword ptr [rsi + 4*rdi + 16]
 c4 c3 79 04 d9 00 | vpermilps xmm3, xmm9, 0
 c4 c3 79 04 d9 01 | vpermilps xmm3, xmm9, 1
