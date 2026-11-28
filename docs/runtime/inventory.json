@@ -10980,6 +10980,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "DecodePointer"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "DeleteCriticalSection"
     },
     {
@@ -11011,6 +11021,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "DuplicateHandle"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "EncodePointer"
     },
     {
       "data_import": false,
@@ -20196,15 +20216,15 @@
   "summary": {
     "aliases": 961,
     "api_set_aliases": 755,
-    "canonical_services": 1002,
+    "canonical_services": 1004,
     "data_import_services": 12,
     "duplicate_registrations": 0,
     "implemented": 247,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 700,
+    "manual_services": 702,
     "ordinal_aliases": 35,
-    "partial": 755,
+    "partial": 757,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,

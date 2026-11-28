@@ -388,6 +388,28 @@ separate local run with Microsoft redistributable DLLs supplied as guest
 modules stopped before execution with 76 required imports unresolved. No
 complete C++ stream execution or cleanup is claimed.
 
+### Static import census scope (#1163)
+
+The historical probe input `artifacts/msvc-dll-probe/imports.csv` records the
+static imports of one original Microsoft-header guest module, not a whole
+redistributable package. Re-running the classifier against fresh `origin/main`
+revision `bdedc62d309b0ee78ad0619c6eaad9f192d1ac94` found 198 distinct wanted
+imports: 27 implemented, 95 partial and 76 missing. The missing set has 51
+C/C++ CRT Runtime names and 25 `KERNEL32.dll` names. The latter cover
+threadpool objects, pointer encoding, processor and stack diagnostics, file
+information, locale and string conversion, temporary paths, callback
+lifetime, and one unhandled-exception filter.
+
+The number 76 is a single-module static census. It is not a reproduction of,
+nor directly comparable with, the historical multi-module package preflight
+counts of 75, 76, 77 or 83 recorded in separate local notes. No authorized
+Microsoft redistributable DLLs or original package executable were available
+for a fresh package preflight, so that question remains unresolved; no
+Microsoft binary was added to the repository. Reports regenerated from the
+CSV are import-classification evidence only. They do not show that any
+redistributable DLL loads or executes, and they do not validate the fidelity
+of any service.
+
 ### Microsoft ostream write and flush (#1163)
 
 The narrow `basic_ostream::write` and `flush` exports support a guest-provided
@@ -1807,6 +1829,18 @@ separately, for diagnostics.
   accepted. No APCs exist, so an alertable sleep always returns zero. Without a
   scheduler, `INFINITE` and sleeps longer than 10 seconds stop the guest with
   the runtime-limit fault, because a single guest thread could not be woken.
+
+### Pointer encoding
+
+`EncodePointer` and `DecodePointer` are exact inverses over a synthetic
+per-process cookie derived from the guest process id. Public Windows
+documentation does not specify a stable cookie algorithm, so Xenora chooses
+XOR with a mixed process id followed by a 13-bit rotation and marks both
+exports partial. Encoded pointers are stable within one guest process, differ
+between process ids, and are not Windows-compatible values or cryptographic
+protection. An original generated PE image imports both exports and round-trips
+a pointer through the translated service path. Local Apple Silicon verification
+only; no Windows comparison is claimed.
 
 ### Services that call guest code
 
