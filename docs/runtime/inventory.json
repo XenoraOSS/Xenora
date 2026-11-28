@@ -1344,6 +1344,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalFree",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-l2-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalFree"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
       "canonical_symbol": "GlobalAlloc",
       "kind": "name",
       "library": "api-ms-win-core-heap-obsolete-l1-1-0.dll",
@@ -2474,6 +2484,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
+      "canonical_symbol": "FormatMessageA",
+      "kind": "name",
+      "library": "api-ms-win-core-localization-l1-2-0.dll",
+      "status": "partial",
+      "symbol": "FormatMessageA"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
       "canonical_symbol": "GetACP",
       "kind": "name",
       "library": "api-ms-win-core-localization-l1-2-0.dll",
@@ -3149,6 +3169,16 @@
       "library": "api-ms-win-core-processthreads-l1-1-0.dll",
       "status": "partial",
       "symbol": "TlsSetValue"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "GetCurrentThreadStackLimits",
+      "kind": "name",
+      "library": "api-ms-win-core-processthreads-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "GetCurrentThreadStackLimits"
     },
     {
       "api_set": true,
@@ -20274,8 +20304,8 @@
     }
   ],
   "summary": {
-    "aliases": 965,
-    "api_set_aliases": 757,
+    "aliases": 968,
+    "api_set_aliases": 760,
     "canonical_services": 1006,
     "data_import_services": 12,
     "duplicate_registrations": 0,
