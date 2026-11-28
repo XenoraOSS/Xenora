@@ -250,7 +250,9 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         // ANDN, BLSI, BLSMSK and BLSR are implemented; BEXTR is the BMI1
         // witness while it stays refused.
         ("BMI1", 7, EBX, 3, &[0xC4, 0xE2, 0x70, 0xF7, 0xC2]), // bextr eax, edx, ecx
-        ("AVX2", 7, EBX, 5, &[0xC4, 0xE2, 0x75, 0x47, 0xC2]), // vpsllvd ymm0, ymm1, ymm2
+        // AVX2 cross-lane permutes, broadcasts, blends and per-lane shifts are
+        // implemented; the 256-bit immediate shuffle is still refused.
+        ("AVX2", 7, EBX, 5, &[0xC5, 0xFD, 0x70, 0xC1, 0x1B]), // vpshufd ymm0, ymm1, 27
         ("BMI2", 7, EBX, 8, &[0xC4, 0xE2, 0x73, 0xF6, 0xC2]), // mulx eax, ecx, edx
         ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),          // rdseed eax
         ("ADX", 7, EBX, 19, &[0x66, 0x0F, 0x38, 0xF6, 0xC1]), // adcx eax, ecx
