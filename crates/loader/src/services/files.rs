@@ -103,8 +103,17 @@ fn read_guest_path(memory: &GuestMemory, address: u64) -> Result<Option<String>,
                 return Ok(None);
             }
             let path = path.replace('/', "\\").to_ascii_lowercase();
-            let name = path.strip_prefix("c:\\").unwrap_or(&path);
-            return Ok(Some(name.to_owned()));
+            // A drive-rooted `c:\foo` is an absolute path: it anchors at
+            // the volume root exactly as a leading separator does, so it
+            // keeps its anchor rather than collapsing into the relative
+            // `foo` - which would resolve against the working directory and
+            // stop resolving the moment the process leaves its start
+            // directory (#1342).
+            let name = match path.strip_prefix("c:\\") {
+                Some(rest) => format!("\\{rest}"),
+                None => path,
+            };
+            return Ok(Some(name));
         }
         units.push(unit);
     }
@@ -222,8 +231,17 @@ fn read_guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String
                 return Ok(None);
             }
             let path = path.replace('/', "\\").to_ascii_lowercase();
-            let name = path.strip_prefix("c:\\").unwrap_or(&path);
-            return Ok(Some(name.to_owned()));
+            // A drive-rooted `c:\foo` is an absolute path: it anchors at
+            // the volume root exactly as a leading separator does, so it
+            // keeps its anchor rather than collapsing into the relative
+            // `foo` - which would resolve against the working directory and
+            // stop resolving the moment the process leaves its start
+            // directory (#1342).
+            let name = match path.strip_prefix("c:\\") {
+                Some(rest) => format!("\\{rest}"),
+                None => path,
+            };
+            return Ok(Some(name));
         }
         bytes.push(byte);
     }
@@ -2748,6 +2766,73 @@ impl super::ObjectState {
 #[cfg(test)]
 mod tests {
     use super::super::ObjectState;
+    use super::{read_guest_path, read_guest_path_a};
+    use crate::memory::GuestMemory;
+
+    fn narrow_at(memory: &mut GuestMemory, address: u64, text: &str) {
+        memory.write_bytes(address, text.as_bytes()).expect("write");
+        memory
+            .write_u8(address + text.len() as u64, 0)
+            .expect("terminator");
+    }
+
+    fn mapped_memory() -> GuestMemory {
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x1000, 0x1000, crate::memory::MemoryPermissions::READ_WRITE)
+            .expect("map");
+        memory
+    }
+
+    /// A drive-rooted path keeps its anchor through the kernel32 path
+    /// readers exactly as it does on Windows: `c:\f` is absolute, so it
+    /// reads as the rooted `\f` rather than the relative `f` - which would
+    /// resolve against the working directory and stop resolving the moment
+    /// the process leaves its start directory. busybox-w32 stats its own
+    /// executable through this very path before every spawn, and the spawn
+    /// broke after `cd` because the absolute answer of GetModuleFileName
+    /// lost its anchor here (#1342).
+    #[test]
+    fn drive_rooted_paths_keep_their_anchor_through_the_readers() {
+        let mut memory = mapped_memory();
+        narrow_at(&mut memory, 0x1000, "c:\\d\\f");
+        assert_eq!(
+            read_guest_path_a(&memory, 0x1000).expect("read"),
+            Some("\\d\\f".to_owned())
+        );
+        narrow_at(&mut memory, 0x1100, "C:/d/f");
+        assert_eq!(
+            read_guest_path_a(&memory, 0x1100).expect("read"),
+            Some("\\d\\f".to_owned())
+        );
+        // A relative name keeps no anchor, so the working directory still
+        // reaches it.
+        narrow_at(&mut memory, 0x1200, "d\\f");
+        assert_eq!(
+            read_guest_path_a(&memory, 0x1200).expect("read"),
+            Some("d\\f".to_owned())
+        );
+        // An already-rooted name is unchanged, as is a drive-relative one.
+        narrow_at(&mut memory, 0x1300, "\\d\\f");
+        assert_eq!(
+            read_guest_path_a(&memory, 0x1300).expect("read"),
+            Some("\\d\\f".to_owned())
+        );
+        // The wide reader canonicalises the same way.
+        let wide: Vec<u16> = "c:\\d\\f".encode_utf16().collect();
+        for (index, unit) in wide.iter().enumerate() {
+            memory
+                .write_u16(0x1400 + index as u64 * 2, *unit)
+                .expect("write");
+        }
+        memory
+            .write_u16(0x1400 + wide.len() as u64 * 2, 0)
+            .expect("terminator");
+        assert_eq!(
+            read_guest_path(&memory, 0x1400).expect("read"),
+            Some("\\d\\f".to_owned())
+        );
+    }
 
     /// The trailing separator of the Windows path grammar: `dir/` names
     /// `dir`, as the shell's mkdir -p idiom depends on when it creates
