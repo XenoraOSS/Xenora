@@ -117,6 +117,7 @@ shlx = { ref = "sdm SHLX/SHRX/SARX" }
 shrx = { ref = "sdm SHLX/SHRX/SARX" }
 sarx = { ref = "sdm SHLX/SHRX/SARX" }
 rorx = { ref = "sdm RORX" }
+mulx = { ref = "sdm MULX" }
 push = { ref = "sdm PUSH" }
 pop = { ref = "sdm POP" }
 leave = { ref = "sdm LEAVE" }
@@ -6162,6 +6163,19 @@ prefix = "f2"
 opcode = 0xF0
 enc = "reg_rm_ub"
 length = "128"
+
+# MULX writes the low product to the ModRM register and the high product to
+# VEX.vvvv. The ModRM r/m operand is the multiplicand and RDX is the implicit
+# multiplier. LLVM's encoding for `mulx r10d, r12d, [rsi + 4*rdi + 16]` uses
+# VEX.F2.0F38.F6 with VEX.vvvv naming the high destination.
+[[vex]]
+op = "mulx"
+map = "0f38"
+prefix = "f2"
+opcode = 0xF6
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
 
 [[vex]]
 op = "fmaddsub132p"
