@@ -1,18 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Unnamed event, semaphore and mutex objects and waits. A wait that cannot
+//! Event, semaphore and mutex objects and waits. A wait that cannot
 //! resolve at once blocks the guest thread if a scheduler is attached, and is
 //! unsupported otherwise.
 
 use super::threads::{Pending, PendingWait};
 use super::{
     ERROR_ACCESS_DENIED, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOACCESS,
-    ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, GuestObject, KERNEL32, ServicesState,
+    ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, GuestObject, KERNEL32, ObjectState,
+    ServicesState,
 };
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
-use crate::memory::MemoryError;
-use std::sync::{Arc, Mutex};
+use crate::memory::{GuestMemory, MemoryError};
+use std::sync::{Arc, Mutex, Weak};
 
 const SYNCH_API: &str = "api-ms-win-core-synch-l1-1-0.dll";
 const CREATE_EVENT_MANUAL_RESET: u32 = 0x0001;
@@ -29,6 +30,10 @@ const WAIT_ABANDONED_0: u64 = 0x80;
 
 const SEMAPHORE_ALL_ACCESS: u32 = 0x001f_0003;
 const SEMAPHORE_MODIFY_STATE: u32 = 2;
+const MAX_SEMAPHORE_NAME_UNITS: usize = 260;
+const ERROR_FILE_NOT_FOUND: u32 = 2;
+const ERROR_INVALID_NAME: u32 = 123;
+const ERROR_ALREADY_EXISTS: u32 = 183;
 const ERROR_TOO_MANY_POSTS: u32 = 298;
 
 const MUTEX_ALL_ACCESS: u32 = 0x001f_0001;
@@ -43,6 +48,7 @@ pub(super) enum Waitable {
     Semaphore {
         count: i32,
         maximum: i32,
+        name: Option<SemaphoreName>,
     },
     /// Owned by a guest TEB; the owner may acquire it recursively.
     Mutex {
@@ -56,6 +62,13 @@ pub(super) enum Waitable {
         id: u32,
         exit_code: Option<u32>,
     },
+}
+
+pub(super) struct SemaphoreName {
+    // Spawned guests share the backing object table. Their namespaces are
+    // distinct, and a weak reference does not keep an ended guest alive.
+    owner: Weak<ServicesState>,
+    text: String,
 }
 
 impl Waitable {
@@ -102,17 +115,97 @@ fn insert_waitable(
     access: u32,
 ) -> Result<u64, ExitReason> {
     let mut objects = state.objects.lock().expect("guest object state");
+    insert_waitable_handle(
+        &mut objects,
+        state,
+        teb,
+        Arc::new(Mutex::new(object)),
+        access,
+    )
+}
+
+fn insert_waitable_handle(
+    objects: &mut ObjectState,
+    state: &ServicesState,
+    teb: u64,
+    object: Arc<Mutex<Waitable>>,
+    access: u32,
+) -> Result<u64, ExitReason> {
     let Some(handle) = objects.next_handle() else {
         return state.fail(teb, ERROR_NOT_ENOUGH_MEMORY, 0);
     };
     objects.insert_handle(
         handle,
         GuestObject::Waitable {
-            state: Arc::new(Mutex::new(object)),
+            state: object,
             access,
         },
     );
     Ok(handle)
+}
+
+fn read_semaphore_name(memory: &GuestMemory, address: u64, wide: bool) -> Result<String, u32> {
+    // A narrow guest string uses the console's UTF-8 code page. Three bytes
+    // per UTF-16 unit cover every valid UTF-8 name within the wide limit.
+    let (limit, unit_size) = if wide {
+        (MAX_SEMAPHORE_NAME_UNITS, 2)
+    } else {
+        (MAX_SEMAPHORE_NAME_UNITS * 3, 1)
+    };
+    let mut units = Vec::new();
+    for index in 0..=limit {
+        let at = address
+            .checked_add(index as u64 * unit_size)
+            .ok_or(ERROR_NOACCESS)?;
+        let unit = if wide {
+            memory.read_u16(at)
+        } else {
+            memory.read_u8(at).map(u16::from)
+        }
+        .map_err(|_| ERROR_NOACCESS)?;
+        if unit != 0 {
+            units.push(unit);
+            continue;
+        }
+        let name = if wide {
+            String::from_utf16(&units).map_err(|_| ERROR_INVALID_NAME)?
+        } else {
+            let bytes = units.into_iter().map(|unit| unit as u8).collect();
+            String::from_utf8(bytes).map_err(|_| ERROR_INVALID_NAME)?
+        };
+        if name.is_empty() || name.encode_utf16().count() > MAX_SEMAPHORE_NAME_UNITS {
+            return Err(ERROR_INVALID_NAME);
+        }
+        if name.contains('\\') {
+            return Err(ERROR_NOT_SUPPORTED);
+        }
+        return Ok(name);
+    }
+    Err(ERROR_INVALID_NAME)
+}
+
+fn find_semaphore(
+    objects: &ObjectState,
+    owner: &ServicesState,
+    name: &str,
+) -> Option<Arc<Mutex<Waitable>>> {
+    // Search only the bounded handle table. A blocked wait can retain the
+    // object after its last handle closes, but cannot keep its name available.
+    objects.handles.values().find_map(|object| {
+        let GuestObject::Waitable { state, .. } = object else {
+            return None;
+        };
+        let waitable = state.lock().expect("guest waitable state");
+        match &*waitable {
+            Waitable::Semaphore {
+                name: Some(existing),
+                ..
+            } if std::ptr::eq(existing.owner.as_ptr(), owner) && existing.text == name => {
+                Some(Arc::clone(state))
+            }
+            _ => None,
+        }
+    })
 }
 
 fn insert_mutex(
@@ -207,11 +300,11 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         });
     }
 
-    for (symbol, extended) in [
-        ("CreateSemaphoreA", false),
-        ("CreateSemaphoreW", false),
-        ("CreateSemaphoreExA", true),
-        ("CreateSemaphoreExW", true),
+    for (symbol, wide, extended) in [
+        ("CreateSemaphoreA", false, false),
+        ("CreateSemaphoreW", true, false),
+        ("CreateSemaphoreExA", false, true),
+        ("CreateSemaphoreExW", true, true),
     ] {
         let state = Arc::clone(state);
         registry.register(KERNEL32, symbol, move |args, cpu, mem| {
@@ -229,19 +322,71 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             } else {
                 SEMAPHORE_ALL_ACCESS
             };
-            if attributes != 0 || name != 0 || access & !SEMAPHORE_ALL_ACCESS != 0 {
-                return state.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
+            let teb = cpu.gs_base;
+            if attributes != 0 || access & !SEMAPHORE_ALL_ACCESS != 0 {
+                return state.fail(teb, ERROR_NOT_SUPPORTED, 0);
+            }
+            let name = match name {
+                0 => None,
+                address => match read_semaphore_name(mem, address, wide) {
+                    Ok(text) => Some(text),
+                    Err(error) => return state.fail(teb, error, 0),
+                },
+            };
+            let mut objects = state.objects.lock().expect("guest object state");
+            if let Some(text) = &name
+                && let Some(object) = find_semaphore(&objects, &state, text)
+            {
+                let handle = insert_waitable_handle(&mut objects, &state, teb, object, access)?;
+                if handle != 0 {
+                    state.set_last_error(teb, ERROR_ALREADY_EXISTS);
+                }
+                return Ok(handle);
             }
             if maximum <= 0 || count < 0 || count > maximum {
-                return state.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                return state.fail(teb, ERROR_INVALID_PARAMETER, 0);
             }
-            insert_waitable(
-                &state,
-                cpu.gs_base,
-                Waitable::Semaphore { count, maximum },
-                access,
-            )
+            let named = name.is_some();
+            let object = Arc::new(Mutex::new(Waitable::Semaphore {
+                count,
+                maximum,
+                name: name.map(|text| SemaphoreName {
+                    owner: Arc::downgrade(&state),
+                    text,
+                }),
+            }));
+            let handle = insert_waitable_handle(&mut objects, &state, teb, object, access)?;
+            if named && handle != 0 {
+                state.set_last_error(teb, 0);
+            }
+            Ok(handle)
         });
+    }
+
+    for (symbol, wide) in [("OpenSemaphoreA", false), ("OpenSemaphoreW", true)] {
+        let state = Arc::clone(state);
+        registry.register(KERNEL32, symbol, move |args, cpu, mem| {
+            let access = args.get(0, mem).map_err(ExitReason::MemoryFault)? as u32;
+            let inherit = args.get(1, mem).map_err(ExitReason::MemoryFault)? as u32 != 0;
+            let name = args.get(2, mem).map_err(ExitReason::MemoryFault)?;
+            let teb = cpu.gs_base;
+            if inherit || access & !SEMAPHORE_ALL_ACCESS != 0 {
+                return state.fail(teb, ERROR_NOT_SUPPORTED, 0);
+            }
+            if name == 0 {
+                return state.fail(teb, ERROR_INVALID_NAME, 0);
+            }
+            let text = match read_semaphore_name(mem, name, wide) {
+                Ok(name) => name,
+                Err(error) => return state.fail(teb, error, 0),
+            };
+            let mut objects = state.objects.lock().expect("guest object state");
+            let Some(object) = find_semaphore(&objects, &state, &text) else {
+                return state.fail(teb, ERROR_FILE_NOT_FOUND, 0);
+            };
+            insert_waitable_handle(&mut objects, &state, teb, object, access)
+        });
+        registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
 
     let release = Arc::clone(state);
@@ -257,7 +402,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             return release.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
         };
         let mut state = state.lock().expect("guest waitable state");
-        let Waitable::Semaphore { count, maximum } = &mut *state else {
+        let Waitable::Semaphore { count, maximum, .. } = &mut *state else {
             return release.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
         };
         if access & SEMAPHORE_MODIFY_STATE == 0 {
@@ -516,7 +661,7 @@ fn signal_waitable(object: &mut Waitable, access: u32, teb: u64) -> Result<bool,
             *signaled = true;
             Ok(true)
         }
-        Waitable::Semaphore { count, maximum } => {
+        Waitable::Semaphore { count, maximum, .. } => {
             if access & SEMAPHORE_MODIFY_STATE == 0 {
                 return Err(ERROR_ACCESS_DENIED);
             }
@@ -693,5 +838,36 @@ impl ServicesState {
                 (*owner, *recursion, *abandoned) = (None, 0, true);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::MockClock;
+
+    #[test]
+    fn semaphore_names_follow_process_and_live_handles() {
+        let parent = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+        let child = parent.child_for_spawn();
+        assert!(Arc::ptr_eq(&parent.objects, &child.objects));
+        let name = "SharedTable";
+        let object = Arc::new(Mutex::new(Waitable::Semaphore {
+            count: 1,
+            maximum: 1,
+            name: Some(SemaphoreName {
+                owner: Arc::downgrade(&parent),
+                text: name.into(),
+            }),
+        }));
+        let mut objects = parent.objects.lock().unwrap();
+        let handle =
+            insert_waitable_handle(&mut objects, &parent, 0, object.clone(), SYNCHRONIZE).unwrap();
+        assert!(find_semaphore(&objects, &parent, name).is_some());
+        assert!(find_semaphore(&objects, &child, name).is_none());
+        objects.handles.remove(&handle).unwrap();
+        assert!(find_semaphore(&objects, &parent, name).is_none());
+        // A retained pending wait can still see the old object.
+        assert!(object.lock().unwrap().is_ready(0));
     }
 }

@@ -1757,11 +1757,26 @@ object wait APIs support the same immediate behavior when alerting is
 disabled. Alertable calls and waits that would block return an unsupported
 error.
 
-`CreateSemaphoreA` and `CreateSemaphoreW` create unnamed semaphores
-with default security attributes. A successful wait consumes one permit.
-`ReleaseSemaphore` can return the previous count and rejects a release
-that exceeds the maximum without changing the count. Duplicates share
-the same permit count.
+`CreateSemaphoreA`, `CreateSemaphoreW` and their `Ex` forms support unnamed
+semaphores and case-sensitive names within the guest process. Named creation
+of an existing semaphore preserves its original count and maximum and sets
+`ERROR_ALREADY_EXISTS`. `OpenSemaphoreA` and `OpenSemaphoreW` return a new
+handle with the requested supported access mask or fail with
+`ERROR_FILE_NOT_FOUND` when the name has no live handle. Closing the last
+handle retires the name. Narrow names use the guest UTF-8 code page, and names
+are limited to 260 UTF-16 code units.
+
+A successful wait consumes one permit and requires synchronize access.
+`ReleaseSemaphore` requires modify-state access, can return the previous
+count and rejects a release above the maximum without changing the count.
+All handles to the same semaphore, including duplicates, share the count.
+Security attributes, handle inheritance, cross-process names and scoped
+namespaces such as `Global\` and `Local\` remain unsupported.
+A spawned guest should close its own handles explicitly because its exit
+does not sweep the shared backing object table.
+
+See Microsoft's [semaphore creation](https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-createsemaphorew)
+and [reopening](https://learn.microsoft.com/windows/win32/api/synchapi/nf-synchapi-opensemaphorew) documentation.
 
 `CreateMutexA`, `CreateMutexW` and their `Ex` forms create unnamed mutexes,
 optionally owned by the caller. Ownership belongs to the calling guest
