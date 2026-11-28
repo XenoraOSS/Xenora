@@ -393,6 +393,9 @@ def avx_form_cases():
         if op in AVX2_PACKED:
             two("v" + op, "ymm", ymm)
     two("vptest", "ymm", ymm)
+    for op in ("vtestps", "vtestpd"):
+        two(op, "xmm", xmm)
+        two(op, "ymm", ymm)
     for kind, width in (("bw", quad), ("bd", dword), ("bq", word), ("wd", quad), ("wq", dword), ("dq", quad)):
         for op in ("vpmovsx", "vpmovzx"):
             two(op + kind, "xmm", width)

@@ -101,7 +101,9 @@ class GenerateX86(unittest.TestCase):
         # OF and writes ZF and SF with PF and AF undefined, for example — which
         # is exact where it matters: every BMI form is VEX-encoded and so runs
         # on the shared semantics, never under native dead-flag elimination.
-        legacy = {"ptest", "pcmpestri", "pcmpestrm", "pcmpistri", "pcmpistrm"}
+        # VTESTPS and VTESTPD write the complete set as well: ZF and CF carry
+        # the sign-bit reductions and the rest are cleared.
+        legacy = {"ptest", "testps", "testpd", "pcmpestri", "pcmpestrm", "pcmpistri", "pcmpistrm"}
         bmi = {"andn", "bextr", "blsi", "blsmsk", "blsr", "bzhi"}
         self.assertEqual(writers, legacy | bmi)
         for op in legacy:

@@ -754,7 +754,6 @@ fn undeclared_vex_encodings_are_rejected() {
         &[0xC4, 0xFF, 0x78, 0x28, 0xC1],       // map 31
         &[0xC5, 0xF8, 0x53, 0xC1],             // vrcpps (not implemented)
         &[0xC5, 0xFB, 0x7C, 0xC1],             // vhaddps (not implemented)
-        &[0xC4, 0xE2, 0x79, 0x0E, 0xC1],       // vtestps (not implemented)
         &[0xC4, 0xE2, 0x71, 0x2C, 0x01],       // vmaskmovps (not implemented)
         &[0xC5, 0xF9, 0xF7, 0xC1],             // vmaskmovdqu (not implemented)
         &[0xC4, 0xE2, 0x71, 0xDC, 0xC2],       // vaesenc
@@ -1172,9 +1171,17 @@ fn flags_survive_every_form() {
         af: true,
     };
     for case in all_cases() {
-        if ["vptest", "vcomi", "vucomi", "vpcmpestr", "vpcmpistr"]
-            .iter()
-            .any(|stem| case.name().starts_with(stem))
+        if [
+            "vptest",
+            "vtestps",
+            "vtestpd",
+            "vcomi",
+            "vucomi",
+            "vpcmpestr",
+            "vpcmpistr",
+        ]
+        .iter()
+        .any(|stem| case.name().starts_with(stem))
         {
             continue;
         }
