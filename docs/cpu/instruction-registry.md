@@ -191,7 +191,7 @@ The counter is Xenora's own. It is neither a host timer nor derived from one, so
 
 ## Rejected on purpose
 
-LOCK except as described above, F2 or F3 where it is neither PAUSE nor part of a declared form, F2 combined with F3, an ignored segment override after FS or GS, 16-bit stack and branch forms, 16-bit BSWAP and MOVSXD, bit tests of memory by a register index, REPNE on MOVS, STOS and LODS, every x87 instruction except FNINIT, MMX, the RCP and RSQRT approximations, SSE3, the MMX forms of SSSE3, SSE4a, VEX/EVEX AES, SHA, MOVBE, VEX except as described above, EVEX and XOP. The legacy PCLMULQDQ accepts every imm8 because SDM Table 4-13 ignores all bits except 0 and 4; its VEX form remains refused. The DBT also refuses raw SYSCALL.
+LOCK except as described above, F2 or F3 where it is neither PAUSE nor part of a declared form, F2 combined with F3, an ignored segment override after FS or GS, 16-bit stack and branch forms, 16-bit BSWAP and MOVSXD, bit tests of memory by a register index, REPNE on MOVS, STOS and LODS, every x87 instruction except FNINIT, MMX, the RCP and RSQRT approximations, SSE3, the MMX forms of SSSE3, SSE4a, VEX/EVEX AES, SHA, MOVBE, VEX except as described above, EVEX and XOP. The legacy PCLMULQDQ accepts every imm8 because SDM Table 4-13 ignores all bits except 0 and 4; its VEX form executes as the same carry-less product with the first source in VEX.vvvv. The DBT also refuses raw SYSCALL.
 
 
 ## CPU semantic expansion audit

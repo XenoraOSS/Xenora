@@ -673,6 +673,7 @@ fn an_unused_vvvv_must_be_all_ones() {
 #[test]
 fn a_vector_length_without_a_form_is_invalid() {
     let only_128 = [
+        "vpclmulqdq",
         "vmovd",
         "vmovq",
         "vmovlps",
@@ -758,7 +759,6 @@ fn undeclared_vex_encodings_are_rejected() {
         &[0xC4, 0xE2, 0x71, 0x2C, 0x01],       // vmaskmovps (not implemented)
         &[0xC5, 0xF9, 0xF7, 0xC1],             // vmaskmovdqu (not implemented)
         &[0xC4, 0xE2, 0x71, 0xDC, 0xC2],       // vaesenc
-        &[0xC4, 0xE3, 0x71, 0x44, 0xC2, 0],    // vpclmulqdq
         &[0xC5, 0xF1, 0x71, 0x31, 0x01],       // vpsllw of memory
         &[0xC5, 0xF1, 0x71, 0xC9, 0x01],       // 0F 71 /1
         &[0xC5, 0xF9, 0xC5, 0x01, 0x01],       // vpextrw from memory

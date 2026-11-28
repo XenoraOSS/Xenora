@@ -1055,6 +1055,86 @@ c5 fb 70 d2 ff | vpshuflw xmm2, xmm2, 255
 c4 c1 7f 70 d9 ff | vpshuflw ymm3, ymm9, 255
 c5 7f 70 64 be 10 ff | vpshuflw ymm12, ymmword ptr [rsi + 4*rdi + 16], 255
 c5 ff 70 d2 ff | vpshuflw ymm2, ymm2, 255
+c4 c3 31 44 da 00 | vpclmulqdq xmm3, xmm9, xmm10, 0
+c4 63 71 44 64 be 10 00 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 0
+c4 e3 69 44 d2 00 | vpclmulqdq xmm2, xmm2, xmm2, 0
+c4 e3 31 44 db 00 | vpclmulqdq xmm3, xmm9, xmm3, 0
+c4 e3 61 44 dd 00 | vpclmulqdq xmm3, xmm3, xmm5, 0
+c4 c3 31 44 da 01 | vpclmulqdq xmm3, xmm9, xmm10, 1
+c4 63 71 44 64 be 10 01 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 1
+c4 e3 69 44 d2 01 | vpclmulqdq xmm2, xmm2, xmm2, 1
+c4 e3 31 44 db 01 | vpclmulqdq xmm3, xmm9, xmm3, 1
+c4 e3 61 44 dd 01 | vpclmulqdq xmm3, xmm3, xmm5, 1
+c4 c3 31 44 da 02 | vpclmulqdq xmm3, xmm9, xmm10, 2
+c4 63 71 44 64 be 10 02 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 2
+c4 e3 69 44 d2 02 | vpclmulqdq xmm2, xmm2, xmm2, 2
+c4 e3 31 44 db 02 | vpclmulqdq xmm3, xmm9, xmm3, 2
+c4 e3 61 44 dd 02 | vpclmulqdq xmm3, xmm3, xmm5, 2
+c4 c3 31 44 da 03 | vpclmulqdq xmm3, xmm9, xmm10, 3
+c4 63 71 44 64 be 10 03 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 3
+c4 e3 69 44 d2 03 | vpclmulqdq xmm2, xmm2, xmm2, 3
+c4 e3 31 44 db 03 | vpclmulqdq xmm3, xmm9, xmm3, 3
+c4 e3 61 44 dd 03 | vpclmulqdq xmm3, xmm3, xmm5, 3
+c4 c3 31 44 da 08 | vpclmulqdq xmm3, xmm9, xmm10, 8
+c4 63 71 44 64 be 10 08 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 8
+c4 e3 69 44 d2 08 | vpclmulqdq xmm2, xmm2, xmm2, 8
+c4 e3 31 44 db 08 | vpclmulqdq xmm3, xmm9, xmm3, 8
+c4 e3 61 44 dd 08 | vpclmulqdq xmm3, xmm3, xmm5, 8
+c4 c3 31 44 da 09 | vpclmulqdq xmm3, xmm9, xmm10, 9
+c4 63 71 44 64 be 10 09 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 9
+c4 e3 69 44 d2 09 | vpclmulqdq xmm2, xmm2, xmm2, 9
+c4 e3 31 44 db 09 | vpclmulqdq xmm3, xmm9, xmm3, 9
+c4 e3 61 44 dd 09 | vpclmulqdq xmm3, xmm3, xmm5, 9
+c4 c3 31 44 da 10 | vpclmulqdq xmm3, xmm9, xmm10, 16
+c4 63 71 44 64 be 10 10 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 16
+c4 e3 69 44 d2 10 | vpclmulqdq xmm2, xmm2, xmm2, 16
+c4 e3 31 44 db 10 | vpclmulqdq xmm3, xmm9, xmm3, 16
+c4 e3 61 44 dd 10 | vpclmulqdq xmm3, xmm3, xmm5, 16
+c4 c3 31 44 da 11 | vpclmulqdq xmm3, xmm9, xmm10, 17
+c4 63 71 44 64 be 10 11 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 17
+c4 e3 69 44 d2 11 | vpclmulqdq xmm2, xmm2, xmm2, 17
+c4 e3 31 44 db 11 | vpclmulqdq xmm3, xmm9, xmm3, 17
+c4 e3 61 44 dd 11 | vpclmulqdq xmm3, xmm3, xmm5, 17
+c4 c3 31 44 da 12 | vpclmulqdq xmm3, xmm9, xmm10, 18
+c4 63 71 44 64 be 10 12 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 18
+c4 e3 69 44 d2 12 | vpclmulqdq xmm2, xmm2, xmm2, 18
+c4 e3 31 44 db 12 | vpclmulqdq xmm3, xmm9, xmm3, 18
+c4 e3 61 44 dd 12 | vpclmulqdq xmm3, xmm3, xmm5, 18
+c4 c3 31 44 da 13 | vpclmulqdq xmm3, xmm9, xmm10, 19
+c4 63 71 44 64 be 10 13 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 19
+c4 e3 69 44 d2 13 | vpclmulqdq xmm2, xmm2, xmm2, 19
+c4 e3 31 44 db 13 | vpclmulqdq xmm3, xmm9, xmm3, 19
+c4 e3 61 44 dd 13 | vpclmulqdq xmm3, xmm3, xmm5, 19
+c4 c3 31 44 da 22 | vpclmulqdq xmm3, xmm9, xmm10, 34
+c4 63 71 44 64 be 10 22 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 34
+c4 e3 69 44 d2 22 | vpclmulqdq xmm2, xmm2, xmm2, 34
+c4 e3 31 44 db 22 | vpclmulqdq xmm3, xmm9, xmm3, 34
+c4 e3 61 44 dd 22 | vpclmulqdq xmm3, xmm3, xmm5, 34
+c4 c3 31 44 da 23 | vpclmulqdq xmm3, xmm9, xmm10, 35
+c4 63 71 44 64 be 10 23 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 35
+c4 e3 69 44 d2 23 | vpclmulqdq xmm2, xmm2, xmm2, 35
+c4 e3 31 44 db 23 | vpclmulqdq xmm3, xmm9, xmm3, 35
+c4 e3 61 44 dd 23 | vpclmulqdq xmm3, xmm3, xmm5, 35
+c4 c3 31 44 da 32 | vpclmulqdq xmm3, xmm9, xmm10, 50
+c4 63 71 44 64 be 10 32 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 50
+c4 e3 69 44 d2 32 | vpclmulqdq xmm2, xmm2, xmm2, 50
+c4 e3 31 44 db 32 | vpclmulqdq xmm3, xmm9, xmm3, 50
+c4 e3 61 44 dd 32 | vpclmulqdq xmm3, xmm3, xmm5, 50
+c4 c3 31 44 da 33 | vpclmulqdq xmm3, xmm9, xmm10, 51
+c4 63 71 44 64 be 10 33 | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 51
+c4 e3 69 44 d2 33 | vpclmulqdq xmm2, xmm2, xmm2, 51
+c4 e3 31 44 db 33 | vpclmulqdq xmm3, xmm9, xmm3, 51
+c4 e3 61 44 dd 33 | vpclmulqdq xmm3, xmm3, xmm5, 51
+c4 c3 31 44 da 7a | vpclmulqdq xmm3, xmm9, xmm10, 122
+c4 63 71 44 64 be 10 7a | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 122
+c4 e3 69 44 d2 7a | vpclmulqdq xmm2, xmm2, xmm2, 122
+c4 e3 31 44 db 7a | vpclmulqdq xmm3, xmm9, xmm3, 122
+c4 e3 61 44 dd 7a | vpclmulqdq xmm3, xmm3, xmm5, 122
+c4 c3 31 44 da ff | vpclmulqdq xmm3, xmm9, xmm10, 255
+c4 63 71 44 64 be 10 ff | vpclmulqdq xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 255
+c4 e3 69 44 d2 ff | vpclmulqdq xmm2, xmm2, xmm2, 255
+c4 e3 31 44 db ff | vpclmulqdq xmm3, xmm9, xmm3, 255
+c4 e3 61 44 dd ff | vpclmulqdq xmm3, xmm3, xmm5, 255
 c4 c3 31 0f da 00 | vpalignr xmm3, xmm9, xmm10, 0
 c4 63 71 0f 64 be 10 00 | vpalignr xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 0
 c4 e3 69 0f d2 00 | vpalignr xmm2, xmm2, xmm2, 0

@@ -415,6 +415,10 @@ def avx_form_cases():
         for n in (0, 27, 78, 177, 255):
             two(op, "xmm", xmm, f", {n}")
             two(op, "ymm", ymm, f", {n}")
+    # The carry-less multiply keeps the full immediate matrix of its legacy
+    # form: bits other than 0 and 4 are ignored and must not change the product.
+    for n in (0, 1, 2, 3, 8, 9, 16, 17, 18, 19, 0x22, 0x23, 0x32, 0x33, 0x7A, 0xFF):
+        three("vpclmulqdq", "xmm", f", {n}")
     for op, values in (("vpalignr", (0, 1, 5, 15, 16, 17, 31, 32, 255)), ("vpblendw", (0, 1, 2, 90, 165, 255)),
                        ("vmpsadbw", (*range(8), 129, 255))):
         for n in values:
