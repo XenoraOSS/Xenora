@@ -14,6 +14,7 @@ use support::{BASE, CODE_RVA, Guest, SCRATCH, SCRATCH_LEN, THREAD_A};
 use xenora_loader::cpu::{CpuState, ExitReason};
 use xenora_loader::import_table::ImportName;
 use xenora_loader::imports::{ImportRegistry, Win64Args};
+use xenora_loader::memory::MemoryPermissions;
 use xenora_loader::services::register_standard_services;
 
 const BCRYPT: &str = "bcrypt.dll";
@@ -178,6 +179,117 @@ fn system_preferred_rng_and_algorithm_pseudo_handle_work_without_opening() {
         STATUS_INVALID_HANDLE,
     );
     check_output(&mut guest, RNG_ALG_HANDLE, 0);
+}
+
+#[test]
+fn cng_fills_buffers_larger_than_the_legacy_advapi_limit() {
+    const RNG_IMPORTS: &[(&str, &str)] = &[
+        (BCRYPT, GENERATE),
+        ("advapi32.dll", "CryptAcquireContextA"),
+        ("advapi32.dll", "CryptGenRandom"),
+        ("advapi32.dll", "CryptReleaseContext"),
+        (KERNEL32, "SetLastError"),
+        (KERNEL32, "GetLastError"),
+    ];
+    const START: u64 = 0x90_0000;
+    const SPLIT: usize = 32 * 1024;
+    const LEGACY_MAX: usize = 65_536;
+    const SIZE: usize = LEGACY_MAX + 64;
+    const INITIAL: u8 = 0xA6;
+
+    let mut guest = Guest::new(RNG_IMPORTS, &[]);
+    guest
+        .memory
+        .map_region(START, SPLIT, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    guest
+        .memory
+        .map_region(
+            START + SPLIT as u64,
+            36 * 1024,
+            MemoryPermissions::READ_WRITE,
+        )
+        .unwrap();
+    let before = vec![INITIAL; SIZE + 2];
+    guest.memory.write_bytes(START, &before).unwrap();
+    let mut actual = vec![0; SIZE + 2];
+
+    // The separate legacy registration still refuses the same valid span.
+    assert_eq!(
+        guest.call("CryptAcquireContextA", &[HANDLE_OUT, 0, 0, 1, 0]),
+        1
+    );
+    let legacy = guest.u64_at(HANDLE_OUT);
+    assert_eq!(
+        guest.call("CryptGenRandom", &[legacy, SIZE as u64, START + 1]),
+        0
+    );
+    assert_eq!(guest.error(), 87); // ERROR_INVALID_PARAMETER
+    assert_eq!(guest.call("CryptReleaseContext", &[legacy, 0]), 1);
+    guest.memory.read_bytes(START, &mut actual).unwrap();
+    assert_eq!(actual, before);
+
+    expect_status(
+        &mut guest,
+        GENERATE,
+        &[
+            0,
+            START + 1,
+            (LEGACY_MAX + 1) as u64,
+            USE_SYSTEM_PREFERRED_RNG,
+        ],
+        STATUS_SUCCESS,
+    );
+    assert_eq!(read::<1>(&guest, START + LEGACY_MAX as u64 + 2), [INITIAL]);
+    guest.memory.write_bytes(START, &before).unwrap();
+
+    expect_status(
+        &mut guest,
+        GENERATE,
+        &[0, START + 1, SIZE as u64, USE_SYSTEM_PREFERRED_RNG],
+        STATUS_SUCCESS,
+    );
+
+    guest.memory.read_bytes(START, &mut actual).unwrap();
+    assert_eq!(actual[0], INITIAL);
+    assert_eq!(actual[SIZE + 1], INITIAL);
+    assert!(actual[1..SPLIT].iter().any(|&byte| byte != INITIAL));
+    assert!(
+        actual[LEGACY_MAX + 1..=SIZE]
+            .iter()
+            .any(|&byte| byte != INITIAL)
+    );
+}
+
+#[test]
+fn cng_rejects_a_late_read_only_byte_without_writing_the_prefix() {
+    const START: u64 = 0x90_0000;
+    const PREFIX: usize = 65_536;
+
+    let mut guest = guest();
+    guest
+        .memory
+        .map_region(START, PREFIX, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    let read_only = START + PREFIX as u64;
+    guest
+        .memory
+        .map_region(read_only, 0x1000, MemoryPermissions::READ_ONLY)
+        .unwrap();
+    let before = vec![0x5A; PREFIX];
+    guest.memory.write_bytes(START, &before).unwrap();
+
+    expect_status(
+        &mut guest,
+        GENERATE,
+        &[RNG_ALG_HANDLE, START, (PREFIX + 1) as u64, 0],
+        STATUS_INVALID_PARAMETER,
+    );
+
+    let mut actual = vec![0; PREFIX];
+    guest.memory.read_bytes(START, &mut actual).unwrap();
+    assert_eq!(actual, before);
+    assert_eq!(read::<1>(&guest, read_only), [0]);
 }
 
 #[test]

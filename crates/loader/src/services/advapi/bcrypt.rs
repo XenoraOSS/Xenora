@@ -2,9 +2,9 @@
 
 //! User-mode CNG random number generation backed by host entropy.
 
-use super::{MAX_RANDOM_BYTES, ServicesState, fill_random};
+use super::{ServicesState, fill_random};
 use crate::imports::{ImportRegistry, ServiceStatus, Win64Args};
-use crate::memory::GuestMemory;
+use crate::memory::{DYNAMIC_BUDGET, GuestMemory};
 use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -103,7 +103,7 @@ fn generate(
     // Windows 8 and later ignore BCRYPT_RNG_USE_ENTROPY_IN_BUFFER.
     if flags & !(BCRYPT_RNG_USE_ENTROPY_IN_BUFFER | BCRYPT_USE_SYSTEM_PREFERRED_RNG) != 0
         || (system_preferred && args.rcx != 0)
-        || length > MAX_RANDOM_BYTES
+        || length as u64 > DYNAMIC_BUDGET
         || args.rdx == 0
         || !memory.can_write(args.rdx, length)
     {
@@ -115,7 +115,11 @@ fn generate(
     if length == 0 {
         return Ok(());
     }
-    let mut bytes = vec![0; length];
+    let mut bytes = Vec::new();
+    bytes
+        .try_reserve_exact(length)
+        .map_err(|_| STATUS_NO_MEMORY)?;
+    bytes.resize(length, 0);
     fill_random(&mut bytes).map_err(|_| STATUS_UNSUCCESSFUL)?;
     memory
         .write_bytes(args.rdx, &bytes)
