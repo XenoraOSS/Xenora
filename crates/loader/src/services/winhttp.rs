@@ -9,7 +9,8 @@
 //! connection reuse remain separate unsupported slices.
 
 use super::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ServicesState};
-use crate::imports::{ImportRegistry, ServiceStatus};
+use crate::cpu::ExitReason;
+use crate::imports::{CallbackStart, CallbackStep, CallbackTask, ImportRegistry, ServiceStatus};
 use crate::memory::GuestMemory;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::{BufRead, BufReader, Read, Write};
@@ -24,6 +25,11 @@ mod url;
 /// The caller-owned opaque value Windows stores on every WinHTTP handle
 /// (Microsoft Learn, WINHTTP_OPTION_CONTEXT_VALUE in "Option Flags").
 const WINHTTP_OPTION_CONTEXT_VALUE: u32 = 78;
+// Public WinHTTP status bits from winhttp.h.
+const HANDLE_CREATED: u32 = 0x0000_0400;
+const HANDLE_CLOSING: u32 = 0x0000_0800;
+const HANDLE_NOTIFICATION_FLAGS: u32 = HANDLE_CREATED | HANDLE_CLOSING;
+const INVALID_STATUS_CALLBACK: u64 = u64::MAX;
 
 const MODULE: &str = "winhttp.dll";
 const MAX_HANDLES: usize = 256;
@@ -316,15 +322,89 @@ fn resolve_redirect(transport: &mut TransportState, location: &str) -> Result<()
     Ok(())
 }
 
+#[derive(Clone, Copy)]
+struct StatusCallback {
+    entry: u64,
+    flags: u32,
+}
+
+struct WinHttpHandle {
+    kind: HandleKind,
+    parent: Option<u64>,
+    context: u64,
+    callback: Option<StatusCallback>,
+}
+
+impl WinHttpHandle {
+    fn notification(&self, handle: u64, status: u32, payload: u64) -> Option<HandleNotification> {
+        let callback = self
+            .callback
+            .filter(|callback| callback.flags & status != 0)?;
+        Some(HandleNotification {
+            entry: callback.entry,
+            handle,
+            context: self.context,
+            status,
+            payload,
+        })
+    }
+}
+
+struct HandleNotification {
+    entry: u64,
+    handle: u64,
+    context: u64,
+    status: u32,
+    payload: u64,
+}
+
+struct CompleteHandleCall(u64);
+
+impl CallbackTask for CompleteHandleCall {
+    fn resume(
+        &mut self,
+        _callback_result: u64,
+        _teb: u64,
+        _memory: &mut GuestMemory,
+    ) -> Result<CallbackStep, ExitReason> {
+        Ok(CallbackStep::Return(self.0))
+    }
+}
+
+fn notify_handle(
+    event: Option<HandleNotification>,
+    result: u64,
+    memory: &mut GuestMemory,
+    scratch: u64,
+) -> Result<CallbackStart, ExitReason> {
+    let Some(event) = event else {
+        return Ok(CallbackStart::Return(result));
+    };
+    // The first scratch slot is at callback RSP+40, the fifth Win64
+    // argument. The second holds an HINTERNET for the callback's lifetime.
+    memory.write_u64(scratch, 8).map_err(memory_fault)?;
+    let payload = scratch + 8;
+    memory
+        .write_u64(payload, event.payload)
+        .map_err(memory_fault)?;
+    Ok(CallbackStart::Call {
+        task: Box::new(CompleteHandleCall(result)),
+        entry: event.entry,
+        args: [
+            event.handle,
+            event.context,
+            u64::from(event.status),
+            payload,
+        ],
+    })
+}
+
 /// The WinHTTP handle table owns all copied strings and request settings.
 /// Later guest-memory writes cannot mutate an existing object.
 #[derive(Default)]
 pub(super) struct WinHttpHandles {
     next: u64,
-    handles: BTreeMap<u64, HandleKind>,
-    /// WINHTTP_OPTION_CONTEXT_VALUE of each handle: the caller's own opaque
-    /// value, zero until set, exactly as Windows stores one per handle.
-    contexts: BTreeMap<u64, u64>,
+    handles: BTreeMap<u64, WinHttpHandle>,
 }
 
 impl WinHttpHandles {
@@ -334,21 +414,46 @@ impl WinHttpHandles {
 
     pub(super) fn close_all(&mut self) {
         self.handles.clear();
-        self.contexts.clear();
     }
 
-    fn insert(&mut self, kind: HandleKind) -> Result<u64, u32> {
+    fn insert(&mut self, parent: Option<u64>, kind: HandleKind) -> Result<u64, u32> {
         if self.handles.len() >= MAX_HANDLES {
             return Err(ERROR_OUTOFMEMORY);
         }
+        let callback = match parent {
+            Some(parent) => {
+                self.live_handle(parent)
+                    .ok_or(ERROR_INVALID_HANDLE)?
+                    .callback
+            }
+            None => None,
+        };
         self.next = self
             .next
             .checked_add(1)
             .filter(|next| *next < (1 << 32))
             .ok_or(ERROR_OUTOFMEMORY)?;
         let handle = 0x5748_0000_0000_0000 | self.next;
-        self.handles.insert(handle, kind);
+        self.handles.insert(
+            handle,
+            WinHttpHandle {
+                kind,
+                parent,
+                context: 0,
+                callback,
+            },
+        );
         Ok(handle)
+    }
+
+    fn derive(
+        &mut self,
+        parent: u64,
+        kind: HandleKind,
+    ) -> Result<(u64, Option<HandleNotification>), u32> {
+        let child = self.insert(Some(parent), kind)?;
+        let event = self.handles[&parent].notification(parent, HANDLE_CREATED, child);
+        Ok((child, event))
     }
 
     fn configure_timeouts(
@@ -376,30 +481,33 @@ impl WinHttpHandles {
         }
     }
 
+    fn live_handle(&self, handle: u64) -> Option<&WinHttpHandle> {
+        let entry = self.handles.get(&handle)?;
+        let mut parent = entry.parent;
+        while let Some(ancestor) = parent {
+            parent = self.handles.get(&ancestor)?.parent;
+        }
+        Some(entry)
+    }
+
     fn kind(&self, handle: u64) -> Option<&HandleKind> {
-        self.handles.get(&handle)
+        self.live_handle(handle).map(|entry| &entry.kind)
     }
 
-    fn close(&mut self, handle: u64) -> bool {
-        self.contexts.remove(&handle);
-        self.handles.remove(&handle).is_some()
-    }
-
-    /// The handle's context value, or its absence when the handle itself is
-    /// no handle: reading and writing the context of a closed handle fails
-    /// with the invalid-handle error, exactly as every other per-handle
-    /// state does.
     fn context(&self, handle: u64) -> Option<u64> {
-        self.handles
-            .contains_key(&handle)
-            .then(|| self.contexts.get(&handle).copied().unwrap_or(0))
+        self.live_handle(handle).map(|entry| entry.context)
+    }
+
+    fn live_handle_mut(&mut self, handle: u64) -> Result<&mut WinHttpHandle, u32> {
+        self.live_handle(handle).ok_or(ERROR_INVALID_HANDLE)?;
+        Ok(self
+            .handles
+            .get_mut(&handle)
+            .expect("validated WinHTTP handle"))
     }
 
     fn set_context(&mut self, handle: u64, value: u64) -> Result<(), u32> {
-        if !self.handles.contains_key(&handle) {
-            return Err(ERROR_INVALID_HANDLE);
-        }
-        self.contexts.insert(handle, value);
+        self.live_handle_mut(handle)?.context = value;
         Ok(())
     }
 }
@@ -948,12 +1056,12 @@ fn fill_chunked_queue(
     Ok(())
 }
 
-fn close_result(state: &ServicesState, teb: u64, closed: bool) -> u64 {
-    if closed {
-        1
-    } else {
-        state.fail(teb, ERROR_INVALID_HANDLE, 0).unwrap()
-    }
+fn fail_handle_call(
+    state: &ServicesState,
+    teb: u64,
+    error: u32,
+) -> Result<CallbackStart, ExitReason> {
+    state.fail(teb, error, 0).map(CallbackStart::Return)
 }
 
 /// A Windows SYSTEMTIME for the HTTP-date utility functions.
@@ -1306,29 +1414,69 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 return open.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
             let mut handles = open.winhttp.lock().expect("WinHTTP handle table");
-            match handles.insert(HandleKind::Session {
-                agent,
-                timeouts: Arc::new(Mutex::new(TimeoutSettings::default())),
-            }) {
+            match handles.insert(
+                None,
+                HandleKind::Session {
+                    agent,
+                    timeouts: Arc::new(Mutex::new(TimeoutSettings::default())),
+                },
+            ) {
                 Ok(handle) => Ok(handle),
                 Err(error) => open.fail(cpu.gs_base, error, 0),
             }
         },
     );
 
-    let connect = Arc::clone(state);
+    let status_callback = Arc::clone(state);
     registry.register_with_status(
+        MODULE,
+        "WinHttpSetStatusCallback",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let flags = args.r8 as u32;
+            if args.r9 != 0
+                || (args.rdx != 0
+                    && (flags & !HANDLE_NOTIFICATION_FLAGS != 0
+                        || memory.fetch_instruction_byte(args.rdx).is_err()))
+            {
+                return status_callback.fail(
+                    cpu.gs_base,
+                    ERROR_INVALID_PARAMETER,
+                    INVALID_STATUS_CALLBACK,
+                );
+            }
+            let mut handles = status_callback
+                .winhttp
+                .lock()
+                .expect("WinHTTP handle table");
+            let entry = match handles.live_handle_mut(args.rcx) {
+                Ok(entry) => entry,
+                Err(error) => {
+                    return status_callback.fail(cpu.gs_base, error, INVALID_STATUS_CALLBACK);
+                }
+            };
+            let callback = (args.rdx != 0).then_some(StatusCallback {
+                entry: args.rdx,
+                flags,
+            });
+            let previous = std::mem::replace(&mut entry.callback, callback);
+            Ok(previous.map_or(0, |callback| callback.entry))
+        },
+    );
+
+    let connect = Arc::clone(state);
+    registry.register_callback_task(
         MODULE,
         "WinHttpConnect",
         ServiceStatus::Partial,
-        move |args, cpu, memory| {
+        move |args, teb, memory, scratch| {
             if args.r9 != 0 {
-                return connect.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                return fail_handle_call(&connect, teb, ERROR_INVALID_PARAMETER);
             }
             let server = match read_wide_string(memory, args.rdx, MAX_WIDE_UNITS) {
                 Ok(server) if valid_server_name(&server) => server,
                 Ok(_) | Err(_) => {
-                    return connect.fail(cpu.gs_base, ERROR_WINHTTP_INVALID_URL, 0);
+                    return fail_handle_call(&connect, teb, ERROR_WINHTTP_INVALID_URL);
                 }
             };
             // INTERNET_PORT is a WORD. As in the Win64 ABI, only the low
@@ -1340,32 +1488,37 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     (agent.clone(), Arc::clone(timeouts))
                 }
                 Some(_) => {
-                    return connect.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_TYPE, 0);
+                    return fail_handle_call(&connect, teb, ERROR_WINHTTP_INCORRECT_HANDLE_TYPE);
                 }
-                None => return connect.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0),
+                None => return fail_handle_call(&connect, teb, ERROR_INVALID_HANDLE),
             };
-            match handles.insert(HandleKind::Connection {
-                agent,
-                server,
-                port,
-                session_timeouts,
-            }) {
-                Ok(handle) => Ok(handle),
-                Err(error) => connect.fail(cpu.gs_base, error, 0),
+            let result = handles.derive(
+                args.rcx,
+                HandleKind::Connection {
+                    agent,
+                    server,
+                    port,
+                    session_timeouts,
+                },
+            );
+            drop(handles);
+            match result {
+                Ok((handle, event)) => notify_handle(event, handle, memory, scratch),
+                Err(error) => fail_handle_call(&connect, teb, error),
             }
         },
     );
 
     let request = Arc::clone(state);
-    registry.register_with_status(
+    registry.register_callback_task(
         MODULE,
         "WinHttpOpenRequest",
         ServiceStatus::Partial,
-        move |args, cpu, memory| {
+        move |args, teb, memory, scratch| {
             let verb = match read_optional_wide_string(memory, args.rdx) {
                 Ok(Some(verb)) if valid_token(&verb) => verb,
                 Ok(Some(_)) | Err(_) => {
-                    return request.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                    return fail_handle_call(&request, teb, ERROR_INVALID_PARAMETER);
                 }
                 Ok(None) => "GET".to_owned(),
             };
@@ -1375,19 +1528,19 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 // specify an expansion. Retain the absent target honestly;
                 // a transport slice must define wire behavior separately.
                 Ok(None) => String::new(),
-                Err(_) => return request.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0),
+                Err(_) => return fail_handle_call(&request, teb, ERROR_INVALID_PARAMETER),
             };
             let version = match read_optional_wide_string(memory, args.r9) {
                 Ok(Some(version)) if valid_token(&version) => version,
                 Ok(Some(_)) | Err(_) => {
-                    return request.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                    return fail_handle_call(&request, teb, ERROR_INVALID_PARAMETER);
                 }
                 Ok(None) => "HTTP/1.1".to_owned(),
             };
             let referrer_ptr = args.get(4, memory).map_err(memory_fault)?;
             let referrer = match read_optional_wide_string(memory, referrer_ptr) {
                 Ok(value) => value,
-                Err(error) => return request.fail(cpu.gs_base, error, 0),
+                Err(error) => return fail_handle_call(&request, teb, error),
             };
             let accept_ptr = args.get(5, memory).map_err(memory_fault)?;
             let mut accept_types = Vec::new();
@@ -1399,27 +1552,27 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                         .map_err(|_| ERROR_INVALID_PARAMETER);
                     let pointer = match pointer {
                         Ok(pointer) => pointer,
-                        Err(error) => return request.fail(cpu.gs_base, error, 0),
+                        Err(error) => return fail_handle_call(&request, teb, error),
                     };
                     if pointer == 0 {
                         terminated = true;
                         break;
                     }
                     let Ok(text) = read_wide_string(memory, pointer, MAX_WIDE_UNITS) else {
-                        return request.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                        return fail_handle_call(&request, teb, ERROR_INVALID_PARAMETER);
                     };
                     accept_types.push(text);
                 }
                 if !terminated {
-                    return request.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                    return fail_handle_call(&request, teb, ERROR_INVALID_PARAMETER);
                 }
             }
             let flags = args.get(6, memory).map_err(memory_fault)? as u32;
             if flags & !DOCUMENTED_REQUEST_FLAGS != 0 {
-                return request.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                return fail_handle_call(&request, teb, ERROR_INVALID_PARAMETER);
             }
             if flags & !WINHTTP_FLAG_SECURE != 0 {
-                return request.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
+                return fail_handle_call(&request, teb, ERROR_NOT_SUPPORTED);
             }
             let mut handles = request.winhttp.lock().expect("WinHTTP handle table");
             let (agent, server, port, session_timeouts) = match handles.kind(args.rcx) {
@@ -1435,28 +1588,33 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     Arc::clone(session_timeouts),
                 ),
                 Some(_) => {
-                    return request.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_TYPE, 0);
+                    return fail_handle_call(&request, teb, ERROR_WINHTTP_INCORRECT_HANDLE_TYPE);
                 }
-                None => return request.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0),
+                None => return fail_handle_call(&request, teb, ERROR_INVALID_HANDLE),
             };
-            match handles.insert(HandleKind::Request {
-                server,
-                port,
-                verb,
-                object_name,
-                version,
-                secure: flags & WINHTTP_FLAG_SECURE != 0,
-                timeouts: Arc::new(Mutex::new(
-                    *session_timeouts.lock().expect("WinHTTP timeouts"),
-                )),
-                transport: Arc::new(Mutex::new(TransportState::new(
-                    agent,
-                    referrer,
-                    accept_types,
-                ))),
-            }) {
-                Ok(handle) => Ok(handle),
-                Err(error) => request.fail(cpu.gs_base, error, 0),
+            let result = handles.derive(
+                args.rcx,
+                HandleKind::Request {
+                    server,
+                    port,
+                    verb,
+                    object_name,
+                    version,
+                    secure: flags & WINHTTP_FLAG_SECURE != 0,
+                    timeouts: Arc::new(Mutex::new(
+                        *session_timeouts.lock().expect("WinHTTP timeouts"),
+                    )),
+                    transport: Arc::new(Mutex::new(TransportState::new(
+                        agent,
+                        referrer,
+                        accept_types,
+                    ))),
+                },
+            );
+            drop(handles);
+            match result {
+                Ok((handle, event)) => notify_handle(event, handle, memory, scratch),
+                Err(error) => fail_handle_call(&request, teb, error),
             }
         },
     );
@@ -1589,7 +1747,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             };
             let optional_length = args.get(4, memory).map_err(memory_fault)? as u32;
             let total_length = args.get(5, memory).map_err(memory_fault)? as u32;
-            let _context = args.get(6, memory).map_err(memory_fault)?;
+            let context = args.get(6, memory).map_err(memory_fault)?;
             if total_length < optional_length {
                 return send.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
@@ -1608,7 +1766,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let (snapshot, transport, mut wire) = {
                 // Hold the table across the timeout snapshot and phase change.
                 // Configuration changes either run first or see a started request.
-                let handles = send.winhttp.lock().expect("WinHTTP handle table");
+                let mut handles = send.winhttp.lock().expect("WinHTTP handle table");
                 let (snapshot, transport) = match request_parts(&handles, args.rcx) {
                     Ok(parts) => parts,
                     Err(error) => return send.fail(cpu.gs_base, error, 0),
@@ -1655,6 +1813,14 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     request.replay_body = body.clone();
                     wire
                 };
+                if context != 0 {
+                    // The request was validated under the same handle-table lock.
+                    handles
+                        .handles
+                        .get_mut(&args.rcx)
+                        .expect("live WinHTTP request")
+                        .context = context;
+                }
                 (snapshot, transport, wire)
             };
             wire.extend_from_slice(&body);
@@ -2327,13 +2493,27 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     );
 
     let close = Arc::clone(state);
-    registry.register_with_status(
+    registry.register_callback_task(
         MODULE,
         "WinHttpCloseHandle",
         ServiceStatus::Partial,
-        move |args, cpu, _| {
-            let mut handles = close.winhttp.lock().expect("WinHTTP handle table");
-            Ok(close_result(&close, cpu.gs_base, handles.close(args.rcx)))
+        move |args, teb, memory, scratch| {
+            // Permit explicit close even after an ancestor was closed.
+            let entry = close
+                .winhttp
+                .lock()
+                .expect("WinHTTP handle table")
+                .handles
+                .remove(&args.rcx);
+            let Some(entry) = entry else {
+                return fail_handle_call(&close, teb, ERROR_INVALID_HANDLE);
+            };
+            let event = if entry.context == 0 {
+                None
+            } else {
+                entry.notification(args.rcx, HANDLE_CLOSING, args.rcx)
+            };
+            notify_handle(event, 1, memory, scratch)
         },
     );
 }
@@ -2380,6 +2560,37 @@ mod tests {
         fields
     }
 
+    fn call_import(
+        registry: &mut ImportRegistry,
+        memory: &mut GuestMemory,
+        symbol: &str,
+        args: &[u64],
+    ) -> u64 {
+        const RSP: u64 = 0x7000;
+        const RETURN: u64 = 0x1000;
+        let trampoline = registry
+            .bind_slot(MODULE, &ImportName::Name(symbol.to_owned()), 0x6f00, memory)
+            .unwrap()
+            .address();
+        let mut cpu = CpuState::default();
+        for (register, value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
+            .into_iter()
+            .zip(args.iter().copied())
+        {
+            cpu.set(register, value);
+        }
+        cpu.set(Register::Rsp, RSP);
+        memory.write_u64(RSP, RETURN).unwrap();
+        for (index, value) in args.iter().copied().enumerate().skip(4) {
+            memory
+                .write_u64(RSP + 0x28 + (index as u64 - 4) * 8, value)
+                .unwrap();
+        }
+        registry.dispatch(trampoline, &mut cpu, memory).unwrap();
+        assert_eq!(cpu.rip, RETURN);
+        cpu.get(Register::Rax)
+    }
+
     struct Fixture {
         registry: ImportRegistry,
         state: Arc<ServicesState>,
@@ -2410,24 +2621,7 @@ mod tests {
         }
 
         fn call(&mut self, symbol: &str, args: &[u64]) -> u64 {
-            let mut cpu = CpuState::default();
-            for (register, value) in [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
-                .into_iter()
-                .zip(args.iter().copied())
-            {
-                cpu.set(register, value);
-            }
-            cpu.set(Register::Rsp, 0x7000);
-            for (index, value) in args.iter().copied().enumerate().skip(4) {
-                self.memory
-                    .write_u64(0x7000 + 0x28 + (index as u64 - 4) * 8, value)
-                    .unwrap();
-            }
-            let descriptor = self
-                .registry
-                .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
-                .unwrap();
-            (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, &mut self.memory).unwrap()
+            call_import(&mut self.registry, &mut self.memory, symbol, args)
         }
 
         fn open_session(&mut self) -> u64 {
@@ -2570,7 +2764,7 @@ mod tests {
     }
 
     #[test]
-    fn closing_a_parent_does_not_mutate_an_existing_request_snapshot() {
+    fn closing_a_parent_invalidates_operations_and_retains_the_request_snapshot() {
         let mut fixture = Fixture::new();
         let (session, connection) = fixture.open_connection();
         let request = fixture.call("WinHttpOpenRequest", &[connection, 0, 0, 0, 0, 0, 0]);
@@ -2578,8 +2772,9 @@ mod tests {
         assert_eq!(fixture.call("WinHttpCloseHandle", &[connection]), 1);
         assert_eq!(fixture.call("WinHttpCloseHandle", &[session]), 1);
         let handles = fixture.state.winhttp.lock().unwrap();
+        assert!(handles.kind(request).is_none());
         assert!(matches!(
-            handles.kind(request),
+            handles.handles.get(&request).map(|entry| &entry.kind),
             Some(HandleKind::Request {
                 server,
                 port: 80,
@@ -2903,10 +3098,20 @@ mod tests {
             fixture.call("WinHttpSetOption", &[request, 6, 0x2900, 4]),
             1
         );
+        let context = 0xa9c4_4d01_cb53_6019;
         assert_eq!(
-            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, context]),
             1
         );
+        fixture.memory.write_u32(0x2920, 8).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryOption",
+                &[request, WINHTTP_OPTION_CONTEXT_VALUE as u64, 0x2930, 0x2920]
+            ),
+            1
+        );
+        assert_eq!(fixture.memory.read_u64(0x2930).unwrap(), context);
         assert_eq!(
             fixture.call("WinHttpSetTimeouts", &[request, 0, 1_000, 1_000, 50]),
             0
@@ -4557,25 +4762,7 @@ mod tests {
                     } else {
                         [parent, 0x2100, 80, 0, 0, 0, 0]
                     };
-                    let mut cpu = CpuState::default();
-                    for (register, value) in
-                        [Register::Rcx, Register::Rdx, Register::R8, Register::R9]
-                            .into_iter()
-                            .zip(arguments.iter().copied())
-                    {
-                        cpu.set(register, value);
-                    }
-                    cpu.set(Register::Rsp, 0x7000);
-                    for (index, value) in arguments.iter().copied().enumerate().skip(4) {
-                        memory
-                            .write_u64(0x7000 + 0x28 + (index as u64 - 4) * 8, value)
-                            .unwrap();
-                    }
-                    let descriptor = registry
-                        .resolve(MODULE, &ImportName::Name(symbol.to_owned()))
-                        .unwrap();
-                    let handle =
-                        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, &mut memory).unwrap();
+                    let handle = call_import(&mut registry, &mut memory, symbol, &arguments);
                     assert_ne!(handle, 0);
                 }));
             }

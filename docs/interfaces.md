@@ -1404,6 +1404,22 @@ configured User-Agent, Accept and Referer values. A request accepts zero
 flags or `WINHTTP_FLAG_SECURE`. The latter records that HTTPS was requested.
 Sending that request fails with `ERROR_NOT_SUPPORTED` before network use.
 
+`WinHttpSetStatusCallback` installs a guest function for handle creation and
+closing. A successful call returns the previous pointer, or zero if none
+was installed. A null pointer removes the callback. A new handle inherits
+its parent's callback and mask. Later changes apply to the selected handle.
+Unsupported notification bits for a non-null callback or a nonzero reserved
+argument fail with `ERROR_INVALID_PARAMETER` and return the invalid callback
+sentinel. A non-null callback must point to executable guest memory.
+
+Xenora delivers these notifications synchronously. Creation supplies the
+parent handle and its current context, with the new handle in the payload.
+Closing supplies the explicitly closed handle, its nonzero context and the
+same handle in the payload. The payload points to an eight-byte guest
+`HINTERNET` valid during the callback. The handle table is unlocked during
+guest execution. An admitted `WinHttpSendRequest` with a nonzero context
+sets the request's callback context.
+
 `WinHttpAddRequestHeaders` updates a live request before sending begins. It
 copies a counted or null-terminated UTF-16 header block and accepts CRLF between
 fields, with an optional trailing CRLF. Add, add-if-new, replace, remove and
@@ -1505,14 +1521,11 @@ independent handles may proceed independently. Closing a handle while another
 thread is using it remains caller misuse, but the implementation retains the
 in-flight object rather than corrupting the table.
 
-`WinHttpCloseHandle` closes exactly one session, connection or request handle
-and makes later use of that value fail. Closing a parent does not rewrite an
-existing child object: children carry immutable snapshots of the state they
-need. This is Xenora's object-lifetime policy for the synchronous subset;
-Microsoft's public documentation requires applications to close handles and
-not reuse them but does not give a complete parent-close cascade contract.
-Handles are process-local opaque values and are also discarded when the guest
-process exits.
+`WinHttpCloseHandle` closes exactly one session, connection or request handle.
+Operations on that value or its descendants fail with `ERROR_INVALID_HANDLE`.
+Descendants retain their copied state until explicitly closed, including the
+context for their terminal notification. Guest process exit discards the
+remaining process-local handles.
 
 `WinHttpQueryHeaders` also answers `WINHTTP_QUERY_RAW_HEADERS_CRLF` with the
 exact wire text of the final response head: the status line and every header
