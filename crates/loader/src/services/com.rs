@@ -11,8 +11,8 @@
 //!
 //! The normal runtime has no class registry. An explicitly enabled synthetic
 //! fixture supplies one class for local host-vtable tests. `PropVariantClear`
-//! serves value types and task-allocated strings and refuses interface and
-//! BSTR ownership, whose release paths are not modelled.
+//! serves value types and task-allocated strings, GUIDs and binary blobs.
+//! Interface and BSTR ownership need separate release paths.
 
 use super::ServicesState;
 use crate::cpu::ExitReason;
@@ -80,6 +80,8 @@ const VT_UINT: u16 = 23;
 const VT_LPSTR: u16 = 30;
 const VT_LPWSTR: u16 = 31;
 const VT_FILETIME: u16 = 64;
+const VT_BLOB: u16 = 65;
+const VT_CLSID: u16 = 72;
 const VT_TYPEMASK: u16 = 0x0fff;
 
 /// The exit for a request the runtime does not model.
@@ -501,8 +503,7 @@ pub(crate) fn co_create_instance_ex(
 /// `VT_EMPTY`.
 pub(crate) fn prop_variant_clear(context: &mut ServiceContext<'_>, variant: u64) -> Outcome<i32> {
     if variant == 0 {
-        // The public contract requires a pointer and does not specify the
-        // result for NULL. Do not invent a successful clear.
+        // This guest subset requires an explicit descriptor.
         return Err(NOT_MODELLED);
     }
     let vt = context.memory.read_u16(variant).map_err(fault)?;
@@ -516,28 +517,45 @@ pub(crate) fn prop_variant_clear(context: &mut ServiceContext<'_>, variant: u64)
         .memory
         .check_write(variant, PROPVARIANT_BYTES)
         .map_err(fault)?;
-    match vt & VT_TYPEMASK {
-        VT_EMPTY | VT_NULL => {}
-        VT_LPSTR | VT_LPWSTR => {
-            let pointer_address = variant
-                .checked_add(8)
-                .ok_or_else(|| fault(MemoryError::Overflow))?;
-            let pointer = context.memory.read_u64(pointer_address).map_err(fault)?;
-            if pointer != 0 {
-                let Some(heap) = context.state.com().task_heap(context.memory) else {
-                    return Err(fault(MemoryError::UnmappedAddress(pointer)));
-                };
-                if !context.memory.release_heap_allocation(heap, pointer) {
-                    return Err(fault(MemoryError::UnmappedAddress(pointer)));
-                }
-            }
-        }
+    let pointer_offset = match vt {
+        VT_LPSTR | VT_LPWSTR | VT_CLSID => Some(8),
+        // A Win64 BLOB contains a DWORD count and an aligned pointer.
+        VT_BLOB => Some(16),
         // Value types carry no owned storage.
-        VT_I1 | VT_UI1 | VT_I2 | VT_UI2 | VT_I4 | VT_UI4 | VT_I8 | VT_UI8 | VT_INT | VT_UINT
-        | VT_R4 | VT_R8 | VT_BOOL | VT_ERROR | VT_CY | VT_DATE | VT_FILETIME => {}
+        VT_EMPTY | VT_NULL | VT_I1 | VT_UI1 | VT_I2 | VT_UI2 | VT_I4 | VT_UI4 | VT_I8 | VT_UI8
+        | VT_INT | VT_UINT | VT_R4 | VT_R8 | VT_BOOL | VT_ERROR | VT_CY | VT_DATE | VT_FILETIME => {
+            None
+        }
         // `VT_BSTR` needs `SysFreeString`, and `VT_UNKNOWN`/`VT_DISPATCH` need
         // `Release`; neither exists here, so the variant is left untouched.
         _ => return Err(NOT_MODELLED),
+    };
+    if let Some(offset) = pointer_offset {
+        // The full descriptor span was checked above, including this pointer.
+        let pointer = context.memory.read_u64(variant + offset).map_err(fault)?;
+        if pointer != 0 {
+            let bad_pointer = || fault(MemoryError::UnmappedAddress(pointer));
+            let heap = context
+                .state
+                .com()
+                .task_heap(context.memory)
+                .ok_or_else(bad_pointer)?;
+            let size = context
+                .memory
+                .heap_allocation_size(heap, pointer)
+                .ok_or_else(bad_pointer)?;
+            let payload_end = pointer
+                .checked_add(size as u64)
+                .ok_or_else(|| fault(MemoryError::Overflow))?;
+            // Clearing a descriptor stored inside its payload would first
+            // unmap the memory where the cleared result needs to be written.
+            if variant < payload_end && pointer < variant + PROPVARIANT_BYTES as u64 {
+                return Ok(E_INVALIDARG);
+            }
+            if !context.memory.release_heap_allocation(heap, pointer) {
+                return Err(bad_pointer());
+            }
+        }
     }
     context
         .memory
