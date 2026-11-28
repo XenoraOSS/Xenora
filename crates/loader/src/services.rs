@@ -336,7 +336,6 @@ pub struct ServicesState {
     synch: Mutex<synch::Synch>,
     crt_streams: Mutex<crt_streams::StandardStreams>,
     crt_clock: Mutex<crt_clock::ClockServices>,
-    crt_directory: Mutex<String>,
     pub(crate) threads: Mutex<threads::ThreadTable>,
     pub(crate) hooks: Arc<threads::SchedulerHooks>,
     /// Functions registered with `atexit`, run in reverse order by `_cexit`.
@@ -449,7 +448,6 @@ impl ServicesState {
             synch: Mutex::default(),
             crt_streams: Mutex::default(),
             crt_clock: Mutex::default(),
-            crt_directory: Mutex::new(String::new()),
             console: Mutex::default(),
             com: Mutex::default(),
             com_fixture: Mutex::default(),
@@ -624,12 +622,6 @@ impl ServicesState {
         // files the parent wrote are visible to the child and vice versa.
         Arc::new(ServicesState {
             objects: Arc::clone(&self.objects),
-            crt_directory: Mutex::new(
-                self.crt_directory
-                    .lock()
-                    .expect("current directory")
-                    .clone(),
-            ),
             environment: Mutex::new(
                 self.environment
                     .lock()
@@ -2439,9 +2431,10 @@ pub(crate) mod handlers {
     pub fn _mkdir(context: &mut ServiceContext<'_>, name: u64) -> Outcome<i32> {
         let bytes =
             crt_streams::c_string(context.memory, name, 260).map_err(ExitReason::MemoryFault)?;
+        let resolved = context.state.crt_streams().resolve_path(&bytes);
         let outcome = {
             let mut drive = context.state.objects.lock().expect("guest object state");
-            match ObjectState::drive_path(&bytes) {
+            match resolved {
                 Some(path) => drive
                     .drive_mkdir(&path)
                     .map(|()| 0)
@@ -2455,9 +2448,10 @@ pub(crate) mod handlers {
     pub fn _rmdir(context: &mut ServiceContext<'_>, name: u64) -> Outcome<i32> {
         let bytes =
             crt_streams::c_string(context.memory, name, 260).map_err(ExitReason::MemoryFault)?;
+        let resolved = context.state.crt_streams().resolve_path(&bytes);
         let outcome = {
             let mut drive = context.state.objects.lock().expect("guest object state");
-            match ObjectState::drive_path(&bytes) {
+            match resolved {
                 Some(path) => drive
                     .drive_rmdir(&path)
                     .map(|()| 0)

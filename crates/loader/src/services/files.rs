@@ -181,11 +181,7 @@ fn valid_key(name: &str) -> bool {
 /// is the volume root. `None` when any component is not a name the drive
 /// accepts.
 fn resolve_bare_path(state: &ServicesState, name: &str) -> Option<String> {
-    let cwd = state
-        .crt_directory
-        .lock()
-        .expect("CRT working directory")
-        .clone();
+    let cwd = state.crt_streams().working_directory();
     // A drive prefix (`c:`) anchors at the volume; what remains resolves
     // against the working directory, dot segments included.
     let stripped = name.replace('/', "\\");
@@ -474,11 +470,7 @@ fn find_first(
         return Err(INVALID_NAME);
     }
     let pattern = if pattern == "*.*" { "*" } else { pattern };
-    let cwd = state
-        .crt_directory
-        .lock()
-        .expect("CRT working directory")
-        .clone();
+    let cwd = state.crt_streams().working_directory();
     // A bare drive root (`c:` as the whole directory portion) anchors at the
     // volume root: the wildcard split consumed the separating backslash.
     let resolved = if root.len() == 2 && root.as_bytes()[1] == b':' {
@@ -1603,11 +1595,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let Some(name) = reader(memory, args.rcx).map_err(ExitReason::MemoryFault)? else {
                 return full.fail(cpu.gs_base, INVALID_NAME, 0);
             };
-            let cwd = full
-                .crt_directory
-                .lock()
-                .expect("CRT working directory")
-                .clone();
+            let cwd = full.crt_streams().working_directory();
             let Some(full_path) = full_name(&cwd, &name) else {
                 return full.fail(cpu.gs_base, INVALID_NAME, 0);
             };
@@ -2038,11 +2026,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         else {
             return fail(memory, super::crt_files::EINVAL);
         };
-        let cwd = fullpath_state
-            .crt_directory
-            .lock()
-            .expect("CRT working directory")
-            .clone();
+        let cwd = fullpath_state.crt_streams().working_directory();
         let Some(resolved) = full_name(&cwd, &name) else {
             return fail(memory, super::crt_files::EINVAL);
         };
