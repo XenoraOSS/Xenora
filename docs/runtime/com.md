@@ -25,8 +25,11 @@ fails is a Xenora policy: Windows behavior for that case is not established.
 specified in their service entries. Programmatic identifier (ProgID) lookup is
 not supported. The task allocator uses a separate bounded guest heap.
 `PropVariantClear` handles value types and task-allocated narrow and wide
-strings; arrays, vectors, by-reference values, BSTRs and interface references
-are refused. It does not implement `SysFreeString` or interface `Release`.
+strings, GUIDs (`VT_CLSID`), and binary blobs (`VT_BLOB`). It releases the
+owned task allocation and zeros the Win64 descriptor. Xenora rejects a
+descriptor that overlaps its own allocation with `E_INVALIDARG`, before
+changing either. Arrays, vectors, by-reference values, BSTRs and interface
+references remain unsupported.
 This work adds no `oleaut32.dll` automation exports or
 `api-ms-win-core-winrt-*` activation exports; those imports remain unsupported.
 
