@@ -1010,6 +1010,41 @@ fn closing_a_standard_descriptor_succeeds_and_fails_everything_after() {
 }
 
 #[test]
+fn the_nul_device_is_open_read_and_written_through_the_crt() {
+    let (mut guest, [_, _, _]) = stdio_guest();
+    let buf = TEXT + 0x4000;
+    // `_open` of the device names succeeds for reading and writing alike,
+    // in any directory position and with the extension the name rules strip.
+    for name in [b"nul\0".as_slice(), b"NUL.TXT\0", b"dev\\nul\0"] {
+        guest.memory.write_bytes(NAME, name).unwrap();
+        let fd = guest.call("_open", &[NAME, 2 | 0x8000, 0]) & 0xFFFF_FFFF;
+        assert!((3..0x8000).contains(&fd), "{fd:x} for {name:?}");
+        // A write discards and reports the count.
+        guest.memory.write_bytes(buf, b"noise").unwrap();
+        assert_eq!(guest.call("_write", &[fd, buf, 5]) & 0xFFFF_FFFF, 5);
+        // A read is end of file: a zero count, no error.
+        assert_eq!(guest.call("_read", &[fd, buf, 8]) & 0xFFFF_FFFF, 0);
+        assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
+    }
+    // The device is no drive file: `_access` of the plain name misses it,
+    // exactly as the drive has no such entry.
+    guest.memory.write_bytes(NAME, b"nul\0").unwrap();
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_access", &[NAME, 0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    // A component after the device name cannot resolve, and the other DOS
+    // device names stay rejected.
+    for bad in [b"nul\\child\0".as_slice(), b"con\0", b"com1\0"] {
+        guest.memory.write_bytes(NAME, bad).unwrap();
+        guest.set_errno(0);
+        let fd = guest.call("_open", &[NAME, 2, 0]) & 0xFFFF_FFFF;
+        assert_eq!(fd, (-1i32) as u32 as u64, "{bad:?}");
+    }
+}
+
+#[test]
 fn snprintf_writes_inside_the_buffer_and_returns_the_would_be_length() {
     let one_slot = &[42];
     // A fit: the text, its terminator, and the result is the length. The
