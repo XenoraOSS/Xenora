@@ -944,6 +944,13 @@ c4 c1 19 73 f9 0f | vpslldq xmm12, xmm9, 15
 c4 c1 19 73 f9 10 | vpslldq xmm12, xmm9, 16
 c4 c1 19 73 f9 ff | vpslldq xmm12, xmm9, 255
 c5 e9 73 fa 03 | vpslldq xmm2, xmm2, 3
+c4 c1 1d 73 f9 00 | vpslldq ymm12, ymm9, 0
+c4 c1 1d 73 f9 01 | vpslldq ymm12, ymm9, 1
+c4 c1 1d 73 f9 05 | vpslldq ymm12, ymm9, 5
+c4 c1 1d 73 f9 0f | vpslldq ymm12, ymm9, 15
+c4 c1 1d 73 f9 10 | vpslldq ymm12, ymm9, 16
+c4 c1 1d 73 f9 ff | vpslldq ymm12, ymm9, 255
+c5 ed 73 fa 03 | vpslldq ymm2, ymm2, 3
 c4 c1 19 73 d9 00 | vpsrldq xmm12, xmm9, 0
 c4 c1 19 73 d9 01 | vpsrldq xmm12, xmm9, 1
 c4 c1 19 73 d9 05 | vpsrldq xmm12, xmm9, 5
@@ -951,6 +958,13 @@ c4 c1 19 73 d9 0f | vpsrldq xmm12, xmm9, 15
 c4 c1 19 73 d9 10 | vpsrldq xmm12, xmm9, 16
 c4 c1 19 73 d9 ff | vpsrldq xmm12, xmm9, 255
 c5 e9 73 da 03 | vpsrldq xmm2, xmm2, 3
+c4 c1 1d 73 d9 00 | vpsrldq ymm12, ymm9, 0
+c4 c1 1d 73 d9 01 | vpsrldq ymm12, ymm9, 1
+c4 c1 1d 73 d9 05 | vpsrldq ymm12, ymm9, 5
+c4 c1 1d 73 d9 0f | vpsrldq ymm12, ymm9, 15
+c4 c1 1d 73 d9 10 | vpsrldq ymm12, ymm9, 16
+c4 c1 1d 73 d9 ff | vpsrldq ymm12, ymm9, 255
+c5 ed 73 da 03 | vpsrldq ymm2, ymm2, 3
 c4 c1 79 70 d9 00 | vpshufd xmm3, xmm9, 0
 c5 79 70 64 be 10 00 | vpshufd xmm12, xmmword ptr [rsi + 4*rdi + 16], 0
 c5 f9 70 d2 00 | vpshufd xmm2, xmm2, 0

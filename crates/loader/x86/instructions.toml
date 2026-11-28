@@ -5469,8 +5469,8 @@ prefix = "66"
 opcode = 0x73
 digit = 3
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5481,8 +5481,8 @@ prefix = "66"
 opcode = 0x73
 digit = 7
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 

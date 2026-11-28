@@ -405,6 +405,7 @@ def avx_form_cases():
                 out.append(f"{name}{op} ymm2, ymm2, xmm2")
     for op in ("vpslldq", "vpsrldq"):
         out += [f"{op} xmm12, xmm9, {n}" for n in (0, 1, 5, 15, 16, 255)] + [f"{op} xmm2, xmm2, 3"]
+        out += [f"{op} ymm12, ymm9, {n}" for n in (0, 1, 5, 15, 16, 255)] + [f"{op} ymm2, ymm2, 3"]
     for op in "vpshufd vpshufhw vpshuflw".split():
         for n in (0, 27, 78, 177, 255):
             two(op, "xmm", xmm, f", {n}")
