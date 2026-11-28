@@ -488,6 +488,14 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         });
     }
 
+    // The guest scheduler assigns every runnable thread to virtual processor 0.
+    registry.register(KERNEL32, "GetCurrentProcessorNumber", |_, _, _| Ok(0));
+    registry.set_status(
+        KERNEL32,
+        "GetCurrentProcessorNumber",
+        crate::imports::ServiceStatus::Partial,
+    );
+
     // Processors and affinity: one processor in one group, coherent with
     // the count GetSystemInfo reports for the simulated machine.
     registry.register(KERNEL32, "GetActiveProcessorCount", |args, _, mem| {

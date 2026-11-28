@@ -7,6 +7,7 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- `GetCurrentProcessorNumber` reports virtual processor zero for the guest scheduler, allowing this Microsoft runtime import to resolve (#1201).
 - Added partial Microsoft locale facet reference-count operations and narrow-character widening; locale construction and destruction are not yet implemented (#1163).
 - Standard UCRT streams expose guest-owned unbuffered pointer, base and count fields through `_get_stream_buffer_pointers`; nonstandard opened streams and buffered operation remain unsupported (#1163).
 - Added partial Microsoft x64 `ostream::write` and `flush` dispatch through guest stream-buffer virtual methods, with state updates and explicit refusal of unsupported tied, unit-buffered and throwing paths. Standard stream objects remain unavailable (#1163).
