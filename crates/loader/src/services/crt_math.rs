@@ -14,12 +14,13 @@
 //!   The C standard does not fix them to the last place, so they can differ
 //!   from the Universal CRT's by one unit in the last place.
 //!
-//! What none of them models: `errno` is never set, no floating-point exception
-//! flag is raised, and the guest MXCSR is not visible to a service, so
+//! `nextafterf` sets `errno` to `ERANGE` on overflow. These services do not raise
+//! floating-point exception flags, and the guest MXCSR is not visible to a service, so
 //! `rint` and `nearbyint` round to nearest, ties to even. A NaN result keeps the
 //! first NaN argument, quieted, as SSE does; a NaN produced from non-NaN
 //! arguments is the x86 default NaN, which is negative.
 
+use super::{crt::set_errno, crt_files::ERANGE};
 use crate::cpu::ExitReason;
 use crate::runtime::{Float32, Float64, OutPtr, ServiceContext};
 
@@ -108,7 +109,6 @@ binary!(Float64, value64, result64, f64: fmod => |x, y| x % y, remainder => rema
 binary!(Float32, value32, result32, f32:
     fmodf => |x, y| x % y,
     remainderf => remainder_exact32,
-    nextafterf => next_after32,
 );
 
 fn remainder_exact32(x: f32, y: f32) -> f32 {
@@ -128,6 +128,15 @@ fn next_after32(x: f32, y: f32) -> f32 {
     } else {
         x.next_down()
     }
+}
+
+pub fn nextafterf(context: &mut ServiceContext<'_>, x: Float32, y: Float32) -> Outcome<Float32> {
+    let from = value32(x);
+    let next = next_after32(from, value32(y));
+    if from.is_finite() && next.is_infinite() {
+        set_errno(context.memory, context.teb, ERANGE)?;
+    }
+    Ok(result32(&[x, y], next))
 }
 
 // Host library: correct to within an ulp or so, not to the last place.

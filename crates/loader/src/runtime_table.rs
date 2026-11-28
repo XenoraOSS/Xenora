@@ -2744,9 +2744,9 @@ pub static SERVICES: [ServiceMetadata; 304] = [
         result: "f32",
         status: ServiceStatus::Partial,
         aliases: &["api-ms-win-crt-math-l1-1-0.dll"],
-        failure: "range events do not set errno or floating-point exception flags",
-        reference: "math.h nextafterf (ISO C Annex F)",
-        tests: &["crt_math_binary32_nextafterf_steps_to_adjacent_values"],
+        failure: "finite overflow returns signed infinity and sets errno to ERANGE. Floating-point exception flags remain unsupported",
+        reference: "https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/nextafter-functions",
+        tests: &["crt_math_binary32_nextafterf_steps_to_adjacent_values", "runtime_crt_nextafterf::nextafterf_sets_erange_when_finite_inputs_step_to_infinity", "runtime_crt_nextafterf::nextafterf_preserves_errno_when_no_overflow_occurs"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
