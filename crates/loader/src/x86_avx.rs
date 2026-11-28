@@ -270,7 +270,8 @@ pub(crate) fn execute(
                 if element(first, bits, index) >> (bits - 1) & 1 == 0 {
                     continue;
                 }
-                let lane_value = read_mem(memory, base + u64::from(index) * u64::from(width), width)?;
+                let lane_value =
+                    read_mem(memory, base + u64::from(index) * u64::from(width), width)?;
                 let half = (index / per_half) as usize;
                 value[half] |= u128::from(lane_value) << (bits * (index % per_half));
             }
