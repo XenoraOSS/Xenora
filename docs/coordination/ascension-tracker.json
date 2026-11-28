@@ -2001,6 +2001,25 @@
       "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
+    },
+    {
+      "id": "WP-1440",
+      "subsystem": "Runtime",
+      "description": "Wide CRT calendar formatting with UTF-16 literals and capacities",
+      "priority": "P1",
+      "dependencies": [
+        "WP-1326"
+      ],
+      "owner": null,
+      "status": "BLOCKED",
+      "evidence_class": "E",
+      "issue": 1440,
+      "pr": null,
+      "test_status": "At a1b69294, the paired original MinGW-w64 guests print the expected narrow leap-day report through strftime and exit zero at -O1 and -O2. The wide variants exit 125 before entry on the exact time API-set wcsftime import and emit no guest output.",
+      "limitations": "The wide output and capacity checks cannot run until the import is implemented. Scope needs coordination with #1330 for the shared calendar formatter and #312, #535 or #1311 for the standard registry.",
+      "ownership_state": "Awaiting external dependency",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     }
   ],
   "ownership_states": {
@@ -2019,14 +2038,15 @@
       "status": "PARTIAL",
       "goal": "Original compiled C application with comprehensive supported CRT coverage",
       "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit. Open PR #1330 adds byte-exact narrow time formatting and six documented directives, with two independent native fixture runs. Open PR #1385 verifies that escaped percent signs count toward the narrow and wide CRT output limits, with successful sizing at the limit and refusal one unit above it. Open PR #1391 combines CRT environment variables, file scanning, exact floating arithmetic, leap-day UTC formatting and file output in one original hosted C program. It checks absent initial state, a malformed scan and fresh replay at two compiler optimization levels. Draft PR #1401 independently verifies narrow-input scanf character and string destination widths for ASCII, including secure wide buffers and terminator capacity. One shared legacy test still expects %ls to be unsupported and awaits coordination. Open PR #1432 verifies a hosted C-locale index at two compiler optimization levels. It checks exact transform capacity and byte ordering, sorts transformed keys with an ordinal tie-break, and repeats successful and missing binary searches from a fresh state with reversed input.",
-      "remaining": "Integrate the hosted workloads, consolidate positive and negative coverage by supported CRT family, and record full R1 acceptance.",
+      "remaining": "Integrate the hosted workloads, consolidate positive and negative coverage by supported CRT family, and record full R1 acceptance. The wide calendar import is awaiting shared file coordination in #1440.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/gate-a.md",
         "https://github.com/ranveersoni98/Xenora/pull/1330",
         "https://github.com/ranveersoni98/Xenora/pull/1385",
         "https://github.com/ranveersoni98/Xenora/pull/1391",
         "https://github.com/ranveersoni98/Xenora/pull/1401",
-        "https://github.com/ranveersoni98/Xenora/pull/1432"
+        "https://github.com/ranveersoni98/Xenora/pull/1432",
+        "https://github.com/ranveersoni98/Xenora/issues/1440"
       ]
     },
     {
