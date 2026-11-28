@@ -12,6 +12,7 @@ from preview.signing import notarize, sign_bundle, verify_distribution, verify_l
 
 APP = Path("/staged/Xenora.app")
 WORKER = APP / "Contents" / "MacOS" / "xenora-cli"
+SESSION = APP / "Contents" / "MacOS" / "xenora-pe-session"
 ARCHIVE = Path("/staged/Xenora-notary.zip")
 SUBMISSION = "2efe2717-52ef-43a5-96dc-0797e4ca1041"
 ENTITLEMENTS = {"com.apple.security.cs.allow-jit": True}
@@ -47,27 +48,29 @@ class SigningTests(unittest.TestCase):
     def setUp(self):
         self.commands = Recorder()
 
-    def test_local_signs_the_worker_before_the_app(self):
+    def test_local_signs_the_helpers_before_the_app(self):
         self.commands.details = "CodeDirectory v=20400 flags=0x2(adhoc)\nSignature=adhoc\n"
         sign_bundle(APP, identity=None, run=self.commands.run)
         args = [args for args, _ in self.commands.calls]
-        self.assertEqual(args[:2], [
+        self.assertEqual(args[:3], [
             ["codesign", "--force", "--sign", "-", WORKER],
+            ["codesign", "--force", "--sign", "-", SESSION],
             ["codesign", "--force", "--sign", "-", APP],
         ])
         self.assertIn(["codesign", "--verify", "--strict", WORKER], args)
+        self.assertIn(["codesign", "--verify", "--strict", SESSION], args)
         self.assertIn(["codesign", "--verify", "--strict", APP], args)
 
     def test_local_verification_requires_adhoc_signatures(self):
         with self.assertRaisesRegex(RuntimeError, "lacks a local ad-hoc signature"):
             verify_local(APP, run=self.commands.run)
 
-    def test_developer_id_signs_both_jit_processes_and_checks_signatures(self):
+    def test_developer_id_signs_all_jit_processes_and_checks_signatures(self):
         identity = "Developer ID Application: Xenora (TEAM)"
         sign_bundle(APP, identity=identity, run=self.commands.run)
-        signing = self.commands.calls[:2]
-        self.assertEqual([args[-1] for args, _ in signing], [WORKER, APP])
-        self.assertEqual(self.commands.embedded_entitlements, [ENTITLEMENTS, ENTITLEMENTS])
+        signing = self.commands.calls[:3]
+        self.assertEqual([args[-1] for args, _ in signing], [WORKER, SESSION, APP])
+        self.assertEqual(self.commands.embedded_entitlements, [ENTITLEMENTS] * 3)
         for args, kwargs in signing:
             self.assertEqual(args[:8], [
                 "codesign", "--force", "--sign", identity, "--options", "runtime",
@@ -77,7 +80,7 @@ class SigningTests(unittest.TestCase):
         verification = [
             args for args, _ in self.commands.calls if args[:3] == ["codesign", "--verify", "--strict"]
         ]
-        self.assertEqual([args[-1] for args in verification], [WORKER, APP])
+        self.assertEqual([args[-1] for args in verification], [WORKER, SESSION, APP])
         for args in verification:
             requirement = args[3]
             self.assertIn("anchor apple generic", requirement)
