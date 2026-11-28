@@ -1314,7 +1314,7 @@ fn guest_gdk_dispatch_runs_callback_and_resumes_caller() {
     code.extend_from_slice(&[0x48, 0x89, 0x44, 0x24, 0x20]);
     set_args(&mut code, &[queue, 0, 30, output]);
     append_import_call(&mut code, 0x2060);
-    set_args(&mut code, &[queue, 0, 1000]);
+    set_args(&mut code, &[queue, 0, 1001]);
     append_import_call(&mut code, 0x21a0);
     code.extend_from_slice(&[0x48, 0x89, 0xc3]); // retain successful dispatch in RBX
     set_args(&mut code, &[queue, 0, 0]);
