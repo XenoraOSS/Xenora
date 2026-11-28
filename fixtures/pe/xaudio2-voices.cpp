@@ -36,9 +36,11 @@ struct XAUDIO2_BUFFER {
     u32 PlayBegin, PlayLength, LoopBegin, LoopLength, LoopCount; void *pContext;
 };
 struct XAUDIO2_VOICE_STATE { void *pCurrentBufferContext; u32 BuffersQueued; u64 SamplesPlayed; };
+struct XAUDIO2_VOICE_DETAILS { u32 CreationFlags, ActiveFlags, InputChannels, InputSampleRate; };
 #pragma pack(pop)
 static_assert(sizeof(XAUDIO2_BUFFER) == 44, "packed XAUDIO2_BUFFER is 44 bytes on x64");
 static_assert(sizeof(XAUDIO2_VOICE_STATE) == 20, "packed XAUDIO2_VOICE_STATE is 20 bytes on x64");
+static_assert(sizeof(XAUDIO2_VOICE_DETAILS) == 16, "packed XAUDIO2_VOICE_DETAILS is 16 bytes");
 
 struct IXAudio2; struct IXAudio2Voice; struct IXAudio2SourceVoice; struct IXAudio2MasteringVoice;
 typedef void *Any;
@@ -193,6 +195,15 @@ static void round_trip(bool first) {
     expect(value == 1.5f);
     expect(s->v->SetFrequencyRatio(s, 1.0f, 0) == S_OK);
 
+    // SetSourceSampleRate accepts the documented range while the queue is empty.
+    expect(s->v->SetSourceSampleRate(s, 999) == E_INVALIDARG);
+    expect(s->v->SetSourceSampleRate(s, 200001) == E_INVALIDARG);
+    expect(s->v->SetSourceSampleRate(s, 24000) == S_OK);
+    XAUDIO2_VOICE_DETAILS details = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+    s->v->GetVoiceDetails(s, &details);
+    expect(details.InputChannels == 2 && details.InputSampleRate == 24000);
+    expect(s->v->SetSourceSampleRate(s, 48000) == S_OK);
+
     // Buffer validation: bad structure and data pointers never fault the host.
     XAUDIO2_BUFFER a = {0, sizeof pcm[0], (const u8 *)pcm[0], 0, 0, 0, 0, 0, (void *)0xA};
     XAUDIO2_BUFFER b = {END_OF_STREAM, sizeof pcm[1], (const u8 *)pcm[1], 0, 0, 0, 0, 0, (void *)0xB};
@@ -208,6 +219,7 @@ static void round_trip(bool first) {
     expect(s->v->SubmitSourceBuffer(s, &odd, nullptr) == E_INVALIDARG);
     expect(s->v->SubmitSourceBuffer(s, &a, nullptr) == S_OK);
     expect(s->v->SubmitSourceBuffer(s, &b, nullptr) == S_OK);
+    expect(s->v->SetSourceSampleRate(s, 24000) == INVALID_CALL);
 
     // A stopped voice does not advance; GetState writes all 24 bytes.
     XAUDIO2_VOICE_STATE st = state_of(s);
@@ -228,6 +240,10 @@ static void round_trip(bool first) {
     expect(st.BuffersQueued == 1 && st.SamplesPlayed == 9120);
     st = state_of(s);
     expect(st.pCurrentBufferContext == nullptr && st.BuffersQueued == 0 && st.SamplesPlayed == 0);
+    expect(s->v->SetSourceSampleRate(s, 22050) == S_OK);
+    details = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
+    s->v->GetVoiceDetails(s, &details);
+    expect(details.InputSampleRate == 22050);
 
     // Flush on a stopped voice removes everything queued.
     expect(s->v->Stop(s, 0, 0) == S_OK);

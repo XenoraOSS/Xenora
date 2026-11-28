@@ -87,8 +87,8 @@ structure below has padding.
   released, is refused with `InvalidCall` and the result code
   `XAUDIO2_E_INVALID_CALL`.
 - **Xenora.** A source-only operation (submit, start, stop, flush, state,
-  consume, frequency ratio) applied to a mastering voice is refused with
-  `InvalidCall`. The volume applies to every voice.
+  consume, frequency ratio, source sample rate) applied to a mastering voice is
+  refused with `InvalidCall`. The volume applies to every voice.
 
 ## Engine
 
@@ -139,6 +139,15 @@ structure below has padding.
   voices. The next one is refused with `OutOfMemory`.
 - **Xenora.** A new voice is stopped, plays at volume 1.0 and at frequency
   ratio 1.0.
+- **Public.** `IXAudio2SourceVoice::SetSourceSampleRate` accepts every input
+  rate from `XAUDIO2_MIN_SAMPLE_RATE` (1000) through
+  `XAUDIO2_MAX_SAMPLE_RATE` (200000) hertz, rejects every rate outside that
+  range with `InvalidArg`, and requires the voice to have no buffers currently
+  queued. **Xenora** records the new input rate and uses it for later fixed
+  clock steps. Because this runtime currently refuses every source-voice
+  creation flag, no voice can yet carry the public NOPITCH or NOSRC flag that
+  would make the call invalid. The reconfiguration is state and timing only:
+  the model still does not resample, mix or output audio.
 
 ## Wave formats
 
@@ -159,9 +168,12 @@ fields in this order, and each step refuses with `InvalidArg` or
    divided by 8, otherwise `InvalidArg`.
 7. The average byte rate must equal the sample rate times the block
    alignment, with checked arithmetic, otherwise `InvalidArg`.
-8. The modelled subset is 16-bit PCM or 32-bit float, mono or stereo, at
-   44100 or 48000 hertz. Everything else that passed the checks above is
-   `NotImplemented`.
+8. The modelled creation subset is 16-bit PCM or 32-bit float, mono or
+   stereo, at 44100 or 48000 hertz. Everything else that passed the checks
+   above is `NotImplemented`. After creation, `SetSourceSampleRate` may still
+   reconfigure an empty voice to any documented rate from 1000 through
+   200000 hertz, because that call changes the input rate state without
+   changing the encoding, channel count or frame size.
 
 **Public.** The callback size of a WAVEFORMATEX is meaningful only for the
 extensible tag, so it is ignored for both supported tags. **Xenora** ignores
@@ -366,8 +378,9 @@ voices through vtables the loader writes into guest memory.
   client. The engine has no output device.
 - No operation sets beyond the immediate commit, no engine flags, no voice
   flags and no submix or mastering device id.
-- No sample rate conversion and no volume ramp. The frequency ratio and the
-  volume are recorded and bounded, and nothing else uses them yet.
+- No sample rate conversion and no volume ramp. The frequency ratio, source
+  input rate and volume are recorded and bounded, and the first two affect
+  only the fixed sample-count clock; no audio samples are converted or heard.
 - The audio processor and the stream category are recorded but are not
   observable through the bounded API.
 
