@@ -557,6 +557,12 @@ fn spawnve(
         let mut drive = child.objects.lock().expect("guest object state");
         child_streams.close_pipe_ends_for_exit(&mut drive);
     }
+    // The positions the child left on inherited file descriptors write back
+    // into the parent's streams: one advancing position across the two
+    // processes, as the shared open file description behaves on Windows.
+    state
+        .crt_streams()
+        .absorb_child_positions(&child.crt_streams());
     let startup = match run {
         Ok(startup) => startup,
         Err(_) => {
