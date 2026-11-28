@@ -698,6 +698,8 @@ remains unsupported.
   for genuinely unsupported DBT instructions.
 
 ### Changed
+
+- Explicit PE package TLS setup stages only new thread storage before publishing indexes and pointers. A failed preparation releases those allocations without copying the rest of the guest address space (#1356).
 - Guest `qsort` and `qsort_s` skip copying the array when its final order matches the input and the full array is readable and writable (#1265). Comparator calls and memory faults are preserved. The service-dispatch benchmark now checks and times an ordered pair of 512 KiB records.
 
 - The native GPU gate now checks that packed and aligned block-compressed texture uploads return the expected pixels with Metal validation enabled (#1238).
