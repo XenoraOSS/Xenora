@@ -16,6 +16,7 @@ use xenora_loader::package::{
     StartupDiagnostics, run_package_startup_with_entry_observer,
 };
 use xenora_loader::pe::{DEFAULT_MAPPED_IMAGE_BUDGET, ParsedPe};
+use xenora_loader::runtime::OutPtr;
 use xenora_loader::startup::{StartupEvent, StartupLayout, run_synthetic_startup_scheduled};
 use xenora_loader::{
     Clock, ExitReason, ImportRegistry, MockClock, ServicesState, SystemClock,
@@ -365,6 +366,13 @@ fn register_protocol(
                     "XenoraSessionNextInput called out of sequence",
                 )?;
                 session.check_frame_index(&current)?;
+                let output = OutPtr::<4>(args.rcx);
+                if args.rcx == 0 {
+                    return Err("invalid NextInput output address: null pointer".to_owned());
+                }
+                output
+                    .check_write(memory)
+                    .map_err(|error| format!("invalid NextInput output address: {error}"))?;
                 send(&Reply::Ready)?;
                 match read_request(io::stdin().lock())
                     .map_err(|error| format!("could not read session request: {error}"))?
@@ -375,7 +383,7 @@ fn register_protocol(
                                 "session exceeds the limit of {MAX_FRAMES} inputs"
                             ));
                         }
-                        memory.write_u32(args.rcx, input).map_err(|error| {
+                        output.store(memory, input.to_le_bytes()).map_err(|error| {
                             format!("invalid NextInput output address: {error}")
                         })?;
                         if let Some(clock) = &replay_clock {
