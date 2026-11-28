@@ -12,14 +12,14 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 1015 |
+| Canonical services | 1018 |
 | Typed registry services | 304 |
-| Manual code registrations | 711 |
-| Canonical libraries | 28 |
+| Manual code registrations | 714 |
+| Canonical libraries | 29 |
 | Implemented | 249 |
-| Partial | 766 |
+| Partial | 769 |
 | Stub | 0 |
-| Data-import services | 12 |
+| Data-import services | 13 |
 | Aliases of every kind | 968 |
 | API-set aliases | 760 |
 | Ordinal aliases | 35 |
@@ -47,6 +47,7 @@ independent acceptance or compatibility claims.
 | <code>psapi.dll</code> | <code>windows-system</code> | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
 | <code>ucrtbase.dll</code> | <code>c-runtime</code> | 309 | 213 | 96 | 0 | 104 | 205 | 0 | 10 |
 | <code>user32.dll</code> | <code>other</code> | 10 | 0 | 10 | 0 | 0 | 10 | 0 | 0 |
+| <code>vcruntime140.dll</code> | <code>other</code> | 2 | 0 | 2 | 0 | 0 | 2 | 0 | 0 |
 | <code>winhttp.dll</code> | <code>other</code> | 18 | 0 | 18 | 0 | 0 | 18 | 0 | 0 |
 | <code>ws2_32.dll</code> | <code>windows-networking</code> | 65 | 0 | 65 | 0 | 6 | 59 | 0 | 6 |
 | <code>xaudio2_9.dll</code> | <code>other</code> | 2 | 2 | 0 | 0 | 0 | 2 | 0 | 0 |

@@ -1,4 +1,4 @@
-//! `_setjmp` and `longjmp` for the legacy `msvcrt.dll` view (#632).
+//! Register-only C jumps shared by the legacy CRT, UCRT and VCRUNTIME140.
 //!
 //! The jump buffer is the documented 256-byte x64 layout: the frame word, the
 //! callee-saved general registers, the resume stack and instruction pointers,
@@ -10,10 +10,10 @@
 //! which the standard return path would overwrite - so it is registered as a
 //! context service, the same mechanism the exception unwinder uses.
 //!
-//! The frame word is zero: unwinding the frames a jump abandons is not
-//! modelled, so there is no frame registration to keep. The control words are
-//! the live ones, so a restore across a changed rounding mode behaves like the
-//! CRT's.
+//! The saved frame word is zero. VCRUNTIME140 requires an explicit null
+//! frame and refuses a restore that requests stack unwinding. The control
+//! words are the live ones, so a restore across a changed rounding mode
+//! behaves like the CRT's.
 
 use crate::cpu::ExitReason;
 use crate::cpu::{CpuState, Register};
@@ -24,8 +24,10 @@ use crate::memory::GuestMemory;
 /// The x64 jump buffer spans 256 bytes, `SETJMP_FLOAT128[16]` as the headers
 /// declare it.
 const JUMP_BUFFER_SIZE: usize = 256;
+const VCRUNTIME140: &str = "vcruntime140.dll";
 
 /// qword offsets inside the jump buffer, in save order.
+const FIELD_FRAME: usize = 0x00;
 const FIELD_RBX: usize = 0x08;
 const FIELD_RSP: usize = 0x10;
 const FIELD_RBP: usize = 0x18;
@@ -54,10 +56,17 @@ fn setjmp(
     cpu: &mut CpuState,
     memory: &mut GuestMemory,
 ) -> Result<u64, ExitReason> {
-    let buffer = args.rcx;
-    if buffer == 0 {
+    if args.rcx == 0 {
         return Ok(0);
     }
+    save_jump_buffer(args.rcx, cpu, memory)
+}
+
+fn save_jump_buffer(
+    buffer: u64,
+    cpu: &CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
     memory
         .check_write(buffer, JUMP_BUFFER_SIZE)
         .map_err(ExitReason::MemoryFault)?;
@@ -101,6 +110,7 @@ fn longjmp(
     args: &Win64Args,
     cpu: &mut CpuState,
     memory: &mut GuestMemory,
+    require_null_frame: bool,
 ) -> Result<(), ExitReason> {
     let buffer = args.rcx;
     let value = args.rdx as u32;
@@ -108,6 +118,9 @@ fn longjmp(
     memory
         .read_bytes(buffer, &mut bytes)
         .map_err(ExitReason::MemoryFault)?;
+    if require_null_frame && read_qword(&bytes, FIELD_FRAME) != 0 {
+        return Err(ExitReason::InvalidUnwind);
+    }
 
     cpu.set(Register::Rbx, read_qword(&bytes, FIELD_RBX));
     cpu.set(Register::Rsp, read_qword(&bytes, FIELD_RSP));
@@ -145,7 +158,12 @@ pub(crate) fn register(registry: &mut ImportRegistry) {
     // api-ms-win-crt-private api set resolves to ucrtbase like the rest.
     for module in ["msvcrt.dll", "ucrtbase.dll"] {
         registry.register_with_status(module, "_setjmp", ServiceStatus::Partial, setjmp);
-        registry.register_context_service(module, "longjmp", ServiceStatus::Partial, longjmp);
+        registry.register_context_service(
+            module,
+            "longjmp",
+            ServiceStatus::Partial,
+            |args, cpu, memory| longjmp(args, cpu, memory, false),
+        );
     }
     registry.register_with_status(
         "ucrtbase.dll",
@@ -158,4 +176,23 @@ pub(crate) fn register(registry: &mut ImportRegistry) {
     for symbol in ["_setjmp", "__intrinsic_setjmp", "longjmp"] {
         registry.alias("api-ms-win-crt-private-l1-1-0.dll", "ucrtbase.dll", symbol);
     }
+
+    registry.register_with_status(
+        VCRUNTIME140,
+        "__intrinsic_setjmp",
+        ServiceStatus::Partial,
+        |args, cpu, memory| {
+            // The x64 CRT's null Frame selects a jump without cleanup.
+            if args.rdx != 0 {
+                return Err(ExitReason::InvalidUnwind);
+            }
+            save_jump_buffer(args.rcx, cpu, memory)
+        },
+    );
+    registry.register_context_service(
+        VCRUNTIME140,
+        "longjmp",
+        ServiceStatus::Partial,
+        |args, cpu, memory| longjmp(args, cpu, memory, true),
+    );
 }

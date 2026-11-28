@@ -352,6 +352,20 @@ bounds and fault behavior. The original MSVC-ABI guest fixture exercises
 copying, overlap, filling, comparison, searching and zero-length comparison;
 it is not evidence for the rest of VCRUNTIME or for Xbox execution.
 
+### Microsoft x64 nonlocal C jumps (#1409)
+
+`vcruntime140.dll` resolves `__intrinsic_setjmp` and `longjmp` for callers
+using the AMD64 null-frame mode. The first return saves the 256-byte jump
+buffer and returns zero. `longjmp` restores the resume stack and instruction
+pointers, the nonvolatile general and XMM registers, and the floating-point
+control words. It returns to the saved call with the requested integer,
+using one for a requested zero. Both entry points stop with the guest
+unwind failure if given a nonzero frame. Unwind handlers, C++ destructors
+and `__finally` callbacks remain outside this subset.
+[Microsoft x64 calling convention](https://learn.microsoft.com/en-us/cpp/build/x64-calling-convention?view=msvc-170#setjmplongjmp),
+[MinGW-w64 AMD64 declaration and null-frame caller](https://github.com/mingw-w64/mingw-w64/blob/7dceb7d776de714a76e7b45d66cb916a8aa8b85f/mingw-w64-headers/crt/setjmp.h#L134-L175),
+and [pinned VCRUNTIME140 exports](https://github.com/mingw-w64/mingw-w64/blob/7dceb7d776de714a76e7b45d66cb916a8aa8b85f/mingw-w64-crt/lib-common/vcruntime140-common.def.in).
+
 ### UCRT standard-stream buffer fields (#1163)
 
 `_get_stream_buffer_pointers` resolves for the three standard UCRT streams.
