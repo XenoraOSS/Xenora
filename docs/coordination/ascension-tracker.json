@@ -1593,6 +1593,57 @@
       "ownership_state": "Catminou-owned",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
+    },
+    {
+      "id": "WP-1320",
+      "subsystem": "Runtime",
+      "description": "Separate guest COM apartments and last-release eligibility",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "C",
+      "issue": 1320,
+      "pr": 1324,
+      "test_status": "169 focused loader tests passed locally. Two independent exact-head ARM64 runs pass the new guest fixture.",
+      "limitations": "Synthetic in-process server and cooperative scheduler. Windows registration, message dispatch and marshaling remain outside the evidence.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1325",
+      "subsystem": "Runtime",
+      "description": "Microsoft codecvt data identity across guest DLLs",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "C",
+      "issue": 1325,
+      "pr": 1328,
+      "test_status": "Eight focused tests passed locally. Two independent exact-head ARM64 runs pass the codecvt package fixture.",
+      "limitations": "Four synthetic data cells in an explicit package. Locale ID assignment, facet lifecycle and conversion remain open.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1326",
+      "subsystem": "Runtime",
+      "description": "Narrow CRT strftime formatting and output boundaries",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "D",
+      "issue": 1326,
+      "pr": 1330,
+      "test_status": "Both compiled cases fail on the baseline and pass with the correction. Two existing calendar tests also pass. Two exact-head reviewers reproduced the new regression.",
+      "limitations": "Six added directives and literal-byte handling in the synthetic UTC C locale. Broader formatting and invalid-parameter behavior remain open.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     }
   ],
   "ownership_states": {
@@ -1610,35 +1661,38 @@
       "id": "R1",
       "status": "PARTIAL",
       "goal": "Original compiled C application with comprehensive supported CRT coverage",
-      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit.",
+      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit. Open PR #1330 adds byte-exact narrow time formatting and six documented directives, with two independent native fixture runs.",
       "remaining": "Consolidate the supported CRT family matrix and obtain independent acceptance.",
       "sources": [
-        "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/gate-a.md"
+        "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/gate-a.md",
+        "https://github.com/ranveersoni98/Xenora/pull/1330"
       ]
     },
     {
       "id": "R2",
       "status": "PARTIAL",
       "goal": "Original compiled C++ application with construction, destruction and STL",
-      "evidence": "On c8210aaf, the original GNU C++ suite passed three tests. Merged PR #1269 records a separate Microsoft x64 object-lifetime witness. Merged PR #1256 adds a bounded synthetic standard output stream.",
+      "evidence": "On c8210aaf, the original GNU C++ suite passed three tests. Merged PR #1269 records a separate Microsoft x64 object-lifetime witness. Merged PR #1256 adds a bounded synthetic standard output stream. Open PR #1328 verifies four synthetic codecvt data cells across two independently compiled DLLs with two independent native fixture runs.",
       "remaining": "Microsoft-header stream startup, output, cleanup, failures and independent acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cpp_path.rs",
         "https://github.com/ranveersoni98/Xenora/pull/1269",
-        "https://github.com/ranveersoni98/Xenora/pull/1256"
+        "https://github.com/ranveersoni98/Xenora/pull/1256",
+        "https://github.com/ranveersoni98/Xenora/pull/1328"
       ]
     },
     {
       "id": "R3",
       "status": "PARTIAL",
       "goal": "Multi-DLL application with cross-module runtime ownership",
-      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs.",
+      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs. Open PR #1328 checks shared runtime data, bidirectional writes and fresh-state zero initialization across the EXE and both DLLs.",
       "remaining": "Independently verify cross-DLL ownership. Cover dynamic module lifetime and cross-module exceptions.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/package_startup.rs",
         "https://github.com/ranveersoni98/Xenora/pull/1262",
         "https://github.com/ranveersoni98/Xenora/pull/1269",
-        "https://github.com/ranveersoni98/Xenora/pull/1280"
+        "https://github.com/ranveersoni98/Xenora/pull/1280",
+        "https://github.com/ranveersoni98/Xenora/pull/1328"
       ]
     },
     {
@@ -1669,24 +1723,28 @@
       "id": "R6",
       "status": "PARTIAL",
       "goal": "Original COM application with supported object lifecycle",
-      "evidence": "On c8210aaf, five compiled COM tests passed. Merged PR #1261 adds opt-in server locks and unload eligibility.",
+      "evidence": "On c8210aaf, five compiled COM tests passed. Merged PR #1261 adds opt-in server locks and unload eligibility. Open PRs #1296 and #1324 add cross-module ownership and simultaneous STA/MTA initialization and lifetime. The latter passed two independent native fixture runs.",
       "remaining": "Independently verify the supported lifecycle and extend thread and module ownership scenarios.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/runtime/com.md",
-        "https://github.com/ranveersoni98/Xenora/pull/1261"
+        "https://github.com/ranveersoni98/Xenora/pull/1261",
+        "https://github.com/ranveersoni98/Xenora/pull/1296",
+        "https://github.com/ranveersoni98/Xenora/pull/1324"
       ]
     },
     {
       "id": "R7",
       "status": "PARTIAL",
       "goal": "Repeated runtime sessions with resource and state isolation",
-      "evidence": "The authored-package session harness checks repeated runs and handle cleanup. Merged PR #1262 records a CRT success, failure and fresh-run sequence.",
+      "evidence": "The authored-package session harness checks repeated runs and handle cleanup. Merged PR #1262 records a CRT success, failure and fresh-run sequence. Open PRs #1324 and #1328 verify fresh state after exact startup refusal in two additional contracts.",
       "remaining": "Exercise callbacks, TLS and shutdown across repeated sessions and obtain independent acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/cli/tests/pe_session.rs",
         "https://github.com/ranveersoni98/Xenora/pull/1262",
         "https://github.com/ranveersoni98/Xenora/pull/1261",
-        "https://github.com/ranveersoni98/Xenora/pull/1279"
+        "https://github.com/ranveersoni98/Xenora/pull/1279",
+        "https://github.com/ranveersoni98/Xenora/pull/1324",
+        "https://github.com/ranveersoni98/Xenora/pull/1328"
       ]
     },
     {
