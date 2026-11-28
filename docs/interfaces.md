@@ -1933,7 +1933,7 @@ The startup settings are declared in the typed registry
 | `__setusermatherr(handler)` | nothing | The handler is never called |
 | `_set_invalid_parameter_handler(handler)` | the previous global handler, null at first | The two explicit invalid-parameter entry points use the global handler. Thread-local overrides are unavailable |
 | `__p__fmode()`, `__p__commode()` | the address of the guest `int` `_fmode` (initially `_O_TEXT`, `0x4000`, as documented) or `_commode` (initially 0; its documentation gives no initial value) | Nothing reads either until stdio exists |
-| `signal(sig, handler)` | the previous handler, `SIG_DFL` at first; `SIG_ERR` and `errno` `EINVAL` for a signal other than `SIGINT`, `SIGILL`, `SIGFPE`, `SIGSEGV`, `SIGTERM` and `SIGABRT` | No signal is ever raised. One table serves the process |
+| `signal(sig, handler)` | the previous handler, `SIG_DFL` at first. Unsupported signal numbers return `SIG_ERR` and set `errno` to `EINVAL` | One table serves the process. The executable SEH filter delivers the two signals below |
 | `SetUnhandledExceptionFilter(filter)` | the previous filter, null at first | Called at the end of an unhandled search (see "Structured exceptions and CPU faults"); no debugger or error-mode handling |
 
 The UCRT and `api-ms-win-crt-runtime-l1-1-0.dll` provide
@@ -1945,6 +1945,20 @@ installed. Xenora models termination with `STATUS_INVALID_CRUNTIME_PARAMETER`
 (`0xC0000417`). Existing CRT validations keep their service-specific error
 paths. Fast-fail exceptions, debugger dispatch and Watson reporting are
 outside this model.
+
+The same runtime API set exposes `_seh_filter_exe` for compiled executable
+`__except` filters. The default disposition and unrecognized exception codes
+continue the SEH search. The handler table maps access violations to `SIGSEGV`
+and both illegal and privileged instructions to `SIGILL`. `SIG_IGN` asks SEH
+to resume and stays installed. A callable handler resets to `SIG_DFL` before
+guest code runs and asks SEH to resume when it returns. Compiled AMD64
+controls verify continuation and outer-handler paths on Apple Silicon.
+
+The enclosing SEH dispatcher retains the exception context. Signal handlers
+receive the signal number as their sole argument. Nondefault `SIGFPE` dispositions,
+including `SIG_IGN`, stop with `InvalidUnwind`. The callback boundary supports
+handlers that return to the filter. Process-wide signal state is shared by
+guest threads.
 
 `_fmode` and `_commode` share one 8-byte block allocated from the process heap
 on the first call to either. `ServicesState::crt_app_type` and

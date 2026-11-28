@@ -1,17 +1,19 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Process termination and exit codes.
+//! Process termination, exit codes and the executable CRT exception filter.
 //!
 //! The only process the guest can name is its own, through the
 //! current-process pseudo-handle. No service here reaches a host process.
 
 const INVALID_HANDLE: u64 = u64::MAX;
+use super::crt_startup::ExceptionAction;
 use super::{
     CURRENT_PROCESS, ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOACCESS,
     ERROR_NOT_ENOUGH_MEMORY, ERROR_NOT_SUPPORTED, GuestObject, KERNEL32, ServicesState,
 };
 use crate::cpu::ExitReason;
-use crate::imports::{ImportRegistry, ServiceStatus};
+use crate::imports::{CallbackStart, CallbackStep, CallbackTask, ImportRegistry, ServiceStatus};
+use crate::memory::GuestMemory;
 use std::sync::Arc;
 
 const PROCESS_THREADS_API: &str = "api-ms-win-core-processthreads-l1-1-0.dll";
@@ -22,6 +24,18 @@ const ABORT_STATUS: u32 = 3;
 /// GetExitCodeProcess result while the process runs (Microsoft Learn,
 /// "GetExitCodeProcess").
 const STILL_ACTIVE: u32 = 259;
+const EXCEPTION_CONTINUE_SEARCH: u64 = 0;
+const EXCEPTION_CONTINUE_EXECUTION: u64 = u32::MAX as u64;
+
+struct ResumeAfterSignal;
+
+impl CallbackTask for ResumeAfterSignal {
+    fn resume(&mut self, _: u64, _: u64, _: &mut GuestMemory) -> Result<CallbackStep, ExitReason> {
+        // The signal handler is void. The surrounding filter owns the
+        // exception context and applies this disposition after we return.
+        Ok(CallbackStep::Return(EXCEPTION_CONTINUE_EXECUTION))
+    }
+}
 
 pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
     // ExitProcess does not return (processthreadsapi.h). It stops the guest
@@ -306,6 +320,29 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.alias(PROCESS_THREADS_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
+
+    let s = Arc::clone(state);
+    registry.register_callback_task(
+        UCRT,
+        "_seh_filter_exe",
+        ServiceStatus::Partial,
+        move |args, _, _, _| {
+            // Snapshot the disposition and release the CRT lock before a
+            // guest handler runs. A handler may call signal() again.
+            let action = s.crt_startup().exception_action(args.rcx as u32);
+            match action {
+                ExceptionAction::Search => Ok(CallbackStart::Return(EXCEPTION_CONTINUE_SEARCH)),
+                ExceptionAction::Resume => Ok(CallbackStart::Return(EXCEPTION_CONTINUE_EXECUTION)),
+                ExceptionAction::Call { handler, signal } => Ok(CallbackStart::Call {
+                    task: Box::new(ResumeAfterSignal),
+                    entry: handler,
+                    args: [signal as u64, 0, 0, 0],
+                }),
+                ExceptionAction::Unsupported => Err(ExitReason::InvalidUnwind),
+            }
+        },
+    );
+    registry.alias(CRT_RUNTIME_API, UCRT, "_seh_filter_exe");
 
     // _exit ends the process without calling the functions registered with
     // atexit (Microsoft Learn, "exit, _Exit, _exit"). `exit`, which does call
