@@ -128,6 +128,68 @@ fn every_chunking_gives_the_same_events_and_state() {
 }
 
 #[test]
+fn exit_loop_finishes_an_infinite_loop_after_the_current_pass() {
+    let mut rt = Runtime::new();
+    let engine = rt.create_engine(0, 1).unwrap();
+    rt.create_mastering_voice(engine, 0, 0, 0, 0, 0, 6).unwrap();
+    let voice = rt
+        .create_source_voice(engine, &mono_pcm16(), 0, 2.0, 0, 0, 0)
+        .unwrap();
+    rt.submit_source_buffer(
+        voice,
+        &desc(100, (0, 0), (20, 30, XAUDIO2_LOOP_INFINITE), 0, 7),
+        0,
+    )
+    .unwrap();
+    rt.start(voice, 0, 0).unwrap();
+
+    assert_eq!(
+        rt.consume(voice, 25).unwrap(),
+        [Event::BufferStart { context: 7 }]
+    );
+    rt.exit_loop(voice, 0).unwrap();
+    assert_eq!(
+        rt.consume(voice, 75).unwrap(),
+        [Event::BufferEnd { context: 7 }]
+    );
+    let state = rt.state(voice, 0).unwrap();
+    assert_eq!((state.buffers_queued, state.samples_played), (0, 100));
+}
+
+#[test]
+fn exit_loop_before_the_loop_region_is_a_noop() {
+    let mut rt = Runtime::new();
+    let engine = rt.create_engine(0, 1).unwrap();
+    rt.create_mastering_voice(engine, 0, 0, 0, 0, 0, 6).unwrap();
+    let voice = rt
+        .create_source_voice(engine, &mono_pcm16(), 0, 2.0, 0, 0, 0)
+        .unwrap();
+    rt.submit_source_buffer(
+        voice,
+        &desc(100, (0, 0), (20, 30, XAUDIO2_LOOP_INFINITE), 0, 8),
+        0,
+    )
+    .unwrap();
+    rt.start(voice, 0, 0).unwrap();
+
+    rt.consume(voice, 10).unwrap();
+    rt.exit_loop(voice, 0).unwrap();
+    assert_eq!(
+        rt.consume(voice, 40).unwrap(),
+        [Event::LoopEnd { context: 8 }]
+    );
+    rt.exit_loop(voice, 0).unwrap();
+    assert_eq!(
+        rt.consume(voice, 80).unwrap(),
+        [Event::BufferEnd { context: 8 }]
+    );
+    assert!(matches!(
+        rt.exit_loop(voice, 9),
+        Err(xenora_xaudio2::Error::NotImplemented(_))
+    ));
+}
+
+#[test]
 fn an_hour_of_looping_audio_advances_in_one_fast_call() {
     let mut rt = Runtime::new();
     let engine = rt.create_engine(0, 1).unwrap();

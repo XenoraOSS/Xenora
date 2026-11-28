@@ -17970,6 +17970,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "WinHttpCreateUrl"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "winhttp.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "WinHttpOpen"
     },
     {
@@ -18081,6 +18091,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "WinHttpTimeToSystemTime"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "winhttp.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "WinHttpWriteData"
     },
     {
       "data_import": false,
@@ -19770,6 +19790,16 @@
       "source": "manual",
       "status": "implemented",
       "status_explicit": true,
+      "symbol": "XNetworkingQueryPreferredLocalUdpMultiplayerPort"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
       "symbol": "XNetworkingQueryStatistics"
     },
     {
@@ -20159,7 +20189,7 @@
     "canonical_services": 998,
     "data_import_services": 12,
     "duplicate_registrations": 0,
-    "implemented": 246,
+    "implemented": 247,
     "implicit_status_services": 78,
     "libraries": 28,
     "manual_services": 696,

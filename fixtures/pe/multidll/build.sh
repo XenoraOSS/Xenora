@@ -74,6 +74,8 @@ flags="--target=x86_64-pc-windows-msvc -O1 -Wall -Wextra -Werror -ffreestanding 
 "$clang" $flags -c "$here/math.c" -o math.obj
 "$clang" $flags -c "$here/chain.c" -o chain.obj
 "$clang" $flags -DXENORA_NO_QUAD_EXPORT -c "$here/chain.c" -o chain-no-quad.obj
+"$clang" $flags -DXENORA_REJECT_ATTACH -c "$here/chain.c" -o chain-reject.obj
+"$clang" $flags -DXENORA_EXIT_ATTACH -c "$here/chain.c" -o chain-exit.obj
 "$clang" $flags -c "$here/consumer.c" -o consumer.obj
 
 link /dll /entry:DllMain /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
@@ -83,9 +85,19 @@ link /dll /entry:DllMain /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
 # Control image: the middle provider without the function the consumer imports.
 link /dll /entry:DllMain /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
     "/out:$outdir/xenora_chain_no_quad.dll" chain-no-quad.obj xenora_math.lib
+# Control images under the same logical module name: one refuses attach and
+# one exits the process during attach.
+mkdir -p "$outdir/refusing" "$outdir/exiting"
+link /dll /entry:DllMain /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
+    "/out:$outdir/refusing/xenora_chain.dll" chain-reject.obj xenora_math.lib
+link /dll /entry:DllMain /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
+    "/out:$outdir/exiting/xenora_chain.dll" chain-exit.obj xenora_math.lib kernel32.lib
 link /entry:entry /subsystem:console /nodefaultlib /dynamicbase /timestamp:0 /machine:x64 \
     "/out:$outdir/multidll-consumer.exe" consumer.obj \
     xenora_math.lib xenora_chain.lib kernel32.lib
 
+rm -f "$outdir"/*.lib "$outdir/refusing"/*.lib "$outdir/exiting"/*.lib
+
 chmod 644 "$outdir/xenora_math.dll" "$outdir/xenora_chain.dll" \
-    "$outdir/xenora_chain_no_quad.dll" "$outdir/multidll-consumer.exe"
+    "$outdir/xenora_chain_no_quad.dll" "$outdir/multidll-consumer.exe" \
+    "$outdir/refusing/xenora_chain.dll" "$outdir/exiting/xenora_chain.dll"

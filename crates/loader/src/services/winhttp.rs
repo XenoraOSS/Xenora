@@ -5,7 +5,7 @@
 //! The object layer models sessions, connections and requests. The transport
 //! layer performs one cleartext HTTP/1.1 request/response exchange per request
 //! with `Connection: close`. TLS, asynchronous callbacks,
-//! cancellation, redirection, authentication, proxying, streaming writes and
+//! cancellation, redirection, authentication, proxying, chunked upload and
 //! connection reuse remain separate unsupported slices.
 
 use super::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, ServicesState};
@@ -45,6 +45,8 @@ const WINHTTP_QUERY_SERVER: u32 = 37;
 const WINHTTP_QUERY_DATE: u32 = 9;
 const WINHTTP_QUERY_EXPIRES: u32 = 10;
 const WINHTTP_QUERY_LAST_MODIFIED: u32 = 11;
+const WINHTTP_QUERY_RAW_HEADERS_CRLF: u32 = 22;
+const WINHTTP_QUERY_CUSTOM: u32 = 65535;
 const WINHTTP_QUERY_FLAG_SYSTEMTIME: u32 = 0x4000_0000;
 const WINHTTP_QUERY_FLAG_NUMBER: u32 = 0x2000_0000;
 const WINHTTP_OPTION_RESOLVE_TIMEOUT: u32 = 2;
@@ -136,6 +138,7 @@ struct RequestSnapshot {
 enum TransportPhase {
     New,
     Busy,
+    Writing,
     Sent,
     Ready,
     Failed,
@@ -180,6 +183,10 @@ struct ResponseHead {
     status: u32,
     status_text: String,
     headers: Vec<(String, String)>,
+    /// Exact wire text of the final response head: the status line and each
+    /// header line in received order, every line CRLF-terminated, with no
+    /// trailing blank line.
+    raw: String,
 }
 
 struct TransportState {
@@ -188,6 +195,8 @@ struct TransportState {
     verb: String,
     stream: Option<BufReader<TcpStream>>,
     response: Option<ResponseHead>,
+    write_remaining: u64,
+    chunked_upload: bool,
     body: BodyKind,
     chunked: ChunkedState,
 }
@@ -210,6 +219,8 @@ impl TransportState {
             verb: String::new(),
             stream: None,
             response: None,
+            write_remaining: 0,
+            chunked_upload: false,
             body: BodyKind::Empty,
             chunked: ChunkedState::new(),
         }
@@ -376,10 +387,10 @@ fn parse_request_headers(
         if !valid_header_name(name) || !valid_header_value(value) {
             return Err(ERROR_INVALID_PARAMETER);
         }
-        if matches!(
-            name.to_ascii_lowercase().as_str(),
-            "host" | "content-length" | "connection" | "transfer-encoding"
-        ) {
+        let lowered = name.to_ascii_lowercase();
+        if matches!(lowered.as_str(), "host" | "content-length" | "connection")
+            || (lowered == "transfer-encoding" && !value.eq_ignore_ascii_case("chunked"))
+        {
             return Err(ERROR_NOT_SUPPORTED);
         }
         headers.push((name.to_owned(), value.to_owned()));
@@ -641,6 +652,7 @@ fn parse_one_response_head(reader: &mut BufReader<TcpStream>) -> Result<Response
     let mut total = status_line.len() + 2;
     let status_text =
         String::from_utf8(status_line).map_err(|_| ERROR_WINHTTP_INVALID_SERVER_RESPONSE)?;
+    let mut raw = format!("{status_text}\r\n");
     let mut parts = status_text.splitn(3, ' ');
     let version = parts.next().ok_or(ERROR_WINHTTP_INVALID_SERVER_RESPONSE)?;
     let status = parts.next().ok_or(ERROR_WINHTTP_INVALID_SERVER_RESPONSE)?;
@@ -665,6 +677,8 @@ fn parse_one_response_head(reader: &mut BufReader<TcpStream>) -> Result<Response
             break;
         }
         let line = String::from_utf8(line).map_err(|_| ERROR_WINHTTP_INVALID_SERVER_RESPONSE)?;
+        raw.push_str(&line);
+        raw.push_str("\r\n");
         let Some((name, value)) = line.split_once(':') else {
             return Err(ERROR_WINHTTP_INVALID_SERVER_RESPONSE);
         };
@@ -678,6 +692,7 @@ fn parse_one_response_head(reader: &mut BufReader<TcpStream>) -> Result<Response
         status,
         status_text,
         headers,
+        raw,
     })
 }
 
@@ -1449,9 +1464,6 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             if total_length < optional_length {
                 return send.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
-            if total_length != optional_length {
-                return send.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
-            }
             if optional_length > MAX_OPTIONAL_BODY_BYTES {
                 return send.fail(cpu.gs_base, ERROR_OUTOFMEMORY, 0);
             }
@@ -1477,6 +1489,20 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     if request.phase != TransportPhase::New {
                         return send.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
                     }
+                    let chunked_upload = additional
+                        .iter()
+                        .chain(request.request_headers.iter())
+                        .any(|(name, value)| {
+                            name.eq_ignore_ascii_case("transfer-encoding")
+                                && value.eq_ignore_ascii_case("chunked")
+                        });
+                    // The public contract requires absent optional data when
+                    // the Transfer-Encoding header is present, and the
+                    // Content-Length that dwTotalLength specifies cannot
+                    // combine with it.
+                    if chunked_upload && (optional_length != 0 || total_length != 0) {
+                        return send.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                    }
                     let wire = match build_request_wire(
                         &snapshot,
                         &request.request_headers,
@@ -1487,6 +1513,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                         Err(error) => return send.fail(cpu.gs_base, error, 0),
                     };
                     request.phase = TransportPhase::Busy;
+                    request.chunked_upload = chunked_upload;
+                    request.write_remaining = u64::from(total_length - optional_length);
                     wire
                 };
                 (snapshot, transport, wire)
@@ -1501,7 +1529,13 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             match result {
                 Ok(stream) => {
                     let mut transport_guard = transport.lock().expect("WinHTTP transport");
-                    transport_guard.phase = TransportPhase::Sent;
+                    transport_guard.phase = if transport_guard.write_remaining == 0
+                        && !transport_guard.chunked_upload
+                    {
+                        TransportPhase::Sent
+                    } else {
+                        TransportPhase::Writing
+                    };
                     transport_guard.verb = snapshot.verb;
                     transport_guard.stream = Some(BufReader::new(stream));
                     Ok(1)
@@ -1509,6 +1543,66 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 Err(error) => {
                     fail_transport(&transport);
                     send.fail(cpu.gs_base, error, 0)
+                }
+            }
+        },
+    );
+
+    let write_data = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WinHttpWriteData",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            if args.r9 == 0 {
+                return write_data.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            memory.write_u32(args.r9, 0).map_err(memory_fault)?;
+            let wanted = args.r8 as u32;
+            if wanted > MAX_OPTIONAL_BODY_BYTES {
+                return write_data.fail(cpu.gs_base, ERROR_OUTOFMEMORY, 0);
+            }
+            if wanted != 0 && args.rdx == 0 {
+                return write_data.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let mut bytes = vec![0; wanted as usize];
+            if wanted != 0 && memory.read_bytes(args.rdx, &mut bytes).is_err() {
+                return write_data.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let transport = {
+                let handles = write_data.winhttp.lock().expect("WinHTTP handle table");
+                match request_transport(&handles, args.rcx) {
+                    Ok(transport) => transport,
+                    Err(error) => return write_data.fail(cpu.gs_base, error, 0),
+                }
+            };
+            let mut transport_guard = transport.lock().expect("WinHTTP transport");
+            if transport_guard.phase != TransportPhase::Writing {
+                return write_data.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
+            }
+            if !transport_guard.chunked_upload
+                && u64::from(wanted) > transport_guard.write_remaining
+            {
+                return write_data.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+            }
+            let result = match transport_guard.stream.as_mut() {
+                Some(reader) => reader.get_mut().write_all(&bytes).map_err(io_winhttp_error),
+                None => Err(ERROR_WINHTTP_INCORRECT_HANDLE_STATE),
+            };
+            match result {
+                Ok(()) => {
+                    if !transport_guard.chunked_upload {
+                        transport_guard.write_remaining -= u64::from(wanted);
+                        if transport_guard.write_remaining == 0 {
+                            transport_guard.phase = TransportPhase::Sent;
+                        }
+                    }
+                    memory.write_u32(args.r9, wanted).map_err(memory_fault)?;
+                    Ok(1)
+                }
+                Err(error) => {
+                    transport_guard.phase = TransportPhase::Failed;
+                    write_data.fail(cpu.gs_base, error, 0)
                 }
             }
         },
@@ -1531,7 +1625,10 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 }
             };
             let mut transport_guard = transport.lock().expect("WinHTTP transport");
-            if transport_guard.phase != TransportPhase::Sent {
+            let acceptable = transport_guard.phase == TransportPhase::Sent
+                || (transport_guard.phase == TransportPhase::Writing
+                    && transport_guard.chunked_upload);
+            if !acceptable {
                 return receive.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
             }
             let verb = transport_guard.verb.clone();
@@ -1728,9 +1825,19 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let info_level = args.rdx as u32;
             let length_ptr = args.get(4, memory).map_err(memory_fault)?;
             let index_ptr = args.get(5, memory).map_err(memory_fault)?;
-            if args.r8 != 0 || length_ptr == 0 {
+            if length_ptr == 0 || (args.r8 != 0) != (info_level == WINHTTP_QUERY_CUSTOM) {
                 return query_headers.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
+            let custom_name = if info_level == WINHTTP_QUERY_CUSTOM {
+                match read_wide_string(memory, args.r8, MAX_HEADER_LINE_BYTES) {
+                    Ok(name) if !name.is_empty() && name.is_ascii() && valid_header_name(&name) => {
+                        Some(name)
+                    }
+                    _ => return query_headers.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0),
+                }
+            } else {
+                None
+            };
             if index_ptr != 0 {
                 return query_headers.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
             }
@@ -1750,6 +1857,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let textual_content_type = info_level == WINHTTP_QUERY_CONTENT_TYPE;
             let textual_content_length = info_level == WINHTTP_QUERY_CONTENT_LENGTH;
             let textual_server = info_level == WINHTTP_QUERY_SERVER;
+            let raw_crlf = info_level == WINHTTP_QUERY_RAW_HEADERS_CRLF;
+            let custom = info_level == WINHTTP_QUERY_CUSTOM;
             let textual_date = matches!(
                 info_level,
                 WINHTTP_QUERY_DATE | WINHTTP_QUERY_EXPIRES | WINHTTP_QUERY_LAST_MODIFIED
@@ -1762,7 +1871,9 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 || textual_status_text
                 || textual_content_type
                 || textual_content_length
-                || textual_server;
+                || textual_server
+                || raw_crlf
+                || custom;
             if !supported {
                 return query_headers.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
             }
@@ -1780,7 +1891,9 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let Some(response) = &transport_guard.response else {
                 return query_headers.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
             };
-            let named_header = if systemtime_date || textual_date {
+            let named_header = if custom {
+                custom_name.as_deref()
+            } else if systemtime_date || textual_date {
                 date_header
             } else if textual_content_type {
                 Some("content-type")
@@ -1834,6 +1947,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     response.status.to_string()
                 } else if textual_status_text {
                     response.status_text.clone()
+                } else if raw_crlf {
+                    response.raw.clone()
                 } else {
                     header_value
                         .and_then(|value| value)
@@ -2530,6 +2645,17 @@ mod tests {
                     .position(|window| window == b"\r\n\r\n")
                     .is_some_and(|header_end| {
                         let head = String::from_utf8_lossy(&request[..header_end]);
+                        let chunked = head.split("\r\n").any(|line| {
+                            line.split_once(':').is_some_and(|(name, value)| {
+                                name.trim().eq_ignore_ascii_case("transfer-encoding")
+                                    && value.trim().eq_ignore_ascii_case("chunked")
+                            })
+                        });
+                        if chunked {
+                            return request[header_end + 4..]
+                                .windows(5)
+                                .any(|window| window == b"0\r\n\r\n");
+                        }
                         let body_length = head
                             .split("\r\n")
                             .find_map(|line| {
@@ -2670,7 +2796,7 @@ mod tests {
             ("bad name: data", ERROR_INVALID_PARAMETER),
             ("X-Okay: value\nX-Other: data", ERROR_INVALID_PARAMETER),
             ("hOsT: outside", ERROR_NOT_SUPPORTED),
-            ("Transfer-Encoding: chunked", ERROR_NOT_SUPPORTED),
+            ("Transfer-Encoding: gzip", ERROR_NOT_SUPPORTED),
         ] {
             write_wide(&mut fixture.memory, 0x2700, text);
             assert_eq!(
@@ -2856,6 +2982,258 @@ mod tests {
         assert!(text.starts_with("POST /fixture HTTP/1.1\r\n"));
         assert!(text.contains("Content-Length: 4\r\n"));
         assert!(wire.ends_with(b"data"));
+    }
+
+    #[test]
+    fn chunked_upload_writes_verbatim_and_receives_after_the_terminal_chunk() {
+        let (port, captured, server) =
+            serve_once(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+        let mut fixture = Fixture::new();
+        write_wide(&mut fixture.memory, 0x2200, "POST");
+        let request = open_loopback_request(&mut fixture, port);
+        write_wide(
+            &mut fixture.memory,
+            0x2700,
+            "Transfer-Encoding: chunked\r\n",
+        );
+        assert_eq!(
+            fixture.call(
+                "WinHttpSendRequest",
+                &[request, 0x2700, u32::MAX as u64, 0, 0, 0, 0]
+            ),
+            1
+        );
+        // The caller frames the chunks itself; the transport copies bytes verbatim.
+        for chunk in [
+            b"5\r\n" as &[u8],
+            b"hello",
+            b"\r\n6\r\n world",
+            b"\r\n0\r\n\r\n",
+        ] {
+            fixture.memory.write_bytes(0x2800, chunk).unwrap();
+            fixture.memory.write_u32(0x2904, 0).unwrap();
+            assert_eq!(
+                fixture.call(
+                    "WinHttpWriteData",
+                    &[request, 0x2800, chunk.len() as u64, 0x2904]
+                ),
+                1
+            );
+            assert_eq!(
+                fixture.memory.read_u32(0x2904).unwrap() as usize,
+                chunk.len()
+            );
+        }
+        // No fixed-length accounting completes the upload; the terminal chunk
+        // is caller data, so receiving is accepted from the writing phase.
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+        let wire = captured.lock().unwrap().clone();
+        let text = String::from_utf8_lossy(&wire);
+        assert!(text.starts_with("POST /fixture HTTP/1.1\r\n"));
+        assert!(text.contains("Transfer-Encoding: chunked\r\n"));
+        assert!(!text.contains("Content-Length"));
+        assert!(wire.ends_with(b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"));
+    }
+
+    #[test]
+    fn chunked_upload_rejects_length_combinations_and_extra_writes() {
+        let (port, _captured, server) =
+            serve_once(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+        let mut fixture = Fixture::new();
+        write_wide(&mut fixture.memory, 0x2200, "POST");
+        let request = open_loopback_request(&mut fixture, port);
+        write_wide(
+            &mut fixture.memory,
+            0x2700,
+            "Transfer-Encoding: chunked\r\n",
+        );
+        fixture.memory.write_bytes(0x2800, b"data").unwrap();
+        // Optional data or a declared total length cannot combine with the
+        // Transfer-Encoding header, as the WinHttpSendRequest reference states.
+        for args in [
+            [request, 0x2700, u32::MAX as u64, 0x2800, 4, 4, 0],
+            [request, 0x2700, u32::MAX as u64, 0, 0, 8, 0],
+        ] {
+            assert_eq!(fixture.call("WinHttpSendRequest", &args), 0);
+            assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
+        }
+        // A fixed-length request still completes and refuses further writes.
+        write_wide(&mut fixture.memory, 0x2700, "X-Fixture: yes\r\n");
+        assert_eq!(
+            fixture.call(
+                "WinHttpSendRequest",
+                &[request, 0x2700, u32::MAX as u64, 0x2800, 4, 4, 0]
+            ),
+            1
+        );
+        assert_eq!(
+            fixture.call("WinHttpWriteData", &[request, 0x2800, 1, 0x2904]),
+            0
+        );
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_STATE
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn raw_headers_crlf_returns_the_exact_wire_head_with_documented_sizing() {
+        let (port, _captured, server) = serve_once(
+            b"HTTP/1.1 203 Non-Authoritative\r\nContent-Length: 11\r\nContent-Type: text/plain\r\nX-Server: fixture\r\n\r\nhello WORLD",
+        );
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        let expected = "HTTP/1.1 203 Non-Authoritative\r\nContent-Length: 11\r\nContent-Type: text/plain\r\nX-Server: fixture\r\n";
+        let units = expected.encode_utf16().count();
+        let required = ((units + 1) * 2) as u32;
+        // Sizing: absent or short buffers report the required byte count
+        // including the terminator and write nothing.
+        for (buffer, capacity) in [(0u64, 0u32), (0x2a00, required - 2)] {
+            fixture.memory.write_u32(0x2908, capacity).unwrap();
+            assert_eq!(
+                fixture.call(
+                    "WinHttpQueryHeaders",
+                    &[
+                        request,
+                        WINHTTP_QUERY_RAW_HEADERS_CRLF as u64,
+                        0,
+                        buffer,
+                        0x2908,
+                        0
+                    ]
+                ),
+                0
+            );
+            assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+            assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), required);
+        }
+        // Exact capacity succeeds and reports the count excluding the terminator.
+        fixture.memory.write_u32(0x2908, required).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    WINHTTP_QUERY_RAW_HEADERS_CRLF as u64,
+                    0,
+                    0x2a00,
+                    0x2908,
+                    0
+                ]
+            ),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), (units * 2) as u32);
+        let mut bytes = vec![0u8; units * 2 + 2];
+        fixture.memory.read_bytes(0x2a00, &mut bytes).unwrap();
+        let (words, _) = bytes.as_chunks::<2>();
+        let text = String::from_utf16(
+            &words
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(text, format!("{expected}\0"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn custom_named_header_queries_match_case_insensitively_with_textual_sizing() {
+        let (port, _captured, server) = serve_once(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nX-Server: fixture\r\nX-MixedCase: Value-Here\r\n\r\n",
+        );
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        write_wide(&mut fixture.memory, 0x2700, "x-mixedcase");
+        // Sizing reports the required byte count including the terminator.
+        fixture.memory.write_u32(0x2908, 0).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[request, WINHTTP_QUERY_CUSTOM as u64, 0x2700, 0, 0x2908, 0]
+            ),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+        assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), 11 * 2);
+        fixture.memory.write_u32(0x2908, 11 * 2).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    WINHTTP_QUERY_CUSTOM as u64,
+                    0x2700,
+                    0x2a00,
+                    0x2908,
+                    0
+                ]
+            ),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), 10 * 2);
+        let mut bytes = vec![0u8; 20];
+        fixture.memory.read_bytes(0x2a00, &mut bytes).unwrap();
+        let (words, _) = bytes.as_chunks::<2>();
+        let text = String::from_utf16(
+            &words
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(text, "Value-Here");
+        // A missing header reports the documented not-found error.
+        write_wide(&mut fixture.memory, 0x2700, "X-Absent");
+        fixture.memory.write_u32(0x2908, 64).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    WINHTTP_QUERY_CUSTOM as u64,
+                    0x2700,
+                    0x2a00,
+                    0x2908,
+                    0
+                ]
+            ),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_WINHTTP_HEADER_NOT_FOUND);
+        // Invalid names and misplaced arguments fail explicitly.
+        for (name, level) in [
+            ("", WINHTTP_QUERY_CUSTOM),
+            ("bad name", WINHTTP_QUERY_CUSTOM),
+            ("X-Ok", WINHTTP_QUERY_STATUS_CODE),
+        ] {
+            write_wide(&mut fixture.memory, 0x2700, name);
+            assert_eq!(
+                fixture.call(
+                    "WinHttpQueryHeaders",
+                    &[request, level as u64, 0x2700, 0x2a00, 0x2908, 0]
+                ),
+                0
+            );
+            assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
+        }
+        server.join().unwrap();
     }
 
     #[test]
@@ -3322,6 +3700,118 @@ mod tests {
                 "{result:?}"
             );
         }
+    }
+
+    #[test]
+    fn write_data_streams_the_declared_body_before_receiving() {
+        let (port, captured, server) = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let mut fixture = Fixture::new();
+        write_wide(&mut fixture.memory, 0x2200, "POST");
+        let request = open_loopback_request(&mut fixture, port);
+        fixture.memory.write_bytes(0x3100, b"0123").unwrap();
+        fixture.memory.write_bytes(0x3200, b"456").unwrap();
+        fixture.memory.write_bytes(0x3300, b"789A").unwrap();
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0x3100, 4, 11, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 0);
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_STATE
+        );
+
+        fixture.memory.write_u32(0x3400, 99).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpWriteData", &[request, 0, 0, 0x3400]),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x3400).unwrap(), 0);
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 0);
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_STATE
+        );
+
+        for (address, length) in [(0x3200, 3), (0x3300, 4)] {
+            fixture.memory.write_u32(0x3400, 99).unwrap();
+            assert_eq!(
+                fixture.call("WinHttpWriteData", &[request, address, length, 0x3400]),
+                1
+            );
+            assert_eq!(u64::from(fixture.memory.read_u32(0x3400).unwrap()), length);
+        }
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+        let captured = captured.lock().unwrap();
+        let request_text = String::from_utf8_lossy(&captured);
+        assert!(
+            request_text.contains("Content-Length: 11\r\n"),
+            "{request_text}"
+        );
+        assert!(request_text.ends_with("0123456789A"), "{request_text}");
+    }
+
+    #[test]
+    fn write_data_rejects_bad_state_memory_and_lengths_without_consuming_budget() {
+        let (port, _captured, server) = serve_once(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
+        let mut fixture = Fixture::new();
+        write_wide(&mut fixture.memory, 0x2200, "POST");
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpWriteData", &[request, 0x3200, 1, 0x3400]),
+            0
+        );
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_STATE
+        );
+        fixture.memory.write_bytes(0x3200, b"abcd").unwrap();
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0x3200, 1, 4, 0]),
+            1
+        );
+
+        fixture.memory.write_u32(0x3400, 99).unwrap();
+        for (args, error) in [
+            ([request, 0x3200, 4, 0x3400], ERROR_INVALID_PARAMETER),
+            ([request, 0x9000, 1, 0x3400], ERROR_INVALID_PARAMETER),
+            ([request, 0x3200, 1, 0], ERROR_INVALID_PARAMETER),
+            (
+                [
+                    request,
+                    0x3200,
+                    u64::from(MAX_OPTIONAL_BODY_BYTES) + 1,
+                    0x3400,
+                ],
+                ERROR_OUTOFMEMORY,
+            ),
+        ] {
+            assert_eq!(fixture.call("WinHttpWriteData", &args), 0, "{args:?}");
+            assert_eq!(fixture.state.last_error(0), error);
+        }
+        assert_eq!(fixture.memory.read_u32(0x3400).unwrap(), 0);
+        assert_eq!(
+            fixture.call("WinHttpWriteData", &[9999, 0x3200, 1, 0x3400]),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_INVALID_HANDLE);
+
+        fixture.memory.write_bytes(0x3300, b"bcd").unwrap();
+        assert_eq!(
+            fixture.call("WinHttpWriteData", &[request, 0x3300, 3, 0x3400]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        assert_eq!(
+            fixture.call("WinHttpWriteData", &[request, 0x3300, 1, 0x3400]),
+            0
+        );
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_STATE
+        );
+        server.join().unwrap();
     }
 
     #[test]

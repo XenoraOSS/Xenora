@@ -47,13 +47,13 @@ independent acceptance or compatibility claims.
 | <code>psapi.dll</code> | <code>windows-system</code> | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
 | <code>ucrtbase.dll</code> | <code>c-runtime</code> | 307 | 211 | 96 | 0 | 104 | 203 | 0 | 10 |
 | <code>user32.dll</code> | <code>other</code> | 10 | 0 | 10 | 0 | 0 | 10 | 0 | 0 |
-| <code>winhttp.dll</code> | <code>other</code> | 16 | 0 | 16 | 0 | 0 | 16 | 0 | 0 |
+| <code>winhttp.dll</code> | <code>other</code> | 18 | 0 | 18 | 0 | 0 | 18 | 0 | 0 |
 | <code>ws2_32.dll</code> | <code>windows-networking</code> | 65 | 0 | 65 | 0 | 6 | 59 | 0 | 6 |
 | <code>xaudio2_9.dll</code> | <code>other</code> | 2 | 2 | 0 | 0 | 0 | 2 | 0 | 0 |
 | <code>xenora_fixture.dll</code> | <code>xenora-fixture</code> | 22 | 0 | 22 | 0 | 22 | 0 | 0 | 20 |
 | <code>xenora_graphics.dll</code> | <code>xenora-fixture</code> | 34 | 0 | 34 | 0 | 34 | 0 | 0 | 0 |
 | <code>xenora_xaudio2.dll</code> | <code>xenora-fixture</code> | 43 | 0 | 43 | 0 | 0 | 43 | 0 | 0 |
-| <code>xgameruntime.dll</code> | <code>xbox-gaming</code> | 12 | 0 | 12 | 0 | 3 | 9 | 0 | 0 |
+| <code>xgameruntime.dll</code> | <code>xbox-gaming</code> | 13 | 0 | 13 | 0 | 4 | 9 | 0 | 0 |
 | <code>xinput1_3.dll</code> | <code>other</code> | 8 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
 | <code>xinput1_4.dll</code> | <code>other</code> | 8 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
 | <code>xinput9_1_0.dll</code> | <code>other</code> | 4 | 0 | 4 | 0 | 0 | 4 | 0 | 0 |

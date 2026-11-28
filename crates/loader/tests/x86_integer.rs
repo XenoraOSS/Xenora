@@ -743,6 +743,51 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
                 ..none
             })
         }
+        "bextr" | "bzhi" => {
+            // Intel SDM Vol. 2A: BEXTR takes START from control[7:0] and LEN
+            // from control[15:8] and extracts that window of the source, zero
+            // filled past its width; BZHI clears the bits at and above the
+            // index in control[7:0] and reports an out-of-range index in CF.
+            let source = read(m, places[1], bits);
+            let control = read(m, places[2], bits);
+            let low = control % 256;
+            let mut value = 0;
+            if name == "bextr" {
+                let len = (control / 256) % 256;
+                for index in 0..bits {
+                    let position = u128::from(index);
+                    if position >= low && position - low < len && bit(source, index) {
+                        value += 1u128 << (position - low);
+                    }
+                }
+                m.flags.cf = false;
+                m.flags.of = false;
+                m.flags.zf = value == 0;
+                write(m, places[0], value);
+                Outcome::Done(Undefined {
+                    sf: true,
+                    pf: true,
+                    af: true,
+                    ..none
+                })
+            } else {
+                for index in 0..bits {
+                    if u128::from(index) < low && bit(source, index) {
+                        value += 1u128 << index;
+                    }
+                }
+                m.flags.cf = low >= u128::from(bits);
+                m.flags.of = false;
+                m.flags.zf = value == 0;
+                m.flags.sf = bit(value, bits - 1);
+                write(m, places[0], value);
+                Outcome::Done(Undefined {
+                    pf: true,
+                    af: true,
+                    ..none
+                })
+            }
+        }
         "shlx" | "shrx" | "sarx" => {
             // Intel SDM Vol. 2B: the count is the second source masked to the
             // operand width; no flags are written. Bit by bit, one step at a
@@ -780,6 +825,62 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
                 }
             }
             write(m, places[0], value);
+            Outcome::Done(none)
+        }
+        "pdep" | "pext" => {
+            // Intel SDM Vol. 2A/2B: the second operand is the bit source and
+            // the third is the mask. PDEP consumes low source bits in mask
+            // order; PEXT compresses masked source bits downwards. Both leave
+            // every flag alone. Work a bit at a time, as the operation sections
+            // do, independently of the executor's shift implementation.
+            let source = read(m, places[1], bits);
+            let control = read(m, places[2], bits);
+            let mut value = 0;
+            if name == "pdep" {
+                let mut source_index = 0;
+                for destination in 0..bits {
+                    if bit(control, destination) {
+                        if bit(source, source_index) {
+                            value += 1u128 << destination;
+                        }
+                        source_index += 1;
+                    }
+                }
+            } else {
+                let mut destination = 0;
+                for source_index in 0..bits {
+                    if bit(control, source_index) {
+                        if bit(source, source_index) {
+                            value += 1u128 << destination;
+                        }
+                        destination += 1;
+                    }
+                }
+            }
+            write(m, places[0], value);
+            Outcome::Done(none)
+        }
+        "mulx" => {
+            // Intel SDM Vol. 2B MULX: the r/m operand is the unsigned
+            // multiplicand and RDX is the implicit unsigned multiplier. The
+            // ModRM register receives the high product; VEX.vvvv, printed as
+            // the second operand, receives the low product. Build the product
+            // by shifted additions so this reference does not share a multiply
+            // instruction with the executor. The low write happens first so
+            // that an identical first and second operand keeps the high half.
+            // No flag is written.
+            let multiplicand = read(m, places[2], bits);
+            let multiplier = read(m, rdx(bits), bits);
+            let limit = 1u128 << bits;
+            let mut product = 0u128;
+            for index in 0..bits {
+                if bit(multiplier, index) {
+                    // The full product fits in u128 at both supported widths.
+                    product += multiplicand << index;
+                }
+            }
+            write(m, places[1], product % limit);
+            write(m, places[0], product / limit);
             Outcome::Done(none)
         }
         "bt" | "bts" | "btr" | "btc" => {
@@ -1216,12 +1317,14 @@ fn every_declared_form_is_executed_by_a_fixture() {
     let forms = include_str!("x86/avx_forms.txt");
     let fma = include_str!("x86/fma.txt");
     let avx2 = include_str!("x86/avx2.txt");
+    let f16c = include_str!("x86/f16c.txt");
     let lines = FIXTURE.lines().chain(vector.lines()).chain(float.lines());
     for line in lines
         .chain(avx.lines())
         .chain(forms.lines())
         .chain(fma.lines())
         .chain(avx2.lines())
+        .chain(f16c.lines())
     {
         let (hex, _) = line.split_once(" | ").unwrap();
         let code: Vec<u8> = hex
@@ -1437,7 +1540,7 @@ fn faulting_read_modify_write_changes_nothing() {
             && !case.text.contains(&format!("{name} dword ptr"))
             && !case.text.contains(&format!("{name} qword ptr"))
             || [
-                "cmp", "test", "bt", "mul", "imul", "div", "idiv", "push", "nop",
+                "cmp", "test", "bt", "mul", "imul", "div", "idiv", "push", "nop", "mulx",
             ]
             .contains(&name)
         {
@@ -1477,6 +1580,182 @@ fn faulting_read_modify_write_changes_nothing() {
             );
             assert_eq!(result.final_state, before, "{} native={native}", case.text);
             assert_eq!(result.instructions_executed, 0);
+        }
+    }
+}
+
+#[test]
+fn pdep_pext_faulting_memory_mask_changes_nothing() {
+    // The mask is the ModRM operand. Point RSI at an unmapped address so the
+    // read faults before either engine writes the destination register.
+    for case in cases() {
+        let name = case.text.split(' ').next().unwrap();
+        if !matches!(name, "pdep" | "pext") || !case.text.contains(" ptr ") {
+            continue;
+        }
+        let machine = Random(13).machine();
+        for native in [false, true] {
+            let (mut cpu, mut memory) = load(&machine, &case.code);
+            cpu.gpr[6] = 0x4000; // RSI
+            cpu.gpr[7] = 0; // RDI
+            let before = cpu.clone();
+            let before_bytes = bytes(&memory);
+            let result = if native {
+                DbtEngine::new(16 * 1024)
+                    .unwrap()
+                    .run(&mut cpu, &mut memory, 1)
+            } else {
+                Interpreter::new(cpu, &mut memory, 1).run()
+            };
+            assert!(
+                matches!(result.exit_reason, ExitReason::MemoryFault(_)),
+                "{}: {:?}",
+                case.text,
+                result.exit_reason
+            );
+            assert_eq!(result.final_state, before, "{} native={native}", case.text);
+            assert_eq!(result.instructions_executed, 0, "{}", case.text);
+            assert_eq!(bytes(&memory), before_bytes, "{}", case.text);
+        }
+    }
+}
+
+#[test]
+fn pdep_pext_edge_masks_match_known_answers_in_both_engines() {
+    fn index(place: Place) -> usize {
+        match place {
+            Place::Reg { index, .. } => index,
+            _ => panic!("this test uses register forms"),
+        }
+    }
+    fn set(machine: &mut Machine, place: Place, value: u64) {
+        match place {
+            Place::Reg {
+                index,
+                bits: 32,
+                high: false,
+            } => machine.gpr[index] = u64::from(value as u32),
+            Place::Reg {
+                index,
+                bits: 64,
+                high: false,
+            } => machine.gpr[index] = value,
+            _ => panic!("this test uses 32- and 64-bit register forms"),
+        }
+    }
+
+    // (fixture text, bit source, mask, destination): zero mask, all-ones
+    // mask, sparse and adjacent masks, a high-bit-only result, aliased source
+    // and mask, and VEX.vvvv naming the highest register. The expected values
+    // are written here by hand from the operation sections, not produced by
+    // the executor or by the text reference.
+    let known: &[(&str, u64, u64, u64)] = &[
+        ("pdep ebx, r9d, ecx", 0x0000_000B, 0x0000_0005, 0x0000_0005),
+        ("pext ebx, r9d, ecx", 0x0000_000B, 0x0000_0005, 0x0000_0001),
+        ("pdep ebx, r9d, ecx", 0x0000_0001, 0x8000_0000, 0x8000_0000),
+        ("pext ebx, r9d, ecx", 0x8000_0000, 0x8000_0000, 0x0000_0001),
+        ("pdep ebx, r9d, ecx", 0xFFFF_FFFF, 0xAAAA_AAAA, 0xAAAA_AAAA),
+        ("pext ebx, r9d, ecx", 0xFFFF_FFFF, 0xAAAA_AAAA, 0x0000_FFFF),
+        ("pdep ebx, r9d, ecx", 0xFFFF_FFFF, 0, 0),
+        ("pext ebx, r9d, ecx", 0xFFFF_FFFF, 0, 0),
+        ("pdep ebx, r9d, ecx", 0x8000_0001, 0xFFFF_FFFF, 0x8000_0001),
+        ("pext ebx, r9d, ecx", 0x8000_0001, 0xFFFF_FFFF, 0x8000_0001),
+        ("pdep edx, edx, edx", 0x0000_00F0, 0x0000_00F0, 0x0000_0000),
+        ("pext edx, edx, edx", 0x0000_00F0, 0x0000_00F0, 0x0000_000F),
+        ("pdep ebx, r9d, r15d", 0x0000_0003, 0x0000_0005, 0x0000_0005),
+        ("pext ebx, r9d, r15d", 0x0000_000B, 0x0000_0005, 0x0000_0001),
+        (
+            "pdep rbx, r9, rcx",
+            0x8000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+            0,
+        ),
+        (
+            "pext rbx, r9, rcx",
+            0x8000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+            1,
+        ),
+        (
+            "pdep rbx, r9, rcx",
+            0x0000_0000_0000_0001,
+            0x8000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+        ),
+        (
+            "pext rbx, r9, rcx",
+            0x0000_0000_0000_0001,
+            0x8000_0000_0000_0000,
+            0,
+        ),
+        (
+            "pdep rbx, r9, rcx",
+            u64::MAX,
+            0xAAAA_AAAA_AAAA_AAAA,
+            0xAAAA_AAAA_AAAA_AAAA,
+        ),
+        (
+            "pext rbx, r9, rcx",
+            u64::MAX,
+            0xAAAA_AAAA_AAAA_AAAA,
+            0x0000_0000_FFFF_FFFF,
+        ),
+        (
+            "pext rbx, r9, r15",
+            0x8000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+            1,
+        ),
+        (
+            "pdep rdx, rdx, rdx",
+            0x0000_0000_0000_00F0,
+            0x0000_0000_0000_00F0,
+            0,
+        ),
+        (
+            "pext rdx, rdx, rdx",
+            0x0000_0000_0000_00F0,
+            0x0000_0000_0000_00F0,
+            0x0000_0000_0000_000F,
+        ),
+    ];
+    let all = cases();
+    for &(text, source, control, wanted) in known {
+        let case = all.iter().find(|case| case.text == text).unwrap();
+        let operands: Vec<_> = text.split_once(' ').unwrap().1.split(", ").collect();
+        let places: Vec<_> = operands.iter().map(|text| parse_place(text)).collect();
+        let mut machine = Random(1).machine();
+        machine.gpr = [0; 16];
+        set(&mut machine, places[1], source);
+        set(&mut machine, places[2], control);
+
+        let mut expected_machine = machine.clone();
+        assert!(
+            matches!(reference(&mut expected_machine, text), Outcome::Done(_)),
+            "{text}"
+        );
+        assert_eq!(expected_machine.gpr[index(places[0])], wanted, "{text}");
+        assert_eq!(expected_machine.flags, machine.flags, "{text}");
+
+        let (mut expected_cpu, expected_memory) = load(&expected_machine, &case.code);
+        expected_cpu.rip += case.code.len() as u64;
+        let (cpu, mut memory) = load(&machine, &case.code);
+        let interpreted = Interpreter::new(cpu, &mut memory, 1).run();
+        let (mut dbt_cpu, mut dbt_memory) = load(&machine, &case.code);
+        let translated = DbtEngine::new(16 * 1024)
+            .unwrap()
+            .run(&mut dbt_cpu, &mut dbt_memory, 1);
+        for (engine, result, actual_memory) in [
+            ("interpreter", interpreted, &memory),
+            ("DBT", translated, &dbt_memory),
+        ] {
+            assert_eq!(
+                result.exit_reason,
+                ExitReason::StepLimitExceeded,
+                "{text} on the {engine}"
+            );
+            assert_eq!(result.final_state, expected_cpu, "{text} on the {engine}");
+            assert_eq!(bytes(actual_memory), bytes(&expected_memory), "{text}");
         }
     }
 }
@@ -1597,6 +1876,132 @@ fn fninit_is_the_only_x87_encoding_accepted() {
 /// treats them before any form without operands. It is not derived from a
 /// manual statement. The prefixes that are refused are in
 /// `undeclared_and_ambiguous_encodings_are_rejected`.
+#[test]
+fn mulx_destinations_hold_independent_halves_of_the_product() {
+    const MEM32: &str = "mulx r10d, r12d, dword ptr [rsi + 4*rdi + 16]";
+    const MEM64: &str = "mulx r10, r12, qword ptr [rsi + 4*rdi + 16]";
+    let all = cases();
+    // Text, source registers, exact destination answers. RDX is implicit and
+    // is set explicitly in each input set. The asymmetric pairs have different
+    // high and low halves, so exchanging the destinations fails; the last two
+    // make the first two operands identical, where the SDM says the single
+    // register keeps the high half.
+    type RegInputs = [(usize, u64)];
+    let checks: &[(&str, &RegInputs, &RegInputs)] = &[
+        (
+            "mulx ebx, r9d, ecx",
+            &[(1, 3), (2, 0x8000_0001)],
+            &[(3, 1), (9, 0x8000_0003)],
+        ),
+        (
+            "mulx rbx, r9, rcx",
+            &[(1, 0x8000_0000_0000_0001), (2, 3)],
+            &[(3, 1), (9, 0x8000_0000_0000_0003)],
+        ),
+        (
+            "mulx edx, r9d, edx",
+            &[(2, 0xFFFF_FFFF)],
+            &[(2, 0xFFFF_FFFE), (9, 1)],
+        ),
+        (MEM32, &[(2, 0x8000_0001)], &[(10, 1), (12, 0x8000_0003)]),
+        (
+            MEM64,
+            &[(2, u64::MAX)],
+            &[(10, 0xFFFF_FFFF_FFFF_FFFE), (12, 1)],
+        ),
+        (
+            "mulx ebx, r9d, ecx",
+            &[(1, 0x1_0002), (2, 0x3_0004)],
+            &[(3, 3), (9, 0xA_0008)],
+        ),
+        (
+            "mulx rbx, r9, rcx",
+            &[(1, 0x1_0000_0003), (2, 0x1_0000_0005)],
+            &[(3, 1), (9, 0x8_0000_000F)],
+        ),
+        ("mulx ebx, ebx, ecx", &[(1, 3), (2, 0x8000_0001)], &[(3, 1)]),
+        (
+            "mulx rbx, rbx, rcx",
+            &[(1, 0x8000_0000_0000_0001), (2, 3)],
+            &[(3, 1)],
+        ),
+    ];
+    for &(text, inputs, outputs) in checks {
+        let case = all
+            .iter()
+            .find(|case| case.text == text)
+            .unwrap_or_else(|| panic!("missing fixture {text}"));
+        let mut machine = Random(19).machine();
+        machine.gpr[6] = DATA;
+        machine.gpr[7] = 4;
+        match text {
+            MEM32 => machine.operand = 3,
+            MEM64 => machine.operand = u64::MAX,
+            _ => {}
+        }
+        for &(index, value) in inputs {
+            machine.gpr[index] = value;
+        }
+        let (cpu, _) = load(&machine, &case.code);
+        let mut expected = cpu;
+        expected.rip += case.code.len() as u64;
+        for &(index, value) in outputs {
+            expected.gpr[index] = value;
+        }
+        let (state, exit, _) = run_both(&machine, &case.code, 1);
+        assert_eq!(exit, ExitReason::StepLimitExceeded, "{text}");
+        assert_eq!(state, expected, "{text}");
+    }
+}
+
+#[test]
+fn mulx_faulting_memory_source_changes_nothing() {
+    for case in cases() {
+        let name = case.text.split(' ').next().unwrap();
+        if name != "mulx" || !case.text.contains(" ptr ") {
+            continue;
+        }
+        let machine = Random(23).machine();
+        for native in [false, true] {
+            let (mut cpu, _) = load(&machine, &case.code);
+            cpu.gpr[6] = 0x5000; // RSI: unmapped source address
+            let mut memory = GuestMemory::new();
+            memory
+                .map_region_with_data(
+                    ENTRY,
+                    case.code.len(),
+                    MemoryPermissions::READ_EXECUTE,
+                    &case.code,
+                )
+                .unwrap();
+            memory
+                .map_region_with_data(DATA, 0x100, MemoryPermissions::READ_WRITE, &[0xA5; 0x100])
+                .unwrap();
+            memory
+                .map_region(STACK, 0x100, MemoryPermissions::READ_WRITE)
+                .unwrap();
+            let before = cpu.clone();
+            let before_bytes = bytes(&memory);
+            let result = if native {
+                DbtEngine::new(16 * 1024)
+                    .unwrap()
+                    .run(&mut cpu, &mut memory, 1)
+            } else {
+                Interpreter::new(cpu, &mut memory, 1).run()
+            };
+            assert!(
+                matches!(result.exit_reason, ExitReason::MemoryFault(_)),
+                "{}: {:?}",
+                case.text,
+                result.exit_reason
+            );
+            assert_eq!(result.final_state, before, "{} native={native}", case.text);
+            assert_eq!(result.instructions_executed, 0, "{}", case.text);
+            assert_eq!(bytes(&memory), before_bytes, "{}", case.text);
+        }
+    }
+}
+
 #[test]
 fn prefixes_accepted_before_fninit_have_no_effect() {
     let machine = Random(11).machine();
