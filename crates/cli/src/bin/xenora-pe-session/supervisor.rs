@@ -74,14 +74,19 @@ impl WorkerProcess {
     }
 
     fn receive(&self, deadline: Instant, phase: &'static str) -> Result<Option<Reply>, Failure> {
-        let remaining = deadline
-            .checked_duration_since(Instant::now())
-            .ok_or(Failure::Deadline(phase))?;
-        match self.replies.recv_timeout(remaining) {
-            Ok(reply) => Ok(reply?),
-            Err(RecvTimeoutError::Timeout) => Err(Failure::Deadline(phase)),
-            Err(RecvTimeoutError::Disconnected) => {
-                Err(Failure::Session("worker reply channel closed".into()))
+        loop {
+            // The host can stop reading while the guest is still executing.
+            // Keep the phase deadline while polling for that disconnection.
+            host_output::check_connection()?;
+            let remaining = deadline
+                .checked_duration_since(Instant::now())
+                .ok_or(Failure::Deadline(phase))?;
+            match self.replies.recv_timeout(remaining.min(POLL_INTERVAL)) {
+                Ok(reply) => return Ok(reply?),
+                Err(RecvTimeoutError::Timeout) => {}
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(Failure::Session("worker reply channel closed".into()));
+                }
             }
         }
     }
@@ -120,6 +125,7 @@ impl WorkerProcess {
             return Err(Failure::Session("worker replied after Done".into()));
         }
         loop {
+            host_output::check_connection()?;
             if let Some(status) = self.child.try_wait()? {
                 return if status.success() {
                     Ok(())

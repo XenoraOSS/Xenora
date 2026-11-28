@@ -181,7 +181,7 @@ struct RawPipeSession(Child);
 
 impl RawPipeSession {
     // Return the read end intact and stop draining immediately after `ready`.
-    // The child retains its writable stdin pipe so neither test sends EOF.
+    // Keep the writable stdin pipe open so dropping stdout cannot send EOF.
     fn start(command: &mut Command) -> (Self, BufReader<ChildStdout>) {
         let mut session = Self(
             command
@@ -533,6 +533,21 @@ fn closing_stdout_while_stdin_is_open_terminates_an_idle_session() {
     let (mut session, output) = RawPipeSession::start(&mut command(&path, None));
     drop(output);
     let stderr = session.assert_exit(125, "after the output consumer disconnected");
+    assert!(stderr.contains("host output disconnected"), "{stderr}");
+}
+
+#[test]
+fn closing_stdout_during_a_frame_terminates_the_worker() {
+    let path = fixture("authored-session-stall-frame");
+    let (mut session, output) =
+        RawPipeSession::start(command(&path, None).args(["--phase-seconds", "10"]));
+    writeln!(session.0.stdin.as_mut().unwrap(), "10").expect("send input to the stalled frame");
+    // Give the supervisor time to forward the input and the guest time to
+    // enter Sleep(5000). The harness timeout is shorter than that sleep and
+    // the phase deadline, so neither can masquerade as disconnect handling.
+    thread::sleep(Duration::from_millis(500));
+    drop(output);
+    let stderr = session.assert_exit(125, "after the output consumer disconnected during a frame");
     assert!(stderr.contains("host output disconnected"), "{stderr}");
 }
 
