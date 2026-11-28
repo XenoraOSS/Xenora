@@ -41,7 +41,8 @@ const MAIN_TEB: u64 = LAYOUT.tls_base + 0x10000;
 pub(super) fn run(options: &Options) -> Result<(), String> {
     let steps = options.steps;
     let image_name = file_name(&options.executable.path)?;
-    if !options.companions.is_empty() && image_name.eq_ignore_ascii_case(MODULE) {
+    let packaged = !options.companions.is_empty();
+    if packaged && image_name.eq_ignore_ascii_case(MODULE) {
         return Err(format!(
             "package image name {image_name:?} is reserved for the session ABI"
         ));
@@ -51,14 +52,17 @@ pub(super) fn run(options: &Options) -> Result<(), String> {
         options.executable.digest,
         MAX_INPUT_BYTES,
     )?;
-    if !options.companions.is_empty() {
-        let executable = ParsedPe::parse(&bytes)
-            .map_err(|error| format!("package executable {image_name:?}: {error}"))?;
-        if executable.is_dll() {
-            return Err(format!(
-                "package root {image_name:?} must be a PE executable"
-            ));
+    let executable = ParsedPe::parse(&bytes).map_err(|error| {
+        if packaged {
+            format!("package executable {image_name:?}: {error}")
+        } else {
+            format!("guest startup: {error}")
         }
+    })?;
+    if executable.is_dll() {
+        return Err(format!(
+            "session root {image_name:?} must be a PE executable"
+        ));
     }
     let mut remaining = MAX_INPUT_BYTES - bytes.len() as u64;
     let mut companions = Vec::with_capacity(options.companions.len());

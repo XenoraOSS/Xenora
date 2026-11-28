@@ -388,6 +388,18 @@ fn packaged_session_limits_total_input_bytes_and_requires_dll_companions() {
 }
 
 #[test]
+fn standalone_dll_is_refused_as_a_session_root() {
+    let completed = Session::start(&mut command(&companion(""), None)).finish();
+    completed.assert_code(125);
+    assert!(completed.lines.is_empty(), "{:?}", completed.lines);
+    assert!(
+        completed.diagnostics.contains("must be a PE executable"),
+        "{}",
+        completed.diagnostics
+    );
+}
+
+#[test]
 #[ignore = "requires native Metal on Apple Silicon"]
 fn packaged_session_matches_reference_on_native_metal() {
     assert_eq!(

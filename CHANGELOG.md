@@ -533,6 +533,7 @@ remains unsupported.
 
 ### Fixed
 
+- `xenora-pe-session` refuses a DLL selected as the root before guest startup, including sessions without companion modules (#1275).
 - The typed CRT registry regenerates the existing `_locking` and `_commit` imports from its source catalog and checks both generated reports in the normal test suite (#1264). Both services are partial. The guest drive stores writes in memory, and lock conflicts return immediately.
 - `fopen` now allocates the legacy CRT's full 48-byte `_iobuf`, zeroed, instead of 8 bytes: the mingw-w64 CRT real-world binaries link expands `getc`/`putc` as macros that decrement `_cnt` and step `_ptr` inside the object in place, so the first macro use faulted on the unmapped byte past the small allocation and applets reading a file by name (`wc`, `grep`, `sort`, `head`, `od`) died in the CRT exception filter before any read. A zero `_cnt` sends every byte through `_filbuf`/`_flsbuf`, exactly as the unbuffered stream behaves on Windows. Local verification only (public busybox mingw64 binary).
 - A 67H address-size override before opcodes E0 through E3 is now refused rather than silently testing the full RCX. In 64-bit mode those opcodes select ECX under the override; Xenora does not model the narrow count, so the decoder fails closed in both engines while JRCXZ and LOOP without the override keep their verified 64-bit answers (#1168).
