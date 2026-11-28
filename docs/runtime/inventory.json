@@ -1344,11 +1344,51 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalAlloc",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-l2-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalAlloc"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
       "canonical_symbol": "LocalFree",
       "kind": "name",
       "library": "api-ms-win-core-heap-l2-1-0.dll",
       "status": "partial",
       "symbol": "LocalFree"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalLock",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-l2-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalLock"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalReAlloc",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-l2-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalReAlloc"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalUnlock",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-l2-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalUnlock"
     },
     {
       "api_set": true,
@@ -1384,11 +1424,61 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalFlags",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-obsolete-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalFlags"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
       "canonical_symbol": "LocalFree",
       "kind": "name",
       "library": "api-ms-win-core-heap-obsolete-l1-1-0.dll",
       "status": "partial",
       "symbol": "LocalFree"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalLock",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-obsolete-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalLock"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalReAlloc",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-obsolete-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalReAlloc"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalSize",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-obsolete-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalSize"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalUnlock",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-obsolete-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalUnlock"
     },
     {
       "api_set": true,
@@ -12750,7 +12840,67 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "LocalFlags"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "LocalFree"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "LocalHandle"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "LocalLock"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "LocalReAlloc"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "LocalSize"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "LocalUnlock"
     },
     {
       "data_import": false,
@@ -20404,17 +20554,17 @@
     }
   ],
   "summary": {
-    "aliases": 968,
-    "api_set_aliases": 760,
-    "canonical_services": 1015,
-    "data_import_services": 12,
+    "aliases": 977,
+    "api_set_aliases": 769,
+    "canonical_services": 1022,
+    "data_import_services": 13,
     "duplicate_registrations": 0,
     "implemented": 249,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 711,
+    "manual_services": 718,
     "ordinal_aliases": 35,
-    "partial": 766,
+    "partial": 773,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 304,

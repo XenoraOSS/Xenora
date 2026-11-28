@@ -9,17 +9,19 @@ use super::{
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::memory::PROCESS_HEAP;
+
+mod local;
+
 const HEAP_NO_SERIALIZE: u32 = 1;
 const HEAP_ZERO_MEMORY: u32 = 8;
 const HEAP_REALLOC_IN_PLACE_ONLY: u32 = 16;
 const HEAP_API: &str = "api-ms-win-core-heap-l1-1-0.dll";
 const HEAP_OBSOLETE_API: &str = "api-ms-win-core-heap-obsolete-l1-1-0.dll";
-// The legacy memory services accept the documented flags: the moveable
-// bit, the zero-initialization bit and the discardable/nocompact/nodiscard
-// hints of the 16-bit memory manager. The hints are inert on every 32- or
-// 64-bit Windows - memory is always fixed and the handle is the pointer.
+// The legacy allocation services accept the movable and zero-initialization
+// flags, plus the obsolete discardable, nocompact and nodiscard hints.
 const GMEM_MOVEABLE: u32 = 0x2;
 const GMEM_ZEROINIT: u32 = 0x40;
 const LEGACY_INERT_HINTS: u32 = 0x0f00 | 0x10 | 0x20;
@@ -36,14 +38,23 @@ fn heap_flags_supported(handle: u64, flags: u32, allowed: u32) -> bool {
     flags & !(allowed | private_flags) == 0
 }
 
+fn public_heap(memory: &crate::memory::GuestMemory, backing_heap: &AtomicU64, handle: u64) -> bool {
+    handle != backing_heap.load(Ordering::Relaxed) && memory.has_heap(handle)
+}
+
 pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
     registry.register(KERNEL32, "GetProcessHeap", |_, _, _| Ok(PROCESS_HEAP));
 
-    registry.register(KERNEL32, "HeapAlloc", |args, _, memory| {
+    // Heap* must not expose the internal heap behind movable local handles.
+    let local_heap = Arc::new(AtomicU64::new(0));
+    let backing_heap = Arc::clone(&local_heap);
+    registry.register(KERNEL32, "HeapAlloc", move |args, _, memory| {
         let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
         let flags = args.get(1, memory).map_err(ExitReason::MemoryFault)? as u32;
         let size = args.get(2, memory).map_err(ExitReason::MemoryFault)?;
-        if !memory.has_heap(handle) || !heap_flags_supported(handle, flags, HEAP_ZERO_MEMORY) {
+        if !public_heap(memory, &backing_heap, handle)
+            || !heap_flags_supported(handle, flags, HEAP_ZERO_MEMORY)
+        {
             return Ok(0);
         }
         Ok(memory
@@ -51,12 +62,13 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             .unwrap_or(0))
     });
 
-    registry.register(KERNEL32, "HeapReAlloc", |args, _, memory| {
+    let backing_heap = Arc::clone(&local_heap);
+    registry.register(KERNEL32, "HeapReAlloc", move |args, _, memory| {
         let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
         let flags = args.get(1, memory).map_err(ExitReason::MemoryFault)? as u32;
         let address = args.get(2, memory).map_err(ExitReason::MemoryFault)?;
         let size = args.get(3, memory).map_err(ExitReason::MemoryFault)?;
-        if !memory.has_heap(handle)
+        if !public_heap(memory, &backing_heap, handle)
             || !heap_flags_supported(handle, flags, HEAP_ZERO_MEMORY | HEAP_REALLOC_IN_PLACE_ONLY)
         {
             return Ok(0);
@@ -73,20 +85,19 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
 
     // The allocator keeps its bookkeeping outside guest memory. Check the
     // heap handle or the exact base of a live allocation owned by that heap.
-    registry.register(KERNEL32, "HeapValidate", |args, _, memory| {
-        let valid = if args.r8 == 0 {
-            memory.has_heap(args.rcx)
-        } else {
-            memory.heap_allocation_size(args.rcx, args.r8).is_some()
-        };
+    let backing_heap = Arc::clone(&local_heap);
+    registry.register(KERNEL32, "HeapValidate", move |args, _, memory| {
+        let valid = public_heap(memory, &backing_heap, args.rcx)
+            && (args.r8 == 0 || memory.heap_allocation_size(args.rcx, args.r8).is_some());
         Ok(u64::from(valid))
     });
 
-    registry.register(KERNEL32, "HeapSize", |args, _, memory| {
+    let backing_heap = Arc::clone(&local_heap);
+    registry.register(KERNEL32, "HeapSize", move |args, _, memory| {
         let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
         let flags = args.get(1, memory).map_err(ExitReason::MemoryFault)? as u32;
         let address = args.get(2, memory).map_err(ExitReason::MemoryFault)?;
-        if !memory.has_heap(handle) || !heap_flags_supported(handle, flags, 0) {
+        if !public_heap(memory, &backing_heap, handle) || !heap_flags_supported(handle, flags, 0) {
             return Ok(u64::MAX);
         }
         Ok(memory
@@ -109,20 +120,22 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     });
 
     let service_state = Arc::clone(state);
+    let backing_heap = Arc::clone(&local_heap);
     registry.register(KERNEL32, "HeapDestroy", move |args, cpu, memory| {
         let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
-        if !memory.destroy_private_heap(handle) {
+        if !public_heap(memory, &backing_heap, handle) || !memory.destroy_private_heap(handle) {
             return service_state.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
         }
         Ok(1)
     });
 
     let service_state = Arc::clone(state);
+    let backing_heap = Arc::clone(&local_heap);
     registry.register(KERNEL32, "HeapFree", move |args, cpu, memory| {
         let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
         let flags = args.get(1, memory).map_err(ExitReason::MemoryFault)? as u32;
         let address = args.get(2, memory).map_err(ExitReason::MemoryFault)?;
-        if !memory.has_heap(handle) {
+        if !public_heap(memory, &backing_heap, handle) {
             return service_state.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
         }
         if !heap_flags_supported(handle, flags, 0) {
@@ -134,43 +147,29 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         Ok(1)
     });
 
-    // The 16-bit compatibility services. On every 32- or 64-bit Windows they
-    // are thin wrappers over the process heap: the moveable bit and the
-    // discardable hints change nothing, the handle is the pointer itself,
-    // and GlobalLock - not needed here - would return the same pointer.
-    for symbol in ["GlobalAlloc", "LocalAlloc"] {
-        let service_state = Arc::clone(state);
-        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
-            let flags = args.get(0, memory).map_err(ExitReason::MemoryFault)? as u32;
-            let size = args.get(1, memory).map_err(ExitReason::MemoryFault)?;
-            if flags & !LEGACY_ACCEPTED != 0 {
-                return service_state.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
-            }
-            // Fresh guest regions are always zero-filled, so the zero-init
-            // flag needs no extra work; the heap flags stay honest.
-            match memory.map_heap_allocation(PROCESS_HEAP, size.max(1) as usize) {
-                Ok(address) => Ok(address),
-                Err(_) => service_state.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, 0),
-            }
-        });
-    }
+    // Xenora's bounded GlobalAlloc compatibility path uses fixed blocks.
+    let service_state = Arc::clone(state);
+    registry.register(KERNEL32, "GlobalAlloc", move |args, cpu, memory| {
+        let flags = args.rcx as u32;
+        if flags & !LEGACY_ACCEPTED != 0 {
+            return service_state.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+        }
+        match memory.map_heap_allocation(PROCESS_HEAP, args.rdx.max(1) as usize) {
+            Ok(address) => Ok(address),
+            Err(_) => service_state.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, 0),
+        }
+    });
 
-    for symbol in ["GlobalFree", "LocalFree"] {
-        let service_state = Arc::clone(state);
-        registry.register(KERNEL32, symbol, move |args, cpu, memory| {
-            let handle = args.get(0, memory).map_err(ExitReason::MemoryFault)?;
-            // Freeing the null handle is a documented no-op success.
-            if handle == 0 {
-                return Ok(0);
-            }
-            if memory.release_heap_allocation(PROCESS_HEAP, handle) {
-                Ok(0)
-            } else {
-                // A failure answers the handle itself, as documented.
-                service_state.fail(cpu.gs_base, ERROR_INVALID_HANDLE, handle)
-            }
-        });
-    }
+    let service_state = Arc::clone(state);
+    registry.register(KERNEL32, "GlobalFree", move |args, cpu, memory| {
+        let handle = args.rcx;
+        if handle == 0 || memory.release_heap_allocation(PROCESS_HEAP, handle) {
+            Ok(0)
+        } else {
+            service_state.fail(cpu.gs_base, ERROR_INVALID_HANDLE, handle)
+        }
+    });
+    local::register(registry, state, local_heap);
 
     for symbol in [
         "GetProcessHeap",
@@ -186,9 +185,64 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.alias(HEAP_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
-    for symbol in ["GlobalAlloc", "GlobalFree", "LocalAlloc", "LocalFree"] {
+    for symbol in ["GlobalAlloc", "GlobalFree"] {
         registry.alias(HEAP_OBSOLETE_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
-    registry.alias("api-ms-win-core-heap-l2-1-0.dll", KERNEL32, "LocalFree");
+}
+
+#[cfg(test)]
+#[test]
+fn public_heap_calls_cannot_access_movable_local_backing() {
+    use crate::cpu::CpuState;
+    use crate::import_table::ImportName;
+    use crate::imports::Win64Args;
+    use crate::memory::GuestMemory;
+    use crate::services::MockClock;
+
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    let mut registry = ImportRegistry::new();
+    register(&mut registry, &state);
+    let mut memory = GuestMemory::new();
+    let call = |memory: &mut GuestMemory, name: &str, [rcx, rdx, r8, r9]: [u64; 4]| {
+        let entry = registry
+            .resolve(KERNEL32, &ImportName::Name(name.into()))
+            .unwrap();
+        let args = Win64Args {
+            rcx,
+            rdx,
+            r8,
+            r9,
+            rsp: 0,
+        };
+        (entry.handler)(&args, &mut CpuState::default(), memory).unwrap()
+    };
+
+    let public = call(&mut memory, "HeapCreate", [0, 0, 0, 0]);
+    assert_ne!(public, 0);
+    let local = call(
+        &mut memory,
+        "LocalAlloc",
+        [u64::from(GMEM_MOVEABLE), 16, 0, 0],
+    );
+    let address = call(&mut memory, "LocalLock", [local, 0, 0, 0]);
+    assert_ne!(address, 0);
+    // Guest private-heap IDs are currently sequential. Pin the case where
+    // a guest passes a valid but undisclosed allocator ID to public APIs.
+    let hidden = public - 1;
+    assert_eq!(memory.heap_allocation_size(hidden, address), Some(16));
+    assert_eq!(call(&mut memory, "HeapValidate", [hidden, 0, 0, 0]), 0);
+    assert_eq!(call(&mut memory, "HeapAlloc", [hidden, 0, 8, 0]), 0);
+    assert_eq!(
+        call(&mut memory, "HeapSize", [hidden, 0, address, 0]),
+        u64::MAX
+    );
+    assert_eq!(call(&mut memory, "HeapReAlloc", [hidden, 0, address, 8]), 0);
+    assert_eq!(call(&mut memory, "HeapFree", [hidden, 0, address, 0]), 0);
+    assert_eq!(call(&mut memory, "HeapDestroy", [hidden, 0, 0, 0]), 0);
+    assert_eq!(call(&mut memory, "LocalFree", [address, 0, 0, 0]), address);
+    assert_eq!(call(&mut memory, "LocalSize", [local, 0, 0, 0]), 16);
+    assert_eq!(call(&mut memory, "LocalFree", [local, 0, 0, 0]), 0);
+    assert!(!memory.has_heap(hidden));
+    assert_eq!(call(&mut memory, "HeapDestroy", [public, 0, 0, 0]), 1);
 }

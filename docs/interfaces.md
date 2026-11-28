@@ -1288,13 +1288,28 @@ with Windows.
 
 ### The legacy memory services
 
-`GlobalAlloc` and `LocalAlloc` are thin wrappers over the process heap, as
-on every 32- or 64-bit Windows: memory is always fixed, the handle is the
-pointer itself, and the moveable bit and the discardable hints of the
-16-bit memory manager are accepted and inert. Freeing the null handle is
-a no-op success; freeing a non-allocation answers the handle itself with
-the invalid-handle error. Flags outside the documented mask are an invalid
-parameter. Nothing was compared with Windows.
+The legacy `GlobalAlloc` compatibility path returns a process-heap pointer
+for the supported flags. Fixed `LocalAlloc` allocations are also process-heap
+pointers. `LocalFree` accepts these pointers, including buffers returned by
+`FormatMessage` in allocate mode.
+
+`LocalAlloc(LMEM_MOVEABLE)` returns a distinct handle. A zero-size
+allocation creates a discarded object with no backing block. `LocalLock`
+returns the current backing address and increments the lock count.
+`LocalUnlock` clears last error when the last lock is released.
+`LocalHandle`, `LocalSize` and `LocalFlags` expose the pointer mapping, size
+and lock or discard state.
+
+`LocalReAlloc` keeps a movable handle across resizing, discard and
+rehydration. A locked block cannot be discarded. Resizing without
+`LMEM_MOVEABLE` keeps a locked block in place. A failed resize preserves
+the original contents and handle. Attribute-only reallocation with
+`LMEM_MODIFY` remains unsupported.
+
+`LocalFree` also releases locked or discarded movable objects. Freeing
+null succeeds. Invalid or stale handles are returned unchanged with
+`ERROR_INVALID_HANDLE`. The movable table holds up to 1,024 objects with up
+to 255 locks each. [Microsoft global and local memory functions](https://learn.microsoft.com/windows/win32/memory/global-and-local-functions)
 
 ### Error reporting
 
@@ -1616,13 +1631,9 @@ with Windows.
 
 ### The legacy memory services
 
-`GlobalAlloc` and `LocalAlloc` are thin wrappers over the process heap, as
-on every 32- or 64-bit Windows: memory is always fixed, the handle is the
-pointer itself, and the moveable bit and the discardable hints of the
-16-bit memory manager are accepted and inert. Freeing the null handle is
-a no-op success; freeing a non-allocation answers the handle itself with
-the invalid-handle error. Flags outside the documented mask are an invalid
-parameter. Nothing was compared with Windows.
+The [legacy memory services](#the-legacy-memory-services) cover fixed
+process-heap pointers and movable local handles, including discarded objects
+and the exact heap API-set binding for `LocalFree`.
 
 ### Error reporting
 
