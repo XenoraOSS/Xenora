@@ -9,9 +9,9 @@
 use crate::cpu::{CpuState, ExitReason, RFlags};
 use crate::memory::GuestMemory;
 use crate::softfloat::{
-    Arithmetic, Control, F16, F32, F64, Format, Outcome, PRE_COMPUTATION, PRECISION, Rounding,
-    arithmetic, compare, convert, from_integer, half_to_single, round_to_integral, single_to_half,
-    square_root, to_integer,
+    Arithmetic, Control, F16, F32, F64, Format, Fused, Outcome, PRE_COMPUTATION, PRECISION,
+    Rounding, arithmetic, compare, convert, from_integer, fused_multiply_add, half_to_single,
+    round_to_integral, single_to_half, square_root, to_integer,
 };
 use crate::x86_decode::{Insn, RmOperand};
 use crate::x86_exec::{address, read_mem, read_reg, rm_operand, write_reg};
@@ -112,6 +112,129 @@ fn conversion(op: Op) -> Option<(Option<Format>, Option<Format>, u32)> {
         Op::Cvtpd2dq | Op::Cvttpd2dq => (Some(F64), None, 2),
         _ => return None,
     })
+}
+
+/// The form of a fused multiply-add and the operand ordering of one operation.
+///
+/// The Intel SDM names the three orderings `132`, `213` and `231`: each digit is
+/// the position of the destination among the three source operands, so the
+/// ordering selects which operand is added to the exact product.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FusedShape {
+    /// The form of the addend in the odd lanes, or in every lane when
+    /// `alternate` is false.
+    pub form: Fused,
+    /// Whether even lanes take the opposite form, as the alternating families
+    /// do: VFMADDSUB subtracts in even lanes and adds in odd ones, VFMSUBADD the
+    /// other way round.
+    pub alternate: bool,
+    /// 132, 213 or 231.
+    pub ordering: u8,
+    /// One lane, with the rest of the destination kept.
+    pub scalar: bool,
+}
+
+/// The shape of a fused multiply-add operation, or `None` for any other
+/// operation. The registry gives the packed and scalar forms separate
+/// operations because they are separate opcodes; `VEX.W` selects single or
+/// double precision within each.
+pub(crate) fn fused_shape(op: Op) -> Option<FusedShape> {
+    let (form, alternate, ordering, scalar) = match op {
+        Op::Fmadd132p => (Fused::Add, false, 132, false),
+        Op::Fmadd213p => (Fused::Add, false, 213, false),
+        Op::Fmadd231p => (Fused::Add, false, 231, false),
+        Op::Fmsub132p => (Fused::Sub, false, 132, false),
+        Op::Fmsub213p => (Fused::Sub, false, 213, false),
+        Op::Fmsub231p => (Fused::Sub, false, 231, false),
+        Op::Fnmadd132p => (Fused::NegAdd, false, 132, false),
+        Op::Fnmadd213p => (Fused::NegAdd, false, 213, false),
+        Op::Fnmadd231p => (Fused::NegAdd, false, 231, false),
+        Op::Fnmsub132p => (Fused::NegSub, false, 132, false),
+        Op::Fnmsub213p => (Fused::NegSub, false, 213, false),
+        Op::Fnmsub231p => (Fused::NegSub, false, 231, false),
+        Op::Fmaddsub132p => (Fused::Add, true, 132, false),
+        Op::Fmaddsub213p => (Fused::Add, true, 213, false),
+        Op::Fmaddsub231p => (Fused::Add, true, 231, false),
+        Op::Fmsubadd132p => (Fused::Sub, true, 132, false),
+        Op::Fmsubadd213p => (Fused::Sub, true, 213, false),
+        Op::Fmsubadd231p => (Fused::Sub, true, 231, false),
+        Op::Fmadd132s => (Fused::Add, false, 132, true),
+        Op::Fmadd213s => (Fused::Add, false, 213, true),
+        Op::Fmadd231s => (Fused::Add, false, 231, true),
+        Op::Fmsub132s => (Fused::Sub, false, 132, true),
+        Op::Fmsub213s => (Fused::Sub, false, 213, true),
+        Op::Fmsub231s => (Fused::Sub, false, 231, true),
+        Op::Fnmadd132s => (Fused::NegAdd, false, 132, true),
+        Op::Fnmadd213s => (Fused::NegAdd, false, 213, true),
+        Op::Fnmadd231s => (Fused::NegAdd, false, 231, true),
+        Op::Fnmsub132s => (Fused::NegSub, false, 132, true),
+        Op::Fnmsub213s => (Fused::NegSub, false, 213, true),
+        Op::Fnmsub231s => (Fused::NegSub, false, 231, true),
+        _ => return None,
+    };
+    Some(FusedShape {
+        form,
+        alternate,
+        ordering,
+        scalar,
+    })
+}
+
+/// Execute a fused multiply-add over the destination, the `VEX.vvvv` register
+/// and the ModRM register or memory. The destination is also a source, and the
+/// result is left in `destination` so that a scalar form keeps the rest of it.
+pub(crate) fn fused(
+    cpu: &mut CpuState,
+    shape: FusedShape,
+    destination: [u128; 2],
+    second: [u128; 2],
+    third: [u128; 2],
+    length: u8,
+    wide: bool,
+) -> Result<[u128; 2], ExitReason> {
+    let format = if wide { F64 } else { F32 };
+    let control = Control::from_mxcsr(cpu.mxcsr.0);
+    let halves = if shape.scalar {
+        1
+    } else {
+        usize::from(length / 16)
+    };
+    let count = if shape.scalar { 1 } else { 128 / format.bits };
+    let mut raised = Raised::default();
+    let mut result = destination;
+    for half in 0..halves {
+        for index in 0..count {
+            let (a, b, c) = match shape.ordering {
+                132 => (
+                    lane(destination[half], format.bits, index),
+                    lane(third[half], format.bits, index),
+                    lane(second[half], format.bits, index),
+                ),
+                213 => (
+                    lane(second[half], format.bits, index),
+                    lane(destination[half], format.bits, index),
+                    lane(third[half], format.bits, index),
+                ),
+                _ => (
+                    lane(second[half], format.bits, index),
+                    lane(third[half], format.bits, index),
+                    lane(destination[half], format.bits, index),
+                ),
+            };
+            let mut form = shape.form;
+            if shape.alternate && index % 2 == 0 {
+                form = match form {
+                    Fused::Add => Fused::Sub,
+                    Fused::Sub => Fused::Add,
+                    other => other,
+                };
+            }
+            let outcome = fused_multiply_add(format, a, b, c, form, &control);
+            insert(&mut result[half], raised.take(outcome), format.bits, index);
+        }
+    }
+    raised.commit(cpu)?;
+    Ok(result)
 }
 
 /// The relations for which each compare predicate holds: 1 less, 2 equal, 4 greater

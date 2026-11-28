@@ -486,6 +486,192 @@ fn sum(format: Format, a: (bool, u64, i32), b: (bool, u64, i32), control: &Contr
     )
 }
 
+/// The form of a fused multiply-add: the sign the exact product takes and
+/// whether the third operand is added to it or subtracted from it.
+///
+/// `NegAdd` is the negative multiply-add and `NegSub` the negative
+/// multiply-subtract. The sign applies to the product alone, so it changes the
+/// sign of a zero or infinite product but not the addend's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fused {
+    Add,
+    Sub,
+    NegAdd,
+    NegSub,
+}
+
+/// The zero that adding two zeros of the given signs produces: their common
+/// sign, or positive zero except when rounding toward negative infinity.
+fn zero_sum(format: Format, sign_a: bool, sign_b: bool, control: &Control) -> Outcome {
+    let negative = if sign_a == sign_b {
+        sign_a
+    } else {
+        control.rounding == Rounding::Down
+    };
+    exact(format.signed(negative, 0))
+}
+
+/// The most significant bit position of a finite, nonzero significand.
+fn top_bit(significand: u128, exponent: i32) -> i32 {
+    exponent + 128 - significand.leading_zeros() as i32 - 1
+}
+
+/// Shift `significand * 2^exponent` down to the window's exponent, reporting
+/// whether any nonzero bit fell below it.
+///
+/// The window sits 125 bits below the larger operand's leading bit, so the
+/// larger operand is shifted left by at most 125 and only the smaller one can
+/// lose bits. Both shifts are bounded, so an aligned value stays below 2^126
+/// and a signed sum of two of them fits in an `i128`.
+fn align(significand: u128, exponent: i32, window: i32) -> (u128, bool) {
+    let shift = exponent - window;
+    if shift >= 0 {
+        (significand << shift, false)
+    } else if shift <= -128 {
+        (0, significand != 0)
+    } else {
+        let lost = -shift as u32;
+        (
+            significand >> lost,
+            significand & ((1u128 << lost) - 1) != 0,
+        )
+    }
+}
+
+/// Exact `a * b + c` with one final rounding (Intel SDM Vol. 2, "FMA").
+///
+/// The product is formed exactly from the two unpacked significands, so no
+/// intermediate value is rounded and no intermediate overflow, underflow or
+/// precision exception exists. The sum is aligned in a 125-bit window below
+/// the most significant bit of the exact result, which leaves a bit for a
+/// carry and room for a sticky remainder; the result is then rounded once by
+/// [`round`], which supplies the overflow, underflow, precision and tininess
+/// rules every other operation shares.
+///
+/// Which NaN a fused operation returns when several operands are NaN is not
+/// stated in the operation section; this takes the first NaN in the order
+/// `a`, `b`, `c`, the same first-operand rule [`select_nan`] applies to two
+/// operands. It is a local rule and the tests assert only that a lone NaN is
+/// returned quieted and that any signaling NaN raises invalid.
+pub fn fused_multiply_add(
+    format: Format,
+    a: u64,
+    b: u64,
+    c: u64,
+    form: Fused,
+    control: &Control,
+) -> Outcome {
+    let (a, a_flag) = operand(format, a, control);
+    let (b, b_flag) = operand(format, b, control);
+    let (c, c_flag) = operand(format, c, control);
+    let negate = matches!(form, Fused::NegAdd | Fused::NegSub);
+    let subtract = matches!(form, Fused::Sub | Fused::NegSub);
+    let product_sign = (format.sign(a) != format.sign(b)) != negate;
+    let addend_sign = format.sign(c) != subtract;
+    // A zero multiplicand with an infinite multiplier is invalid whatever the
+    // addend is, and it takes priority over a quiet NaN in the addend.
+    let product_invalid = (format.is_zero(a) && format.is_infinite(b))
+        || (format.is_infinite(a) && format.is_zero(b));
+
+    // A NaN result selects the first NaN in the order of the operands and
+    // reports no denormal operand, as the two-operand forms do.
+    if format.is_nan(a) || format.is_nan(b) || format.is_nan(c) {
+        let chosen = if format.is_nan(a) {
+            a
+        } else if format.is_nan(b) {
+            b
+        } else {
+            c
+        };
+        let signaling = format.is_signaling(a) || format.is_signaling(b) || format.is_signaling(c);
+        return Outcome {
+            bits: chosen | format.quiet_bit(),
+            flags: if signaling || product_invalid {
+                INVALID
+            } else {
+                0
+            },
+        };
+    }
+    let mut outcome = if product_invalid {
+        invalid(format)
+    } else if format.is_infinite(a) || format.is_infinite(b) {
+        // The product is infinite. An addend of the opposite sign is the
+        // infinity minus infinity invalid operation.
+        if format.is_infinite(c) && addend_sign != product_sign {
+            invalid(format)
+        } else {
+            exact(format.infinity(product_sign))
+        }
+    } else if format.is_infinite(c) {
+        exact(format.infinity(addend_sign))
+    } else {
+        let (sa, ea) = format.unpack(a);
+        let (sb, eb) = format.unpack(b);
+        let (sc, ec) = format.unpack(c);
+        let product = u128::from(sa) * u128::from(sb);
+        match (product == 0, sc == 0) {
+            // Both terms are zero: the sign follows the two zero signs.
+            (true, true) => zero_sum(format, product_sign, addend_sign, control),
+            // An exact zero product leaves the addend, rounded to the format.
+            (true, false) => round(format, addend_sign, u128::from(sc), ec, false, control),
+            // A zero addend leaves the product.
+            (false, true) => round(format, product_sign, product, ea + eb, false, control),
+            (false, false) => {
+                let product_exponent = ea + eb;
+                // Anchor the window 125 bits below the greater of the two
+                // leading bits: the aligned sum then stays below 2^126 in
+                // magnitude, so it fits in an i128 whichever operand is larger.
+                let top = top_bit(product, product_exponent).max(top_bit(u128::from(sc), ec));
+                let window = top - 125;
+                let (aligned_product, product_lost) = align(product, product_exponent, window);
+                let (aligned_addend, addend_lost) = align(u128::from(sc), ec, window);
+                // The larger operand is shifted left and the smaller is more
+                // than 125 bits below it, so at most one of them loses bits.
+                debug_assert!(!(product_lost && addend_lost));
+                let signed = |value: u128, sign: bool| (value as i128) * if sign { -1 } else { 1 };
+                let total =
+                    signed(aligned_product, product_sign) + signed(aligned_addend, addend_sign);
+                if total == 0 {
+                    // Cancellation to zero needs the two aligned values to be
+                    // equal, which rules out a lost remainder: the exact result
+                    // is a zero whose sign follows the two zero signs.
+                    debug_assert!(!product_lost && !addend_lost);
+                    zero_sum(format, product_sign, addend_sign, control)
+                } else {
+                    // The lost bits are a remainder smaller than one window unit,
+                    // carrying the sign of the operand they came from. When that
+                    // sign opposes the sum, the remainder borrows a unit.
+                    let remainder_sign = if product_lost {
+                        product_sign
+                    } else {
+                        addend_sign
+                    };
+                    let lost = product_lost || addend_lost;
+                    let magnitude = total.unsigned_abs();
+                    let (significand, sticky) = if lost && (total < 0) != remainder_sign {
+                        // The operand that loses bits is aligned below the window,
+                        // and its aligned value is then at most 2^106, while the
+                        // other term is at least 2^125. The borrow therefore
+                        // cannot empty the sum, so the rounding path always sees
+                        // a nonzero significand.
+                        debug_assert!(magnitude > 1 << 106);
+                        (magnitude - 1, true)
+                    } else {
+                        (magnitude, lost)
+                    };
+                    round(format, total < 0, significand, window, sticky, control)
+                }
+            }
+        }
+    };
+    // Invalid operation takes priority over a denormal operand.
+    if outcome.flags & INVALID == 0 {
+        outcome.flags |= a_flag | b_flag | c_flag;
+    }
+    outcome
+}
+
 /// MIN and MAX return the second operand unless the first is strictly smaller
 /// or larger; any NaN is an invalid operation and selects the second operand.
 fn extremum(minimum: bool, format: Format, a: u64, b: u64, denormal: u32) -> Outcome {

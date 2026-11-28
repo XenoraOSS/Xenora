@@ -50,7 +50,11 @@ layout: natural alignment, 8-byte pointers and explicit padding.
 | 14 | 2 | Bits per sample |
 | 16 | 2 | Callback size, ignored for both supported tags |
 
-### XAUDIO2_BUFFER, 48 bytes
+**Public.** `xaudio2.h` packs every structure it defines to one byte
+("All structures defined in this file use tight field packing"), so neither
+structure below has padding.
+
+### XAUDIO2_BUFFER, 44 bytes
 
 | Offset | Size | Field |
 | --- | --- | --- |
@@ -62,17 +66,15 @@ layout: natural alignment, 8-byte pointers and explicit padding.
 | 24 | 4 | Loop begin, in frames |
 | 28 | 4 | Loop length, in frames |
 | 32 | 4 | Loop count |
-| 36 | 4 | Padding, not part of any field |
-| 40 | 8 | Client context |
+| 36 | 8 | Client context |
 
-### XAUDIO2_VOICE_STATE, 24 bytes
+### XAUDIO2_VOICE_STATE, 20 bytes
 
 | Offset | Size | Field |
 | --- | --- | --- |
 | 0 | 8 | Client context of the current buffer |
 | 8 | 4 | Number of queued buffers |
-| 12 | 4 | Padding, written as zero |
-| 16 | 8 | Samples played |
+| 12 | 8 | Samples played |
 
 ## Handles
 
@@ -275,10 +277,88 @@ in between. The model itself keeps the address and the byte count and never
 touches the bytes, so a stale or unmapped range cannot reach the mixer
 through this crate.
 
+## The guest-visible objects
+
+The loader exposes the bounded model to a guest program. The guest imports
+`xaudio2_9.dll`, calls `XAudio2Create`, and calls the engine and its
+voices through vtables the loader writes into guest memory.
+
+### The module and its exports
+
+- **Public.** `xaudio2_9.dll` is the name of the XAudio2 library on
+  Windows 10 and later. **Xenora** registers two exports in it:
+  `XAudio2Create` and `XAudio2CreateWithVersionInfo`. The public header
+  declares the first one. The export list of `xaudio2_9.dll` in the Wine
+  `xaudio2_9` module specification names the second one with the same
+  arguments and a trailing operating-system version, so **Xenora** accepts
+  that version argument and records it with the engine. The other exports of
+  the real library (`CreateAudioReverb`, `CreateAudioVolumeMeter`,
+  `CreateFX`, `X3DAudioCalculate` and `X3DAudioInitialize`) are not
+  registered.
+- **Xenora.** A null out pointer is `E_POINTER`. A nonzero engine flag is
+  `E_NOTIMPL`, because the model implements no engine flag. The out
+  pointer is set to null before a call that fails, and an out pointer the
+  guest cannot write is `E_POINTER` rather than a fault.
+
+### The interfaces
+
+- **Public.** The vtable of `IXAudio2` holds thirteen entries: the three
+  methods of `IUnknown` and the ten methods of `IXAudio2`. The vtable of
+  `IXAudio2Voice` holds the nineteen methods the voice interfaces share,
+  the vtable of `IXAudio2SourceVoice` holds those nineteen and ten more,
+  and the vtable of `IXAudio2MasteringVoice` holds the nineteen and
+  `GetChannelMask`. **Xenora** writes the vtables in that order, so a
+  guest calls the same method at the same index as the public header
+  describes.
+- **Public.** The voice interfaces do not inherit `IUnknown` in the public
+  header, so they have no `QueryInterface` slot at all. Only the engine
+  answers a query, and it accepts `IID_IUnknown` and `IID_IXAudio2` only.
+  Anything else is `E_NOINTERFACE` with the out pointer set to null; a
+  null out pointer is `E_POINTER`.
+- **Xenora.** `AddRef` and `Release` return the new count. The last
+  `Release` of an engine releases the engine and every voice it owns.
+- **Xenora.** `GetVoiceDetails`, `GetVolume`, `GetFrequencyRatio` and
+  `GetChannelMask` are implemented. The channel mask of a stereo mastering
+  voice is front left and front right, and the mask of a mono one is front
+  center.
+
+### The objects
+
+- **Xenora.** A guest object is one allocation in a private heap the loader
+  owns. The first word of the allocation holds the address of the vtable,
+  and the vtable follows it in the same allocation.
+- **Xenora.** A destroyed voice stays allocated as a tombstone until the
+  engine is released. A call through the vtable of a tombstone is refused
+  with `XAUDIO2_E_INVALID_CALL` and never touches freed memory. A
+  mastering voice that still has source voices cannot be destroyed: the
+  call is void, so it writes nothing and records a diagnostic.
+- **Xenora.** A call that cannot report an error, such as
+  `GetPerformanceData` or `GetChannelVolumes`, writes nothing to its out
+  pointer and records a diagnostic.
+
+### Guest pointers
+
+- **Xenora.** Every structure pointer, out pointer and audio range is
+  checked before the model sees it. An unreadable or unwritable pointer is
+  `E_POINTER`, and the host never faults on a guest pointer. The audio
+  range of a submitted buffer must be mapped and readable when the buffer
+  is submitted. The bytes are named, never copied.
+
+### The clock until the mixer arrives
+
+- **Xenora.** The mixer of issue #306 owns the real clock. Until it lands,
+  every `IXAudio2SourceVoice::GetState` call first advances every started
+  source voice of the same engine by one quantum: a hundredth of a second
+  of the mastering rate, 480 frames at 48000 hertz, turned into frames of
+  the source rate with the frequency ratio of the voice and rounded down.
+  A stopped engine does not move its voices. This is a stand-in for the
+  mixer and not an audio path: nothing is mixed, resampled or played, and
+  no sample is ever read.
+
 ## Not implemented
 
-- No guest memory access, no loader code, no mixing and no resampling. The
-  audio path of issue #306 owns those.
+- No mixing and no resampling. The audio path of issue #306 owns those, and
+  the engine clock of the loader is a stand-in for it.
 - No notification callbacks, no submix voices, no effect chains, no voice
   sends, no reverb or EQ effects, no spatial audio and no WMA or ADPCM
   decoding.
@@ -295,6 +375,14 @@ through this crate.
 
 - The crate's own unit tests and the acceptance test in
   `crates/xaudio2/tests/boundary.rs` pass locally on Apple Silicon.
-- No guest program runs against this crate yet, no audio is produced, and no
-  behaviour was compared with Windows or with console hardware.
+- The loader runs the original acceptance program of issue #888,
+  `fixtures/pe/xaudio2-voices.cpp`, through the ordinary x64 execution
+  path on Apple Silicon. The program exits with zero, which means every
+  check it makes passed, and the runtime diagnostics report no engine, no
+  voice, no queued buffer and no queued byte afterwards. The service-level
+  tests in `crates/loader/tests/xaudio2_services.rs` cover the calls the
+  program cannot reach.
+- No audio is produced, no behaviour was compared with Windows or with
+  console hardware. The acceptance program declares the structures
+  with the header's one-byte packing.
 - Independent review is pending.

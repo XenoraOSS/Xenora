@@ -215,6 +215,7 @@ dependencies = [
  "xenora-metal",
  "xenora-shader",
  "xenora-texture",
+ "xenora-xaudio2",
 ]
 
 [[package]]

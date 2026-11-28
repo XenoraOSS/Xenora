@@ -457,6 +457,33 @@ def avx_form_cases():
     three("vdppd", "xmm", ", 255")
     return list(dict.fromkeys(out))
 
+def fma_cases():
+    """FMA3: three sources, every family, ordering and precision."""
+    place = " ptr [rsi + 4*rdi + 16]"
+    whole = {"xmm": "xmmword" + place, "ymm": "ymmword" + place}
+    scalar = {"ss": "dword" + place, "sd": "qword" + place}
+    out = []
+
+    def three(op, v):
+        out.extend([f"{op} {v}3, {v}9, {v}10", f"{op} {v}3, {v}9, {whole[v]}",
+                    f"{op} {v}2, {v}2, {v}2", f"{op} {v}3, {v}9, {v}3"])
+
+    for family in ("fmadd", "fmsub", "fnmadd", "fnmsub"):
+        for ordering in ("132", "213", "231"):
+            for kind in ("ps", "pd"):
+                for v in ("xmm", "ymm"):
+                    three(f"v{family}{ordering}{kind}", v)
+            for kind, width in scalar.items():
+                op = f"v{family}{ordering}{kind}"
+                out.extend([f"{op} xmm3, xmm9, xmm10", f"{op} xmm3, xmm9, {width}",
+                            f"{op} xmm2, xmm2, xmm2", f"{op} xmm3, xmm9, xmm3"])
+    for family in ("fmaddsub", "fmsubadd"):
+        for ordering in ("132", "213", "231"):
+            for kind in ("ps", "pd"):
+                for v in ("xmm", "ymm"):
+                    three(f"v{family}{ordering}{kind}", v)
+    return list(dict.fromkeys(out))
+
 
 def f16c_cases():
     place = " ptr [rsi + 4*rdi + 16]"
@@ -496,7 +523,8 @@ def main(argv):
         sys.exit("usage: assemble.py generate|--check")
     for name, lines in (("integer.txt", cases()), ("vector.txt", vector_cases()),
                         ("float.txt", float_cases()), ("avx.txt", avx_cases()),
-                        ("avx_forms.txt", avx_form_cases()), ("f16c.txt", f16c_cases())):
+                        ("avx_forms.txt", avx_form_cases()), ("fma.txt", fma_cases()),
+                        ("f16c.txt", f16c_cases())):
         text = assemble(lines)
         if argv[1] == "generate":
             (HERE / name).write_text(text)
