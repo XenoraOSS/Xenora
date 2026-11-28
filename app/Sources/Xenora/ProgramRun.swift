@@ -49,14 +49,13 @@ final class GuestFileExportSaveDelegate: NSObject, NSOpenSavePanelDelegate {
 
 /// What one run of the worker produced.
 struct ProgramRunResult: Equatable, Sendable {
-    /// The worker's exit status: the program's own, 124 for the wall
-    /// deadline, 125 for any other failure of the runner or the guest, 2 for
-    /// a refused command line. `nil` if the worker could not be started or
-    /// ended by a signal.
+    /// The POSIX exit code of the launcher, if it exited normally.
     let exitStatus: Int32?
+    /// The full guest exit status from a matching supervisor report.
+    let guestExitStatus: UInt32?
     let standardOutput: String
     let standardError: String
-    /// Whether either stream was cut at `ProgramRunner.outputLimit`.
+    /// Whether either stream exceeded the capture limit or stayed open after the runner exited.
     let truncated: Bool
     /// The last startup stage the worker traced, if tracing was on.
     let lastStage: String?
@@ -66,6 +65,7 @@ struct ProgramRunResult: Equatable, Sendable {
 
     var summary: String {
         if let launchError { return "Could not start the runner: \(launchError)" }
+        if let guestExitStatus { return "Exited with status \(guestExitStatus)." }
         guard let status = exitStatus else { return "The runner ended without an exit status." }
         switch status {
         case 124: return "Stopped at the wall deadline (exit 124)."
@@ -128,9 +128,15 @@ enum ProgramRunner {
 
     /// The bundled worker, or the one named by `XENORA_CLI` (for `swift run`).
     static func workerURL() -> URL? {
-        if let override = ProcessInfo.processInfo.environment["XENORA_CLI"], !override.isEmpty {
-            return URL(fileURLWithPath: override)
-        }
+        workerOverride(in: ProcessInfo.processInfo.environment) ?? bundledWorkerURL()
+    }
+
+    private static func workerOverride(in environment: [String: String]) -> URL? {
+        guard let override = environment["XENORA_CLI"], !override.isEmpty else { return nil }
+        return URL(fileURLWithPath: override)
+    }
+
+    private static func bundledWorkerURL() -> URL? {
         // Not "xenora": the default macOS file system ignores case, so that
         // name would be the app's own "Xenora" executable.
         let bundled = Bundle.main.executableURL?
@@ -149,44 +155,33 @@ enum ProgramRunner {
         process.executableURL = worker
         process.arguments = ["inspect", file.path]
         process.standardInput = FileHandle.nullDevice
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        let stdout = BoundedCollector(out.fileHandleForReading)
-        let stderr = BoundedCollector(err.fileHandleForReading)
+        let captured: RunnerOutput
         do {
-            try process.run()
+            captured = try capture(process)
         } catch {
             return (false, "Could not start the inspector: \(error.localizedDescription)")
         }
-        let done = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in done.signal() }
-        if done.wait(timeout: .now() + backstopSeconds) == .timedOut {
-            process.terminate()
-            if done.wait(timeout: .now() + 2) == .timedOut {
-                _ = Darwin.kill(process.processIdentifier, SIGKILL)
-                process.waitUntilExit()
-            }
-            _ = stdout.finish()
-            _ = stderr.finish()
+        if captured.timedOut {
             return (false, "Header inspection exceeded its deadline.")
         }
-        let (output, outputCut) = stdout.finish()
-        let (failure, errorCut) = stderr.finish()
-        let truncated = outputCut || errorCut ? "\nInspection output was truncated.\n" : ""
-        let ok = process.terminationReason == .exit && process.terminationStatus == 0
-        return (ok, "Header-only inspection; detailed import and instruction analysis was not run.\n" + output + failure + truncated)
+        let output = captured.stdout
+        let failure = captured.stderr
+        let truncated = output.truncated || failure.truncated ? "\nInspection output was truncated.\n" : ""
+        let ok = captured.status == 0
+        return (ok, "Header-only inspection; detailed import and instruction analysis was not run.\n"
+                + output.text + failure.text + truncated)
     }
 
     /// The worker's command line for one run. Tracing is on when the HUD is,
     /// because a program run has no Metal HUD in the runner yet (#440) and
     /// its startup stages are the statistics it has.
     static func arguments(for file: URL, trace: Bool, programArguments: [String],
-                          guestFileExport: ProgramGuestFileExport? = nil) -> [String] {
+                          guestFileExport: ProgramGuestFileExport? = nil,
+                          reportStartup: Bool = false) -> [String] {
         var arguments = ["run", "--experimental"]
         if trace { arguments.append("--trace") }
         arguments += ["--pe", file.path]
+        if reportStartup { arguments.append("--startup-report") }
         if let guestFileExport {
             arguments += ["--export-guest-file", guestFileExport.guestPath, guestFileExport.destination.path]
         }
@@ -209,10 +204,21 @@ enum ProgramRunner {
     static func run(_ file: URL, trace: Bool, programArguments: [String] = [],
                     standardInput: URL? = nil,
                     guestFileExport: ProgramGuestFileExport? = nil,
-                    worker: URL? = workerURL()) -> ProgramRunResult {
+                    environment: [String: String] = ProcessInfo.processInfo.environment) -> ProgramRunResult {
+        let override = workerOverride(in: environment)
+        return run(file, trace: trace, programArguments: programArguments, standardInput: standardInput,
+                   guestFileExport: guestFileExport, worker: override ?? bundledWorkerURL(),
+                   reportStartup: override == nil)
+    }
+
+    /// Run an explicitly selected worker. Tests can supply a report-capable runner.
+    static func run(_ file: URL, trace: Bool, programArguments: [String] = [],
+                    standardInput: URL? = nil, guestFileExport: ProgramGuestFileExport? = nil,
+                    worker: URL?, reportStartup: Bool = true,
+                    backstop: TimeInterval = backstopSeconds) -> ProgramRunResult {
         let started = Date()
         func failed(_ reason: String) -> ProgramRunResult {
-            ProgramRunResult(exitStatus: nil, standardOutput: "", standardError: "", truncated: false,
+            ProgramRunResult(exitStatus: nil, guestExitStatus: nil, standardOutput: "", standardError: "", truncated: false,
                              lastStage: nil, launchError: reason,
                              hostMilliseconds: Date().timeIntervalSince(started) * 1000)
         }
@@ -246,64 +252,213 @@ enum ProgramRunner {
         let process = Process()
         process.executableURL = worker
         process.arguments = arguments(for: file, trace: trace, programArguments: programArguments,
-                                      guestFileExport: guestFileExport)
+                                      guestFileExport: guestFileExport, reportStartup: reportStartup)
         process.standardInput = input ?? FileHandle.nullDevice
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        let collectors = [BoundedCollector(out.fileHandleForReading),
-                          BoundedCollector(err.fileHandleForReading)]
+        let captured: RunnerOutput
         do {
-            try process.run()
+            captured = try capture(process, stderrTailLimit: reportStartup ? StartupReport.tailLimit : 0,
+                                   backstop: backstop)
         } catch {
             return failed(error.localizedDescription)
         }
+        let stdout = captured.stdout
+        var stderr = captured.stderr
+        let status = captured.status
+        let guestStatus = StartupReport.consumeFinalRecord(from: &stderr, exitStatus: status)
+        return ProgramRunResult(
+            exitStatus: status, guestExitStatus: guestStatus, standardOutput: stdout.text, standardError: stderr.text,
+            truncated: stdout.truncated || stderr.truncated,
+            lastStage: trace || !reportStartup ? lastStage(in: stderr.text) : nil, launchError: nil,
+            hostMilliseconds: Date().timeIntervalSince(started) * 1000)
+    }
+
+    private struct RunnerOutput {
+        let stdout: CapturedOutput
+        let stderr: CapturedOutput
+        let status: Int32?
+        let timedOut: Bool
+    }
+
+    /// Read both pipes on the caller's thread without waiting on descendants.
+    private static func capture(_ process: Process, stderrTailLimit: Int = 0,
+                                backstop: TimeInterval = backstopSeconds) throws -> RunnerOutput {
+        let out = Pipe()
+        let err = Pipe()
+        let readers = [out.fileHandleForReading, err.fileHandleForReading]
+        let writers = [out.fileHandleForWriting, err.fileHandleForWriting]
+        defer {
+            for handle in readers + writers { try? handle.close() }
+        }
+        var descriptors = try readers.map { handle in
+            let fd = handle.fileDescriptor
+            let flags = Darwin.fcntl(fd, F_GETFL)
+            guard flags >= 0, Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                throw InputFileError.posix(errno)
+            }
+            return pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        }
+
+        process.standardOutput = out
+        process.standardError = err
         let done = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in done.signal() }
-        if done.wait(timeout: .now() + backstopSeconds) == .timedOut {
-            process.terminate()
-            process.waitUntilExit()
+        try process.run()
+        for writer in writers { try? writer.close() }
+
+        var output = [CapturedOutput(), CapturedOutput()]
+        let tailLimits = [0, stderrTailLimit]
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var deadline = DispatchTime.now() + backstop
+        var signalsSent = 0
+        var reaped = false
+
+        while true {
+            if !reaped, done.wait(timeout: .now()) == .success {
+                reaped = true
+                // The direct runner has exited. Collect queued bytes and give
+                // the pipes a brief chance to reach EOF independently.
+                deadline = .now() + .milliseconds(250)
+            }
+            if reaped, descriptors.allSatisfy({ $0.fd < 0 }) { break }
+            if DispatchTime.now() >= deadline {
+                if reaped || signalsSent == 2 { break }
+                if process.isRunning {
+                    if signalsSent == 0 {
+                        process.terminate()
+                    } else {
+                        _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                    }
+                }
+                signalsSent += 1
+                deadline = .now() + .seconds(2)
+            }
+
+            let ready = descriptors.withUnsafeMutableBufferPointer {
+                Darwin.poll($0.baseAddress, nfds_t($0.count), 25)
+            }
+            if ready < 0, errno != EINTR {
+                for index in descriptors.indices where descriptors[index].fd >= 0 {
+                    output[index].drainIncomplete = true
+                    descriptors[index].fd = -1
+                }
+            }
+            guard ready > 0 else { continue }
+            for index in descriptors.indices
+            where descriptors[index].fd >= 0 && descriptors[index].revents != 0 {
+                let fd = descriptors[index].fd
+                let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+                if count > 0 {
+                    output[index].append(buffer.prefix(count), tailLimit: tailLimits[index])
+                } else if count == 0 {
+                    descriptors[index].fd = -1
+                } else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
+                    output[index].drainIncomplete = true
+                    descriptors[index].fd = -1
+                }
+            }
         }
-        let (stdout, stdoutCut) = collectors[0].finish()
-        let (stderr, stderrCut) = collectors[1].finish()
-        let status: Int32? = process.terminationReason == .exit ? process.terminationStatus : nil
-        return ProgramRunResult(
-            exitStatus: status, standardOutput: stdout, standardError: stderr,
-            truncated: stdoutCut || stderrCut, lastStage: lastStage(in: stderr), launchError: nil,
-            hostMilliseconds: Date().timeIntervalSince(started) * 1000)
+        for index in descriptors.indices where descriptors[index].fd >= 0 {
+            output[index].drainIncomplete = true
+        }
+        let status = reaped && process.terminationReason == .exit ? process.terminationStatus : nil
+        return RunnerOutput(stdout: output[0], stderr: output[1], status: status, timedOut: signalsSent != 0)
     }
 }
 
-/// Reads a pipe to its end on a background queue, keeping at most
-/// `ProgramRunner.outputLimit` bytes so a chatty program cannot exhaust memory
-/// or block on a full pipe.
-private final class BoundedCollector: @unchecked Sendable {
-    private var data = Data()
-    private var cut = false
-    private let lock = NSLock()
-    private let finished = DispatchSemaphore(value: 0)
+private struct StartupReport: Decodable {
+    // The runner bounds the diagnostic socket to 2 KiB before JSON encoding.
+    // Allow room for JSON escaping as well as the fixed report fields.
+    static let tailLimit = 16 * 1024
+    private static let prefix = Array("xenora-startup ".utf8)
+    private static let stages = [
+        "parsed", "mapped", "relocated", "imports_bound", "tls_completed",
+        "entry_started", "entry_returned", "framebuffer_verified",
+    ]
 
-    init(_ handle: FileHandle) {
-        DispatchQueue.global().async { [self] in
-            while true {
-                let chunk = handle.availableData
-                if chunk.isEmpty { break }
-                lock.lock()
-                let room = ProgramRunner.outputLimit - data.count
-                if chunk.count > room { cut = true }
-                if room > 0 { data.append(chunk.prefix(room)) }
-                lock.unlock()
-            }
-            finished.signal()
+    struct Event: Decodable {
+        let stage: String
+        let completed: Bool
+    }
+
+    struct Outcome: Decodable {
+        let kind: String
+        let guestStatus: UInt32?
+        let workerCode: Int32?
+        let workerSignal: Int32?
+        let phase: String?
+        let message: String?
+        let messageTruncated: Bool?
+    }
+
+    let schemaVersion: Int
+    let events: [Event]
+    let lastCompletedStage: String?
+    let `protocol`: String
+    let outcome: Outcome
+
+    static func consumeFinalRecord(from output: inout CapturedOutput, exitStatus: Int32?) -> UInt32? {
+        let tail = output.tail
+        // The supervisor appends a leading LF and one final LF. Require both
+        // so earlier messages and incomplete or overlong reports stay visible.
+        guard tail.last == 10, let separator = tail.dropLast().lastIndex(of: 10) else { return nil }
+        let line = tail.dropLast().suffix(from: tail.index(after: separator))
+        guard line.starts(with: prefix) else { return nil }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        guard let report = try? decoder.decode(Self.self, from: Data(line.dropFirst(prefix.count))),
+              let exitStatus, report.matches(exitStatus: exitStatus) else { return nil }
+        output.removeSuffix(byteCount: tail.distance(from: separator, to: tail.endIndex))
+        return report.outcome.guestStatus
+    }
+
+    private func matches(exitStatus: Int32) -> Bool {
+        guard schemaVersion == 1, self.protocol == "complete", outcome.workerSignal == nil,
+              outcome.workerCode == exitStatus,
+              events.map(\.stage) == Array(Self.stages.prefix(events.count)),
+              events.allSatisfy({ $0.completed == ($0.stage != "entry_started") }),
+              events.last(where: \.completed)?.stage == lastCompletedStage else { return false }
+        switch outcome.kind {
+        case "guest_exit":
+            guard let guest = outcome.guestStatus,
+                  let last = events.last?.stage,
+                  ["imports_bound", "tls_completed", "entry_returned"].contains(last) else { return false }
+            let lowByte = Int32(guest & 0xff)
+            return exitStatus == (guest != 0 && lowByte == 0 ? 1 : lowByte)
+        case "verified":
+            return outcome.guestStatus == nil && exitStatus == 0 && lastCompletedStage == "framebuffer_verified"
+        case "wall_timeout": return outcome.guestStatus == nil && exitStatus == 124
+        case "known_failure":
+            return outcome.guestStatus == nil && exitStatus == 125
+                && outcome.phase != nil && outcome.message != nil && outcome.messageTruncated != nil
+        default: return false
+        }
+    }
+}
+
+private struct CapturedOutput {
+    var prefix = Data()
+    var tail = Data()
+    var byteCount = 0
+    var drainIncomplete = false
+
+    var text: String { String(decoding: prefix, as: UTF8.self) }
+    var truncated: Bool { drainIncomplete || byteCount > prefix.count }
+
+    mutating func append(_ chunk: ArraySlice<UInt8>, tailLimit: Int) {
+        byteCount += chunk.count
+        let room = ProgramRunner.outputLimit - prefix.count
+        if room > 0 { prefix.append(contentsOf: chunk.prefix(room)) }
+        if tailLimit > 0 {
+            let suffix = chunk.suffix(tailLimit)
+            let excess = max(0, tail.count + suffix.count - tailLimit)
+            tail.removeFirst(excess)
+            tail.append(contentsOf: suffix)
         }
     }
 
-    func finish() -> (String, Bool) {
-        finished.wait()
-        lock.lock()
-        defer { lock.unlock() }
-        return (String(decoding: data, as: UTF8.self), cut)
+    mutating func removeSuffix(byteCount length: Int) {
+        byteCount -= length
+        if prefix.count > byteCount { prefix.removeLast(prefix.count - byteCount) }
     }
 }
 
@@ -486,7 +641,7 @@ struct ProgramRunView: View {
                 output("Standard output", result.standardOutput)
                 output("Standard error", result.standardError)
                 if result.truncated {
-                    Text("Output was cut at \(ProgramRunner.outputLimit / 1024) KiB per stream.")
+                    Text("Some output was truncated.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

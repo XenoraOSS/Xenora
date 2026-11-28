@@ -126,7 +126,7 @@ struct ProgramRunModelTests {
     @Test func aLaunchFailureLeavesTheSlotAvailableForRetry() async throws {
         let url = URL(fileURLWithPath: "/nonexistent/retry.exe")
         let failure = ProgramRunResult(
-            exitStatus: nil, standardOutput: "", standardError: "", truncated: false,
+            exitStatus: nil, guestExitStatus: nil, standardOutput: "", standardError: "", truncated: false,
             lastStage: nil, launchError: "runner not found", hostMilliseconds: 1
         )
         let model = ProgramRunModel(worker: { _, _, _, _, _ in failure })
@@ -174,6 +174,7 @@ struct ProgramRunModelTests {
     private func outcome(output: String, status: Int32) -> ProgramRunResult {
         ProgramRunResult(
             exitStatus: status,
+            guestExitStatus: nil,
             standardOutput: output,
             standardError: "",
             truncated: false,

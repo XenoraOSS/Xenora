@@ -540,7 +540,9 @@ remains unsupported.
 - WinHTTP HTTP-date conversion utilities (#1109): `WinHttpTimeToSystemTime` parses the exact RFC 2616 RFC1123, RFC850 and asctime forms into bounded SYSTEMTIME values, including validated leap years, computed weekdays and a year-granularity rolling fifty-year RFC850 century window driven by the service clock. `WinHttpTimeFromSystemTime` validates input calendar fields and emits the RFC1123 generation form with a null terminator. The parser deliberately remains narrower than permissive legacy implementations: lowercase or whitespace-tolerant forms, leap seconds, non-GMT zone names and years above 9999 fail honestly. Direct service tests cover all three forms, round trips, malformed inputs and invalid guest memory on Apple Silicon; independent acceptance and real Xbox compatibility are not claimed.
 
 ### Fixed
+- Run Program and header inspection now return after the runner exits even if a descendant holds an output pipe open. Run Program preserves the exact guest exit status from the captured startup report (#1371).
 
+- The macOS Run Program panel uses the supervisor report to show the guest's full 32-bit exit status, even when the displayed stderr is truncated. Guest exit codes 2, 124, and 125 retain their guest meaning (#1346).
 - QA verification now fingerprints tracked and non-ignored checkout inputs, including binary fixtures. A source change detected during the suites makes the evidence stale even if the original files are restored later. Suite exit codes are preserved (#1237).
 - `xenora-pe-session` refuses a DLL selected as the root before guest startup, including sessions without companion modules (#1275).
 - The typed CRT registry regenerates the existing `_locking` and `_commit` imports from its source catalog and checks both generated reports in the normal test suite (#1264). Both services are partial. The guest drive stores writes in memory, and lock conflicts return immediately.
