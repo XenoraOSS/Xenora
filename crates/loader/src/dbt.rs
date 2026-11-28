@@ -1545,6 +1545,13 @@ impl Emitter<'_> {
                 asm.add_reg_64(X1, X1, X9);
             }
         }
+        // A 67H address-size override truncates the computed effective
+        // address to 32 bits and zero-extends it, before any segment base is
+        // added (Intel SDM Vol. 1, section 3.3.7.1 and Vol. 2A, 2.2.1.6). A
+        // 32-bit register write zero-extends on ARM64.
+        if operand.addr32 {
+            asm.mov_reg_32(X1, X1);
+        }
         if with_segment && let Some(segment) = operand.segment {
             let offset = match segment {
                 Segment::Fs => FS_BASE_OFFSET,
