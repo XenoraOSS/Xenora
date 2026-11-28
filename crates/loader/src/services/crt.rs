@@ -1656,6 +1656,34 @@ fn spawnve_modes_other_than_pwait_refuse_honestly_with_enosys() {
         );
     }
 }
+#[test]
+fn the_spawn_image_is_provisioned_in_the_drive_all_or_nothing() {
+    use super::ServicesState;
+    use crate::services::MockClock;
+    use std::sync::Arc;
+
+    let state = ServicesState::new(Arc::new(MockClock::new(0)));
+    let image: Vec<u8> = (0..512u32).map(|index| (index % 251) as u8).collect();
+    state.set_spawn_image("PrOg.EXE", &image);
+    {
+        let objects = state.objects.lock().expect("guest object state");
+        // The drive key folds case exactly as every drive path does.
+        assert_eq!(
+            objects.drive_file("prog.exe"),
+            Some(image.as_slice()),
+            "the drive must hold the exact image bytes"
+        );
+    }
+
+    // An image beyond the drive's byte bound stays absent rather than
+    // truncated, because a partial image would answer reads wrongly.
+    let big = ServicesState::new(Arc::new(MockClock::new(0)));
+    let huge = vec![0x5A; 17 * 1024 * 1024];
+    big.set_spawn_image("huge.exe", &huge);
+    let objects = big.objects.lock().expect("guest object state");
+    assert_eq!(objects.drive_file("huge.exe"), None);
+}
+
 // The CRT directory surface. The process working directory is a path in
 // the virtual filesystem: it starts at the volume root, `_chdir` validates
 // against the directory set, `_fullpath` resolves lexically without an
