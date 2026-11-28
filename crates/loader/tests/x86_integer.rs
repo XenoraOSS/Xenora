@@ -323,6 +323,7 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
     let none = Undefined::default();
     let af = Undefined { af: true, ..none };
     const RAX: usize = 0;
+    const RCX: usize = 1;
     const RDX: usize = 2;
     let rax = |bits| Place::Reg {
         index: RAX,
@@ -1038,15 +1039,18 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
             Outcome::Done(none)
         }
         "cpuid" => {
-            // Xenora's guest CPUID contract, restated: the vendor "Xenora guest"
-            // and the eight features whose every instruction exists, TSC (EDX
+            // Xenora's guest CPUID contract, restated: leaf 0 reports basic
+            // leaf 7 and the vendor "Xenora guest"; leaf 1 reports TSC (EDX
             // bit 4), CX8 (EDX bit 8), CMOV (EDX bit 15), CMPXCHG16B (ECX bit
-            // 13) and POPCNT (ECX bit 23) in leaf 1, LAHF/SAHF, LZCNT and long
-            // mode in leaf 0x8000_0001.
+            // 13) and POPCNT (ECX bit 23); leaf 7 subleaf 0 reports only the
+            // complete BMI1 family (EBX bit 3), with EAX zero as the highest
+            // subleaf; leaves 2 through 6 are zero; LAHF/SAHF, LZCNT and long
+            // mode appear in leaf 0x8000_0001.
             let word = |text: &[u8; 4]| u32::from_le_bytes(*text);
             let values = match m.gpr[RAX] as u32 {
-                0 => [1, word(b"Xeno"), word(b"uest"), word(b"ra g")],
+                0 => [7, word(b"Xeno"), word(b"uest"), word(b"ra g")],
                 1 => [0, 0, 1 << 13 | 1 << 23, 1 << 4 | 1 << 8 | 1 << 15],
+                7 if m.gpr[RCX] as u32 == 0 => [0, 1 << 3, 0, 0],
                 0x8000_0000 => [0x8000_0001, 0, 0, 0],
                 0x8000_0001 => [0, 0, 1 | 1 << 5, 1 << 29],
                 _ => [0; 4],

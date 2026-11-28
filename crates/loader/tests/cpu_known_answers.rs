@@ -3047,20 +3047,20 @@ const GROUPS: &[(&str, &str)] = &[
 
 /// Forms both engines refuse today, with the index of the refused instruction.
 /// They are not verified, only required to be refused without changing state.
+/// The 67H ModRM, LEA and 15-byte forms are no longer listed here: #1168
+/// implements them, and their expected answers are verified by the ordinary
+/// case sweep and by `cpu_addrsize.rs` in both engines. The string forms and
+/// the ECX-count forms E0 through E3 stay refused honestly because their
+/// narrow implicit registers are not modelled.
 const UNSUPPORTED: &[(&str, usize)] = &[
-    ("addr32_load_truncates_effective_address", 0),
-    ("addr32_sum_wraps_at_32_bits", 0),
     ("bt_memory_negative_offset", 0),
     ("bt_memory_positive_offset_beyond_operand", 0),
     ("bt_memory_register_offset_can_fault", 0),
     ("btr16_memory_negative_16bit_offset", 0),
     ("bts_memory_negative_offset", 0),
     ("enter_leave_round_trip", 0),
-    ("fifteen_byte_instruction_executes", 0),
-    ("fs_addr32_truncates_before_adding_base", 0),
     ("haddps_hsubpd_addsubps", 0),
     ("jecxz_tests_low_32_bits", 1),
-    ("lea64_addr32_truncates_effective_address", 0),
     ("maskmovdqu_selects_bytes", 0),
     ("movddup_movsldup_movshdup", 0),
     ("push16_moves_rsp_by_two", 0),

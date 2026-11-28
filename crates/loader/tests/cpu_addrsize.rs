@@ -211,6 +211,25 @@ fn string_instructions_refuse_the_override() {
     }
 }
 
+/// E0 through E3 count or test RCX by default; 67H would select ECX. The
+/// narrow implicit count is not modelled, so all four forms refuse at decode
+/// rather than silently answering with the full RCX.
+#[test]
+fn ecx_count_forms_refuse_the_override() {
+    for opcode in [0xE0, 0xE1, 0xE2, 0xE3] {
+        let code = [0x67, opcode, 0x01, 0x90, 0xF4]; // 67 E0..E3 +1; nop; hlt
+        let memory = machine(&code);
+        let [interpreted, translated] = run_both(&CpuState::new(ENTRY, 0), &memory);
+        for result in [interpreted, translated] {
+            assert!(
+                matches!(result.exit_reason, ExitReason::IllegalInstruction(0x67)),
+                "opcode {opcode:#04x} must refuse honestly: {:?}",
+                result.exit_reason
+            );
+        }
+    }
+}
+
 /// An accumulator offset form under the override would read a four-byte
 /// offset where the decoder expects eight: refused at decode rather than
 /// mis-read.
