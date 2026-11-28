@@ -17680,6 +17680,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "WinHttpCreateUrl"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "winhttp.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "WinHttpOpen"
     },
     {
@@ -19886,15 +19896,15 @@
   "summary": {
     "aliases": 955,
     "api_set_aliases": 754,
-    "canonical_services": 977,
+    "canonical_services": 978,
     "data_import_services": 7,
     "duplicate_registrations": 0,
     "implemented": 247,
     "implicit_status_services": 78,
     "libraries": 25,
-    "manual_services": 675,
+    "manual_services": 676,
     "ordinal_aliases": 35,
-    "partial": 730,
+    "partial": 731,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,
