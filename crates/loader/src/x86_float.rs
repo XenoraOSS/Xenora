@@ -332,6 +332,58 @@ fn lanes(
     control: &Control,
     raised: &mut Raised,
 ) -> Option<u128> {
+    // The horizontal and add-subtract families combine lanes across positions,
+    // so they compose the arithmetic primitive directly rather than the
+    // lane-positional loop below. They are lane-local: each 128-bit half is
+    // processed on its own, which the caller's half loop already arranges.
+    let horizontal = match op {
+        Op::Addsubps => Some((F32, false, false)),
+        Op::Addsubpd => Some((F64, false, false)),
+        Op::Haddps => Some((F32, true, false)),
+        Op::Haddpd => Some((F64, true, false)),
+        Op::Hsubps => Some((F32, true, true)),
+        Op::Hsubpd => Some((F64, true, true)),
+        _ => None,
+    };
+    if let Some((format, pairwise, subtract)) = horizontal {
+        let lanes_per_half = 128 / format.bits;
+        let mut result = 0u128;
+        for index in 0..lanes_per_half {
+            let (a, b) = if pairwise {
+                // HADD/HSUB: the low half of the result pairs adjacent lanes of
+                // the first source, the high half those of the second source.
+                let (vector, pair) = if index < lanes_per_half / 2 {
+                    (old, index * 2)
+                } else {
+                    (source, (index - lanes_per_half / 2) * 2)
+                };
+                (
+                    lane(vector, format.bits, pair),
+                    lane(vector, format.bits, pair + 1),
+                )
+            } else {
+                // ADDSUB: lane positions match; even lanes subtract, odd lanes add.
+                (
+                    lane(old, format.bits, index),
+                    lane(source, format.bits, index),
+                )
+            };
+            let kind = if pairwise {
+                if subtract {
+                    Arithmetic::Sub
+                } else {
+                    Arithmetic::Add
+                }
+            } else if index % 2 == 0 {
+                Arithmetic::Sub
+            } else {
+                Arithmetic::Add
+            };
+            let outcome = arithmetic(kind, format, a, b, control);
+            insert(&mut result, raised.take(outcome), format.bits, index);
+        }
+        return Some(result);
+    }
     if let Some((kind, format, scalar)) = classify(op) {
         let mut result = old;
         let count = if scalar { 1 } else { 128 / format.bits };
@@ -499,7 +551,11 @@ pub(crate) fn execute(
     let reg = usize::from(insn.reg.index);
     let mut raised = Raised::default();
 
-    if classify(insn.op).is_some() || conversion(insn.op).is_some() {
+    let horizontal = matches!(
+        insn.op,
+        Op::Addsubps | Op::Addsubpd | Op::Haddps | Op::Haddpd | Op::Hsubps | Op::Hsubpd
+    );
+    if classify(insn.op).is_some() || conversion(insn.op).is_some() || horizontal {
         let source = read_rm(cpu, memory, insn)?;
         // Legacy encodings define only compare predicates 0-7.
         let compares = matches!(classify(insn.op), Some((Kind::Compare, ..)));

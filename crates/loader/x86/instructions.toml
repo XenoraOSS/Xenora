@@ -358,6 +358,12 @@ mulpd = { faults = true, ref = "sdm MULPD" }
 mulss = { faults = true, ref = "sdm MULSS" }
 mulsd = { faults = true, ref = "sdm MULSD" }
 subps = { faults = true, ref = "sdm SUBPS" }
+addsubps = { faults = true, ref = "sdm ADDSUBPS" }
+addsubpd = { faults = true, ref = "sdm ADDSUBPD" }
+haddps = { faults = true, ref = "sdm HADDPS" }
+haddpd = { faults = true, ref = "sdm HADDPD" }
+hsubps = { faults = true, ref = "sdm HSUBPS" }
+hsubpd = { faults = true, ref = "sdm HSUBPD" }
 subpd = { faults = true, ref = "sdm SUBPD" }
 subss = { faults = true, ref = "sdm SUBSS" }
 subsd = { faults = true, ref = "sdm SUBSD" }
@@ -3156,6 +3162,60 @@ size = "x"
 src = "q"
 
 [[form]]
+op = "haddps"
+map = "0f"
+prefix = "f2"
+opcode = 0x7c
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "hsubps"
+map = "0f"
+prefix = "f2"
+opcode = 0x7d
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "addsubps"
+map = "0f"
+prefix = "f2"
+opcode = 0xd0
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "haddpd"
+map = "0f"
+prefix = "66"
+opcode = 0x7c
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "hsubpd"
+map = "0f"
+prefix = "66"
+opcode = 0x7d
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
+op = "addsubpd"
+map = "0f"
+prefix = "66"
+opcode = 0xd0
+enc = "xmm_rm"
+size = "x"
+src = "x"
+
+[[form]]
 op = "addps"
 map = "0f"
 opcode = 0x58
@@ -5715,6 +5775,66 @@ opcode = 0x51
 enc = "xmm_rm"
 length = "any"
 src = "q"
+nds = true
+
+[[vex]]
+op = "haddps"
+map = "0f"
+prefix = "f2"
+opcode = 0x7c
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "hsubps"
+map = "0f"
+prefix = "f2"
+opcode = 0x7d
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "addsubps"
+map = "0f"
+prefix = "f2"
+opcode = 0xd0
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "haddpd"
+map = "0f"
+prefix = "66"
+opcode = 0x7c
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "hsubpd"
+map = "0f"
+prefix = "66"
+opcode = 0x7d
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "addsubpd"
+map = "0f"
+prefix = "66"
+opcode = 0xd0
+enc = "xmm_rm"
+length = "any"
+src = "v"
 nds = true
 
 [[vex]]

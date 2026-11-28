@@ -223,6 +223,36 @@ def binary(op, fmt, a, b, control):
     return out and (out[0], out[1] | de)
 
 
+def horizontal(name, fmt, a, b, control):
+    """128-bit packed result of a horizontal or add-subtract operation, as the
+    lane composition of exact binary lanes. The flags of every lane are OR-ed
+    together, which is how the processor accumulates them. A lane whose outcome
+    the rules leave open discards the whole vector, as for the scalar forms."""
+    count = 128 // fmt.bits
+    lane = lambda v, i: (v >> (fmt.bits * i)) % (1 << fmt.bits)
+    pairwise = name.startswith("h")
+    subtract = "sub" in name
+    result = 0
+    flags = 0
+    for index in range(count):
+        if pairwise:
+            if index < count // 2:
+                vector, pair = a, index * 2
+            else:
+                vector, pair = b, (index - count // 2) * 2
+            x, y = lane(vector, pair), lane(vector, pair + 1)
+            op = "sub" if subtract else "add"
+        else:
+            x, y = lane(a, index), lane(b, index)
+            op = "sub" if index % 2 == 0 else "add"
+        out = binary(op, fmt, x, y, control)
+        if out is None:
+            return None
+        result |= out[0] << (fmt.bits * index)
+        flags |= out[1]
+    return result, flags
+
+
 def root(fmt, v, control):
     v = prepare(fmt, v, control)
     if fmt.nan(v):
@@ -713,11 +743,60 @@ def build_dots():
     return "".join(lines)
 
 
+def build_horizontal():
+    """128-bit vectors of HADDPS/PD, HSUBPS/PD and ADDSUBPS/PD: random operands
+    and a grid of special values in every pairing position, so that NaN
+    propagation, denormal handling and rounding are covered lane by lane."""
+    rng = random.Random(0x484F52495A)
+    lines = []
+
+    def pack(fmt, lanes):
+        return sum(v << (fmt.bits * i) for i, v in enumerate(lanes))
+
+    def emit(name, fmt, control, a, b):
+        out = horizontal(name, fmt, a, b, control)
+        if out is None:
+            return
+        result, flags = out
+        mxcsr = 0x1F80 | control["mode"] << 13 | control["daz"] << 6 | control["ftz"] << 15
+        lines.append(f"{name} {mxcsr:x} {a:x} {b:x} {result:x} {flags:x}\n")
+
+    for fmt, kind in ((S, "ps"), (D, "pd")):
+        count = 128 // fmt.bits
+        for stem in ("hadd", "hsub", "addsub"):
+            name = stem + kind
+            for _ in range(160):
+                control = {"mode": rng.randrange(4), "daz": rng.random() < 0.2,
+                           "ftz": rng.random() < 0.2}
+                a = pack(fmt, [operands(fmt, rng) for _ in range(count)])
+                b = pack(fmt, [operands(fmt, rng) for _ in range(count)])
+                emit(name, fmt, control, a, b)
+            # Special values rotating through every lane of both sources, so
+            # each pairing position meets each special case.
+            one, least = fmt.emax << fmt.frac, 1 << fmt.frac
+            special = [0, fmt.top, 1, least - 1, least, one - 1, one,
+                       fmt.inf - 1, fmt.inf, fmt.top + fmt.inf,
+                       fmt.inf + fmt.quiet + 5, fmt.top + fmt.inf + 3]
+            base_a = pack(fmt, [one] * count)
+            base_b = pack(fmt, [one] * count)
+            for x in special:
+                for position in range(count):
+                    lanes_a = [one] * count
+                    lanes_b = [one] * count
+                    lanes_a[position] = x
+                    lanes_b[count - 1 - position] = x
+                    control = {"mode": 0, "daz": False, "ftz": False}
+                    emit(name, fmt, control, pack(fmt, lanes_a), base_b)
+                    emit(name, fmt, control, base_a, pack(fmt, lanes_b))
+    return "".join(lines)
+
+
 def main(argv):
     if len(argv) != 2 or argv[1] not in ("generate", "--check"):
         sys.exit("usage: float_reference.py generate|--check")
     for name, text in (("float_vectors.txt", build()), ("dot_vectors.txt", build_dots()),
-                       ("fma_vectors.txt", build_fma())):
+                       ("fma_vectors.txt", build_fma()),
+                       ("horizontal_vectors.txt", build_horizontal())):
         if argv[1] == "generate":
             (HERE / name).write_text(text)
         elif (HERE / name).read_text() != text:

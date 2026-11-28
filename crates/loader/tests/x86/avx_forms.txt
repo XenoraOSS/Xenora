@@ -765,6 +765,66 @@ c4 e2 79 17 d2 | vptest xmm2, xmm2
 c4 c2 7d 17 d9 | vptest ymm3, ymm9
 c4 62 7d 17 64 be 10 | vptest ymm12, ymmword ptr [rsi + 4*rdi + 16]
 c4 e2 7d 17 d2 | vptest ymm2, ymm2
+c4 c1 33 7c da | vhaddps xmm3, xmm9, xmm10
+c5 73 7c 64 be 10 | vhaddps xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c5 eb 7c d2 | vhaddps xmm2, xmm2, xmm2
+c5 b3 7c db | vhaddps xmm3, xmm9, xmm3
+c5 e3 7c dd | vhaddps xmm3, xmm3, xmm5
+c4 c1 37 7c da | vhaddps ymm3, ymm9, ymm10
+c5 77 7c 64 be 10 | vhaddps ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ef 7c d2 | vhaddps ymm2, ymm2, ymm2
+c5 b7 7c db | vhaddps ymm3, ymm9, ymm3
+c5 e7 7c dd | vhaddps ymm3, ymm3, ymm5
+c4 c1 31 7c da | vhaddpd xmm3, xmm9, xmm10
+c5 71 7c 64 be 10 | vhaddpd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c5 e9 7c d2 | vhaddpd xmm2, xmm2, xmm2
+c5 b1 7c db | vhaddpd xmm3, xmm9, xmm3
+c5 e1 7c dd | vhaddpd xmm3, xmm3, xmm5
+c4 c1 35 7c da | vhaddpd ymm3, ymm9, ymm10
+c5 75 7c 64 be 10 | vhaddpd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 7c d2 | vhaddpd ymm2, ymm2, ymm2
+c5 b5 7c db | vhaddpd ymm3, ymm9, ymm3
+c5 e5 7c dd | vhaddpd ymm3, ymm3, ymm5
+c4 c1 33 7d da | vhsubps xmm3, xmm9, xmm10
+c5 73 7d 64 be 10 | vhsubps xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c5 eb 7d d2 | vhsubps xmm2, xmm2, xmm2
+c5 b3 7d db | vhsubps xmm3, xmm9, xmm3
+c5 e3 7d dd | vhsubps xmm3, xmm3, xmm5
+c4 c1 37 7d da | vhsubps ymm3, ymm9, ymm10
+c5 77 7d 64 be 10 | vhsubps ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ef 7d d2 | vhsubps ymm2, ymm2, ymm2
+c5 b7 7d db | vhsubps ymm3, ymm9, ymm3
+c5 e7 7d dd | vhsubps ymm3, ymm3, ymm5
+c4 c1 31 7d da | vhsubpd xmm3, xmm9, xmm10
+c5 71 7d 64 be 10 | vhsubpd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c5 e9 7d d2 | vhsubpd xmm2, xmm2, xmm2
+c5 b1 7d db | vhsubpd xmm3, xmm9, xmm3
+c5 e1 7d dd | vhsubpd xmm3, xmm3, xmm5
+c4 c1 35 7d da | vhsubpd ymm3, ymm9, ymm10
+c5 75 7d 64 be 10 | vhsubpd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed 7d d2 | vhsubpd ymm2, ymm2, ymm2
+c5 b5 7d db | vhsubpd ymm3, ymm9, ymm3
+c5 e5 7d dd | vhsubpd ymm3, ymm3, ymm5
+c4 c1 33 d0 da | vaddsubps xmm3, xmm9, xmm10
+c5 73 d0 64 be 10 | vaddsubps xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c5 eb d0 d2 | vaddsubps xmm2, xmm2, xmm2
+c5 b3 d0 db | vaddsubps xmm3, xmm9, xmm3
+c5 e3 d0 dd | vaddsubps xmm3, xmm3, xmm5
+c4 c1 37 d0 da | vaddsubps ymm3, ymm9, ymm10
+c5 77 d0 64 be 10 | vaddsubps ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ef d0 d2 | vaddsubps ymm2, ymm2, ymm2
+c5 b7 d0 db | vaddsubps ymm3, ymm9, ymm3
+c5 e7 d0 dd | vaddsubps ymm3, ymm3, ymm5
+c4 c1 31 d0 da | vaddsubpd xmm3, xmm9, xmm10
+c5 71 d0 64 be 10 | vaddsubpd xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c5 e9 d0 d2 | vaddsubpd xmm2, xmm2, xmm2
+c5 b1 d0 db | vaddsubpd xmm3, xmm9, xmm3
+c5 e1 d0 dd | vaddsubpd xmm3, xmm3, xmm5
+c4 c1 35 d0 da | vaddsubpd ymm3, ymm9, ymm10
+c5 75 d0 64 be 10 | vaddsubpd ymm12, ymm1, ymmword ptr [rsi + 4*rdi + 16]
+c5 ed d0 d2 | vaddsubpd ymm2, ymm2, ymm2
+c5 b5 d0 db | vaddsubpd ymm3, ymm9, ymm3
+c5 e5 d0 dd | vaddsubpd ymm3, ymm3, ymm5
 c4 c2 79 20 d9 | vpmovsxbw xmm3, xmm9
 c4 62 79 20 64 be 10 | vpmovsxbw xmm12, qword ptr [rsi + 4*rdi + 16]
 c4 e2 79 20 d2 | vpmovsxbw xmm2, xmm2
