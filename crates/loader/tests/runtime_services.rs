@@ -3534,9 +3534,27 @@ fn open_streams_are_bounded_and_fclose_releases_them() {
     }
     let (_, exit) = print_with(&mut guest, MINGW_OPTIONS, again, b"x", &[]);
     assert_eq!(exit, LIMIT);
-    for stream in [input, out, err, TEXT] {
-        assert_eq!(guest.run("fclose", &[stream]).1, LIMIT, "{stream:#x}");
+    // Closing a standard stream is legal: the CRT does not reserve them on
+    // Windows. awk closes its input when stdin reaches EOF before exit, and
+    // the close marks the descriptor exactly as `_close` of it does (#1273).
+    for stream in [input, out, err] {
+        assert_eq!(
+            guest.call("fclose", &[stream]) & 0xFFFF_FFFF,
+            0,
+            "{stream:#x}"
+        );
     }
+    // A second close has nothing to close, and no stream at all stays no
+    // stream.
+    for stream in [input, out, err] {
+        assert_eq!(
+            guest.call("fclose", &[stream]) & 0xFFFF_FFFF,
+            STDIO_MINUS_ONE,
+            "{stream:#x}"
+        );
+    }
+    assert_eq!(guest.run("fclose", &[TEXT]).1, LIMIT);
+    guest.set_errno(0);
     for stream in open_streams {
         close(&mut guest, stream);
     }
