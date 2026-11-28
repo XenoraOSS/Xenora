@@ -9,6 +9,8 @@
 //! it, generate validates it, release destroys it - because that lifecycle
 //! is the observable behavior of the API.
 
+mod bcrypt;
+
 use super::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ServicesState};
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
@@ -161,6 +163,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             Ok(1)
         },
     );
+
+    bcrypt::register(registry, state);
 }
 
 // The security-token surface of a machine with exactly one identity.

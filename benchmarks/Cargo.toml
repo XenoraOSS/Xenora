@@ -17,3 +17,10 @@ path = "src/main.rs"
 xenora-shader = { path = "../crates/shader" }
 xenora-ref = { path = "../crates/ref" }
 xenora-metal = { path = "../crates/metal" }
+
+[dev-dependencies]
+xenora-isa = { path = "../crates/isa" }
+
+[[bench]]
+name = "gfx1030_identify"
+harness = false

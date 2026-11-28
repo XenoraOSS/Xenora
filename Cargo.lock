@@ -167,6 +167,7 @@ dependencies = [
 name = "xenora-benchmarks"
 version = "0.1.0"
 dependencies = [
+ "xenora-isa",
  "xenora-metal",
  "xenora-ref",
  "xenora-shader",

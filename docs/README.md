@@ -42,6 +42,7 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 - [Guest experiment guide](../experiments/x1/README.md) — Bounded x86-64 execution, executable loading, experimental services, native compute, and offscreen rendering.
 - [x86-64 instruction registry](cpu/instruction-registry.md) — Shared decoder, generated tables, semantics, native lowering and how to add a verified instruction form.
 - [Runtime service registry](runtime/registry.md), [typed service coverage](runtime/services.md) and the [live inventory](runtime/inventory.md) — Import resolution, typed Win64 adapters, manual registrations, aliases and status metadata.
+- [Package entry observation](runtime/package-entry-observer.md) — Root executable entry boundaries and the initial guest thread environment block.
 - [COM base services](runtime/com.md) — Partial apartment, GUID, task allocation and class lookup behavior, with explicit object-model limits.
 - [Guest threads](runtime/threads.md) — Deterministic scheduler, thread services, limits and tests.
 - [Guest graphics command path](runtime/guest-graphics.md) — The guest-callable graphics ABI, ordered resource destruction, and the path from a guest program to a rendered framebuffer.

@@ -11,6 +11,7 @@ It was written as research. Since then #447 implemented follow-ups 1, 2 and 4 fo
 | [x64 exception handling](https://learn.microsoft.com/en-us/cpp/build/exception-handling-x64) (Microsoft C++ docs) | `RUNTIME_FUNCTION`, `UNWIND_INFO`, unwind codes, chained info, the unwind procedure, the handler prototype, `DISPATCHER_CONTEXT` |
 | [PE format](https://learn.microsoft.com/en-us/windows/win32/debug/pe-format), data directories and `.pdata` | Exception directory (index 3) and the x64 function table entry |
 | [`RtlVirtualUnwind`](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtlvirtualunwind) | Signature, handler types, the x64 epilog forms |
+| [x64 prolog and epilog](https://learn.microsoft.com/en-us/cpp/build/prolog-and-epilog) (Microsoft C++ docs, read for #979) | The epilog shape: one `add rsp, constant` or `lea rsp, constant[frame register]`, then pops, then `ret` or `jmp` |
 | [`RtlLookupFunctionEntry`](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtllookupfunctionentry) | Signature and NULL result for leaf code |
 | [`RtlUnwindEx`](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtlunwindex) | Signature, exit unwind when `TargetFrame` is NULL |
 | [`RtlCaptureContext`](https://learn.microsoft.com/en-us/windows/win32/api/winnt/nf-winnt-rtlcapturecontext) | Signature |
@@ -19,7 +20,7 @@ It was written as research. Since then #447 implemented follow-ups 1, 2 and 4 fo
 | [`try-except` statement](https://learn.microsoft.com/en-us/cpp/cpp/try-except-statement) | Filter results and their values |
 | mingw-w64 14.0.0 `winnt.h` and `excpt.h` (public headers, installed with the Homebrew `mingw-w64` package) | Numeric constants the Microsoft pages name without values. Only constant values are cited; no header text or code is copied |
 
-The prolog and epilog page linked from the x64 page (`/cpp/build/prolog-epilog`) returned HTTP 404 when this was written, so its rules are listed under unknowns.
+The prolog and epilog page linked from the x64 page (`/cpp/build/prolog-epilog`) returned HTTP 404 when this was written. #979 later read it at `/cpp/build/prolog-and-epilog`; what it settled and what it leaves open are under unknowns.
 
 ## ABI summary
 
@@ -169,7 +170,7 @@ No page read describes the handler data of `__C_specific_handler`. The layout Xe
 
 ## Unknowns and inconsistencies
 
-- The prolog and epilog page returned 404. The required prolog shape and the `lea rsp` epilog rule are therefore unverified; only the `RtlVirtualUnwind` list of epilog markers was read.
+- The prolog and epilog page, read later for #979, settles the epilog rule: one `add rsp, constant`, or `lea rsp, constant[frame register]` when the function has a frame register, then 8-byte pops, then `ret` or `jmp`. It forbids `lea rsp, constant[rsp]`. It names no list of frame registers, and its examples use RBP and R13. The x64 page says the `FrameRegister` field holds a nonvolatile register in the `OpInfo` encoding, so R12 can be named; its `lea rsp` needs a SIB byte, which the unwinder decodes since #979. The required prolog shape was not checked against the page.
 - Unwind version 2 and its epilog codes, and operation values 6, 7 and 11–15, are not described on the pages read. The x64 page links an "Unwind V3 Preview" for APX, which was not read.
 - The scope table that `__C_specific_handler` reads from the language-specific data is not described on any page read. #453 derived it from original compiled fixtures (above); MSVC's own output was not examined, and how Windows handles collided unwinds through it is unknown.
 - The x64 `CONTEXT` layout was not on the pages read: `RtlCaptureContext` links an ARM64 `CONTEXT` page. The x64 definition of `UNWIND_HISTORY_TABLE` was not in the fetched content either.

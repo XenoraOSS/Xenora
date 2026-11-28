@@ -74,7 +74,7 @@ def main(argv):
             since = (_now(a.now) - timedelta(hours=replay.window_hours(cfg))).strftime("%Y-%m-%dT%H:%M:%SZ")
         st = ghio.gather(a.repo, with_prs=not a.no_prs, recent_since=since)
         if a.pr:
-            st["pr"] = ghio.pr_data(a.repo, a.pr)
+            st["pr"] = ghio.pr_data(a.repo, a.pr, st.get("prs"))
             st["pr_comments"] = ghio.comments(a.repo, a.pr)
         _out(st)
     elif a.cmd == "decide":

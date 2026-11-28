@@ -524,16 +524,28 @@ fn unwind_epilog(
         trial.set(Register::Rsp, rsp.wrapping_add(size));
         pc += len;
     } else if matches!(byte(pc)?, 0x48 | 0x49) && byte(pc + 1)? == 0x8D {
-        // lea rsp, [frame register + disp8/disp32]
+        // lea rsp, [frame register + disp8/disp32]. An r/m field of 100 is
+        // followed by a SIB byte. Under REX.B, SIB 0x24 (no index, base 100)
+        // is R12, which can be a frame register. Any other SIB byte adds an
+        // index or names another base. Without REX.B the base is RSP, and
+        // Microsoft's "x64 prolog and epilog" page rules out `lea rsp,
+        // constant[rsp]` in an epilog.
         let modrm = byte(pc + 2)?;
-        let rm = (modrm & 7) | if byte(pc)? == 0x49 { 8 } else { 0 };
+        let rex_b = byte(pc)? == 0x49;
+        let rm = (modrm & 7) | if rex_b { 8 } else { 0 };
+        let sib = u64::from(modrm & 7 == 4);
+        if sib == 1 && !(rex_b && byte(pc + 3)? == 0x24) {
+            return Ok(false);
+        }
         let disp = match modrm >> 6 {
-            1 => Some((byte(pc + 3)? as i8 as i64 as u64, 4)),
-            2 => Some((memory_u32(memory, pc + 3)? as i32 as i64 as u64, 7)),
+            1 => Some((byte(pc + 3 + sib)? as i8 as i64 as u64, 4 + sib)),
+            2 => Some((
+                memory_u32(memory, pc + 3 + sib)? as i32 as i64 as u64,
+                7 + sib,
+            )),
             _ => None,
         };
-        let Some((disp, len)) =
-            disp.filter(|_| (modrm >> 3) & 7 == 4 && rm & 7 != 4 && rm == frame_register)
+        let Some((disp, len)) = disp.filter(|_| (modrm >> 3) & 7 == 4 && rm == frame_register)
         else {
             return Ok(false);
         };
@@ -1400,6 +1412,171 @@ mod tests {
         assert_eq!(ctx.get(Register::Rbp), 0xBEBE);
         assert_eq!(ctx.rip, 0xCA11E7);
         assert_eq!(ctx.get(Register::Rsp), rsp + 0x40);
+    }
+
+    /// The handler a framed function names, and its data after the slot.
+    const HANDLER: u32 = 0x1F00;
+    /// Where the framed function's fixed allocation starts, and the values
+    /// saved above it: RBX, R12 and the return address.
+    const ALLOCATION: u64 = STACK + 0x200;
+    const SAVED_RBX: u64 = 0xB0B0_B0B0;
+    const SAVED_R12: u64 = 0x1212_1212_1212;
+    const RETURN: u64 = 0xCA11E7;
+
+    /// An image with one function at BEGIN..BEGIN+0x100 that uses R12 as its
+    /// frame register, laid out from Microsoft's "x64 prolog and epilog" and
+    /// "x64 exception handling" pages. The encodings, epilogs included, were
+    /// checked with LLVM `llvm-mc`:
+    ///
+    /// ```text
+    /// 0:  push r12              41 54
+    /// 2:  push rbx              53
+    /// 3:  sub rsp, 0x40         48 83 EC 40
+    /// 7:  lea r12, [rsp + 0x20] 4C 8D 64 24 20
+    /// ```
+    ///
+    /// UNWIND_INFO names R12 (12) with a scaled frame offset of 2, which is
+    /// 0x20 bytes, and an exception handler. `epilog` is written at
+    /// BEGIN+0x80. It also fills the stack: RBX, R12 and the return address
+    /// above the 0x40 allocation at ALLOCATION.
+    fn r12_image(epilog: &[u8]) -> GuestMemory {
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(BASE, IMAGE as usize, MemoryPermissions::READ_WRITE_EXECUTE)
+            .unwrap();
+        memory
+            .map_region(STACK, 0x1000, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        let entry = [BEGIN as u32, BEGIN as u32 + 0x100, INFO as u32];
+        for (index, value) in entry.iter().enumerate() {
+            memory
+                .write_u32(BASE + 0x3000 + 4 * index as u64, *value)
+                .unwrap();
+        }
+        // Version 1 with UNW_FLAG_EHANDLER, a 12-byte prolog, four codes, and
+        // frame register 12 with scaled offset 2.
+        memory
+            .write_bytes(BASE + INFO, &[1 | UNW_FLAG_EHANDLER << 3, 12, 4, 0x2C])
+            .unwrap();
+        // UWOP_SET_FPREG at 12, UWOP_ALLOC_SMALL of 0x40 at 7, then
+        // UWOP_PUSH_NONVOL of RBX at 3 and of R12 at 2: offset, then the
+        // operation in the low and its information in the high nibble.
+        for (index, code) in [0x030C_u16, 0x7207, 0x3003, 0xC002].iter().enumerate() {
+            memory
+                .write_u16(BASE + INFO + 4 + 2 * index as u64, *code)
+                .unwrap();
+        }
+        memory.write_u32(BASE + INFO + 12, HANDLER).unwrap();
+        memory
+            .write_bytes(
+                BASE + BEGIN,
+                &[
+                    0x41, 0x54, 0x53, 0x48, 0x83, 0xEC, 0x40, 0x4C, 0x8D, 0x64, 0x24, 0x20,
+                ],
+            )
+            .unwrap();
+        memory.write_bytes(BASE + BEGIN + 0x80, epilog).unwrap();
+        memory.write_u64(ALLOCATION + 0x40, SAVED_RBX).unwrap();
+        memory.write_u64(ALLOCATION + 0x48, SAVED_R12).unwrap();
+        memory.write_u64(ALLOCATION + 0x50, RETURN).unwrap();
+        register_exception_directory(&headers(0x3000, 12), BASE, IMAGE, &mut memory).unwrap();
+        memory
+    }
+
+    /// `lea rsp, [r12 + 0x20]; pop rbx; pop r12; ret`, with an 8-bit
+    /// displacement as assemblers emit it.
+    const R12_EPILOG: [u8; 9] = [0x49, 0x8D, 0x64, 0x24, 0x20, 0x5B, 0x41, 0x5C, 0xC3];
+    /// The same epilog with a 32-bit displacement.
+    const R12_EPILOG_DISP32: [u8; 12] = [
+        0x49, 0x8D, 0xA4, 0x24, 0x20, 0x00, 0x00, 0x00, 0x5B, 0x41, 0x5C, 0xC3,
+    ];
+
+    /// Unwind from `pc` with RSP, RBX and R12 as given. The frame register
+    /// R12 holds ALLOCATION + 0x20 until the epilog pops it.
+    fn unwind_r12(
+        memory: &GuestMemory,
+        pc: u64,
+        rsp: u64,
+        rbx: u64,
+        r12: u64,
+    ) -> (CpuState, Frame) {
+        let mut ctx = CpuState::new(pc, rsp);
+        ctx.set(Register::Rbx, rbx);
+        ctx.set(Register::R12, r12);
+        let (base, entry) = lookup(memory, pc).unwrap().expect("in the table");
+        let frame = virtual_unwind(memory, base, entry, &mut ctx, UNW_FLAG_EHANDLER).unwrap();
+        (ctx, frame)
+    }
+
+    /// The caller's registers after any unwind of the framed function.
+    fn assert_caller(ctx: &CpuState, what: &str) {
+        assert_eq!(ctx.get(Register::Rbx), SAVED_RBX, "{what}");
+        assert_eq!(ctx.get(Register::R12), SAVED_R12, "{what}");
+        assert_eq!(ctx.rip, RETURN, "{what}");
+        assert_eq!(ctx.get(Register::Rsp), ALLOCATION + 0x58, "{what}");
+    }
+
+    const R12_FRAME: u64 = ALLOCATION + 0x20;
+    /// RSP in the body, below a further 0x100 bytes the body allocated, so only
+    /// the frame register locates the fixed allocation.
+    const BODY_RSP: u64 = ALLOCATION - 0x100;
+
+    #[test]
+    fn an_r12_frame_body_address_unwinds_from_the_frame_register() {
+        let memory = r12_image(&R12_EPILOG);
+        let (ctx, frame) = unwind_r12(&memory, BASE + BEGIN + 0x40, BODY_RSP, 0x5555, R12_FRAME);
+        assert_caller(&ctx, "body");
+        // R12 - 0x20 is the fixed allocation, and the body selects the handler.
+        assert_eq!(
+            frame,
+            Frame {
+                handler: Some((BASE + u64::from(HANDLER), BASE + INFO + 16)),
+                establisher: ALLOCATION,
+            }
+        );
+    }
+
+    #[test]
+    fn an_r12_frame_epilog_is_finished_from_each_of_its_instructions() {
+        for (epilog, lea) in [(&R12_EPILOG[..], 5), (&R12_EPILOG_DISP32[..], 8)] {
+            let memory = r12_image(epilog);
+            let start = BASE + BEGIN + 0x80;
+            // (PC, RSP, RBX, R12) as each instruction of the epilog finds them.
+            let points = [
+                (start, BODY_RSP, 0x5555, R12_FRAME),
+                (start + lea, ALLOCATION + 0x40, 0x5555, R12_FRAME),
+                (start + lea + 1, ALLOCATION + 0x48, SAVED_RBX, R12_FRAME),
+                (start + lea + 3, ALLOCATION + 0x50, SAVED_RBX, SAVED_R12),
+            ];
+            for (pc, rsp, rbx, r12) in points {
+                let what = format!("{epilog:02X?} at {:#x}", pc - start);
+                let (ctx, frame) = unwind_r12(&memory, pc, rsp, rbx, r12);
+                assert_caller(&ctx, &what);
+                // An epilog address calls no handler (Microsoft, "x64
+                // exception handling", RtlVirtualUnwind).
+                assert_eq!(frame.handler, None, "{what}");
+                if r12 == R12_FRAME {
+                    assert_eq!(frame.establisher, ALLOCATION, "{what}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_r12_frame_lea_of_another_form_is_body_code() {
+        let pops = [0x5B, 0x41, 0x5C, 0xC3];
+        for lea in [
+            &[0x49, 0x8D, 0x64, 0x04, 0x20][..], // lea rsp, [r12 + rax + 0x20]: an index
+            &[0x48, 0x8D, 0x64, 0x24, 0x20],     // lea rsp, [rsp + 0x20]: RSP is no frame
+            &[0x49, 0x8D, 0x65, 0x20],           // lea rsp, [r13 + 0x20]: not the frame register
+        ] {
+            let memory = r12_image(&[lea, &pops[..]].concat());
+            let (ctx, frame) =
+                unwind_r12(&memory, BASE + BEGIN + 0x80, BODY_RSP, 0x5555, R12_FRAME);
+            // The body rules apply: the same caller state, and the handler.
+            assert_caller(&ctx, &format!("{lea:02X?}"));
+            assert!(frame.handler.is_some(), "{lea:02X?}");
+        }
     }
 
     #[test]

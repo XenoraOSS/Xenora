@@ -1115,9 +1115,10 @@ fn every_declared_form_is_executed_by_a_fixture() {
     }
     // Control flow and exits are covered by the tests below. String
     // instructions and the direction flag need their own memory layout and
-    // are covered form by form in `tests/cpu_rep.rs`. CMPXCHG8B and
-    // CMPXCHG16B take an 8- or 16-byte operand and two register pairs, and
-    // are covered in `tests/x86_cmpxchg_pair.rs`.
+    // are covered form by form in `tests/cpu_rep.rs` and, for LODS, SCAS and
+    // CMPS, `tests/cpu_string_compare.rs`. CMPXCHG8B and CMPXCHG16B take an
+    // 8- or 16-byte operand and two register pairs, and are covered in
+    // `tests/x86_cmpxchg_pair.rs`.
     let separate = [
         Op::Ldmxcsr,
         Op::Jcc,
@@ -1132,6 +1133,9 @@ fn every_declared_form_is_executed_by_a_fixture() {
         Op::Syscall,
         Op::Movs,
         Op::Stos,
+        Op::Lods,
+        Op::Scas,
+        Op::Cmps,
         Op::Cld,
         Op::Std,
         Op::Cmpxchg8b,
@@ -1358,7 +1362,7 @@ fn undeclared_and_ambiguous_encodings_are_rejected() {
         &[0xF2, 0x90],             // repne nop
         &[0xF3, 0xC3],             // rep ret
         &[0xF2, 0xA4],             // repne movsb
-        &[0xF3, 0xA6],             // repe cmpsb
+        &[0xF2, 0xAC],             // repne lodsb
         &[0x67, 0x8B, 0x06],       // address-size override
         &[0x67, 0xA1, 0, 0, 0, 0], // mov eax, [moffs32]
         &[0x64, 0x2E, 0x8B, 0x06], // CS after FS

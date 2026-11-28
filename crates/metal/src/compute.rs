@@ -21,7 +21,7 @@ use objc2_metal::{
 };
 use xenora_texture::{
     AddressMode, Bc1Upload, BcAlphaFormat, BcAlphaUpload, BcChannelFormat, BcChannelUpload,
-    FilterMode, TiledBc1,
+    BptcFormat, BptcUpload, FilterMode, TiledBc1,
 };
 
 #[path = "render.rs"]
@@ -147,6 +147,25 @@ kernel void read_bc_snorm(texture2d<float, access::read> image [[texture(0)]],
     output[index] = bytes.r | (bytes.g << 8u) | (bytes.b << 16u) | (bytes.a << 24u);
 }
 ";
+
+// BC6H decodes to half floats. Each texel returns its four channels as
+// binary32 bit patterns, so a value between two half floats stays visible
+// instead of being rounded to one of them.
+const BC_FLOAT_READBACK: &str = r"
+#include <metal_stdlib>
+using namespace metal;
+kernel void read_bc_float(texture2d<float, access::read> image [[texture(0)]],
+                          device uint *output [[buffer(1)]],
+                          uint index [[thread_position_in_grid]]) {
+    uint width = image.get_width();
+    uint texel = index / 4u;
+    float4 value = image.read(uint2(texel % width, texel / width));
+    output[index] = as_type<uint>(value[index % 4u]);
+}
+";
+
+/// Output words of each BC6H texel from [`NativeCompute::read_bptc_upload`].
+const BC_FLOAT_WORDS: usize = 4;
 
 enum ComputeInput<'a> {
     Words(&'a [u32]),
@@ -757,23 +776,84 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         )
     }
 
+    /// Read a selected subresource from a validated pitched BC6H or BC7 upload.
+    ///
+    /// The original 16-byte blocks go to a native `BC7_RGBAUnorm`,
+    /// `BC6H_RGBUfloat` or `BC6H_RGBFloat` texture. BC7 output has the layout
+    /// of [`Self::read_bc1_upload`], one word per texel. BC6H output has four
+    /// words per texel, row-major: the red, green, blue and alpha channels as
+    /// the GPU reads them, each as a binary32 bit pattern. Metal fills BC6H
+    /// alpha with 1.0. A BC6H level therefore holds at most 1024 texels.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an invalid layer or mip, out-of-policy size,
+    /// unavailable BC compression (operation `supportsBCTextureCompression`),
+    /// or Metal setup or execution failure.
+    pub fn read_bptc_upload(
+        &self,
+        upload: &BptcUpload<'_>,
+        layer: usize,
+        mip: u32,
+    ) -> Result<Vec<u32>, MetalError> {
+        let level = upload
+            .subresource(layer, mip)
+            .map_err(|error| MetalError::new("texture subresource", format!("{error:?}")))?;
+        let (format, words_per_texel, name) = match upload.format() {
+            BptcFormat::Bc6hUfloat => (
+                MTLPixelFormat::BC6H_RGBUfloat,
+                BC_FLOAT_WORDS,
+                "BC6H UFLOAT",
+            ),
+            BptcFormat::Bc6hSfloat => {
+                (MTLPixelFormat::BC6H_RGBFloat, BC_FLOAT_WORDS, "BC6H SFLOAT")
+            }
+            BptcFormat::Bc7Unorm => (MTLPixelFormat::BC7_RGBAUnorm, 1, "BC7 UNORM"),
+        };
+        let words = self.validate_bc_words(level.width, level.height, words_per_texel, name)?;
+        self.read_bc_blocks(
+            format,
+            level.bytes,
+            level.row_pitch,
+            level.width,
+            level.height,
+            words,
+        )
+    }
+
+    /// [`Self::validate_bc_words`] for formats read back as one word per texel.
     fn validate_bc_extent(
         &self,
         width: usize,
         height: usize,
         name: &str,
     ) -> Result<usize, MetalError> {
+        self.validate_bc_words(width, height, 1, name)
+    }
+
+    /// Checks the level's size against the dispatch limit and the device's
+    /// BC support, and returns the number of output words.
+    fn validate_bc_words(
+        &self,
+        width: usize,
+        height: usize,
+        words_per_texel: usize,
+        name: &str,
+    ) -> Result<usize, MetalError> {
+        let limit = MAX_GRID_WORDS / words_per_texel;
         let pixels = width
             .checked_mul(height)
-            .filter(|pixels| (1..=MAX_GRID_WORDS).contains(pixels))
-            .ok_or_else(|| MetalError::new("texture bounds", "expected 1..=4096 texels"))?;
+            .filter(|pixels| (1..=limit).contains(pixels))
+            .ok_or_else(|| {
+                MetalError::new("texture bounds", format!("expected 1..={limit} texels"))
+            })?;
         if !self.device.supportsBCTextureCompression() {
             return Err(MetalError::new(
                 MetalError::BC_UNAVAILABLE,
                 format!("{name} is unavailable"),
             ));
         }
-        Ok(pixels)
+        Ok(pixels * words_per_texel)
     }
 
     fn read_bc_blocks(
@@ -783,7 +863,7 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         row_pitch: usize,
         width: usize,
         height: usize,
-        pixels: usize,
+        words: usize,
     ) -> Result<Vec<u32>, MetalError> {
         autoreleasepool(|_| {
             // SAFETY: The positive bounded dimensions and supported BC format
@@ -826,10 +906,14 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
             let (source, entry) =
                 if format == MTLPixelFormat::BC4_RSnorm || format == MTLPixelFormat::BC5_RGSnorm {
                     (BC_SNORM_READBACK, "read_bc_snorm")
+                } else if format == MTLPixelFormat::BC6H_RGBUfloat
+                    || format == MTLPixelFormat::BC6H_RGBFloat
+                {
+                    (BC_FLOAT_READBACK, "read_bc_float")
                 } else {
                     (BC_READBACK, "read_bc")
                 };
-            self.run(source, entry, ComputeInput::Texture(&texture, pixels))
+            self.run(source, entry, ComputeInput::Texture(&texture, words))
                 .map(|profile| profile.output)
         })
     }

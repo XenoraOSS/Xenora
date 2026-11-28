@@ -221,8 +221,12 @@ pub struct Insn {
     /// Carries a LOCK prefix. Set only for a lockable form with a memory
     /// destination.
     pub lock: bool,
-    /// A string instruction carrying a REP prefix.
+    /// A string instruction carrying a repeat prefix: REP or REPE (F3), or
+    /// REPNE (F2).
     pub rep: bool,
+    /// The repeat prefix is REPNE (F2), which only CMPS and SCAS accept.
+    /// On those two, a repeat without it is REPE.
+    pub repne: bool,
     /// Set for a VEX-encoded instruction, which shares `op` with a legacy form.
     pub vex: Option<Vex>,
 }
@@ -463,6 +467,7 @@ fn decode_vex<E, F: FnMut(u64) -> Result<u8, E>>(
         condition: opcode & 0xF,
         lock: false,
         rep: false,
+        repne: false,
         vex: Some(Vex {
             length,
             source: rule.nds.then_some(source),
@@ -581,11 +586,19 @@ pub fn decode<E>(
         table
     } else if !two_byte {
         // On a one-byte opcode F3 is PAUSE (F3 90) or REP on a string form.
-        let string = matches!(
-            ONE_BYTE[slot],
-            Entry::Form(index) if FORMS[usize::from(index)].encoding == Encoding::String
-        );
-        if repne || (rep && opcode != 0x90 && !string) {
+        // F2 is REPNE, which only the string compares CMPS and SCAS take
+        // (Intel SDM Vol. 2B, "REP/REPE/REPZ/REPNE/REPNZ").
+        let (string, compares) = match ONE_BYTE[slot] {
+            Entry::Form(index) => {
+                let form = &FORMS[usize::from(index)];
+                (
+                    form.encoding == Encoding::String,
+                    matches!(form.op, Op::Cmps | Op::Scas),
+                )
+            }
+            _ => (false, false),
+        };
+        if (repne && !compares) || (rep && opcode != 0x90 && !string) {
             return Err(DecodeError::Unsupported(if rep { 0xF3 } else { 0xF2 }));
         }
         &ONE_BYTE
@@ -753,7 +766,8 @@ pub fn decode<E>(
         imm,
         condition: opcode & 0xF,
         lock,
-        rep: rep && form.encoding == Encoding::String,
+        rep: (rep || repne) && form.encoding == Encoding::String,
+        repne: repne && form.encoding == Encoding::String,
         vex: None,
     })
 }

@@ -115,15 +115,17 @@ The registry key `rm = 3` makes the form match that one ModRM byte. The other re
 
 ## String instructions
 
-MOVS and STOS exist for 8-, 16-, 32- and 64-bit elements, alone and with REP (F3), together with the direction flag and CLD and STD. `CpuState::df` holds the flag. It is not one of the six status flags the registry tracks.
+MOVS, STOS and LODS exist for 8-, 16-, 32- and 64-bit elements, alone and with REP (F3). So do the string compares SCAS and CMPS, alone, with REPE (F3) and with REPNE (F2). The direction flag exists, with CLD and STD. `CpuState::df` holds the flag. It is not one of the six status flags the registry tracks.
 
-- **One element per step.** A REP form moves one element, decrements RCX and, while RCX is not zero, leaves RIP on the instruction. Each element is a step of its own in both engines and counts against the step budget, so a repeat cannot outrun the budget and can stop part-way and resume. A zero count touches no memory and no register. Without REP, RCX is not read. Step counts therefore count elements, not instructions, for a REP form.
+- **Operations.** MOVS copies `[RSI]` to `[RDI]`. STOS stores the accumulator at `[RDI]`. LODS loads `[RSI]` into AL, AX, EAX or RAX; a 32-bit load clears bits 63:32 and the narrower ones keep the bits above them. SCAS compares the accumulator with `[RDI]`, and CMPS compares `[RSI]` with `[RDI]`, source minus destination. Each compare sets the six status flags as CMP would. MOVS, STOS and LODS change no flag.
+- **One element per step.** A repeated form handles one element, decrements RCX and, while RCX is not zero, leaves RIP on the instruction. REPE also stops after an element that clears ZF, and REPNE after one that sets it (Intel SDM Vol. 2B, "REP/REPE/REPZ/REPNE/REPNZ"). Each element is a step of its own in both engines and counts against the step budget, so a repeat cannot outrun the budget and can stop part-way and resume. A zero count touches no memory, no register and no flag. Without a repeat prefix, RCX is not read. Step counts therefore count elements, not instructions, for a repeated form.
 - **Direction.** RSI and RDI move up by the element size when the flag is clear and down when it is set. Each element is read whole and then written, so overlapping ranges behave as that order dictates.
-- **Faults.** An element completes or changes nothing. A fault keeps the elements already done, leaves RSI, RDI and RCX at the element that faulted, and leaves RIP on the instruction.
-- **Segments.** An FS or GS override applies to the MOVS source. The destination, and STOS as a whole, take no override.
+- **Faults.** An element completes or changes nothing. A fault keeps the elements already done, leaves RSI, RDI and RCX at the element that faulted, and leaves RIP on the instruction. A repeated CMPS or SCAS that faults also gets back the status flags it began with, as Intel SDM Vol. 2B (REP) describes for REPE and REPNE. `CpuState::repeat_flags` keeps them while the repeat runs. It is not architectural state: it exists so that a step budget that splits a repeat cannot change the result.
+- **Segments.** An FS or GS override applies to the `[RSI]` source of MOVS, LODS and CMPS. `[RDI]`, and so STOS and SCAS as a whole, take no override.
+- **Prefixes.** REPNE (F2) is accepted only on SCAS and CMPS. F2 together with F3, LOCK and the address-size override that would select ECX, ESI and EDI are rejected on every string form.
 - **Lowering.** The DBT runs these forms on the shared semantics, one helper call per element, and a string instruction ends its translated block. There is no bulk-copy path, so large copies are slow.
 
-The SDM cases for these forms in `tests/cpu_known_answers.rs` were written before this implementation, by another contributor. `tests/cpu_rep.rs` adds a byte-array model over every form, direction and count, the step accounting, faults and the segment rule. None of it has been compared with x86 hardware.
+The SDM cases for these forms in `tests/cpu_known_answers.rs` were written before this implementation, by another contributor. `tests/cpu_rep.rs` adds a byte-array model for MOVS and STOS over every form, direction and count, the step accounting, faults and the segment rule. `tests/cpu_string_compare.rs` does the same for LODS, SCAS and CMPS (#988) with every repeat prefix. Its model derives the flags from 128-bit arithmetic, arranges the data so that a repeat stops at a chosen element, and also covers `strlen` and `memcmp` idioms. The implementer wrote both the model and the implementation. None of it has been compared with x86 hardware.
 
 ## Guest CPUID
 
@@ -149,7 +151,7 @@ A feature bit is set only when every instruction of that feature is implemented.
 
 ## Rejected on purpose
 
-LOCK except as described above, F2 or F3 where it is neither PAUSE nor part of a declared form, F2 combined with F3, address-size overrides, an ignored segment override after FS or GS, 16-bit stack and branch forms, 16-bit BSWAP and MOVSXD, bit tests of memory by a register index, LODS, CMPS, SCAS, REPE and REPNE, every x87 instruction except FNINIT, MMX, the RCP and RSQRT approximations, SSE3, the MMX forms of SSSE3, SSE4a, AES, PCLMULQDQ, SHA, MOVBE, VEX except as described above, EVEX and XOP. The DBT also refuses raw SYSCALL.
+LOCK except as described above, F2 or F3 where it is neither PAUSE nor part of a declared form, F2 combined with F3, address-size overrides, an ignored segment override after FS or GS, 16-bit stack and branch forms, 16-bit BSWAP and MOVSXD, bit tests of memory by a register index, REPNE on MOVS, STOS and LODS, every x87 instruction except FNINIT, MMX, the RCP and RSQRT approximations, SSE3, the MMX forms of SSSE3, SSE4a, AES, PCLMULQDQ, SHA, MOVBE, VEX except as described above, EVEX and XOP. The DBT also refuses raw SYSCALL.
 
 
 ## CPU semantic expansion audit

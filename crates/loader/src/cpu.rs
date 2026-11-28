@@ -134,6 +134,12 @@ pub struct CpuState {
     pub x87: X87State,
     /// Bits 255:128 of YMM0-YMM15. Legacy SSE instructions never change them.
     pub ymm_high: [u128; 16],
+    /// While a repeated CMPS or SCAS is part-way through, its address and the
+    /// status flags it began with. A fault on a later element restores those
+    /// flags (Intel SDM Vol. 2B, REP/REPE/REPZ/REPNE/REPNZ). Each element is a
+    /// step of its own, so this is not architectural state. It is kept here so
+    /// that where a step budget splits a repeat cannot change its result.
+    pub repeat_flags: Option<(u64, RFlags)>,
 }
 
 impl CpuState {
@@ -151,6 +157,7 @@ impl CpuState {
             df: false,
             x87: X87State::INIT,
             ymm_high: [0; 16],
+            repeat_flags: None,
         }
     }
 

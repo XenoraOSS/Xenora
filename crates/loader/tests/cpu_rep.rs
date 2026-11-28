@@ -472,11 +472,7 @@ fn exactly_the_declared_string_forms_decode() {
         &[0x67, 0xF3, 0xA4], // rep movsb with 32-bit addresses
         &[0xF0, 0xF3, 0xAA], // lock rep stosb
         &[0xF3, 0xFC],       // rep cld
-        &[0xA6],             // cmpsb
-        &[0xF3, 0xA6],       // repe cmpsb
-        &[0xAC],             // lodsb
-        &[0xAE],             // scasb
-        &[0xF2, 0xAE],       // repne scasb
+        &[0xF2, 0xFD],       // repne std
     ];
     for code in rejected {
         let mut padded = code.to_vec();

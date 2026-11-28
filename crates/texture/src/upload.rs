@@ -180,6 +180,69 @@ impl<'a> BcChannelUpload<'a> {
     }
 }
 
+/// A block-compressed format of the BPTC family, whose 16-byte blocks select
+/// a mode in their low bits: BC6H for half-float RGB, BC7 for RGBA.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BptcFormat {
+    /// BC6H with unsigned half-float endpoints (UF16).
+    Bc6hUfloat,
+    /// BC6H with signed half-float endpoints (SF16).
+    Bc6hSfloat,
+    /// BC7 with unsigned normalized channels.
+    Bc7Unorm,
+}
+
+/// A layer-major BC6H or BC7 upload with the same pitch rules as
+/// [`Bc1UploadDesc`], measured in 16-byte blocks.
+#[derive(Clone, Copy, Debug)]
+pub struct BptcUploadDesc {
+    pub width: usize,
+    pub height: usize,
+    pub mips: u32,
+    pub layers: usize,
+    pub format: BptcFormat,
+    pub row_pitch: usize,
+    pub slice_pitch: usize,
+}
+
+/// Validated pitched BC6H or BC7 bytes. Construction checks the layout only:
+/// block contents, reserved modes included, pass through unchanged.
+#[derive(Debug)]
+pub struct BptcUpload<'a> {
+    bytes: &'a [u8],
+    desc: BptcUploadDesc,
+}
+
+impl<'a> BptcUpload<'a> {
+    /// Size of one BC6H or BC7 block in bytes.
+    pub const BLOCK_BYTES: usize = 16;
+
+    pub fn new(bytes: &'a [u8], desc: BptcUploadDesc) -> Result<Self, TextureError> {
+        Self::layout(desc).validate(bytes.len(), Self::BLOCK_BYTES)?;
+        Ok(Self { bytes, desc })
+    }
+
+    pub fn format(&self) -> BptcFormat {
+        self.desc.format
+    }
+
+    /// Selects one level; the returned rows hold 16-byte blocks.
+    pub fn subresource(&self, layer: usize, mip: u32) -> Result<Bc1Subresource<'a>, TextureError> {
+        Self::layout(self.desc).subresource(self.bytes, layer, mip)
+    }
+
+    fn layout(desc: BptcUploadDesc) -> PitchedLayout {
+        PitchedLayout {
+            width: desc.width,
+            height: desc.height,
+            mips: desc.mips,
+            layers: desc.layers,
+            row_pitch: desc.row_pitch,
+            slice_pitch: desc.slice_pitch,
+        }
+    }
+}
+
 /// Format-independent pitch rules shared by the pitched uploads.
 struct PitchedLayout {
     width: usize,
@@ -507,6 +570,128 @@ mod tests {
             assert_eq!(
                 BcChannelUpload::new(&bytes, desc).unwrap_err(),
                 TextureError::InvalidLayout
+            );
+        }
+    }
+
+    const BPTC_DESC: BptcUploadDesc = BptcUploadDesc {
+        width: 5,
+        height: 5,
+        mips: 2,
+        layers: 2,
+        format: BptcFormat::Bc7Unorm,
+        row_pitch: 48,
+        slice_pitch: 112,
+    };
+
+    #[test]
+    fn selects_bptc_subresources_in_sixteen_byte_blocks() {
+        let mut bytes = [0; 448];
+        // Layer 1 starts at 2 * 112; its mip 0 row 1 block 1 is 48 + 16 further.
+        bytes[288..304].fill(0x40);
+        // Layer 0, mip 1 starts one slice in.
+        bytes[112] = 0x03;
+        for format in [
+            BptcFormat::Bc6hUfloat,
+            BptcFormat::Bc6hSfloat,
+            BptcFormat::Bc7Unorm,
+        ] {
+            let upload = BptcUpload::new(
+                &bytes,
+                BptcUploadDesc {
+                    format,
+                    ..BPTC_DESC
+                },
+            )
+            .unwrap();
+            assert_eq!(upload.format(), format);
+            let base = upload.subresource(1, 0).unwrap();
+            assert_eq!((base.width, base.height, base.row_pitch), (5, 5, 48));
+            assert_eq!(base.bytes.len(), 96);
+            assert_eq!(base.bytes[64..80], [0x40; 16]);
+            let small = upload.subresource(0, 1).unwrap();
+            assert_eq!((small.width, small.height, small.bytes.len()), (2, 2, 48));
+            assert_eq!(small.bytes[0], 0x03);
+            for (layer, mip) in [(2, 0), (0, 2)] {
+                assert_eq!(
+                    upload.subresource(layer, mip).unwrap_err(),
+                    TextureError::OutOfBounds
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_invalid_bptc_uploads_before_indexing() {
+        let bytes = [0; 448];
+        for desc in [
+            // An eight-byte pitch holds half a block; 40 is not a multiple of 16.
+            BptcUploadDesc {
+                row_pitch: 24,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                row_pitch: 40,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                slice_pitch: 80,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                slice_pitch: 104,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                width: 0,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                height: 0,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                layers: 0,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                mips: 0,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                mips: 4,
+                ..BPTC_DESC
+            },
+        ] {
+            assert_eq!(
+                BptcUpload::new(&bytes, desc).unwrap_err(),
+                TextureError::InvalidLayout
+            );
+        }
+        // Short, oversized, and one block too few or too many for the layout.
+        for len in [447, 449, 432, 464] {
+            assert_eq!(
+                BptcUpload::new(&vec![0; len], BPTC_DESC).unwrap_err(),
+                TextureError::InvalidByteLength
+            );
+        }
+        for desc in [
+            BptcUploadDesc {
+                width: usize::MAX,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                row_pitch: usize::MAX - 15,
+                ..BPTC_DESC
+            },
+            BptcUploadDesc {
+                layers: usize::MAX,
+                ..BPTC_DESC
+            },
+        ] {
+            assert_eq!(
+                BptcUpload::new(&bytes, desc).unwrap_err(),
+                TextureError::SizeOverflow
             );
         }
     }

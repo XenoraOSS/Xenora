@@ -671,6 +671,16 @@ impl StandardStreams {
         stream: Stream,
         bytes: &[u8],
     ) -> Result<Result<(), u32>, ExitReason> {
+        // A closed standard descriptor fails every later write, as on
+        // Windows after `_close` of it succeeds.
+        let mark = match stream {
+            Stream::Output => Some(1),
+            Stream::Error => Some(2),
+            _ => None,
+        };
+        if mark.is_some_and(|fd| self.closed[fd]) {
+            return Ok(Err(EBADF));
+        }
         let orientation = match stream {
             Stream::Output => &mut self.output_orientation,
             Stream::Error => &mut self.error_orientation,
@@ -891,7 +901,7 @@ impl StandardStreams {
         }
         let bytes = match stream {
             Stream::Input => {
-                if !self.input.orient(false) {
+                if self.closed[0] || !self.input.orient(false) {
                     return Ok(Err(Failed(0, EBADF)));
                 }
                 self.input.take(length as usize)
@@ -927,10 +937,15 @@ impl StandardStreams {
             return Ok(Err(Failed(-1, EINVAL)));
         }
         match self.stream(file)? {
-            Stream::Input => Ok(Ok(match self.input.character() {
-                Some(byte) => i32::from(byte),
-                None => -1,
-            })),
+            Stream::Input => {
+                if self.closed[0] {
+                    return Ok(Err(Failed(-1, EBADF)));
+                }
+                Ok(Ok(match self.input.character() {
+                    Some(byte) => i32::from(byte),
+                    None => -1,
+                }))
+            }
             Stream::File(file) => match self.opened.read_bytes(drive, file, 1) {
                 Ok(bytes) if !bytes.is_empty() => Ok(Ok(i32::from(bytes[0]))),
                 Ok(_) => {
@@ -965,7 +980,7 @@ impl StandardStreams {
         let request = Request::read(memory, options, format, locale)?;
         let scanned = match stream {
             Stream::Input => {
-                if !self.input.orient(false) {
+                if self.closed[0] || !self.input.orient(false) {
                     return Ok(Err(Failed(EOF, EBADF)));
                 }
                 // The hosted input has already had its CRLFs translated.
@@ -1075,7 +1090,7 @@ impl StandardStreams {
     /// end. Text mode is applied when the input is supplied, so a character
     /// here is already after the replacement.
     pub(super) fn character_stdin(&mut self) -> i32 {
-        if !self.input.orient(false) {
+        if self.closed[0] || !self.input.orient(false) {
             return -1;
         }
         match self.input.character() {
@@ -1126,9 +1141,16 @@ impl StandardStreams {
         // A standard descriptor the table carries closes through the
         // ordinary machinery: `_dup2` put it there, and closing it is
         // closing the duplication. One the table does not carry is the
-        // standard stream itself, whose close the runtime still refuses.
+        // standard stream itself, which closes as on Windows - the CRT does
+        // not reserve them - and every later operation on it fails with
+        // EBADF. A second close has nothing to close and fails.
         if fd < 3 && !self.opened.has_descriptor(fd as u32) {
-            return Err(RUNTIME_LIMIT);
+            let mark = &mut self.closed[fd as usize];
+            if *mark {
+                return Ok(Err(Failed(-1, EBADF)));
+            }
+            *mark = true;
+            return Ok(Ok(0));
         }
         let closed = self.opened.descriptor_close(memory, drive, fd as u32);
         if closed && fd < 3 {
@@ -1481,6 +1503,9 @@ impl StandardStreams {
             return Ok(Err(Failed(0, EBADF)));
         }
         if fd < 3 {
+            if self.closed[fd as usize] && !self.opened.has_descriptor(fd as u32) {
+                return Ok(Err(Failed(0, EBADF)));
+            }
             return Ok(Ok(0));
         }
         Ok(if self.opened.has_descriptor(fd as u32) {
@@ -1544,7 +1569,7 @@ impl StandardStreams {
         };
         match stream {
             Stream::Input => {
-                if !self.input.orient(false) {
+                if self.closed[0] || !self.input.orient(false) {
                     return Ok(Err(Failed(-1, EBADF)));
                 }
                 Ok(Ok(match self.input.character() {

@@ -9,6 +9,10 @@
 //! `DllMain` markers, so a missing binding or an inverted initialization order
 //! changes the observed status instead of passing silently.
 
+use std::fs;
+use std::io::ErrorKind;
+use std::path::Path;
+use std::process::Command;
 use std::sync::Arc;
 
 use xenora_loader::imports::ServiceStatus;
@@ -54,20 +58,55 @@ fn registry() -> ImportRegistry {
 
 #[test]
 fn original_multi_dll_package_runs_its_entry_point() {
+    verify_successful_package(CONSUMER, CHAIN, MATH);
+}
+
+#[test]
+fn freshly_built_multi_dll_package_preserves_loader_behavior() {
+    let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("multidll-package-{}", std::process::id()));
+    match fs::remove_dir_all(&directory) {
+        Ok(()) => {}
+        Err(error) if error.kind() == ErrorKind::NotFound => {}
+        Err(error) => panic!("clear {}: {error}", directory.display()),
+    }
+    let script = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/pe/multidll/build.sh");
+    let build = Command::new("sh")
+        .arg(&script)
+        .arg(&directory)
+        .output()
+        .expect("run the multi-DLL fixture builder");
+    assert!(
+        build.status.success(),
+        "{} failed:\n{}{}",
+        script.display(),
+        String::from_utf8_lossy(&build.stdout),
+        String::from_utf8_lossy(&build.stderr),
+    );
+    let read = |name| fs::read(directory.join(name)).expect("read the freshly built package image");
+    let consumer = read("multidll-consumer.exe");
+    let chain = read("xenora_chain.dll");
+    let chain_no_quad = read("xenora_chain_no_quad.dll");
+    let math = read("xenora_math.dll");
+    verify_successful_package(&consumer, &chain, &math);
+    verify_missing_export(&consumer, &chain_no_quad, &math);
+}
+
+fn verify_successful_package(consumer: &[u8], chain: &[u8], math: &[u8]) {
     // The consumer is first on purpose: dependency order must come from the
     // import graph, not from the caller's list order.
     let package = [
         PackageModule {
             file_name: "multidll-consumer.exe",
-            bytes: CONSUMER,
+            bytes: consumer,
         },
         PackageModule {
             file_name: "xenora_chain.dll",
-            bytes: CHAIN,
+            bytes: chain,
         },
         PackageModule {
             file_name: "xenora_math.dll",
-            bytes: MATH,
+            bytes: math,
         },
     ];
     let result = run_package_startup(&package, layout(), 0, registry(), 2_000_000, None)
@@ -259,20 +298,24 @@ fn package_exports_take_precedence_over_same_named_host_services() {
 
 #[test]
 fn a_present_provider_without_the_exported_symbol_fails_closed() {
+    verify_missing_export(CONSUMER, CHAIN_NO_QUAD, MATH);
+}
+
+fn verify_missing_export(consumer: &[u8], chain_no_quad: &[u8], math: &[u8]) {
     // The control DLL is the same middle provider built without XenoraQuad.
     // Its presence must not be treated as a successful binding.
     let package = [
         PackageModule {
             file_name: "multidll-consumer.exe",
-            bytes: CONSUMER,
+            bytes: consumer,
         },
         PackageModule {
             file_name: "xenora_chain.dll",
-            bytes: CHAIN_NO_QUAD,
+            bytes: chain_no_quad,
         },
         PackageModule {
             file_name: "xenora_math.dll",
-            bytes: MATH,
+            bytes: math,
         },
     ];
     let error = run_package_startup(&package, layout(), 0, registry(), 2_000_000, None)
