@@ -241,6 +241,10 @@ pub struct Insn {
     /// The repeat prefix is REPNE (F2), which only CMPS and SCAS accept.
     /// On those two, a repeat without it is REPE.
     pub repne: bool,
+    /// The instruction carried a 67H address-size override. Memory operands
+    /// apply it to their effective address; LOOP and JCXZ select their count
+    /// register by it (Intel SDM Vol. 2A, 2.2.1.6).
+    pub addr32: bool,
     /// Set for a VEX-encoded instruction, which shares `op` with a legacy form.
     pub vex: Option<Vex>,
 }
@@ -485,6 +489,7 @@ fn decode_vex<E, F: FnMut(u64) -> Result<u8, E>>(
         lock: false,
         rep: false,
         repne: false,
+        addr32: false,
         vex: Some(Vex {
             length,
             wide,
@@ -586,12 +591,6 @@ pub fn decode<E>(
     // F2 and F3 together have no defined meaning for any declared form.
     if rep && repne {
         return Err(DecodeError::Unsupported(0xF2));
-    }
-    // In 64-bit mode E0 through E3 count or test RCX; a 67H prefix selects
-    // ECX instead (JECXZ and the narrow LOOP forms). Xenora does not model
-    // that narrow count, so refuse rather than silently test the full RCX.
-    if address_size && matches!(byte, 0xE0..=0xE3) {
-        return Err(DecodeError::Unsupported(0x67));
     }
     let two_byte = byte == 0x0F;
     let mut opcode = if two_byte { cursor.u8()? } else { byte };
@@ -811,6 +810,7 @@ pub fn decode<E>(
         lock,
         rep: (rep || repne) && form.encoding == Encoding::String,
         repne: repne && form.encoding == Encoding::String,
+        addr32: address_size,
         vex: None,
     })
 }
