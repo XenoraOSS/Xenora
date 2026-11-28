@@ -6,6 +6,8 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use xenora::host_output::check_connection;
+
 use super::session;
 use super::{
     CompletedSession, Direction, Frame, MAX_EVENTS, MAX_REPLY_BYTES, Options, RGBA_BYTES, RunError,
@@ -124,16 +126,31 @@ fn read_replies(mut input: impl Read, replies: Sender<io::Result<Reply>>) {
 }
 
 fn receive(replies: &Receiver<io::Result<Reply>>, start: Instant) -> Result<Reply, RunError> {
-    let timeout = WALL_LIMIT.saturating_sub(start.elapsed());
-    match replies.recv_timeout(timeout) {
-        Ok(reply) => reply.map_err(|error| {
-            RunError::Runtime(format!("could not read the session worker: {error}"))
-        }),
-        Err(RecvTimeoutError::Timeout) => Err(RunError::Deadline),
-        Err(RecvTimeoutError::Disconnected) => Err(RunError::Runtime(
-            "session worker disconnected without a reply".to_owned(),
-        )),
+    loop {
+        check_output()?;
+        let remaining = WALL_LIMIT.saturating_sub(start.elapsed());
+        if remaining.is_zero() {
+            return Err(RunError::Deadline);
+        }
+        match replies.recv_timeout(remaining.min(IDLE_CHECK)) {
+            Ok(reply) => {
+                return reply.map_err(|error| {
+                    RunError::Runtime(format!("could not read the session worker: {error}"))
+                });
+            }
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(RunError::Runtime(
+                    "session worker disconnected without a reply".to_owned(),
+                ));
+            }
+        }
     }
+}
+
+fn check_output() -> Result<(), RunError> {
+    check_connection()
+        .map_err(|error| RunError::Runtime(format!("could not write result: {error}")))
 }
 
 fn read_direction(input: &mut impl BufRead, line: usize) -> Result<Option<Direction>, RunError> {
@@ -165,19 +182,20 @@ fn read_direction(input: &mut impl BufRead, line: usize) -> Result<Option<Direct
 
 fn next_direction(
     input: &Receiver<Result<Option<Direction>, RunError>>,
-    replies: &Receiver<io::Result<Reply>>,
+    replies: Option<&Receiver<io::Result<Reply>>>,
 ) -> Result<Option<Direction>, RunError> {
     loop {
+        check_output()?;
         match input.recv_timeout(IDLE_CHECK) {
             Ok(direction) => return direction,
-            Err(RecvTimeoutError::Timeout) => match replies.try_recv() {
-                Err(TryRecvError::Empty) => {}
-                Ok(Err(error)) => {
+            Err(RecvTimeoutError::Timeout) => match replies.map(Receiver::try_recv) {
+                None | Some(Err(TryRecvError::Empty)) => {}
+                Some(Ok(Err(error))) => {
                     return Err(RunError::Runtime(format!(
                         "session worker stopped while waiting for input: {error}"
                     )));
                 }
-                Ok(Ok(_)) | Err(TryRecvError::Disconnected) => {
+                Some(Ok(Ok(_)) | Err(TryRecvError::Disconnected)) => {
                     return Err(RunError::Runtime(
                         "session worker stopped while waiting for input".to_owned(),
                     ));
@@ -232,7 +250,7 @@ fn forward(
             .map_err(|error| RunError::Runtime(format!("could not write result: {error}")))?;
         directions.push(selected);
         frames.push(frame);
-        direction = next_direction(input, replies)?;
+        direction = next_direction(input, Some(replies))?;
     }
 
     let start = Instant::now();
@@ -265,23 +283,20 @@ pub(super) fn supervise(
     mut input: impl BufRead + Send + 'static,
     output: impl Write,
 ) -> Result<CompletedSession, RunError> {
-    // With no operation to perform, there is no worker to time out or reap.
-    let first_direction = read_direction(&mut input, 1)?;
     let (directions, pending) = mpsc::sync_channel(1);
-    if first_direction.is_some() {
-        thread::Builder::new()
-            .name("xenora-interactive-stdin".to_owned())
-            .spawn(move || {
-                for line in 2..=MAX_EVENTS + 1 {
-                    let command = read_direction(&mut input, line);
-                    let done = !matches!(command, Ok(Some(_)));
-                    if directions.send(command).is_err() || done {
-                        return;
-                    }
+    thread::Builder::new()
+        .name("xenora-interactive-stdin".to_owned())
+        .spawn(move || {
+            for line in 1..=MAX_EVENTS + 1 {
+                let command = read_direction(&mut input, line);
+                let done = !matches!(command, Ok(Some(_)));
+                if directions.send(command).is_err() || done {
+                    return;
                 }
-            })
-            .map_err(|error| RunError::Input(format!("could not read stdin: {error}")))?;
-    }
+            }
+        })
+        .map_err(|error| RunError::Input(format!("could not read stdin: {error}")))?;
+    let first_direction = next_direction(&pending, None)?;
     let mut child = worker_command(options)?
         .arg("--interactive")
         .stdin(Stdio::piped())

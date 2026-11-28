@@ -357,3 +357,48 @@ fn interactive_reaps_a_worker_failure_while_stdin_stays_open() {
     assert!(stderr.contains("instruction budget exhausted"), "{stderr}");
     assert!(!frame_dir.exists());
 }
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+#[test]
+fn interactive_exits_on_stdout_disconnect_before_input_and_between_frames() {
+    let scratch = Scratch::new();
+    for (send_direction, directory) in [(false, "before-input"), (true, "between-frames")] {
+        let frame_dir = scratch.0.join(directory);
+        let mut child = command("reference", &frame_dir)
+            .arg("--interactive")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("start interactive xenora-session");
+        let output = child.stdout.take().unwrap();
+        let (sender, stdout) = mpsc::channel();
+        let mut session = Interactive { child, stdout };
+        if send_direction {
+            thread::spawn(move || {
+                let mut reader = BufReader::new(output);
+                let mut frame = String::new();
+                let result = reader.read_line(&mut frame);
+                drop(reader);
+                let _ = sender.send(result.map(|_| frame));
+            });
+            session.input(b"left\n");
+            assert!(
+                session
+                    .line()
+                    .starts_with("frame sequence=1 direction=left "),
+                "{directory}"
+            );
+        } else {
+            drop(output);
+            drop(sender);
+        }
+        let (tail, stderr) = session.await_exit(125);
+        assert!(tail.is_empty(), "{directory}: {tail:?}");
+        assert!(
+            stderr.contains("host output disconnected"),
+            "{directory}: {stderr}"
+        );
+        assert!(!frame_dir.exists(), "{directory}");
+    }
+}
