@@ -420,7 +420,7 @@ def avx_form_cases():
         for n in values:
             three(op, "xmm", f", {n}")
     for v, fourth in (("xmm", (0, 3, 7, 9, 12, 15)), ("ymm", (0, 3, 7, 9, 12, 15))):
-        for op in ("vblendvps", "vblendvpd") + (("vpblendvb",) if v == "xmm" else ()):
+        for op in ("vblendvps", "vblendvpd", "vpblendvb"):
             for n in fourth:
                 out.append(f"{op} {v}3, {v}9, {v}10, {v}{n}")
                 out.append(f"{op} {v}12, {v}1, {whole[v]}, {v}{n}")
