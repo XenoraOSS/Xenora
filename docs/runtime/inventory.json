@@ -14133,6 +14133,26 @@
       "symbol": "??1Init@ios_base@std@@QEAA@XZ"
     },
     {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?_Decref@facet@locale@std@@UEAAPEAV_Facet_base@3@XZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?_Incref@facet@locale@std@@UEAAXXZ"
+    },
+    {
       "data_import": true,
       "family": "other",
       "kind": "name",
@@ -14181,6 +14201,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "?bad@ios_base@std@@QEBA_NXZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?do_widen@?$ctype@D@std@@MEBADD@Z"
     },
     {
       "data_import": false,
@@ -20126,15 +20156,15 @@
   "summary": {
     "aliases": 961,
     "api_set_aliases": 755,
-    "canonical_services": 995,
+    "canonical_services": 998,
     "data_import_services": 12,
     "duplicate_registrations": 0,
     "implemented": 246,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 693,
+    "manual_services": 696,
     "ordinal_aliases": 35,
-    "partial": 749,
+    "partial": 752,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,

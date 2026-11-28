@@ -403,6 +403,18 @@ slots and virtual-base layout were inspected using Clang with those headers.
 The original synthetic-layout guests test callbacks, failure state and refusal
 paths; they do not construct `std::cout` or validate general iostream ABI.
 
+### Microsoft locale facet primitives (#1163)
+
+The Microsoft x64 `locale::facet` increment and decrement exports update the
+32-bit guest reference count at offset 8; decrement returns the facet when
+the new count is zero, leaving destruction to its caller. The narrow
+`ctype<char>::do_widen` scalar export preserves the input byte. These partial
+primitives do not construct locale or facet objects or run destructors. Their
+semantics follow the public [Microsoft STL locale header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xlocale),
+copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception. A locally
+compiled synthetic-layout guest tests the primitives; independent acceptance
+and a Microsoft-header locale lifecycle fixture remain outstanding.
+
 ### Microsoft stream state queries (#1163)
 
 The x64 `ios_base` exports `rdstate`, `good`, `eof`, `fail` and `bad` read

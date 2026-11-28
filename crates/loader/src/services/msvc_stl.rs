@@ -36,6 +36,40 @@ fn count_address(slot: &mut Option<u64>, memory: &mut GuestMemory) -> Result<u64
 }
 
 pub(super) fn register(registry: &mut ImportRegistry) {
+    // Microsoft x64 locale::facet has a 32-bit reference count at offset 8.
+    // Both calls share a lock so their guest-memory update is indivisible.
+    let facet_lock = Arc::new(Mutex::new(()));
+    for (symbol, increment) in [
+        ("?_Incref@facet@locale@std@@UEAAXXZ", true),
+        ("?_Decref@facet@locale@std@@UEAAPEAV_Facet_base@3@XZ", false),
+    ] {
+        let lock = Arc::clone(&facet_lock);
+        registry.register_with_status(
+            MODULE,
+            symbol,
+            ServiceStatus::Partial,
+            move |args, _, memory| {
+                let _guard = lock.lock().expect("Microsoft facet reference count");
+                let address = field(args.rcx, 8)?;
+                let previous = memory.read_u32(address).map_err(ExitReason::MemoryFault)?;
+                let next = if increment {
+                    previous.wrapping_add(1)
+                } else {
+                    previous.wrapping_sub(1)
+                };
+                memory
+                    .write_u32(address, next)
+                    .map_err(ExitReason::MemoryFault)?;
+                Ok(if !increment && next == 0 { args.rcx } else { 0 })
+            },
+        );
+    }
+    registry.register_with_status(
+        MODULE,
+        "?do_widen@?$ctype@D@std@@MEBADD@Z",
+        ServiceStatus::Partial,
+        |args, _, _| Ok(args.rdx & 0xff),
+    );
     register_ostream_flush(registry);
     register_ostream_write(registry);
     // x64 ios_base stores its iostate after the vptr and _Stdstr. These
