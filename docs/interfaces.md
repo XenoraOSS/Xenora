@@ -1782,6 +1782,7 @@ The guest sees a simulated machine described by `GuestSystemProfile` on
 reports the Mac's logical processors, physical memory and page size
 separately, for diagnostics.
 
+- `GetCurrentProcessorNumber` reports virtual processor zero, consistent with the guest scheduler and affinity model (#1201).
 - `GetSystemInfo` and `GetNativeSystemInfo` report an AMD64 processor
   (`PROCESSOR_ARCHITECTURE_AMD64`, `PROCESSOR_AMD_X8664`), 4 KiB pages,
   64 KiB allocation granularity and the x64 user address range
