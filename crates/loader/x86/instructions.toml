@@ -387,6 +387,8 @@ cvtsi2sd = { faults = true, ref = "sdm CVTSI2SD" }
 cvttsd2si = { faults = true, ref = "sdm CVTTSD2SI" }
 cvtsd2si = { faults = true, ref = "sdm CVTSD2SI" }
 
+vcvtph2ps = { faults = true, ref = "sdm VCVTPH2PS" }
+vcvtps2ph = { faults = true, ref = "sdm VCVTPS2PH" }
 vpermd = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
 vpermps = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
 vpermq = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
@@ -7037,3 +7039,46 @@ length = "any"
 w = "0"
 src = "v"
 nds = true
+
+# F16C. The source of VCVTPH2PS is 64 bits at VEX.128 and 128 bits at VEX.256;
+# VCVTPS2PH writes the same widths. VEX.W must be zero and VEX.vvvv must be
+# 1111b, as the operation sections require.
+[[vex]]
+op = "vcvtph2ps"
+map = "0f38"
+prefix = "66"
+opcode = 0x13
+enc = "xmm_rm"
+length = "128"
+w = "0"
+src = "q"
+
+[[vex]]
+op = "vcvtph2ps"
+map = "0f38"
+prefix = "66"
+opcode = 0x13
+enc = "xmm_rm"
+length = "256"
+w = "0"
+src = "x"
+
+[[vex]]
+op = "vcvtps2ph"
+map = "0f3a"
+prefix = "66"
+opcode = 0x1D
+enc = "rm_xmm_imm"
+length = "128"
+w = "0"
+src = "q"
+
+[[vex]]
+op = "vcvtps2ph"
+map = "0f3a"
+prefix = "66"
+opcode = 0x1D
+enc = "rm_xmm_imm"
+length = "256"
+w = "0"
+src = "x"

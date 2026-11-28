@@ -536,6 +536,20 @@ def fma_cases():
     return list(dict.fromkeys(out))
 
 
+def f16c_cases():
+    place = " ptr [rsi + 4*rdi + 16]"
+    quad, xmm = "qword" + place, "xmmword" + place
+    out = []
+    # imm8[1:0] is the rounding mode when imm8[2] is clear; imm8[2] selects
+    # MXCSR.RC; imm8[7:3] is ignored.
+    for n in (0, 1, 2, 3, 4, 7, 8, 255):
+        out += [f"vcvtps2ph xmm3, xmm9, {n}", f"vcvtps2ph {quad}, xmm9, {n}",
+                f"vcvtps2ph xmm3, ymm9, {n}", f"vcvtps2ph {xmm}, ymm9, {n}"]
+    out += ["vcvtph2ps xmm3, xmm9", f"vcvtph2ps xmm3, {quad}",
+            "vcvtph2ps ymm3, xmm9", f"vcvtph2ps ymm3, {xmm}"]
+    return list(dict.fromkeys(out))
+
+
 def assemble(lines):
     with tempfile.TemporaryDirectory() as directory:
         source, obj = Path(directory, "a.s"), Path(directory, "a.o")
@@ -562,7 +576,8 @@ def main(argv):
                         ("float.txt", float_cases()), ("avx.txt", avx_cases()),
                         ("avx_forms.txt", avx_form_cases()),
                         ("fma.txt", fma_cases()),
-                        ("avx2.txt", avx2_cases())):
+                        ("avx2.txt", avx2_cases()),
+                        ("f16c.txt", f16c_cases())):
         text = assemble(lines)
         if argv[1] == "generate":
             (HERE / name).write_text(text)

@@ -6,7 +6,9 @@
 //! every instruction of that feature is implemented, so each bit that is set
 //! is checked against instructions that run, and each bit software commonly
 //! tests that is clear has a witness instruction of that feature which both
-//! engines refuse. The witness must be removed before its bit can be set.
+//! engines refuse. The witness must be removed before its bit can be set. A
+//! feature whose instructions all run can also stay clear pending independent
+//! acceptance; F16C has its own test for that case.
 //!
 //! Bit positions and the feature each instruction belongs to are from the
 //! Intel SDM Vol. 2, CPUID and the instruction entries. A feature whose own
@@ -261,7 +263,6 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("AESNI", 1, ECX, 25, &[0x66, 0x0F, 0x38, 0xDC, 0xC1]), // aesenc xmm0, xmm1
         ("XSAVE", 1, ECX, 26, &[0x0F, 0x01, 0xD0]),      // xgetbv
         ("AVX", 1, ECX, 28, &[0xC5, 0xFC, 0x53, 0xC1]),  // vrcpps ymm0, ymm1
-        ("F16C", 1, ECX, 29, &[0xC4, 0xE2, 0x79, 0x13, 0xC1]), // vcvtph2ps xmm0, xmm1
         ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]),     // rdrand eax
         // AVX2 cross-lane permutes, broadcasts, blends and per-lane shifts are
         // implemented; the 256-bit immediate shuffle is still refused.
@@ -294,6 +295,23 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
             );
             assert_eq!(state, cpu, "{feature} on the {engine}");
         }
+    }
+}
+
+/// F16C is fully implemented but its CPUID bit stays clear until independent
+/// acceptance. Unlike the witnesses above, the instruction runs in both engines.
+#[test]
+fn f16c_is_implemented_but_unreported() {
+    assert_eq!(cpuid(1, 0)[ECX] >> 29 & 1, 0);
+    let code = [0xC4, 0xE2, 0x79, 0x13, 0xC1]; // vcvtph2ps xmm0, xmm1
+    let mut cpu = CpuState::new(ENTRY, 0);
+    cpu.xmm[1] = 0x3C00; // binary16 1.0
+    for (engine, state, exit) in both(&cpu, &code, 1) {
+        assert!(
+            !matches!(exit, ExitReason::IllegalInstruction(_)),
+            "{engine}: {exit:?}"
+        );
+        assert_eq!(state.xmm[0], 0x3F80_0000, "{engine}");
     }
 }
 

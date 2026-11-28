@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Exact binary32 and binary64 arithmetic with x86 SSE rules.
+//! Exact binary16, binary32 and binary64 arithmetic with x86 SSE rules.
 //!
 //! Every operation computes an exact or sticky integer result and rounds once,
 //! in any MXCSR rounding mode. NaN selection, the negative default NaN,
@@ -49,6 +49,8 @@ pub struct Control {
     pub flush_to_zero: bool,
     pub overflow_masked: bool,
     pub underflow_masked: bool,
+    pub denormals_masked: bool,
+    pub precision_masked: bool,
 }
 
 impl Control {
@@ -59,6 +61,8 @@ impl Control {
             flush_to_zero: mxcsr & 1 << 15 != 0,
             overflow_masked: mxcsr & 1 << 10 != 0,
             underflow_masked: mxcsr & 1 << 11 != 0,
+            denormals_masked: mxcsr & 1 << 8 != 0,
+            precision_masked: mxcsr & 1 << 12 != 0,
         }
     }
 }
@@ -71,6 +75,10 @@ pub struct Format {
     fraction: u32,
 }
 
+pub const F16: Format = Format {
+    bits: 16,
+    fraction: 10,
+};
 pub const F32: Format = Format {
     bits: 32,
     fraction: 23,
@@ -779,6 +787,73 @@ pub fn convert(from: Format, to: Format, value: u64, control: &Control) -> Outco
     let (significand, exponent) = from.unpack(value);
     let mut outcome = round(to, sign, u128::from(significand), exponent, false, control);
     outcome.flags |= denormal;
+    outcome
+}
+
+/// VCVTPH2PS: binary16 to binary32. The SDM says a denormal input returns the
+/// correct normal result, MXCSR.DAZ is ignored, and no denormal exception is
+/// reported. A widening conversion is exact, so no rounding is needed.
+pub fn half_to_single(value: u64) -> Outcome {
+    let sign = F16.sign(value);
+    if F16.is_nan(value) {
+        let moved = (value & F16.fraction_mask()) << (F32.fraction - F16.fraction);
+        return Outcome {
+            bits: F32.infinity(sign) | moved | F32.quiet_bit(),
+            flags: if F16.is_signaling(value) { INVALID } else { 0 },
+        };
+    }
+    if F16.is_infinite(value) {
+        return exact(F32.infinity(sign));
+    }
+    let (significand, exponent) = F16.unpack(value);
+    round(
+        F32,
+        sign,
+        u128::from(significand),
+        exponent,
+        false,
+        &Control {
+            rounding: Rounding::Nearest,
+            denormals_are_zero: false,
+            flush_to_zero: false,
+            overflow_masked: true,
+            underflow_masked: true,
+            denormals_masked: true,
+            precision_masked: true,
+        },
+    )
+}
+
+/// VCVTPS2PH: binary32 to binary16 with the rounding mode selected by imm8 or
+/// MXCSR.RC. The SDM says MXCSR.FTZ is ignored, so tiny results become denormals.
+/// A denormal input raises the triple the operation section names: DE, UE and
+/// PE when DM is masked and at least one of PM or UM is unmasked, or DE alone
+/// when DM is unmasked.
+pub fn single_to_half(value: u64, rounding: Rounding, control: &Control) -> Outcome {
+    let sign = F32.sign(value);
+    let denormal_input = F32.is_denormal(value);
+    let mut inner = *control;
+    inner.rounding = rounding;
+    inner.flush_to_zero = false;
+    let mut outcome = if F32.is_nan(value) {
+        let moved = (value & F32.fraction_mask()) >> (F32.fraction - F16.fraction);
+        Outcome {
+            bits: F16.infinity(sign) | moved | F16.quiet_bit(),
+            flags: if F32.is_signaling(value) { INVALID } else { 0 },
+        }
+    } else if F32.is_infinite(value) {
+        exact(F16.infinity(sign))
+    } else {
+        let (significand, exponent) = F32.unpack(value);
+        round(F16, sign, u128::from(significand), exponent, false, &inner)
+    };
+    if denormal_input {
+        if !control.denormals_masked {
+            outcome.flags |= DENORMAL;
+        } else if !control.precision_masked || !control.underflow_masked {
+            outcome.flags |= DENORMAL | UNDERFLOW | PRECISION;
+        }
+    }
     outcome
 }
 
