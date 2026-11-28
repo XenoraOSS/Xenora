@@ -34,6 +34,15 @@ STATES = {
     "SUPERSEDED",
 }
 EVIDENCE = {"A", "B", "C", "D", "E"}
+OWNERSHIP_STATES = {
+    "DeepSeek-owned",
+    "Catminou-owned",
+    "CPU contributor-owned",
+    "Graphics contributor-owned",
+    "Awaiting external dependency",
+    "Ready for integration",
+    "Verified",
+}
 PRIORITIES = {"P0", "P1", "P2", "P3"}
 REQUIRED = {
     "id",
@@ -44,6 +53,9 @@ REQUIRED = {
     "owner",
     "status",
     "evidence_class",
+    "ownership_state",
+    "assignment_side",
+    "counts_toward_personal_workload",
     "issue",
     "pr",
     "test_status",
@@ -81,6 +93,12 @@ def validate(data: dict) -> None:
             raise ValueError(f"{identifier}: unknown status {package['status']}")
         if package["evidence_class"] not in EVIDENCE:
             raise ValueError(f"{identifier}: unknown evidence class {package['evidence_class']}")
+        if package["ownership_state"] not in OWNERSHIP_STATES:
+            raise ValueError(f"{identifier}: unknown ownership state {package['ownership_state']}")
+        if package["assignment_side"] not in {"personal", "external"}:
+            raise ValueError(f"{identifier}: assignment_side must be personal or external")
+        if not isinstance(package["counts_toward_personal_workload"], bool):
+            raise ValueError(f"{identifier}: counts_toward_personal_workload must be boolean")
         if package["priority"] not in PRIORITIES:
             raise ValueError(f"{identifier}: unknown priority {package['priority']}")
         for key in ("issue", "pr"):
@@ -163,6 +181,15 @@ def dashboard(data: dict) -> None:
         count = sum(package["status"] == state for package in packages)
         if count:
             print(f"  {state}: {count}")
+    for side in ("personal", "external"):
+        group = [package for package in packages if package["assignment_side"] == side]
+        completed = sum(package["status"] in {"MERGED", "VERIFIED"} for package in group)
+        remaining = sum(package["counts_toward_personal_workload"] for package in group)
+        print(f"{side} assignments: total={len(group)} completed={completed} remaining_implementation={remaining}")
+    for ownership in sorted(OWNERSHIP_STATES):
+        count = sum(package["ownership_state"] == ownership for package in packages)
+        if count:
+            print(f"  ownership {ownership}: {count}")
     for subsystem in sorted({package["subsystem"] for package in packages}):
         count = sum(package["subsystem"] == subsystem for package in packages)
         print(f"  subsystem {subsystem}: {count}")

@@ -72,6 +72,20 @@ advance this clock. Host idle time and Stop add no time. The launcher still
 uses real wall time for phase deadlines. The default uses the system clock.
 This mode stabilizes programs whose timing comes from the guest clock.
 
+## Xenora.app
+
+Open **Authored PE Session** in the main window. Select the authored EXE
+and provide its SHA-256. Add each companion DLL with its own SHA-256, then
+select Reference or Metal and start the session. The selected files remain
+associated with that session until it ends.
+
+Send one unsigned 32-bit input when the session is ready. The app checks
+the size and SHA-256 of each RGBA frame before displaying it. **Finish session**
+closes the input stream and waits for the guest's final frame count and
+successful exit. **Cancel session** ends an active session without confirming
+completion. The app uses the bundled ARM64 `xenora-pe-session` runner and
+the deterministic guest clock by default.
+
 ## Guest contract
 
 Link against the Win64 C ABI from `xenora-session-v1.dll`. The

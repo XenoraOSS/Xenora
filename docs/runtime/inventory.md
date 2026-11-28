@@ -12,16 +12,16 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 1006 |
+| Canonical services | 1015 |
 | Typed registry services | 304 |
-| Manual code registrations | 702 |
+| Manual code registrations | 711 |
 | Canonical libraries | 28 |
-| Implemented | 249 |
-| Partial | 757 |
+| Implemented | 251 |
+| Partial | 764 |
 | Stub | 0 |
 | Data-import services | 12 |
-| Aliases of every kind | 965 |
-| API-set aliases | 757 |
+| Aliases of every kind | 968 |
+| API-set aliases | 760 |
 | Ordinal aliases | 35 |
 | Statuses never explicitly set | 78 |
 | Duplicate canonical registrations | 0 |
@@ -53,7 +53,7 @@ independent acceptance or compatibility claims.
 | <code>xenora_fixture.dll</code> | <code>xenora-fixture</code> | 22 | 0 | 22 | 0 | 22 | 0 | 0 | 20 |
 | <code>xenora_graphics.dll</code> | <code>xenora-fixture</code> | 34 | 0 | 34 | 0 | 34 | 0 | 0 | 0 |
 | <code>xenora_xaudio2.dll</code> | <code>xenora-fixture</code> | 43 | 0 | 43 | 0 | 0 | 43 | 0 | 0 |
-| <code>xgameruntime.dll</code> | <code>xbox-gaming</code> | 13 | 0 | 13 | 0 | 4 | 9 | 0 | 0 |
+| <code>xgameruntime.dll</code> | <code>xbox-gaming</code> | 22 | 0 | 22 | 0 | 6 | 16 | 0 | 0 |
 | <code>xinput1_3.dll</code> | <code>other</code> | 8 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
 | <code>xinput1_4.dll</code> | <code>other</code> | 8 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
 | <code>xinput9_1_0.dll</code> | <code>other</code> | 4 | 0 | 4 | 0 | 0 | 4 | 0 | 0 |
@@ -67,7 +67,7 @@ metadata, are in `inventory.json`.
 
 | Alias kind | Count |
 | --- | --- |
-| API-set | 757 |
+| API-set | 760 |
 | Ordinal | 35 |
 | Other module | 173 |
 

@@ -1051,7 +1051,6 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.alias(PROCESS_THREADS_V1, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
-    // Registered on kernel32.dll only: no API-set alias is claimed for these.
     for symbol in [
         "GetCurrentThreadStackLimits",
         "GetThreadGroupAffinity",
@@ -1059,5 +1058,10 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     ] {
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
+    registry.alias(
+        "api-ms-win-core-processthreads-l1-1-1.dll",
+        KERNEL32,
+        "GetCurrentThreadStackLimits",
+    );
     const _: () = assert!(THREAD_ALL_ACCESS & SYNCHRONIZE != 0);
 }

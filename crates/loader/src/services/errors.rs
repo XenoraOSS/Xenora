@@ -365,6 +365,11 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.alias(ERRHANDLING_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, ServiceStatus::Partial);
     }
+    registry.alias(
+        "api-ms-win-core-localization-l1-2-0.dll",
+        KERNEL32,
+        "FormatMessageA",
+    );
 
     // No debugger is attached to a Xenora guest, so the documented answer is
     // the honest one: false. A program that changes its behavior under a

@@ -278,6 +278,7 @@ pclmulqdq = { ref = "sdm PCLMULQDQ" }
 # SSE4.1, integer. PTEST writes ZF and CF and clears the other four.
 pblendvb = { ref = "sdm PBLENDVB" }
 ptest = { writes = "cf zf sf of pf af", ref = "sdm PTEST" }
+pmaskmov = { ref = "sdm VPMASKMOVD VPMASKMOVQ" }
 pmuldq = { ref = "sdm PMULDQ" }
 pcmpeqq = { ref = "sdm PCMPEQQ" }
 packusdw = { ref = "sdm PACKUSDW" }
@@ -4425,6 +4426,28 @@ opcode = 0x17
 enc = "xmm_rm"
 length = "any"
 src = "v"
+
+[[vex]]
+op = "pmaskmov"
+map = "0f38"
+prefix = "66"
+opcode = 0x8C
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+memory_only = true
+
+[[vex]]
+op = "pmaskmov"
+map = "0f38"
+prefix = "66"
+opcode = 0x8E
+enc = "rm_xmm"
+length = "any"
+src = "v"
+nds = true
+memory_only = true
 
 [[vex]]
 op = "pmuldq"

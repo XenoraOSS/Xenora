@@ -1344,6 +1344,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
+      "canonical_symbol": "LocalFree",
+      "kind": "name",
+      "library": "api-ms-win-core-heap-l2-1-0.dll",
+      "status": "partial",
+      "symbol": "LocalFree"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
       "canonical_symbol": "GlobalAlloc",
       "kind": "name",
       "library": "api-ms-win-core-heap-obsolete-l1-1-0.dll",
@@ -2474,6 +2484,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
+      "canonical_symbol": "FormatMessageA",
+      "kind": "name",
+      "library": "api-ms-win-core-localization-l1-2-0.dll",
+      "status": "partial",
+      "symbol": "FormatMessageA"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
       "canonical_symbol": "GetACP",
       "kind": "name",
       "library": "api-ms-win-core-localization-l1-2-0.dll",
@@ -3149,6 +3169,16 @@
       "library": "api-ms-win-core-processthreads-l1-1-0.dll",
       "status": "partial",
       "symbol": "TlsSetValue"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
+      "canonical_symbol": "GetCurrentThreadStackLimits",
+      "kind": "name",
+      "library": "api-ms-win-core-processthreads-l1-1-1.dll",
+      "status": "partial",
+      "symbol": "GetCurrentThreadStackLimits"
     },
     {
       "api_set": true,
@@ -19858,6 +19888,76 @@
       "kind": "name",
       "library": "xgameruntime.dll",
       "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "XAsyncBegin"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "XAsyncCancel"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "XAsyncComplete"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "XAsyncGetResult"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "XAsyncGetResultSize"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "XAsyncGetStatus"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "XAsyncSchedule"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
       "status": "implemented",
       "status_explicit": true,
       "symbol": "XNetworkingGetConnectivityHint"
@@ -19948,9 +20048,29 @@
       "kind": "name",
       "library": "xgameruntime.dll",
       "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "XTaskQueueGetCurrentProcessTaskQueue"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
       "status": "partial",
       "status_explicit": true,
       "symbol": "XTaskQueueGetPort"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "XTaskQueueSetCurrentProcessTaskQueue"
     },
     {
       "data_import": false,
@@ -20276,15 +20396,18 @@
   "summary": {
     "aliases": 965,
     "api_set_aliases": 757,
+    "canonical_services": 1015,
+    "aliases": 968,
+    "api_set_aliases": 760,
     "canonical_services": 1006,
     "data_import_services": 12,
     "duplicate_registrations": 0,
-    "implemented": 249,
+    "implemented": 251,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 702,
+    "manual_services": 711,
     "ordinal_aliases": 35,
-    "partial": 757,
+    "partial": 764,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 304,

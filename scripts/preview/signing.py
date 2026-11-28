@@ -12,6 +12,8 @@ from tempfile import TemporaryDirectory
 from uuid import UUID
 from xml.parsers.expat import ExpatError
 
+from .package import HELPERS
+
 
 # Apple Developer ID Application requirement, from TN3127.
 _DEVELOPER_ID = (
@@ -23,8 +25,8 @@ _ALLOW_JIT = "com.apple.security.cs.allow-jit"
 _JIT_ENTITLEMENTS = {_ALLOW_JIT: True}
 
 
-def _signing_targets(app: Path) -> tuple[Path, Path]:
-    return app / "Contents" / "MacOS" / "xenora-cli", app
+def _signing_targets(app: Path) -> tuple[Path, ...]:
+    return (*(app / "Contents" / "MacOS" / name for name in HELPERS), app)
 
 
 def _signature_details(target: Path, *, run) -> str:
@@ -36,7 +38,7 @@ def _signature_details(target: Path, *, run) -> str:
 
 
 def verify_local(app: Path, *, run) -> None:
-    """Verify both ad-hoc signatures on a local preview."""
+    """Verify every ad-hoc signature on a local preview."""
     for target in _signing_targets(app):
         run(["codesign", "--verify", "--strict", target])
         if "Signature=adhoc" not in _signature_details(target, run=run).splitlines():
@@ -66,7 +68,7 @@ def _verify_developer_id(app: Path, *, run) -> None:
 
 
 def sign_bundle(app: Path, *, identity: str | None, run) -> None:
-    """Sign the worker before sealing the app. None selects local ad-hoc signing."""
+    """Sign the helpers before sealing the app. None selects local ad-hoc signing."""
     if identity is None:
         for target in _signing_targets(app):
             run(["codesign", "--force", "--sign", "-", target])
@@ -76,8 +78,8 @@ def sign_bundle(app: Path, *, identity: str | None, run) -> None:
     if not identity.strip() or identity.startswith("-"):
         raise ValueError("Provide a Developer ID Application identity")
 
-    # The app runs original fixtures through the Rust FFI and the worker runs
-    # guest programs. Both invoke the native translator, which uses MAP_JIT.
+    # The app runs original fixtures through the Rust FFI. The helpers run
+    # guest programs. All invoke the native translator, which uses MAP_JIT.
     with TemporaryDirectory(prefix="xenora-sign-") as directory:
         entitlements = Path(directory) / "jit.plist"
         entitlements.write_bytes(plistlib.dumps(_JIT_ENTITLEMENTS))

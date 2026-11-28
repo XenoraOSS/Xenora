@@ -32,6 +32,7 @@ class PreviewPackageTests(unittest.TestCase):
             }),
             "Xenora.app/Contents/MacOS/Xenora": b"app placeholder",
             "Xenora.app/Contents/MacOS/xenora-cli": b"worker placeholder",
+            "Xenora.app/Contents/MacOS/xenora-pe-session": b"session helper placeholder",
         }
 
     def make_app(self, directory):
@@ -105,13 +106,27 @@ class PreviewPackageTests(unittest.TestCase):
                     run=lambda args: self.fail("ditto ran for oversized input"),
                 )
 
+    def test_archive_and_extraction_require_the_session_helper(self):
+        member = "Xenora.app/Contents/MacOS/xenora-pe-session"
+        app = self.make_app(self.root)
+        (self.root / member).unlink()
+        with self.assertRaisesRegex(ValueError, "missing bundle members: .*xenora-pe-session"):
+            package.archive_app(app, self.archive, run=self.fail)
+
+        with ZipFile(self.archive, "w") as archive:
+            for name, data in self.app_files().items():
+                if name != member:
+                    archive.writestr(name, data)
+        with self.assertRaisesRegex(ValueError, "missing archive members: .*xenora-pe-session"):
+            package.extract_app(self.archive, self.destination, run=self.fail)
+
     def test_extract_rejects_oversized_zip_before_opening_it(self):
         self.archive.write_bytes(b"not a ZIP")
         with patch.object(package, "MAX_ARCHIVE_BYTES", 5):
             with self.assertRaisesRegex(ValueError, "on-disk size limit"):
                 package.extract_app(self.archive, self.destination, run=self.fail)
 
-    def test_inspect_records_both_binaries_without_paths_or_execution(self):
+    def test_inspect_records_all_binaries_without_paths_or_execution(self):
         app = self.make_app(self.root)
         calls = []
 
@@ -125,20 +140,22 @@ class PreviewPackageTests(unittest.TestCase):
             "CFBundleExecutable": "Xenora", "CFBundlePackageType": "APPL",
             "CFBundleVersion": "1234", "XenoraSourceRevision": "a" * 40,
         })
-        self.assertEqual(set(evidence["executables"]), {"Xenora", "xenora-cli"})
-        self.assertEqual(evidence["executables"]["xenora-cli"], {
-            "file": "Mach-O 64-bit executable arm64",
-            "architectures": ["arm64"],
-            "dependencies": ["/usr/lib/libSystem.B.dylib"],
-            "signature_verified": True,
-        })
+        self.assertEqual(set(evidence["executables"]), {"Xenora", "xenora-cli", "xenora-pe-session"})
+        for binary in evidence["executables"].values():
+            self.assertEqual(binary, {
+                "file": "Mach-O 64-bit executable arm64",
+                "architectures": ["arm64"],
+                "dependencies": ["/usr/lib/libSystem.B.dylib"],
+                "signature_verified": True,
+            })
         self.assertTrue(evidence["signature_verified"])
         self.assertNotIn(str(self.root), str(evidence))
         self.assertEqual([args[-1] for args in calls if args[0] == "codesign"], [
-            app / "Contents/MacOS/Xenora", app / "Contents/MacOS/xenora-cli", app,
+            app / "Contents/MacOS/Xenora", app / "Contents/MacOS/xenora-cli",
+            app / "Contents/MacOS/xenora-pe-session", app,
         ])
 
-    def test_inspect_refuses_wrong_worker_architecture_linkage_and_signature(self):
+    def test_inspect_refuses_wrong_helper_architecture_linkage_and_signature(self):
         app = self.make_app(self.root)
         for (tool, output, error) in [
             ("lipo", "x86_64 arm64", ValueError),
@@ -149,16 +166,17 @@ class PreviewPackageTests(unittest.TestCase):
             ),
             ("codesign", None, subprocess.CalledProcessError),
         ]:
-            with self.subTest(tool=tool):
-                def run(args, *, capture):
-                    if args[0] == tool and args[-1].name == "xenora-cli":
-                        if output is None:
-                            raise subprocess.CalledProcessError(1, args)
-                        return output
-                    return self.tool_output(args)
+            for helper in ("xenora-cli", "xenora-pe-session"):
+                with self.subTest(tool=tool, helper=helper):
+                    def run(args, *, capture):
+                        if args[0] == tool and args[-1].name == helper:
+                            if output is None:
+                                raise subprocess.CalledProcessError(1, args)
+                            return output
+                        return self.tool_output(args)
 
-                with self.assertRaises(error):
-                    package.inspect_app(app, run=run)
+                    with self.assertRaises(error):
+                        package.inspect_app(app, run=run)
 
     @staticmethod
     def tool_output(args):
