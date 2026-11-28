@@ -565,7 +565,9 @@ pub fn fused_multiply_add(
     let product_invalid = (format.is_zero(a) && format.is_infinite(b))
         || (format.is_infinite(a) && format.is_zero(b));
 
-    let mut outcome = if format.is_nan(a) || format.is_nan(b) || format.is_nan(c) {
+    // A NaN result selects the first NaN in the order of the operands and
+    // reports no denormal operand, as the two-operand forms do.
+    if format.is_nan(a) || format.is_nan(b) || format.is_nan(c) {
         let chosen = if format.is_nan(a) {
             a
         } else if format.is_nan(b) {
@@ -574,15 +576,16 @@ pub fn fused_multiply_add(
             c
         };
         let signaling = format.is_signaling(a) || format.is_signaling(b) || format.is_signaling(c);
-        Outcome {
+        return Outcome {
             bits: chosen | format.quiet_bit(),
             flags: if signaling || product_invalid {
                 INVALID
             } else {
                 0
             },
-        }
-    } else if product_invalid {
+        };
+    }
+    let mut outcome = if product_invalid {
         invalid(format)
     } else if format.is_infinite(a) || format.is_infinite(b) {
         // The product is infinite. An addend of the opposite sign is the
