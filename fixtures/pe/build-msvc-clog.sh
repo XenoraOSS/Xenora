@@ -4,10 +4,7 @@
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 out=${1:-"$here/../../artifacts/msvc-clog"}
-clang=${CLANG:-/opt/homebrew/opt/llvm/bin/clang++}
-if [ ! -x "$clang" ] && [ -z "${CLANG:-}" ]; then
-    clang=$(command -v clang++)
-fi
+clang=${CLANG:-$(xcrun --find clang++)}
 linker=${LLD_LINK:-/opt/homebrew/opt/lld/bin/lld-link}
 if [ ! -x "$linker" ] && [ -z "${LLD_LINK:-}" ]; then
     linker="$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"
