@@ -485,3 +485,37 @@ fn register_ostream_write(registry: &mut ImportRegistry) {
         },
     );
 }
+
+/// Expose the standard UCRT streams' live, unbuffered pointer fields. Opened
+/// file streams still use a different representation and stop explicitly.
+pub(super) fn register_stream_buffer_pointers(
+    registry: &mut ImportRegistry,
+    state: &Arc<super::ServicesState>,
+) {
+    let state = Arc::clone(state);
+    registry.register_with_status(
+        "ucrtbase.dll",
+        "_get_stream_buffer_pointers",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            if args.rcx == 0 {
+                super::crt::set_errno(memory, cpu.gs_base, super::crt::EINVAL)?;
+                return Ok(u64::from(super::crt::EINVAL));
+            }
+            let fields = state.crt_streams().standard_buffer_fields(args.rcx)?;
+            for (out, value) in [args.rdx, args.r8, args.r9].into_iter().zip(fields) {
+                if out != 0 {
+                    memory
+                        .write_u64(out, value)
+                        .map_err(ExitReason::MemoryFault)?;
+                }
+            }
+            Ok(0)
+        },
+    );
+    registry.alias(
+        "api-ms-win-crt-stdio-l1-1-0.dll",
+        "ucrtbase.dll",
+        "_get_stream_buffer_pointers",
+    );
+}

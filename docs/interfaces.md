@@ -352,6 +352,24 @@ bounds and fault behavior. The original MSVC-ABI guest fixture exercises
 copying, overlap, filling, comparison, searching and zero-length comparison;
 it is not evidence for the rest of VCRUNTIME or for Xbox execution.
 
+### UCRT standard-stream buffer fields (#1163)
+
+`_get_stream_buffer_pointers` resolves for the three standard UCRT streams.
+It returns guest addresses of their current pointer, base pointer and count
+fields in the requested output order; null output arguments are allowed.
+A null stream returns `EINVAL`, and unknown or nonstandard streams stop with
+the runtime-limit fault. Standard streams are modeled as unbuffered: their
+base and current pointer reference their own two-byte guest storage and their
+available count is zero. `fputc` and `fflush` retain the existing immediate
+output behavior. Guest-controlled buffering, streams opened by `fopen`, and a
+complete UCRT `FILE` implementation are not supported by this interface.
+
+The declaration is in the public Windows SDK `stdio.h`; Microsoft classifies
+this as an [internal CRT function](https://learn.microsoft.com/en-us/cpp/c-runtime-library/internal-crt-globals-and-functions).
+The initial unbuffered pointer arrangement was checked against Windows SDK
+10.0.22621.0 UCRT source. Original guest fixtures cover stable field addresses,
+ordinary output, optional parameters, null input and invalid addresses.
+
 ### Microsoft-header iostream workload (#1163)
 
 `fixtures/pe/msvc-iostream.cpp` is an original program that uses the actual
@@ -367,7 +385,7 @@ no vendor headers or redistributable binaries are included in this fixture.
 In that local build, six of seven imports resolve to standard services; the `cout` object remains
 unresolved. This is import resolution only, not successful execution. A
 separate local run with Microsoft redistributable DLLs supplied as guest
-modules stopped before execution with 77 required imports unresolved. No
+modules stopped before execution with 76 required imports unresolved. No
 complete C++ stream execution or cleanup is claimed.
 
 ### Microsoft ostream write and flush (#1163)
