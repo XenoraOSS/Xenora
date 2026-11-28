@@ -9,7 +9,7 @@
 //! otherwise. Every instruction is all-or-nothing.
 
 use crate::cpu::{CpuState, ExitReason, Mxcsr, RFlags};
-use crate::memory::GuestMemory;
+use crate::memory::{GuestMemory, MemoryError};
 use crate::x86_decode::{Encoding, Insn, RmOperand, Vex};
 use crate::x86_exec::{
     address, canonical_access, read_mem, read_reg, rm_operand, write_mem, write_reg,
@@ -301,6 +301,53 @@ pub(crate) fn execute(
             }
         }
         (op, encoding) => {
+            // F16C: VCVTPH2PS reads the ModRM operand; VCVTPS2PH writes it and
+            // reads the register named by ModRM.reg. Both VEX.W and a nonzero
+            // VEX.vvvv are rejected by the decoder. A store's address and
+            // permissions are checked before the conversion, so a fault raises
+            // no MXCSR flags.
+            if matches!(op, Op::Vcvtph2ps | Op::Vcvtps2ph) {
+                let destination = if op == Op::Vcvtps2ph {
+                    match vector_address(cpu, insn)? {
+                        Some(address) => {
+                            if !canonical_access(address, insn.rm_size) {
+                                return Err(ExitReason::GeneralProtection);
+                            }
+                            if !memory.can_write(address, usize::from(insn.rm_size)) {
+                                return Err(ExitReason::MemoryFault(
+                                    MemoryError::PermissionViolation {
+                                        address,
+                                        required: "write",
+                                    },
+                                ));
+                            }
+                            Some(address)
+                        }
+                        None => None,
+                    }
+                } else {
+                    None
+                };
+                let source = if op == Op::Vcvtph2ps {
+                    read_source(cpu, memory, insn)?
+                } else {
+                    read_ymm(cpu, reg)
+                };
+                let result =
+                    x86_float::half_precision(cpu, op, source, length, lane_immediate(insn))?
+                        .ok_or(ExitReason::IllegalInstruction(0))?;
+                if op == Op::Vcvtph2ps {
+                    write_ymm(cpu, reg, result, length);
+                } else if let Some(address) = destination {
+                    write_bytes(memory, address, insn.rm_size, result)?;
+                } else {
+                    let RmOperand::Reg(target) = rm_operand(insn)? else {
+                        return Err(ExitReason::IllegalInstruction(0));
+                    };
+                    write_ymm(cpu, target.index, result, 16);
+                }
+                return Ok(());
+            }
             let source = read_source(cpu, memory, insn)?;
             let imm = lane_immediate(insn);
             if let Some(shape) = x86_float::fused_shape(op) {

@@ -1261,12 +1261,14 @@ fn every_declared_form_is_executed_by_a_fixture() {
     let forms = include_str!("x86/avx_forms.txt");
     let fma = include_str!("x86/fma.txt");
     let avx2 = include_str!("x86/avx2.txt");
+    let f16c = include_str!("x86/f16c.txt");
     let lines = FIXTURE.lines().chain(vector.lines()).chain(float.lines());
     for line in lines
         .chain(avx.lines())
         .chain(forms.lines())
         .chain(fma.lines())
         .chain(avx2.lines())
+        .chain(f16c.lines())
     {
         let (hex, _) = line.split_once(" | ").unwrap();
         let code: Vec<u8> = hex
