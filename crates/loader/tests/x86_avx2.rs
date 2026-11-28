@@ -120,6 +120,14 @@ fn length(name: &str, operands: &[Operand]) -> usize {
                 _ => None,
             })
             .unwrap(),
+
+        "vmaskmovps" | "vmaskmovpd" => operands
+            .iter()
+            .find_map(|operand| match operand {
+                Operand::Memory(size) => Some(*size),
+                _ => None,
+            })
+            .unwrap(),
         _ => match operands[0] {
             Operand::Register(_, wide) if wide => 32,
             _ => 16,
@@ -275,6 +283,36 @@ fn reference(
         // their memory bytes alone. The mask is the VEX.vvvv operand.
         "vpmaskmovd" | "vpmaskmovq" => {
             let size = if name.ends_with('q') { 8 } else { 4 };
+            let sign = 8 * size - 1;
+            let mask = source_of(operands[1]);
+            match operands[0] {
+                Operand::Memory(_) => {
+                    let values = source_of(operands[2]);
+                    let mut stored = *memory;
+                    for index in 0..length / size {
+                        if lane(&mask, size, index) >> sign & 1 == 1 {
+                            put(&mut stored, size, index, lane(&values, size, index));
+                        }
+                    }
+                    return (out, Some(stored));
+                }
+                _ => {
+                    let values = source_of(operands[2]);
+                    for index in 0..length / size {
+                        if lane(&mask, size, index) >> sign & 1 == 1 {
+                            put(&mut out, size, index, lane(&values, size, index));
+                        }
+                    }
+                }
+            }
+        }
+
+        // DEST or memory lane i is written only when the sign bit of mask
+        // lane i is set: the load zeroes masked lanes, the store leaves
+        // their memory bytes alone. The mask is the VEX.vvvv operand. These
+        // are bit movements only: no floating-point rounding or exceptions.
+        "vmaskmovps" | "vmaskmovpd" => {
+            let size = if name.ends_with("pd") { 8 } else { 4 };
             let sign = 8 * size - 1;
             let mask = source_of(operands[1]);
             match operands[0] {

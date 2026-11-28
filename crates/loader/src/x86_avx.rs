@@ -252,6 +252,51 @@ pub(crate) fn execute(
                 )?;
             }
         }
+
+        // VMASKMOVPS and VMASKMOVPD: a lane is loaded or stored only when
+        // the sign bit of its mask lane is set. Masked lanes are never
+        // accessed, which is exactly the fault suppression the manuals
+        // specify: an enabled lane that faults still raises.
+        (Op::Maskmovps | Op::Maskmovpd, Encoding::XmmRm) => {
+            let bits = if insn.op == Op::Maskmovps { 32 } else { 64 };
+            let width = (bits / 8) as u8;
+            let Some(base) = vector_address(cpu, insn)? else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let count = u32::from(length) * 8 / bits;
+            let per_half = 128 / bits;
+            let mut value = [0; 2];
+            for index in 0..count {
+                if element(first, bits, index) >> (bits - 1) & 1 == 0 {
+                    continue;
+                }
+                let lane_value =
+                    read_mem(memory, base + u64::from(index) * u64::from(width), width)?;
+                let half = (index / per_half) as usize;
+                value[half] |= u128::from(lane_value) << (bits * (index % per_half));
+            }
+            write_ymm(cpu, reg, value, length);
+        }
+        (Op::Maskmovps | Op::Maskmovpd, Encoding::RmXmm) => {
+            let bits = if insn.op == Op::Maskmovps { 32 } else { 64 };
+            let width = (bits / 8) as u8;
+            let Some(base) = vector_address(cpu, insn)? else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let count = u32::from(length) * 8 / bits;
+            let value = read_ymm(cpu, reg);
+            for index in 0..count {
+                if element(first, bits, index) >> (bits - 1) & 1 == 0 {
+                    continue;
+                }
+                write_mem(
+                    memory,
+                    base + u64::from(index) * u64::from(width),
+                    width,
+                    element(value, bits, index),
+                )?;
+            }
+        }
         // The result is a general register, memory or flags, as in the legacy form.
         (_, Encoding::RegXmm | Encoding::GprXmmImm | Encoding::RegXmmImm)
         | (
