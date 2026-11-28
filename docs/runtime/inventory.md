@@ -12,12 +12,12 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 998 |
+| Canonical services | 1001 |
 | Typed registry services | 302 |
-| Manual code registrations | 696 |
+| Manual code registrations | 699 |
 | Canonical libraries | 28 |
-| Implemented | 246 |
-| Partial | 752 |
+| Implemented | 247 |
+| Partial | 754 |
 | Stub | 0 |
 | Data-import services | 12 |
 | Aliases of every kind | 961 |

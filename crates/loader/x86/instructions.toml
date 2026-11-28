@@ -274,6 +274,7 @@ aesdec = { ref = "sdm AESDEC" }
 aesdeclast = { ref = "sdm AESDECLAST" }
 aesimc = { ref = "sdm AESIMC" }
 aeskeygenassist = { ref = "sdm AESKEYGENASSIST" }
+pclmulqdq = { ref = "sdm PCLMULQDQ" }
 # SSE4.1, integer. PTEST writes ZF and CF and clears the other four.
 pblendvb = { ref = "sdm PBLENDVB" }
 ptest = { writes = "cf zf sf of pf af", ref = "sdm PTEST" }
@@ -1355,6 +1356,19 @@ op = "aeskeygenassist"
 map = "0f3a"
 prefix = "66"
 opcode = 0xDF
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+# PCLMULQDQ has no VEX form. SDM Table 4-13 names imm8[0] and imm8[4] as the
+# qword selectors for the first and second sources; all other immediate bits
+# are ignored by the operation.
+[[form]]
+op = "pclmulqdq"
+map = "0f3a"
+prefix = "66"
+opcode = 0x44
 enc = "xmm_rm_imm"
 size = "x"
 src = "x"

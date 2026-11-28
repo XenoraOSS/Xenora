@@ -344,6 +344,18 @@ fn aes_mul(mut a: u8, mut b: u8) -> u8 {
     product
 }
 
+/// Carry-less product of two qwords, computed bit by bit as the SDM operation
+/// section describes. The product of two 64-bit operands fits in 128 bits.
+fn carryless_product(a: u64, b: u64) -> u128 {
+    let mut product = 0u128;
+    for index in 0..64 {
+        if b >> index & 1 != 0 {
+            product ^= u128::from(a) << index;
+        }
+    }
+    product
+}
+
 /// Multiplicative inverse in the AES field. Zero maps to zero, as FIPS 197's
 /// S-box definition does.
 fn aes_inverse(value: u8) -> u8 {
@@ -767,6 +779,23 @@ pub(crate) fn execute_legacy(
         ) => {
             let source = read_rm(cpu, memory, insn)?;
             cpu.xmm[reg] = aes(insn.op, cpu.xmm[reg], source, 0);
+        }
+        (Op::Pclmulqdq, Encoding::XmmRmImm) => {
+            // SDM Vol. 2, Table 4-13: imm8[0] selects a qword of the first
+            // source (the destination register) and imm8[4] selects one of the
+            // second. Every other immediate bit is ignored.
+            let source = read_rm(cpu, memory, insn)?;
+            let a = if insn.imm & 0x01 != 0 {
+                (cpu.xmm[reg] >> 64) as u64
+            } else {
+                cpu.xmm[reg] as u64
+            };
+            let b = if insn.imm & 0x10 != 0 {
+                (source >> 64) as u64
+            } else {
+                source as u64
+            };
+            cpu.xmm[reg] = carryless_product(a, b);
         }
         (_, Encoding::XmmRmImm) => {
             let source = read_rm(cpu, memory, insn)?;

@@ -434,6 +434,54 @@ f2 0f 70 d2 39 | pshuflw xmm2, xmm2, 57
 66 41 0f 3a 0f d9 ff | palignr xmm3, xmm9, 255
 66 44 0f 3a 0f 54 be 10 ff | palignr xmm10, xmmword ptr [rsi + 4*rdi + 16], 255
 66 0f 3a 0f d2 ff | palignr xmm2, xmm2, 255
+66 41 0f 3a 44 d9 00 | pclmulqdq xmm3, xmm9, 0
+66 44 0f 3a 44 54 be 10 00 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 0
+66 0f 3a 44 d2 00 | pclmulqdq xmm2, xmm2, 0
+66 41 0f 3a 44 d9 01 | pclmulqdq xmm3, xmm9, 1
+66 44 0f 3a 44 54 be 10 01 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 1
+66 0f 3a 44 d2 01 | pclmulqdq xmm2, xmm2, 1
+66 41 0f 3a 44 d9 02 | pclmulqdq xmm3, xmm9, 2
+66 44 0f 3a 44 54 be 10 02 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 2
+66 0f 3a 44 d2 02 | pclmulqdq xmm2, xmm2, 2
+66 41 0f 3a 44 d9 03 | pclmulqdq xmm3, xmm9, 3
+66 44 0f 3a 44 54 be 10 03 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 3
+66 0f 3a 44 d2 03 | pclmulqdq xmm2, xmm2, 3
+66 41 0f 3a 44 d9 08 | pclmulqdq xmm3, xmm9, 8
+66 44 0f 3a 44 54 be 10 08 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 8
+66 0f 3a 44 d2 08 | pclmulqdq xmm2, xmm2, 8
+66 41 0f 3a 44 d9 09 | pclmulqdq xmm3, xmm9, 9
+66 44 0f 3a 44 54 be 10 09 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 9
+66 0f 3a 44 d2 09 | pclmulqdq xmm2, xmm2, 9
+66 41 0f 3a 44 d9 10 | pclmulqdq xmm3, xmm9, 16
+66 44 0f 3a 44 54 be 10 10 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 16
+66 0f 3a 44 d2 10 | pclmulqdq xmm2, xmm2, 16
+66 41 0f 3a 44 d9 11 | pclmulqdq xmm3, xmm9, 17
+66 44 0f 3a 44 54 be 10 11 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 17
+66 0f 3a 44 d2 11 | pclmulqdq xmm2, xmm2, 17
+66 41 0f 3a 44 d9 12 | pclmulqdq xmm3, xmm9, 18
+66 44 0f 3a 44 54 be 10 12 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 18
+66 0f 3a 44 d2 12 | pclmulqdq xmm2, xmm2, 18
+66 41 0f 3a 44 d9 13 | pclmulqdq xmm3, xmm9, 19
+66 44 0f 3a 44 54 be 10 13 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 19
+66 0f 3a 44 d2 13 | pclmulqdq xmm2, xmm2, 19
+66 41 0f 3a 44 d9 22 | pclmulqdq xmm3, xmm9, 34
+66 44 0f 3a 44 54 be 10 22 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 34
+66 0f 3a 44 d2 22 | pclmulqdq xmm2, xmm2, 34
+66 41 0f 3a 44 d9 23 | pclmulqdq xmm3, xmm9, 35
+66 44 0f 3a 44 54 be 10 23 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 35
+66 0f 3a 44 d2 23 | pclmulqdq xmm2, xmm2, 35
+66 41 0f 3a 44 d9 32 | pclmulqdq xmm3, xmm9, 50
+66 44 0f 3a 44 54 be 10 32 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 50
+66 0f 3a 44 d2 32 | pclmulqdq xmm2, xmm2, 50
+66 41 0f 3a 44 d9 33 | pclmulqdq xmm3, xmm9, 51
+66 44 0f 3a 44 54 be 10 33 | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 51
+66 0f 3a 44 d2 33 | pclmulqdq xmm2, xmm2, 51
+66 41 0f 3a 44 d9 7a | pclmulqdq xmm3, xmm9, 122
+66 44 0f 3a 44 54 be 10 7a | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 122
+66 0f 3a 44 d2 7a | pclmulqdq xmm2, xmm2, 122
+66 41 0f 3a 44 d9 ff | pclmulqdq xmm3, xmm9, 255
+66 44 0f 3a 44 54 be 10 ff | pclmulqdq xmm10, xmmword ptr [rsi + 4*rdi + 16], 255
+66 0f 3a 44 d2 ff | pclmulqdq xmm2, xmm2, 255
 66 41 0f 38 28 d9 | pmuldq xmm3, xmm9
 66 44 0f 38 28 54 be 10 | pmuldq xmm10, xmmword ptr [rsi + 4*rdi + 16]
 66 0f 38 28 d2 | pmuldq xmm2, xmm2
