@@ -258,9 +258,15 @@ impl FileStreams {
         };
         // The FILE object is allocated before the drive is touched, so a
         // failed fopen neither creates a file nor destroys the contents of
-        // one.
+        // one. The object spans the legacy CRT's 48-byte `_iobuf`, zeroed:
+        // the mingw-w64 CRT the real-world binaries link expands `getc` and
+        // `putc` as macros that decrement `_cnt` at offset 8 and step `_ptr`
+        // at offset 0 in place, so anything shorter unmaps the first byte
+        // past the allocation the macro touches. A zero `_cnt` sends every
+        // byte through `_filbuf`/`_flsbuf`, exactly as the unbuffered stream
+        // behaves on Windows.
         let file = memory
-            .map_heap_allocation(PROCESS_HEAP, 8)
+            .map_heap_allocation(PROCESS_HEAP, 48)
             .map_err(|_| ENOMEM)?;
         if create && !drive.drive_create(&path) {
             memory.release_heap_allocation(PROCESS_HEAP, file);
@@ -1533,6 +1539,38 @@ mod tests {
     use super::super::ObjectState;
     use super::{FileStreams, parse_mode};
     use crate::memory::GuestMemory;
+
+    /// The object `fopen` returns spans the legacy CRT's 48-byte `_iobuf`,
+    /// zeroed: the mingw-w64 CRT expands `getc`/`putc` as macros that
+    /// decrement `_cnt` at offset 8 and step `_ptr` at offset 0 in place, so
+    /// every byte of the structure the macros touch must be mapped memory
+    /// (#1218), and a zero `_cnt` sends every byte through `_filbuf`/`_flsbuf`.
+    #[test]
+    fn fopen_returns_a_legacy_iobuf_sized_zeroed_object() {
+        let mut streams = FileStreams::default();
+        let mut drive = ObjectState::default();
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x1000, 0x4000, crate::memory::MemoryPermissions::READ_WRITE)
+            .unwrap();
+        let file = streams
+            .open(&mut memory, &mut drive, b"target", b"w")
+            .expect("open");
+        // Every byte of the 48-byte `_iobuf` is mapped and zero: `_cnt` at 8
+        // for the decrement, `_ptr` at 0 for the step, and the slack the
+        // legacy layout documents through `_tmpfname` at 40.
+        for offset in 0..48u64 {
+            assert_eq!(
+                memory.read_u8(file + offset).expect("mapped"),
+                0,
+                "offset {offset}"
+            );
+        }
+        memory
+            .write_u32(file + 8, 1)
+            .expect("the macro decrement must be writable");
+        assert_eq!(memory.read_u32(file + 8).expect("read"), 1);
+    }
 
     /// The six access types of the `fopen` page, each alone and with `t` or
     /// `b`, and what the page says of each.

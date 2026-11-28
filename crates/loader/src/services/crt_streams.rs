@@ -641,7 +641,9 @@ impl StandardStreams {
     }
 
     /// Addresses of the live buffer fields for one of our standard streams.
-    /// File streams returned by fopen are not yet represented by this layout.
+    /// File streams returned by fopen are not represented by this layout:
+    /// their zeroed legacy `_iobuf` keeps `_cnt` at zero, so the CRT macros
+    /// reach `_filbuf`/`_flsbuf` for every byte instead of a buffer.
     pub(super) fn standard_buffer_fields(&self, file: u64) -> Result<[u64; 3], ExitReason> {
         let Some(base) = self.files else {
             return Err(RUNTIME_LIMIT);
