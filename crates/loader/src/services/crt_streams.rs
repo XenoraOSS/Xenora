@@ -34,8 +34,10 @@ use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
 
 /// The exit for a request the runtime does not model.
 const RUNTIME_LIMIT: ExitReason = ExitReason::IllegalInstruction(0xFE);
-/// `typedef struct _iobuf { void* _Placeholder; } FILE;` (corecrt_wstdio.h).
-const FILE_BYTES: u64 = 8;
+/// Windows x64 internal standard-stream allocation: the public FILE is its
+/// first pointer-sized member. The first three fields are the live unbuffered
+/// pointer, base and count; the remaining fields reserve the CRT object layout.
+const FILE_BYTES: u64 = 88;
 /// The most a format string or one `fwrite` or `fputs` may hold.
 const MAX_TRANSFER: u64 = 1 << 20;
 /// The longest file name or mode string `fopen` reads, in bytes.
@@ -625,11 +627,37 @@ impl StandardStreams {
                 let base = memory
                     .map_heap_allocation(PROCESS_HEAP, (3 * FILE_BYTES) as usize)
                     .map_err(fault)?;
+                // These standard streams use unbuffered output. Its two-byte
+                // backing storage is the stream's own _charbuf field, while
+                // the available count remains zero between operations.
+                for stream in 0..3u64 {
+                    let at = base + FILE_BYTES * stream;
+                    memory.write_u64(at, at + 28).map_err(fault)?;
+                    memory.write_u64(at + 8, at + 28).map_err(fault)?;
+                    memory.write_u32(at + 32, 2).map_err(fault)?;
+                    memory
+                        .write_u32(at + 20, 0x2400 | if stream == 0 { 1 } else { 2 })
+                        .map_err(fault)?;
+                    memory.write_u32(at + 24, stream as u32).map_err(fault)?;
+                }
                 self.files = Some(base);
                 base
             }
         };
         Ok(base + FILE_BYTES * u64::from(index))
+    }
+
+    /// Addresses of the live buffer fields for one of our standard streams.
+    /// File streams returned by fopen are not yet represented by this layout.
+    pub(super) fn standard_buffer_fields(&self, file: u64) -> Result<[u64; 3], ExitReason> {
+        let Some(base) = self.files else {
+            return Err(RUNTIME_LIMIT);
+        };
+        let offset = file.wrapping_sub(base);
+        if ![0, FILE_BYTES, FILE_BYTES * 2].contains(&offset) {
+            return Err(RUNTIME_LIMIT);
+        }
+        Ok([file + 8, file, file + 16])
     }
 
     /// `__iob_func`: the legacy CRT's array of three 48-byte `_iobuf`
@@ -678,8 +706,8 @@ impl StandardStreams {
     fn stream(&self, file: u64) -> Result<Stream, ExitReason> {
         match self.files.map(|base| file.wrapping_sub(base)) {
             Some(0) => Ok(Stream::Input),
-            Some(8) => Ok(Stream::Output),
-            Some(16) => Ok(Stream::Error),
+            Some(offset) if offset == FILE_BYTES => Ok(Stream::Output),
+            Some(offset) if offset == 2 * FILE_BYTES => Ok(Stream::Error),
             _ if self.opened.contains(file) => Ok(Stream::File(file)),
             _ => self.legacy_stream(file).ok_or(RUNTIME_LIMIT),
         }

@@ -117,6 +117,11 @@ shlx = { ref = "sdm SHLX/SHRX/SARX" }
 shrx = { ref = "sdm SHLX/SHRX/SARX" }
 sarx = { ref = "sdm SHLX/SHRX/SARX" }
 rorx = { ref = "sdm RORX" }
+# PDEP deposits low-order source bits into the positions selected by the mask;
+# PEXT compresses the masked source bits into low-order positions. Neither
+# instruction writes a flag.
+pdep = { ref = "sdm PDEP" }
+pext = { ref = "sdm PEXT" }
 mulx = { ref = "sdm MULX" }
 push = { ref = "sdm PUSH" }
 pop = { ref = "sdm POP" }
@@ -5540,8 +5545,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x70
 enc = "xmm_rm_imm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "pshufhw"
@@ -5549,8 +5554,8 @@ map = "0f"
 prefix = "f3"
 opcode = 0x70
 enc = "xmm_rm_imm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "pshuflw"
@@ -5558,8 +5563,8 @@ map = "0f"
 prefix = "f2"
 opcode = 0x70
 enc = "xmm_rm_imm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "shufps"
@@ -6231,9 +6236,31 @@ opcode = 0xF0
 enc = "reg_rm_ub"
 length = "128"
 
+# PDEP and PEXT take the bit source from VEX.vvvv and the mask from ModRM.
+# They share opcode F5 with VEX.pp selecting the two forms; VEX.W selects a
+# 32- or 64-bit operand and VEX.L is clear in both. MULX takes its multiplicand
+# from the ModRM r/m operand and the implicit multiplier from RDX, writing the
+# high product to the ModRM register and the low product to VEX.vvvv.
+[[vex]]
+op = "pdep"
+map = "0f38"
+prefix = "f2"
+opcode = 0xF5
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "pext"
+map = "0f38"
+prefix = "f3"
+opcode = 0xF5
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
 # MULX writes the low product to the ModRM register and the high product to
-# VEX.vvvv. The ModRM r/m operand is the multiplicand and RDX is the implicit
-# multiplier. LLVM's encoding for `mulx r10d, r12d, [rsi + 4*rdi + 16]` uses
+# VEX.vvvv. LLVM's encoding for `mulx r10d, r12d, [rsi + 4*rdi + 16]` uses
 # VEX.F2.0F38.F6 with VEX.vvvv naming the high destination.
 [[vex]]
 op = "mulx"

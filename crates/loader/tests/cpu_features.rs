@@ -266,12 +266,14 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("XSAVE", 1, ECX, 26, &[0x0F, 0x01, 0xD0]),             // xgetbv
         ("AVX", 1, ECX, 28, &[0xC5, 0xFC, 0x53, 0xC1]),         // vrcpps ymm0, ymm1
         ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]),            // rdrand eax
-        // AVX2 cross-lane permutes, broadcasts, blends and per-lane shifts are
-        // implemented; the 256-bit immediate shuffle is still refused.
-        ("AVX2", 7, EBX, 5, &[0xC5, 0xFD, 0x70, 0xC1, 0x1B]), // vpshufd ymm0, ymm1, 27
-        // The merged BMI1 and BMI2 forms are implemented; PDEP and PEXT are
-        // the remaining BMI2 refusals, so PDEP is the witness.
-        ("BMI2", 7, EBX, 8, &[0xC4, 0xE2, 0x33, 0xF5, 0xD9]), // pdep ebx, r9d, ecx
+        // AVX2 cross-lane permutes, broadcasts, blends, per-lane shifts and
+        // the 256-bit immediate shuffles are implemented; moving the 256-bit
+        // byte mask to a general register is still refused.
+        ("AVX2", 7, EBX, 5, &[0xC5, 0xFD, 0xD7, 0xC1]), // vpmovmskb eax, ymm1
+        // All defined BMI2 forms now execute; CPUID still withholds the bit
+        // pending independent acceptance. VEX.L=1 is reserved for PDEP, so the
+        // 256-bit encoding is an honest refused witness.
+        ("BMI2", 7, EBX, 8, &[0xC4, 0xE2, 0x37, 0xF5, 0xD9]), // reserved VEX.L=1 pdep
         ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),          // rdseed eax
         ("ADX", 7, EBX, 19, &[0x66, 0x0F, 0x38, 0xF6, 0xC1]), // adcx eax, ecx
         ("SHA", 7, EBX, 29, &[0x0F, 0x38, 0xC9, 0xC1]),       // sha1msg1 xmm0, xmm1
