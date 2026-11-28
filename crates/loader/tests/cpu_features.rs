@@ -301,10 +301,12 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("AESNI", 1, ECX, 25, &[0xC4, 0xE2, 0x71, 0xDC, 0xD0]), // vaesenc xmm0, xmm1, xmm2
         ("XSAVE", 1, ECX, 26, &[0x0F, 0x01, 0xD0]),             // xgetbv
         ("AVX", 1, ECX, 28, &[0xC5, 0xFC, 0x53, 0xC1]),         // vrcpps ymm0, ymm1
-        ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]), // AVX2 cross-lane permutes, broadcasts, blends, per-lane shifts, the
-        // 256-bit immediate shuffles and the byte-mask move are implemented;
-        // the byte-granular variable blend at 256 bits is still refused.
-        ("AVX2", 7, EBX, 5, &[0xC4, 0xE3, 0x75, 0x4C, 0xC2, 0x30]), // vpblendvb ymm0, ymm1, ymm2, ymm3
+        ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]),            // rdrand eax
+        // AVX2 cross-lane permutes, broadcasts, blends, per-lane shifts, the
+        // 256-bit immediate shuffles, the byte-mask move and the byte-granular
+        // variable blend are implemented; the gather instructions and masked
+        // moves are still refused.
+        ("AVX2", 7, EBX, 5, &[0xC4, 0xE2, 0x69, 0x90, 0x04, 0x8E]), // vpgatherdd xmm0, [rsi + 4*xmm1], xmm2
         // All defined BMI2 forms now execute; CPUID still withholds the bit
         // pending independent acceptance. VEX.L=1 is reserved for PDEP, so the
         // 256-bit encoding is an honest refused witness.
