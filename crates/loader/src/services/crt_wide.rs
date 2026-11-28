@@ -15,7 +15,7 @@
 use super::crt::set_errno;
 use super::crt_streams::{c_string, fault};
 use crate::cpu::ExitReason;
-use crate::memory::{GuestMemory, PROCESS_HEAP};
+use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
 
 /// `EILSEQ`: a wide character that has no multibyte form in the encoding.
 const EILSEQ: u32 = 42;
@@ -175,11 +175,12 @@ pub(super) fn wide_string_to_multibyte(
     wide: u64,
     count: u64,
 ) -> Result<u64, ExitReason> {
-    let limit = if text == 0 {
-        65_536
-    } else {
-        count.saturating_add(1)
-    };
+    if wide == 0 {
+        return Err(fault(MemoryError::UnmappedAddress(0)));
+    }
+    // Each representable unit occupies one byte in this locale. A full
+    // destination stops conversion before the next source unit is read.
+    let limit = if text == 0 { 65_536 } else { count };
     let units = wide_string(memory, wide, limit).map_err(fault)?;
     if units.iter().any(|unit| *unit > 0xFF) {
         let _ = set_errno(memory, teb, EILSEQ);
@@ -189,15 +190,13 @@ pub(super) fn wide_string_to_multibyte(
     if text == 0 {
         return Ok(units.len() as u64);
     }
-    let mut written = 0u64;
-    for unit in units.iter().copied() {
-        if written >= count {
-            break;
-        }
-        memory.write_u8(text + written, unit as u8).map_err(fault)?;
-        written += 1;
+    for (offset, unit) in units.iter().copied().enumerate() {
+        memory
+            .write_u8(text + offset as u64, unit as u8)
+            .map_err(fault)?;
     }
-    if written < count && written == units.len() as u64 {
+    let written = units.len() as u64;
+    if written < count {
         memory.write_u8(text + written, 0).map_err(fault)?;
     }
     Ok(written)
