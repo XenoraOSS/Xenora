@@ -104,6 +104,13 @@ def cases():
             out += [f"{op} {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
                     f"{op} {reg(10, bits)}, {mem(bits)}, {reg(12, bits)}",
                     f"{op} {reg(2, bits)}, {reg(2, bits)}, {reg(2, bits)}"]
+        # MULX writes the low product to the first destination, the high
+        # product to VEX.vvvv, and takes the multiplicand from the last
+        # operand. The third case aliases the low destination with RDX.
+        out += [f"mulx {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
+                f"mulx {reg(10, bits)}, {reg(12, bits)}, {mem(bits)}",
+                f"mulx {reg(2, bits)}, {reg(9, bits)}, {reg(2, bits)}",
+                f"mulx {reg(10, bits)}, {reg(15, bits)}, {reg(1, bits)}"]
         for count in (0, 1, 7, bits - 1, bits, bits + 5):
             out += [f"rorx {reg(3, bits)}, {reg(9, bits)}, {count}",
                     f"rorx {reg(10, bits)}, {mem(bits)}, {count}"]
