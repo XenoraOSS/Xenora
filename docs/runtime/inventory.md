@@ -12,14 +12,14 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 975 |
+| Canonical services | 979 |
 | Typed registry services | 302 |
-| Manual code registrations | 673 |
-| Canonical libraries | 25 |
+| Manual code registrations | 677 |
+| Canonical libraries | 26 |
 | Implemented | 246 |
-| Partial | 729 |
+| Partial | 733 |
 | Stub | 0 |
-| Data-import services | 7 |
+| Data-import services | 8 |
 | Aliases of every kind | 955 |
 | API-set aliases | 754 |
 | Ordinal aliases | 35 |
@@ -40,6 +40,7 @@ independent acceptance or compatibility claims.
 | <code>libgcc_s_seh-1.dll</code> | <code>c++-support</code> | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
 | <code>libstdc++-6.dll</code> | <code>c++-support</code> | 18 | 3 | 15 | 0 | 15 | 3 | 0 | 0 |
 | <code>libwinpthread-1.dll</code> | <code>c++-support</code> | 8 | 0 | 8 | 0 | 4 | 4 | 0 | 0 |
+| <code>msvcp140.dll</code> | <code>other</code> | 4 | 0 | 4 | 1 | 0 | 4 | 0 | 0 |
 | <code>msvcrt.dll</code> | <code>c-runtime</code> | 41 | 13 | 28 | 7 | 14 | 27 | 0 | 14 |
 | <code>psapi.dll</code> | <code>windows-system</code> | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
 | <code>ucrtbase.dll</code> | <code>c-runtime</code> | 306 | 211 | 95 | 0 | 104 | 202 | 0 | 10 |

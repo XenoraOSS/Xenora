@@ -43,6 +43,7 @@ mod graphics;
 mod heap;
 mod locale;
 pub(crate) mod modules;
+mod msvc_stl;
 mod platform_fixture;
 mod process;
 mod registry;
@@ -895,6 +896,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     registry.hooks = Some(Arc::clone(&state.hooks));
     threads::register(registry, &state);
     static_cxx::register(registry, &state);
+    msvc_stl::register(registry);
     crate::exceptions::register(registry);
     crt_jump::register(registry);
     xnetworking::register(registry);

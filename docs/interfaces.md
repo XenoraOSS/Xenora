@@ -324,6 +324,27 @@ attribute bit, is truncated, or uses the earlier virtual-address descriptor form
 is reported in `delay_import_error` and in the Markdown report, together with
 the entries read before it.
 
+### Microsoft STL initialization count (#1163)
+
+`msvcp140.dll` exposes the Microsoft x64 decorated `ios_base::Init` count,
+count accessor, constructor helper and destructor helper. The data import and
+accessor share one guest-memory cell, initialized to -1. Construction changes a
+negative count to 1 and otherwise increments it; destruction decrements it. On
+the final destruction Xenora stops with the runtime-limit fault because the
+standard stream objects and their required flush are not implemented. Count
+overflow also stops the guest. This is a partial initialization boundary: it
+does not initialize `std::cout` or establish general Microsoft STL support.
+
+The count behavior is independently implemented from the publicly available
+[Microsoft STL source at commit 0cabaf3](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/src/iostream.cpp)
+and its [header declarations](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xiosbase).
+These files are copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception;
+no source text was copied. The original freestanding fixture declares just the
+ABI under test, and does not include the Microsoft headers or prove a complete
+MSVC iostream program. Its output uses UCRT `puts`, not a C++ stream.
+
+### Import name diagnostics
+
 `xenora_import_gen::demangle` decodes Microsoft Visual C++ decorated names
 for diagnostics, in the style of Microsoft's `undname`. It covers functions,
 data, member access and storage, `this` qualifiers, calling conventions,
