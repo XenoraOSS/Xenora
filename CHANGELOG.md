@@ -7,6 +7,7 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- The synthetic C runtime supports the documented `strftime` format codes `%D`, `%F`, `%R`, `%T`, `%n`, and `%t` (#1326).
 - An original C++ guest fixture exercises compiler-generated Itanium ABI guard abort when a function-local constructor throws. A guest worker retries and initializes the object once, and startup controls require the three guard imports. The compiled fixture passes locally at two optimization levels on Apple Silicon (#1277).
 - Added an original Microsoft x64 C++ package fixture that checks compiler-emitted global initialization in dependency order and per-DLL exit callbacks in reverse registration order (#1276). The EXE and two DLLs record their execution order in the synthetic guest drive.
 - Added an original Microsoft x64 C++ ABI package fixture that constructs an object in one DLL, invokes and deletes it through a base pointer in another, and checks destructor order and heap release. A rejected handoff leaves the object live for a retry (#1263).
@@ -540,6 +541,7 @@ remains unsupported.
 - WinHTTP HTTP-date conversion utilities (#1109): `WinHttpTimeToSystemTime` parses the exact RFC 2616 RFC1123, RFC850 and asctime forms into bounded SYSTEMTIME values, including validated leap years, computed weekdays and a year-granularity rolling fifty-year RFC850 century window driven by the service clock. `WinHttpTimeFromSystemTime` validates input calendar fields and emits the RFC1123 generation form with a null terminator. The parser deliberately remains narrower than permissive legacy implementations: lowercase or whitespace-tolerant forms, leap seconds, non-GMT zone names and years above 9999 fail honestly. Direct service tests cover all three forms, round trips, malformed inputs and invalid guest memory on Apple Silicon; independent acceptance and real Xbox compatibility are not claimed.
 
 ### Fixed
+- Narrow `strftime` preserves literal format bytes and counts them toward the output buffer capacity (#1326).
 
 - QA verification now fingerprints tracked and non-ignored checkout inputs, including binary fixtures. A source change detected during the suites makes the evidence stale even if the original files are restored later. Suite exit codes are preserved (#1237).
 - `xenora-pe-session` refuses a DLL selected as the root before guest startup, including sessions without companion modules (#1275).
