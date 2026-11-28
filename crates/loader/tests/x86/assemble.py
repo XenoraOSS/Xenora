@@ -456,6 +456,40 @@ def avx_form_cases():
     three("vdpps", "ymm", ", 255")
     three("vdppd", "xmm", ", 255")
     return list(dict.fromkeys(out))
+def avx2_cases():
+    """AVX2 cross-lane permutations, broadcasts, blends and per-lane shifts."""
+    place = " ptr [rsi + 4*rdi + 16]"
+    whole = {"xmm": "xmmword" + place, "ymm": "ymmword" + place}
+    byte, word, dword, quad = (w + place for w in ("byte", "word", "dword", "qword"))
+    out = []
+
+    for op in ("vpermd", "vpermps"):
+        out += [f"{op} ymm3, ymm9, ymm10", f"{op} ymm3, ymm9, {whole['ymm']}",
+                f"{op} ymm2, ymm2, ymm2", f"{op} ymm3, ymm9, ymm3"]
+    for op in ("vpermq", "vpermpd"):
+        for imm in (0, 27, 78, 177, 255):
+            out += [f"{op} ymm3, ymm10, {imm}", f"{op} ymm3, {whole['ymm']}, {imm}"]
+    for imm in (0, 0x31, 0x80, 0x88, 0xFF):
+        out += [f"vperm2i128 ymm3, ymm9, ymm10, {imm}",
+                f"vperm2i128 ymm3, ymm9, {whole['ymm']}, {imm}"]
+    for imm in (0, 1, 0x80, 0xFF):
+        out += [f"vinserti128 ymm3, ymm9, xmm10, {imm}",
+                f"vinserti128 ymm3, ymm9, {whole['xmm']}, {imm}",
+                f"vextracti128 xmm3, ymm9, {imm}",
+                f"vextracti128 {whole['xmm']}, ymm9, {imm}"]
+    for op, width in (("vpbroadcastb", byte), ("vpbroadcastw", word),
+                      ("vpbroadcastd", dword), ("vpbroadcastq", quad)):
+        out += [f"{op} xmm3, {width}", f"{op} ymm3, {width}"]
+    out += [f"vbroadcasti128 ymm3, {whole['xmm']}"]
+    for v in ("xmm", "ymm"):
+        for imm in (0, 1, 0x5A, 0xFF):
+            out += [f"vpblendd {v}3, {v}9, {v}10, {imm}",
+                    f"vpblendd {v}3, {v}9, {whole[v]}, {imm}"]
+    for op in ("vpsllvd", "vpsllvq", "vpsrlvd", "vpsrlvq", "vpsravd"):
+        for v in ("xmm", "ymm"):
+            out += [f"{op} {v}3, {v}9, {v}10", f"{op} {v}3, {v}9, {whole[v]}",
+                    f"{op} {v}2, {v}2, {v}2", f"{op} {v}3, {v}9, {v}3"]
+    return list(dict.fromkeys(out))
 
 
 def assemble(lines):
@@ -482,7 +516,8 @@ def main(argv):
         sys.exit("usage: assemble.py generate|--check")
     for name, lines in (("integer.txt", cases()), ("vector.txt", vector_cases()),
                         ("float.txt", float_cases()), ("avx.txt", avx_cases()),
-                        ("avx_forms.txt", avx_form_cases())):
+                        ("avx_forms.txt", avx_form_cases()),
+                        ("avx2.txt", avx2_cases())):
         text = assemble(lines)
         if argv[1] == "generate":
             (HERE / name).write_text(text)

@@ -102,6 +102,40 @@ fn doubles(source: u128, select: impl Fn(u32) -> u32) -> u128 {
     })
 }
 
+/// A lane of a 256-bit vector, counting across both halves.
+fn element(value: Vector, bits: u32, index: u32) -> u64 {
+    let per_half = 128 / bits;
+    lane(value[(index / per_half) as usize], bits, index % per_half)
+}
+
+/// A 256-bit vector of `length` bytes built lane by lane.
+fn elements(length: u8, bits: u32, f: impl Fn(u32) -> u64) -> Vector {
+    let per_half = 128 / bits;
+    let count = u32::from(length) * 8 / bits;
+    let mask = if bits == 64 {
+        u64::MAX
+    } else {
+        (1 << bits) - 1
+    };
+    let mut out = [0; 2];
+    for index in 0..count {
+        let half = (index / per_half) as usize;
+        out[half] |= u128::from(f(index) & mask) << (bits * (index % per_half));
+    }
+    out
+}
+
+/// A 128-bit vector of the low `bits` of `value` repeated.
+fn splat(value: u64, bits: u32) -> u128 {
+    let mask = if bits == 64 {
+        u64::MAX
+    } else {
+        (1 << bits) - 1
+    };
+    let value = u128::from(value & mask);
+    (0..128 / bits).fold(0, |out, index| out | value << (bits * index))
+}
+
 /// A half for VPERM2F128: two selector bits and a bit that zeroes.
 fn half(a: Vector, b: Vector, control: u64) -> u128 {
     match control & 11 {
@@ -258,7 +292,7 @@ pub(crate) fn execute(
                 (None, RmOperand::Mem(_)) => return Err(ExitReason::IllegalInstruction(0)),
             }
         }
-        (Op::Vextractf128, _) => {
+        (Op::Vextractf128 | Op::Vextracti128, _) => {
             let value = read_ymm(cpu, reg)[(insn.imm & 1) as usize];
             match (vector_address(cpu, insn)?, rm_operand(insn)?) {
                 (Some(address), _) => write_bytes(memory, address, 16, [value, 0])?,
@@ -289,7 +323,70 @@ pub(crate) fn execute(
                     result[(imm & 1) as usize] = source[0];
                     result
                 }
-                (Op::Vperm2f128, _) => [half(first, source, imm), half(first, source, imm >> 4)],
+                (Op::Vperm2f128 | Op::Vperm2i128, _) => {
+                    [half(first, source, imm), half(first, source, imm >> 4)]
+                }
+                (Op::Vinserti128, _) => {
+                    let mut result = first;
+                    result[(imm & 1) as usize] = source[0];
+                    result
+                }
+                // AVX2: the source selects a lane of the second source by the
+                // index of the same lane in the first, for VPERMD and VPERMPS,
+                // or by two immediate bits for VPERMQ and VPERMPD.
+                (Op::Vpermd | Op::Vpermps, _) => elements(length, 32, |index| {
+                    element(source, 32, (element(first, 32, index) & 7) as u32)
+                }),
+                (Op::Vpermq | Op::Vpermpd, _) => elements(length, 64, |index| {
+                    element(source, 64, (imm >> (2 * index)) as u32 & 3)
+                }),
+                (Op::Vpbroadcastb, _) => [splat(source[0] as u64, 8); 2],
+                (Op::Vpbroadcastw, _) => [splat(source[0] as u64, 16); 2],
+                (Op::Vpbroadcastd, _) => [splat(source[0] as u64, 32); 2],
+                (Op::Vpbroadcastq, _) => [splat(source[0] as u64, 64); 2],
+                (Op::Vbroadcasti128, _) => [source[0]; 2],
+                (Op::Vpblendd, _) => [0, 1].map(|half| {
+                    (0..4).fold(0, |out, index| {
+                        // One immediate bit for each 32-bit lane of the whole
+                        // vector, so the high half reads bits 4 to 7.
+                        let chosen = if imm >> (4 * half as u64 + index) & 1 == 1 {
+                            source[half]
+                        } else {
+                            first[half]
+                        };
+                        out | chosen & (u128::from(u32::MAX) << (32 * index))
+                    })
+                }),
+                // AVX2 per-lane shifts: VEX.vvvv holds the data and the ModRM
+                // operand the counts, as the operation sections of the manual
+                // name SRC1 and SRC2. A count wider than the element zeroes a
+                // logical shift and sign-fills an arithmetic one.
+                (Op::Vpsllv | Op::Vpsrlv | Op::Vpsravd, _) => {
+                    let bits = if vex.wide { 64 } else { 32 };
+                    elements(length, bits, |index| {
+                        let value = element(first, bits, index);
+                        let count = element(source, bits, index);
+                        if count >= u64::from(bits) {
+                            let negative = value >> (bits - 1) & 1 == 1;
+                            if insn.op == Op::Vpsravd && negative {
+                                if bits == 64 {
+                                    u64::MAX
+                                } else {
+                                    u64::from(u32::MAX)
+                                }
+                            } else {
+                                0
+                            }
+                        } else {
+                            let shift = count as u32;
+                            match insn.op {
+                                Op::Vpsllv => value << shift,
+                                Op::Vpsrlv => value >> shift,
+                                _ => ((value << (64 - bits)) as i64 >> (64 - bits) >> shift) as u64,
+                            }
+                        }
+                    })
+                }
                 // The same selectors serve both halves.
                 (Op::Vpermilps, Encoding::XmmRmImm) => {
                     source.map(|half| singles(half, |index| (imm >> (2 * index) & 3) as u32))
