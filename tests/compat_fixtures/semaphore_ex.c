@@ -2,8 +2,8 @@
 //
 // The Win32 semaphore and access-rights pages define count consumption,
 // SEMAPHORE_MODIFY_STATE for release and SYNCHRONIZE for wait. Each failed
-// assertion exits with its source line. Named objects and security attributes
-// are outside Xenora's unnamed-object model.
+// assertion exits with its source line. The named case uses the guest's
+// process namespace and default security attributes.
 
 typedef unsigned int u32;
 typedef unsigned short u16;
@@ -71,8 +71,11 @@ void start(void) {
     CHECK(GetLastError() == ERROR_INVALID_PARAMETER);
     CHECK(!CreateSemaphoreExW(0, 0, 2, 0, 1, SYNCHRONIZE));
     CHECK(GetLastError() == ERROR_INVALID_PARAMETER);
-    CHECK(!CreateSemaphoreExA(0, 0, 2, "name", 0, SYNCHRONIZE));
-    CHECK(GetLastError() == ERROR_NOT_SUPPORTED);
+    handle named = CreateSemaphoreExA(0, 1, 2, "name", 0, SYNCHRONIZE);
+    CHECK(named);
+    CHECK(WaitForSingleObject(named, 0) == WAIT_OBJECT_0);
+    CHECK(WaitForSingleObject(named, 0) == WAIT_TIMEOUT);
+    CHECK(CloseHandle(named));
     CHECK(!CreateSemaphoreExW(&previous, 0, 2, 0, 0, SYNCHRONIZE));
     CHECK(GetLastError() == ERROR_NOT_SUPPORTED);
     CHECK(!CreateSemaphoreExA(0, 0, 2, 0, 0, 0x80000000u));
