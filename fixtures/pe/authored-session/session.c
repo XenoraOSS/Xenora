@@ -19,6 +19,9 @@ IMPORT void Sleep(u32 milliseconds);
 IMPORT u64 GetTickCount64(void);
 IMPORT void GetSystemTimeAsFileTime(u64 *filetime);
 IMPORT __declspec(noreturn) void ExitProcess(u32 status);
+#ifdef SESSION_COMPANION
+IMPORT u32 CompanionColor(u32 input);
+#endif
 
 IMPORT int XenoraCreateDevice(u64 *out);
 IMPORT int XenoraCreateCommandQueue(u64 device, u32 type, u64 *out);
@@ -139,7 +142,11 @@ static void run_session(enum session_mode mode) {
         record->input = input;
         u32 count;
         CHECK(WriteFile(file, record, sizeof(*record), &count, 0) && count == sizeof(*record), 3);
+#ifdef SESSION_COMPANION
+        const u32 blue = CompanionColor(input);
+#else
         const u32 blue = mode == DETERMINISTIC_CLOCK ? clock_milliseconds() : 0x3c;
+#endif
         draw_frame(&graphics, input, frames, blue);
 
         if (mode == MISSING_PRESENT) {
