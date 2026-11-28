@@ -3,8 +3,8 @@
 //! CRT services that can call guest functions during sorting, searching,
 //! initialization, cleanup and invalid-parameter handling.
 //!
-//! Each service is a callback task. The comparator or initializer runs as
-//! ordinary translated guest code, and the service continues when it returns.
+//! Callback tasks run comparators and initializers as ordinary translated
+//! guest code, then continue the service when that code returns.
 
 use super::ServicesState;
 use crate::cpu::ExitReason;
@@ -635,6 +635,11 @@ fn register_exit_tables(registry: &mut ImportRegistry, state: &Arc<ServicesState
         let pending = std::mem::take(&mut *s.atexit.lock().expect("guest atexit functions"));
         Ok(ExitFunctions { pending }.start())
     });
+
+    // The void quick-cleanup form returns with exit registrations and open
+    // streams intact. The hosted CRT has no additional quick-cleanup state.
+    registry.register(UCRT, "_c_exit", |_, _, _| Ok(0));
+    registry.alias(CRT_RUNTIME_API, UCRT, "_c_exit");
 
     // exit does not return. It is partial: no stream is flushed, because
     // there are none, and thread-local destructors are not run.
