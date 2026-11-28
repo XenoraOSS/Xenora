@@ -2694,6 +2694,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
+      "canonical_symbol": "VirtualQueryEx",
+      "kind": "name",
+      "library": "api-ms-win-core-memory-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "VirtualQueryEx"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "kernel32.dll",
       "canonical_symbol": "ExpandEnvironmentStringsA",
       "kind": "name",
       "library": "api-ms-win-core-processenvironment-l1-1-0.dll",
@@ -13780,6 +13790,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "VirtualQueryEx"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "WaitForMultipleObjects"
     },
     {
@@ -20404,17 +20424,17 @@
     }
   ],
   "summary": {
-    "aliases": 968,
-    "api_set_aliases": 760,
-    "canonical_services": 1015,
-    "data_import_services": 12,
+    "aliases": 969,
+    "api_set_aliases": 761,
+    "canonical_services": 1017,
+    "data_import_services": 13,
     "duplicate_registrations": 0,
     "implemented": 249,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 711,
+    "manual_services": 713,
     "ordinal_aliases": 35,
-    "partial": 766,
+    "partial": 768,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 304,

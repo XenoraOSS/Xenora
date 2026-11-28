@@ -622,6 +622,15 @@ than inventing reserve or free-state bookkeeping the memory model does not
 record. A short output buffer receives only the requested prefix and the
 return value is the number of bytes copied.
 
+`VirtualQueryEx` uses the same committed-region result for the
+`GetCurrentProcess` pseudo-handle. The process handle is validated before
+writing the output. Invalid, closed or non-process handles return
+`ERROR_INVALID_HANDLE`. Ordinary process handles return
+`ERROR_NOT_SUPPORTED` because the runtime does not track their granted
+query rights or retain a child's address space. The canonical Win32 entry
+and the `api-ms-win-core-memory-l1-1-0.dll` binding share this implementation.
+[Microsoft VirtualQueryEx](https://learn.microsoft.com/windows/win32/api/memoryapi/nf-memoryapi-virtualqueryex)
+
 `VirtualProtect` supports the non-executable base protections Xenora already
 models: `PAGE_NOACCESS`, `PAGE_READONLY` and `PAGE_READWRITE`. The affected
 range is rounded to whole pages as documented, including a two-byte range
