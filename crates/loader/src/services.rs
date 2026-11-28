@@ -45,6 +45,7 @@ mod locale;
 pub(crate) mod modules;
 mod msvc_stl;
 mod platform_fixture;
+mod pointer;
 mod process;
 mod registry;
 mod startup_info;
@@ -1085,6 +1086,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     events::register(registry, &state);
     synch::register(registry, &state);
     sysinfo::register(registry, &state);
+    pointer::register(registry, &state);
     files::register(registry, &state);
     console::register(registry, &state);
     graphics::register(registry, &state);

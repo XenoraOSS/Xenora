@@ -6121,6 +6121,50 @@ fn aliases_share_a_trampoline_and_ordinals_bind_only_ordinals() {
     }
 }
 
+/// Run the generated guest stub for import `slot` with one integer argument.
+fn call_bound_slot(
+    engine: &mut DbtEngine,
+    memory: &mut GuestMemory,
+    slot: usize,
+    value: u64,
+) -> u64 {
+    let mut cpu = CpuState::new(BASE + u64::from(CODE_RVA) + 16 * slot as u64, STACK_TOP);
+    cpu.set(Register::Rcx, value);
+    let result = engine.run(&mut cpu, memory, 1000);
+    assert_eq!(result.exit_reason, ExitReason::Halt, "slot {slot}");
+    cpu.get(Register::Rax)
+}
+
+#[test]
+fn pointer_encoding_services_round_trip_through_bound_imports() {
+    let image = build(&[
+        ("kernel32.dll", Symbol::Name("EncodePointer")),
+        ("kernel32.dll", Symbol::Name("DecodePointer")),
+    ]);
+    let (mut registry, _, _state) = standard_with_state(0);
+    let (result, mut memory) = bind(&mut registry, &image);
+    assert_eq!(result, Ok(2));
+    memory
+        .map_region(STACK, 0x1000, MemoryPermissions::READ_WRITE)
+        .unwrap();
+    // The service dispatcher reads the caller-owned 32-byte home area.
+    for slot in 0..4 {
+        memory
+            .write_u64(STACK_TOP + slot * 8, 0x7000 + slot)
+            .unwrap();
+    }
+    let mut engine = DbtEngine::new(256 * 1024).unwrap();
+    engine.set_import_registry(registry);
+
+    let pointer = 0x1_4000_1234;
+    let encoded = call_bound_slot(&mut engine, &mut memory, 0, pointer);
+    assert_ne!(encoded, pointer, "the cookie must transform the pointer");
+    assert_eq!(
+        call_bound_slot(&mut engine, &mut memory, 1, encoded),
+        pointer
+    );
+}
+
 /// A registry with one service bound, and its trampoline address.
 fn bound_service<F>(handler: F) -> (ImportRegistry, GuestMemory, u64)
 where
