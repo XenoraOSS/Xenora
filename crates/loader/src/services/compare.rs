@@ -21,10 +21,9 @@
 //!   instead of pretending to sort like Windows. `NORM_IGNORESYMBOLS` and
 //!   the other modifier flags are refused with `ERROR_INVALID_PARAMETER`
 //!   rather than silently ignored.
-//! - `GetStringTypeW` answers `CT_CTYPE1` classification for ASCII input
-//!   with the flags the winnls header defines; `CT_CTYPE2` and `CT_CTYPE3`
-//!   are refused rather than answered wrong. Wide units above ASCII are
-//!   classified zero except space-like controls, documented.
+//! - `GetStringTypeW` answers `CT_CTYPE1` for ASCII and the Unicode C1
+//!   controls. Other wide units receive zero. `CT_CTYPE2` and `CT_CTYPE3`
+//!   are refused.
 //! - `LCMapStringW` maps ASCII case for `LCMAP_UPPERCASE`/`LCMAP_LOWERCASE`.
 //!   `LCMAP_SORTKEY` and the byte reversal are refused. `-1` source counts
 //!   include the terminator in both input processing and output, as the
@@ -41,13 +40,15 @@ pub(super) const C1_BLANK: u16 = 0x0040;
 pub(super) const C1_XDIGIT: u16 = 0x0080;
 pub(super) const C1_ALPHA: u16 = 0x0100;
 
-/// Classifies one wide unit for `CT_CTYPE1`. The ASCII rows are exactly the
-/// en-US answers; units above ASCII get only what is true of them in every
-/// locale (nothing), which the module documents rather than invents.
+/// Classifies one wide unit in Xenora's bounded `CT_CTYPE1` table.
+/// Unicode 17.0 §23.1 defines the C0, DELETE, and C1 controls and identifies
+/// NEXT LINE (U+0085) as whitespace.
 pub(super) fn ctype1(unit: u16) -> u16 {
-    let byte = match u8::try_from(unit) {
-        Ok(byte) => byte,
-        Err(_) => return 0,
+    let byte = match unit {
+        0x00..=0x7f => unit as u8,
+        0x85 => return C1_SPACE | C1_CNTRL,
+        0x80..=0x9f => return C1_CNTRL,
+        _ => return 0,
     };
     let xdigit = if byte.is_ascii_hexdigit() {
         C1_XDIGIT
@@ -58,7 +59,8 @@ pub(super) fn ctype1(unit: u16) -> u16 {
         b'A'..=b'Z' => C1_UPPER | C1_ALPHA | xdigit,
         b'a'..=b'z' => C1_LOWER | C1_ALPHA | xdigit,
         b'0'..=b'9' => C1_DIGIT | C1_XDIGIT,
-        b' ' | b'\t' => C1_SPACE | C1_BLANK,
+        b' ' => C1_SPACE | C1_BLANK,
+        b'\t' => C1_SPACE | C1_BLANK | C1_CNTRL,
         b'\n' | b'\r' | 0x0b | 0x0c => C1_SPACE | C1_CNTRL,
         0x00..=0x1f | 0x7f => C1_CNTRL,
         _ => C1_PUNCT,
