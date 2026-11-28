@@ -25,6 +25,11 @@ pub struct ServiceContext<'a> {
 pub struct OutPtr<const N: usize>(pub u64);
 
 impl<const N: usize> OutPtr<N> {
+    /// Check the entire output span for writes without changing guest memory.
+    pub fn check_write(self, memory: &GuestMemory) -> Result<(), MemoryError> {
+        memory.check_write(self.0, N)
+    }
+
     /// Checked, all-or-nothing store.
     pub fn store(self, memory: &mut GuestMemory, bytes: [u8; N]) -> Result<(), MemoryError> {
         memory.write_bytes(self.0, &bytes)
