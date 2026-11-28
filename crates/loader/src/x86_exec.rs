@@ -927,11 +927,21 @@ pub fn execute(
                 next = insn.imm;
             }
         }
-        // The count is RCX, decremented without changing any flag; LOOPE and
-        // LOOPNE also test ZF (Intel SDM Vol. 2A, LOOP/LOOPcc).
+        // The count is RCX, or ECX when the address-size override selects
+        // the 32-bit attribute, decremented without changing any flag; the
+        // bits above the count register are not part of it and keep their
+        // values. LOOPE and LOOPNE also test ZF (Intel SDM Vol. 2A,
+        // LOOP/LOOPcc).
         Op::Loop | Op::Loope | Op::Loopne => {
-            let count = cpu.gpr[RCX].wrapping_sub(1);
-            cpu.gpr[RCX] = count;
+            let count = if insn.addr32 {
+                let count = (cpu.gpr[RCX] as u32).wrapping_sub(1);
+                cpu.gpr[RCX] = (cpu.gpr[RCX] & 0xFFFF_FFFF_0000_0000) | u64::from(count);
+                u64::from(count)
+            } else {
+                let count = cpu.gpr[RCX].wrapping_sub(1);
+                cpu.gpr[RCX] = count;
+                count
+            };
             let zf_holds = match insn.op {
                 Op::Loope => cpu.flags.zf,
                 Op::Loopne => !cpu.flags.zf,
@@ -941,9 +951,16 @@ pub fn execute(
                 next = insn.imm;
             }
         }
-        // JRCXZ reads RCX and changes nothing (Intel SDM Vol. 2A, Jcc).
+        // JRCXZ reads RCX, or ECX when the address-size override selects the
+        // 32-bit attribute - the same instruction is JECXZ then - and changes
+        // nothing (Intel SDM Vol. 2A, Jcc).
         Op::Jrcxz => {
-            if cpu.gpr[RCX] == 0 {
+            let count = if insn.addr32 {
+                u64::from(cpu.gpr[RCX] as u32)
+            } else {
+                cpu.gpr[RCX]
+            };
+            if count == 0 {
                 next = insn.imm;
             }
         }

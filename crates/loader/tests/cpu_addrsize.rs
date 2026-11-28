@@ -211,22 +211,39 @@ fn string_instructions_refuse_the_override() {
     }
 }
 
-/// E0 through E3 count or test RCX by default; 67H would select ECX. The
-/// narrow implicit count is not modelled, so all four forms refuse at decode
-/// rather than silently answering with the full RCX.
+/// E0 through E3 count or test RCX by default; 67H selects ECX. JCXZ under
+/// the override tests only the low 32 bits: bit 32 set is invisible to it,
+/// exactly as Intel SDM Vol. 2A states the count-register rule.
 #[test]
-fn ecx_count_forms_refuse_the_override() {
-    for opcode in [0xE0, 0xE1, 0xE2, 0xE3] {
-        let code = [0x67, opcode, 0x01, 0x90, 0xF4]; // 67 E0..E3 +1; nop; hlt
-        let memory = machine(&code);
-        let [interpreted, translated] = run_both(&CpuState::new(ENTRY, 0), &memory);
-        for result in [interpreted, translated] {
-            assert!(
-                matches!(result.exit_reason, ExitReason::IllegalInstruction(0x67)),
-                "opcode {opcode:#04x} must refuse honestly: {:?}",
-                result.exit_reason
-            );
-        }
+fn jecxz_tests_only_the_low_32_bits() {
+    // xor eax, eax; jecxz over; inc eax; over: hlt — a taken branch leaves
+    // eax zero. RCX has bit 32 set and a zero low half: the branch is taken
+    // through ECX where the full RCX would fall through.
+    let code = [0x31, 0xC0, 0x67, 0xE3, 0x02, 0xFF, 0xC0, 0xF4];
+    let memory = machine(&code);
+    let mut cpu = CpuState::new(ENTRY, 0);
+    cpu.gpr[1] = 0x1_0000_0000; // RCX: high bit set, ECX zero
+    let [interpreted, translated] = run_both(&cpu, &memory);
+    for result in [interpreted, translated] {
+        assert_eq!(result.exit_reason, ExitReason::Halt);
+        assert_eq!(
+            result.final_state.gpr[0] & 0xFFFF_FFFF,
+            0,
+            "jecxz must test ECX and branch"
+        );
+    }
+    // Without the override the same bytes test RCX, which is nonzero here:
+    // the branch falls through and the increment runs.
+    let code = [0x31, 0xC0, 0xE3, 0x02, 0xFF, 0xC0, 0xF4];
+    let memory = machine(&code);
+    let [interpreted, translated] = run_both(&cpu, &memory);
+    for result in [interpreted, translated] {
+        assert_eq!(result.exit_reason, ExitReason::Halt);
+        assert_eq!(
+            result.final_state.gpr[0] & 0xFFFF_FFFF,
+            1,
+            "jrcxz must test the full RCX and fall through"
+        );
     }
 }
 
