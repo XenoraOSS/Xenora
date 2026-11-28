@@ -1,0 +1,33 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+//! Original MSVC-ABI PE fixture for the bounded initialization count.
+use std::sync::Arc;
+use xenora_loader::cpu::ExitReason;
+use xenora_loader::imports::ImportRegistry;
+use xenora_loader::services::{MockClock, ServicesState, register_standard_services};
+use xenora_loader::startup::{StartupLayout, run_synthetic_startup};
+
+#[test]
+fn nested_initializers_track_lifetimes_and_final_flush_stops() {
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    let mut registry = ImportRegistry::new();
+    register_standard_services(&mut registry, Arc::clone(&state));
+    let result = run_synthetic_startup(
+        include_bytes!("../../../fixtures/pe/msvc-ios-init.exe"),
+        StartupLayout {
+            image_base: 0x1_4000_0000,
+            stack_top: 0x2_0001_0000,
+            tls_base: 0x3_0000_0000,
+        },
+        registry,
+        2_000_000,
+    )
+    .unwrap();
+    assert_eq!(
+        result.execution.exit_reason,
+        ExitReason::IllegalInstruction(0xFE)
+    );
+    assert_eq!(
+        state.standard_output(),
+        b"nested initialization complete\r\n"
+    );
+}

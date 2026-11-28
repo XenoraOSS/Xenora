@@ -7,6 +7,15 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- Added partial Microsoft locale facet reference-count operations and narrow-character widening; locale construction and destruction are not yet implemented (#1163).
+- Standard UCRT streams expose guest-owned unbuffered pointer, base and count fields through `_get_stream_buffer_pointers`; nonstandard opened streams and buffered operation remain unsupported (#1163).
+- Added partial Microsoft x64 `ostream::write` and `flush` dispatch through guest stream-buffer virtual methods, with state updates and explicit refusal of unsupported tied, unit-buffered and throwing paths. Standard stream objects remain unavailable (#1163).
+- Microsoft x64 `ios_base` state query exports now read guest state bits, including `good`, `eof`, `fail`, `bad` and `rdstate`; constructed C++ stream objects are not yet supplied (#1163).
+- Added an original Microsoft-header iostream fixture and local build script for measuring `std::cout` import and execution gaps; its complete workload is not yet supported (#1163).
+- Microsoft atomic-wait deadline helpers now use the guest monotonic clock, including infinite and capped timeouts. Actual atomic waits and notifications remain unsupported (#1163).
+- The four Microsoft UTF codecvt locale-ID data imports now resolve to distinct writable guest cells initialized to zero; locale allocation and conversion remain unsupported (#1163).
+- `vcruntime140.dll` memory imports now bind to the existing bounded guest memory services for copy, move, fill, compare and search. An original MSVC-ABI executable exercises the aliases locally (#1163).
+- Added partial Microsoft STL `ios_base::Init` constructor, destructor and count services and an original MSVC-ABI guest fixture. Nested construction and destruction update the guest count; the final destructor stops because standard stream flushing is not implemented (#1163).
 - `WINHTTP_QUERY_CUSTOM` named response-header queries (#1195): case-insensitive first-match lookup of a caller-supplied ASCII field name with the textual sizing contract and documented not-found error. Duplicate-header enumeration through the index parameter remains refused. Loopback-tested on Apple Silicon only.
 - The AVX2 256-bit immediate shuffles `VPSHUFD`, `VPSHUFHW` and `VPSHUFLW` now execute in both engines (#1184): each applies its documented 128-bit immediate shuffle to the two halves separately, with register and memory sources at the correct width. Fixtures are LLVM-assembled rows next to the 128-bit forms and compare the independent legacy reference lane by lane. The AVX2 refusal witness moves to `VPMOVMSKB ymm`; gathers, masked moves and the remaining AVX2 forms stay refused, so the CPUID AVX2 bit stays clear. Local verification only; not compared with x86 hardware.
 - `WINHTTP_QUERY_RAW_HEADERS_CRLF` response queries (#1190): exact wire capture of the final response head (status line plus header lines in received order, CRLF-terminated) with the documented sizing contract. The NUL-separated level-21 form, custom named-header queries and index enumeration remain explicitly unsupported. Loopback-tested on Apple Silicon only.
