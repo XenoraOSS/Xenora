@@ -286,14 +286,15 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("SSE2", 1, EDX, 26, &[0x66, 0x0F, 0xF7, 0xC1]), // maskmovdqu xmm0, xmm1
         ("SSE3", 1, ECX, 0, &[0xF2, 0x0F, 0x7C, 0xC1]),  // haddps xmm0, xmm1
         // Every legacy imm8 is accepted: SDM Table 4-13 ignores all bits but
-        // 0 and 4. The VEX form remains refused and is the witness.
+        // 0 and 4. The VEX form now runs; it is 128-bit only, so the reserved
+        // VEX.L=1 encoding is an honest permanent refusal as the witness.
         (
             "PCLMULQDQ",
             1,
             ECX,
             1,
-            &[0xC4, 0xE3, 0x71, 0x44, 0xC2, 0x00],
-        ), // vpclmulqdq xmm0, xmm1, xmm2, 0
+            &[0xC4, 0xE3, 0x75, 0x44, 0xC2, 0x00],
+        ), // reserved VEX.L=1 vpclmulqdq
         ("SSSE3", 1, ECX, 9, &[0x0F, 0x38, 0x00, 0xC1]), // pshufb mm0, mm1
         ("MOVBE", 1, ECX, 22, &[0x0F, 0x38, 0xF0, 0x06]), // movbe eax, [rsi]
         // All six legacy AES-NI forms now run; only the VEX form remains a

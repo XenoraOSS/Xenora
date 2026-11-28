@@ -16,7 +16,8 @@ use crate::x86_exec::{
 };
 use crate::x86_float;
 use crate::x86_simd::{
-    controlled, execute_legacy, insert_general, lane, lane_immediate, packed, select, shift_by,
+    carryless_multiply_selected, controlled, execute_legacy, insert_general, lane, lane_immediate,
+    packed, select, shift_by,
 };
 use crate::x86_table::{FORMS, Op};
 
@@ -515,6 +516,11 @@ pub(crate) fn execute(
                 (Op::Pblendvb | Op::Blendvps | Op::Blendvpd, _) => {
                     let control = read_ymm(cpu, (imm >> 4) as u8);
                     [0, 1].map(|half| select(op, first[half], source[half], control[half]))
+                }
+                // The carry-less multiply selects its qwords by the immediate,
+                // with the first source in VEX.vvvv rather than the destination.
+                (Op::Pclmulqdq, _) => {
+                    [0, 1].map(|half| carryless_multiply_selected(first[half], source[half], imm))
                 }
                 (_, Encoding::XmmRmImm) => {
                     // Immediate bits for the low half only; others serve both.

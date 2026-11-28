@@ -1362,9 +1362,9 @@ size = "x"
 src = "x"
 imm = "ub"
 
-# PCLMULQDQ has no VEX form. SDM Table 4-13 names imm8[0] and imm8[4] as the
-# qword selectors for the first and second sources; all other immediate bits
-# are ignored by the operation.
+# SDM Table 4-13 names imm8[0] and imm8[4] as the qword selectors for the
+# first and second sources; all other immediate bits are ignored. The VEX
+# form is the non-destructive encoding at 128 bits.
 [[form]]
 op = "pclmulqdq"
 map = "0f3a"
@@ -1374,6 +1374,16 @@ enc = "xmm_rm_imm"
 size = "x"
 src = "x"
 imm = "ub"
+
+[[vex]]
+op = "pclmulqdq"
+map = "0f3a"
+prefix = "66"
+opcode = 0x44
+enc = "xmm_rm_imm"
+length = "128"
+src = "v"
+nds = true
 
 # SSE4.1, integer. The source of PBLENDVB is selected by XMM0.
 [[form]]
