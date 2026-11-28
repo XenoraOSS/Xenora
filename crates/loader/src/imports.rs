@@ -282,7 +282,9 @@ pub(crate) struct GuestCallback {
 }
 
 type CallbackDispatch = Box<
-    dyn Fn(&Win64Args, &GuestMemory) -> Result<Option<GuestCallback>, ExitReason> + Send + Sync,
+    dyn Fn(&Win64Args, u64, &GuestMemory) -> Result<Option<GuestCallback>, ExitReason>
+        + Send
+        + Sync,
 >;
 
 /// What a callback-driven service does next.
@@ -805,7 +807,7 @@ impl ImportRegistry {
         &mut self,
         module: &str,
         symbol: &str,
-        handler: impl Fn(&Win64Args, &GuestMemory) -> Result<Option<GuestCallback>, ExitReason>
+        handler: impl Fn(&Win64Args, u64, &GuestMemory) -> Result<Option<GuestCallback>, ExitReason>
         + Send
         + Sync
         + 'static,
@@ -1046,7 +1048,7 @@ impl ImportRegistry {
             memory
                 .check_write(rsp, 8)
                 .map_err(ExitReason::MemoryFault)?;
-            if let Some(callback) = dispatcher(&args, memory)? {
+            if let Some(callback) = dispatcher(&args, cpu.gs_base, memory)? {
                 memory
                     .write_u64(rsp, CALLBACK_RETURN)
                     .map_err(ExitReason::MemoryFault)?;

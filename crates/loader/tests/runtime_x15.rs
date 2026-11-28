@@ -1314,7 +1314,7 @@ fn guest_gdk_dispatch_runs_callback_and_resumes_caller() {
     code.extend_from_slice(&[0x48, 0x89, 0x44, 0x24, 0x20]);
     set_args(&mut code, &[queue, 0, 30, output]);
     append_import_call(&mut code, 0x2060);
-    set_args(&mut code, &[queue, 0, 1000]);
+    set_args(&mut code, &[queue, 0, 1001]);
     append_import_call(&mut code, 0x21a0);
     code.extend_from_slice(&[0x48, 0x89, 0xc3]); // retain successful dispatch in RBX
     set_args(&mut code, &[queue, 0, 0]);
@@ -1903,9 +1903,22 @@ fn test_guest_synthetic_file_io_through_iat() {
     let found = path_result("FindFirstFileW", "C:/Archive/*.*", find_data, 0, None);
     let search = found.execution.final_state.get(Register::Rax);
     assert_ne!(search, u64::MAX);
+    // The enumeration begins with the dot entries, exactly as the real one
+    // does: `.` is the directory itself and `..` its parent.
     assert_eq!(found.image.memory.read_u32(find_data).unwrap(), 0x10);
     assert_eq!(
         found.image.memory.read_u16(find_data + 44).unwrap(),
+        u16::from(b'.')
+    );
+    let dots = call("FindNextFileW", &[search, find_data]);
+    assert_eq!(dots.execution.final_state.get(Register::Rax), 1);
+    assert_eq!(dots.image.memory.read_u32(find_data).unwrap(), 0x10);
+    assert_eq!(dots.image.memory.read_u16(find_data + 46).unwrap(), u16::from(b'.'));
+    let extra = call("FindNextFileW", &[search, find_data]);
+    assert_eq!(extra.execution.final_state.get(Register::Rax), 1);
+    assert_eq!(extra.image.memory.read_u32(find_data).unwrap(), 0x10);
+    assert_eq!(
+        extra.image.memory.read_u16(find_data + 44).unwrap(),
         u16::from(b'e')
     );
     assert_eq!(
