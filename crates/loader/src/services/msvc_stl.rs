@@ -100,3 +100,11 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         );
     }
 }
+
+/// VCRUNTIME exports these same C memory contracts. The existing services
+/// retain their guest bounds and fault handling; no host pointers are exposed.
+pub(super) fn register_vcruntime_memory(registry: &mut ImportRegistry) {
+    for symbol in ["memcpy", "memmove", "memset", "memcmp", "memchr"] {
+        registry.alias("vcruntime140.dll", "ucrtbase.dll", symbol);
+    }
+}

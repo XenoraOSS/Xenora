@@ -9203,6 +9203,56 @@
     {
       "api_set": false,
       "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memchr",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "implemented",
+      "symbol": "memchr"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memcmp",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "partial",
+      "symbol": "memcmp"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memcpy",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "partial",
+      "symbol": "memcpy"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memmove",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "partial",
+      "symbol": "memmove"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memset",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "partial",
+      "symbol": "memset"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
       "canonical_library": "ws2_32.dll",
       "canonical_symbol": "accept",
       "kind": "ordinal",
@@ -19924,7 +19974,7 @@
     }
   ],
   "summary": {
-    "aliases": 955,
+    "aliases": 960,
     "api_set_aliases": 754,
     "canonical_services": 981,
     "data_import_services": 8,

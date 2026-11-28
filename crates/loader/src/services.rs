@@ -1071,6 +1071,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     console::register(registry, &state);
     graphics::register(registry, &state);
     crt::register(registry);
+    msvc_stl::register_vcruntime_memory(registry);
     crt::register_heap(registry);
     crt::register_errno(registry);
     crt::register_conversions(registry);

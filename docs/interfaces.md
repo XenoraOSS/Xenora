@@ -324,6 +324,14 @@ attribute bit, is truncated, or uses the earlier virtual-address descriptor form
 is reported in `delay_import_error` and in the Markdown report, together with
 the entries read before it.
 
+### Microsoft runtime memory exports (#1163)
+
+`vcruntime140.dll` resolves `memcpy`, `memmove`, `memset`, `memcmp` and
+`memchr` to the existing UCRT guest-memory services. They retain the same
+bounds and fault behavior. The original MSVC-ABI guest fixture exercises
+copying, overlap, filling, comparison, searching and zero-length comparison;
+it is not evidence for the rest of VCRUNTIME or for Xbox execution.
+
 ### Microsoft STL initialization count (#1163)
 
 `msvcp140.dll` exposes the Microsoft x64 decorated `ios_base::Init` count,
