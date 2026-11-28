@@ -2343,6 +2343,9 @@ Without a matching guest result it uses the host exit code, where 124 denotes
 the wall deadline, 125 a runner or guest failure, and 2 a refused command line.
 It shows the last captured `trace stage=` and up to 256 KiB of each output
 stream. A validated final report is removed from the displayed stderr.
+After the runner exits, the app briefly drains both pipes and shows the
+captured result even if another process still holds a pipe open. The Run
+panel indicates when capture was cut short.
 `XENORA_CLI` names another worker for `swift run`. The app keeps the legacy
 arguments and host-code display for that override.
 

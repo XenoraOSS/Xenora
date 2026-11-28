@@ -120,6 +120,56 @@ struct ProgramRunnerTests {
         }
     }
 
+    @Test func reportsExactExitWhileDescendantKeepsOutputPipesOpen() throws {
+        let report = Self.guestReport(256, code: 1)
+        try Self.withWorker(script: """
+            /bin/sleep 8 </dev/null &
+            printf '%s' "$!" > "${4}.started"
+            printf '%s' 'captured stdout'
+            printf '%s' 'captured stderr' >&2
+            printf '\\n%s\\n' '\(report)' >&2
+            exit 1
+            """) { _, worker, program, marker in
+            var descendant: Int32?
+            defer {
+                if let descendant { _ = Darwin.kill(descendant, SIGTERM) }
+            }
+            let started = DispatchTime.now()
+            let result = ProgramRunner.run(program, trace: false, worker: worker)
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+            descendant = Int32(try String(contentsOf: marker, encoding: .utf8))
+            let pid = try #require(descendant)
+            #expect(elapsed < 4_000_000_000)
+            #expect(Darwin.kill(pid, 0) == 0)
+            #expect(result.exitStatus == 1)
+            #expect(result.guestExitStatus == 256)
+            #expect(result.summary == "Exited with status 256.")
+            #expect(result.standardOutput == "captured stdout")
+            #expect(result.standardError == "captured stderr")
+            #expect(result.truncated)
+        }
+    }
+
+    @Test func aRunnerThatIgnoresTerminationCannotBlockTheApp() throws {
+        try Self.withWorker(script: """
+            trap '' TERM
+            printf '%s' "$$" > "${4}.started"
+            printf '%s' 'waiting' >&2
+            exec /bin/sleep 8
+            """) { _, worker, program, marker in
+            let started = DispatchTime.now()
+            let result = ProgramRunner.run(program, trace: false, worker: worker, backstop: 0.5)
+            let elapsed = DispatchTime.now().uptimeNanoseconds - started.uptimeNanoseconds
+            let pid = try #require(Int32(String(contentsOf: marker, encoding: .utf8)))
+            #expect(elapsed < 6_000_000_000)
+            #expect(Darwin.kill(pid, 0) == -1)
+            #expect(result.exitStatus == nil)
+            #expect(result.guestExitStatus == nil)
+            #expect(result.standardError == "waiting")
+            #expect(!result.truncated)
+        }
+    }
+
     @Test func fallsBackUnlessTheFinalReportMatchesTheObservedExit() throws {
         let logs = [
             "plain runner error",

@@ -55,7 +55,7 @@ struct ProgramRunResult: Equatable, Sendable {
     let guestExitStatus: UInt32?
     let standardOutput: String
     let standardError: String
-    /// Whether either stream was cut at `ProgramRunner.outputLimit`.
+    /// Whether either stream exceeded the capture limit or stayed open after the runner exited.
     let truncated: Bool
     /// The last startup stage the worker traced, if tracing was on.
     let lastStage: String?
@@ -155,33 +155,19 @@ enum ProgramRunner {
         process.executableURL = worker
         process.arguments = ["inspect", file.path]
         process.standardInput = FileHandle.nullDevice
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        let stdout = BoundedCollector(out.fileHandleForReading)
-        let stderr = BoundedCollector(err.fileHandleForReading)
+        let captured: RunnerOutput
         do {
-            try process.run()
+            captured = try capture(process)
         } catch {
             return (false, "Could not start the inspector: \(error.localizedDescription)")
         }
-        let done = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in done.signal() }
-        if done.wait(timeout: .now() + backstopSeconds) == .timedOut {
-            process.terminate()
-            if done.wait(timeout: .now() + 2) == .timedOut {
-                _ = Darwin.kill(process.processIdentifier, SIGKILL)
-                process.waitUntilExit()
-            }
-            _ = stdout.finish()
-            _ = stderr.finish()
+        if captured.timedOut {
             return (false, "Header inspection exceeded its deadline.")
         }
-        let output = stdout.finish()
-        let failure = stderr.finish()
+        let output = captured.stdout
+        let failure = captured.stderr
         let truncated = output.truncated || failure.truncated ? "\nInspection output was truncated.\n" : ""
-        let ok = process.terminationReason == .exit && process.terminationStatus == 0
+        let ok = captured.status == 0
         return (ok, "Header-only inspection; detailed import and instruction analysis was not run.\n"
                 + output.text + failure.text + truncated)
     }
@@ -228,7 +214,8 @@ enum ProgramRunner {
     /// Run an explicitly selected worker. Tests can supply a report-capable runner.
     static func run(_ file: URL, trace: Bool, programArguments: [String] = [],
                     standardInput: URL? = nil, guestFileExport: ProgramGuestFileExport? = nil,
-                    worker: URL?, reportStartup: Bool = true) -> ProgramRunResult {
+                    worker: URL?, reportStartup: Bool = true,
+                    backstop: TimeInterval = backstopSeconds) -> ProgramRunResult {
         let started = Date()
         func failed(_ reason: String) -> ProgramRunResult {
             ProgramRunResult(exitStatus: nil, guestExitStatus: nil, standardOutput: "", standardError: "", truncated: false,
@@ -267,32 +254,114 @@ enum ProgramRunner {
         process.arguments = arguments(for: file, trace: trace, programArguments: programArguments,
                                       guestFileExport: guestFileExport, reportStartup: reportStartup)
         process.standardInput = input ?? FileHandle.nullDevice
-        let out = Pipe()
-        let err = Pipe()
-        process.standardOutput = out
-        process.standardError = err
-        let output = BoundedCollector(out.fileHandleForReading)
-        let diagnostics = BoundedCollector(err.fileHandleForReading, tailLimit: reportStartup ? StartupReport.tailLimit : 0)
+        let captured: RunnerOutput
         do {
-            try process.run()
+            captured = try capture(process, stderrTailLimit: reportStartup ? StartupReport.tailLimit : 0,
+                                   backstop: backstop)
         } catch {
             return failed(error.localizedDescription)
         }
-        let done = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in done.signal() }
-        if done.wait(timeout: .now() + backstopSeconds) == .timedOut {
-            process.terminate()
-            process.waitUntilExit()
-        }
-        let stdout = output.finish()
-        var stderr = diagnostics.finish()
-        let status: Int32? = process.terminationReason == .exit ? process.terminationStatus : nil
+        let stdout = captured.stdout
+        var stderr = captured.stderr
+        let status = captured.status
         let guestStatus = StartupReport.consumeFinalRecord(from: &stderr, exitStatus: status)
         return ProgramRunResult(
             exitStatus: status, guestExitStatus: guestStatus, standardOutput: stdout.text, standardError: stderr.text,
             truncated: stdout.truncated || stderr.truncated,
             lastStage: trace || !reportStartup ? lastStage(in: stderr.text) : nil, launchError: nil,
             hostMilliseconds: Date().timeIntervalSince(started) * 1000)
+    }
+
+    private struct RunnerOutput {
+        let stdout: CapturedOutput
+        let stderr: CapturedOutput
+        let status: Int32?
+        let timedOut: Bool
+    }
+
+    /// Read both pipes on the caller's thread without waiting on descendants.
+    private static func capture(_ process: Process, stderrTailLimit: Int = 0,
+                                backstop: TimeInterval = backstopSeconds) throws -> RunnerOutput {
+        let out = Pipe()
+        let err = Pipe()
+        let readers = [out.fileHandleForReading, err.fileHandleForReading]
+        let writers = [out.fileHandleForWriting, err.fileHandleForWriting]
+        defer {
+            for handle in readers + writers { try? handle.close() }
+        }
+        var descriptors = try readers.map { handle in
+            let fd = handle.fileDescriptor
+            let flags = Darwin.fcntl(fd, F_GETFL)
+            guard flags >= 0, Darwin.fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0 else {
+                throw InputFileError.posix(errno)
+            }
+            return pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+        }
+
+        process.standardOutput = out
+        process.standardError = err
+        let done = DispatchSemaphore(value: 0)
+        process.terminationHandler = { _ in done.signal() }
+        try process.run()
+        for writer in writers { try? writer.close() }
+
+        var output = [CapturedOutput(), CapturedOutput()]
+        let tailLimits = [0, stderrTailLimit]
+        var buffer = [UInt8](repeating: 0, count: 64 * 1024)
+        var deadline = DispatchTime.now() + backstop
+        var signalsSent = 0
+        var reaped = false
+
+        while true {
+            if !reaped, done.wait(timeout: .now()) == .success {
+                reaped = true
+                // The direct runner has exited. Collect queued bytes and give
+                // the pipes a brief chance to reach EOF independently.
+                deadline = .now() + .milliseconds(250)
+            }
+            if reaped, descriptors.allSatisfy({ $0.fd < 0 }) { break }
+            if DispatchTime.now() >= deadline {
+                if reaped || signalsSent == 2 { break }
+                if process.isRunning {
+                    if signalsSent == 0 {
+                        process.terminate()
+                    } else {
+                        _ = Darwin.kill(process.processIdentifier, SIGKILL)
+                    }
+                }
+                signalsSent += 1
+                deadline = .now() + .seconds(2)
+            }
+
+            let ready = descriptors.withUnsafeMutableBufferPointer {
+                Darwin.poll($0.baseAddress, nfds_t($0.count), 25)
+            }
+            if ready < 0, errno != EINTR {
+                for index in descriptors.indices where descriptors[index].fd >= 0 {
+                    output[index].drainIncomplete = true
+                    descriptors[index].fd = -1
+                }
+            }
+            guard ready > 0 else { continue }
+            for index in descriptors.indices
+            where descriptors[index].fd >= 0 && descriptors[index].revents != 0 {
+                let fd = descriptors[index].fd
+                let count = buffer.withUnsafeMutableBytes { Darwin.read(fd, $0.baseAddress, $0.count) }
+                if count > 0 {
+                    output[index].append(buffer.prefix(count), tailLimit: tailLimits[index])
+                } else if count == 0 {
+                    descriptors[index].fd = -1
+                } else if errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR {
+                    output[index].drainIncomplete = true
+                    descriptors[index].fd = -1
+                }
+            }
+        }
+        for index in descriptors.indices where descriptors[index].fd >= 0 {
+            output[index].drainIncomplete = true
+        }
+        let status = reaped && process.terminationReason == .exit ? process.terminationStatus : nil
+        return RunnerOutput(stdout: output[0], stderr: output[1], status: status, timedOut: signalsSent != 0)
     }
 }
 
@@ -370,48 +439,26 @@ private struct CapturedOutput {
     var prefix = Data()
     var tail = Data()
     var byteCount = 0
+    var drainIncomplete = false
 
     var text: String { String(decoding: prefix, as: UTF8.self) }
-    var truncated: Bool { byteCount > prefix.count }
+    var truncated: Bool { drainIncomplete || byteCount > prefix.count }
+
+    mutating func append(_ chunk: ArraySlice<UInt8>, tailLimit: Int) {
+        byteCount += chunk.count
+        let room = ProgramRunner.outputLimit - prefix.count
+        if room > 0 { prefix.append(contentsOf: chunk.prefix(room)) }
+        if tailLimit > 0 {
+            let suffix = chunk.suffix(tailLimit)
+            let excess = max(0, tail.count + suffix.count - tailLimit)
+            tail.removeFirst(excess)
+            tail.append(contentsOf: suffix)
+        }
+    }
 
     mutating func removeSuffix(byteCount length: Int) {
         byteCount -= length
         if prefix.count > byteCount { prefix.removeLast(prefix.count - byteCount) }
-    }
-}
-
-/// Drain the pipe while retaining a bounded display prefix and optional tail.
-private final class BoundedCollector: @unchecked Sendable {
-    private var output = CapturedOutput()
-    private let lock = NSLock()
-    private let finished = DispatchSemaphore(value: 0)
-
-    init(_ handle: FileHandle, tailLimit: Int = 0) {
-        DispatchQueue.global().async { [self] in
-            while true {
-                let chunk = handle.availableData
-                if chunk.isEmpty { break }
-                lock.lock()
-                output.byteCount += chunk.count
-                let room = ProgramRunner.outputLimit - output.prefix.count
-                if room > 0 { output.prefix.append(chunk.prefix(room)) }
-                if tailLimit > 0 {
-                    let suffix = chunk.suffix(tailLimit)
-                    let excess = max(0, output.tail.count + suffix.count - tailLimit)
-                    output.tail.removeFirst(excess)
-                    output.tail.append(suffix)
-                }
-                lock.unlock()
-            }
-            finished.signal()
-        }
-    }
-
-    func finish() -> CapturedOutput {
-        finished.wait()
-        lock.lock()
-        defer { lock.unlock() }
-        return output
     }
 }
 
@@ -594,7 +641,7 @@ struct ProgramRunView: View {
                 output("Standard output", result.standardOutput)
                 output("Standard error", result.standardError)
                 if result.truncated {
-                    Text("Output was cut at \(ProgramRunner.outputLimit / 1024) KiB per stream.")
+                    Text("Some output was truncated.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
