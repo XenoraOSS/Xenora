@@ -19,6 +19,11 @@ cargo test --locked -p xenora-metal --features gpu-tests --test native_compute -
 timeout 30s cargo test --locked -p xenora-metal --features gpu-tests --test native_compute -- \
     --nocapture --test-threads=1
 
+# Packed and aligned block-compressed uploads must return the expected Metal pixels.
+cargo test --locked -p xenora-metal --features gpu-tests --test packed_bc_upload --no-run
+timeout 30s cargo test --locked -p xenora-metal --features gpu-tests --test packed_bc_upload -- \
+    --nocapture --test-threads=1
+
 cargo test --locked -p xenora-loader --features gpu-tests --test dbt_render --no-run
 timeout 30s cargo test --locked -p xenora-loader --features gpu-tests --test dbt_render -- \
     --nocapture --test-threads=1
