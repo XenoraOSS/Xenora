@@ -203,11 +203,12 @@ fn reference(
             }
         }
         // Every element of the destination is element 0 of the source.
-        "vpbroadcastb" | "vpbroadcastw" | "vpbroadcastd" | "vpbroadcastq" => {
+        "vpbroadcastb" | "vpbroadcastw" | "vpbroadcastd" | "vpbroadcastq" | "vbroadcastss"
+        | "vbroadcastsd" => {
             let size = match name {
                 "vpbroadcastb" => 1,
                 "vpbroadcastw" => 2,
-                "vpbroadcastd" => 4,
+                "vpbroadcastd" | "vbroadcastss" => 4,
                 _ => 8,
             };
             let source = source_of(operands[1]);

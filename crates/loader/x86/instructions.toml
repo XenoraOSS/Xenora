@@ -4018,7 +4018,6 @@ enc = "xmm_rm"
 length = "any"
 w = "0"
 src = "d"
-memory_only = true
 
 [[vex]]
 op = "vbroadcastsd"
@@ -4029,7 +4028,6 @@ enc = "xmm_rm"
 length = "256"
 w = "0"
 src = "q"
-memory_only = true
 
 [[vex]]
 op = "vbroadcastf128"
@@ -6184,7 +6182,6 @@ enc = "xmm_rm"
 length = "any"
 w = "0"
 src = "b"
-memory_only = true
 
 [[vex]]
 op = "vpbroadcastw"
@@ -6195,7 +6192,6 @@ enc = "xmm_rm"
 length = "any"
 w = "0"
 src = "w"
-memory_only = true
 
 [[vex]]
 op = "vpbroadcastd"
@@ -6206,7 +6202,6 @@ enc = "xmm_rm"
 length = "any"
 w = "0"
 src = "d"
-memory_only = true
 
 [[vex]]
 op = "vpbroadcastq"
@@ -6217,7 +6212,6 @@ enc = "xmm_rm"
 length = "any"
 w = "0"
 src = "q"
-memory_only = true
 
 [[vex]]
 op = "vbroadcasti128"

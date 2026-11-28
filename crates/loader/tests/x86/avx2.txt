@@ -54,13 +54,24 @@ c4 63 7d 39 cb ff | vextracti128 xmm3, ymm9, 255
 c4 63 7d 39 4c be 10 ff | vextracti128 xmmword ptr [rsi + 4*rdi + 16], ymm9, 255
 c4 e2 79 78 5c be 10 | vpbroadcastb xmm3, byte ptr [rsi + 4*rdi + 16]
 c4 e2 7d 78 5c be 10 | vpbroadcastb ymm3, byte ptr [rsi + 4*rdi + 16]
+c4 c2 79 78 d9 | vpbroadcastb xmm3, xmm9
+c4 c2 7d 78 d9 | vpbroadcastb ymm3, xmm9
 c4 e2 79 79 5c be 10 | vpbroadcastw xmm3, word ptr [rsi + 4*rdi + 16]
 c4 e2 7d 79 5c be 10 | vpbroadcastw ymm3, word ptr [rsi + 4*rdi + 16]
+c4 c2 79 79 d9 | vpbroadcastw xmm3, xmm9
+c4 c2 7d 79 d9 | vpbroadcastw ymm3, xmm9
 c4 e2 79 58 5c be 10 | vpbroadcastd xmm3, dword ptr [rsi + 4*rdi + 16]
 c4 e2 7d 58 5c be 10 | vpbroadcastd ymm3, dword ptr [rsi + 4*rdi + 16]
+c4 c2 79 58 d9 | vpbroadcastd xmm3, xmm9
+c4 c2 7d 58 d9 | vpbroadcastd ymm3, xmm9
 c4 e2 79 59 5c be 10 | vpbroadcastq xmm3, qword ptr [rsi + 4*rdi + 16]
 c4 e2 7d 59 5c be 10 | vpbroadcastq ymm3, qword ptr [rsi + 4*rdi + 16]
+c4 c2 79 59 d9 | vpbroadcastq xmm3, xmm9
+c4 c2 7d 59 d9 | vpbroadcastq ymm3, xmm9
 c4 e2 7d 5a 5c be 10 | vbroadcasti128 ymm3, xmmword ptr [rsi + 4*rdi + 16]
+c4 c2 79 18 d9 | vbroadcastss xmm3, xmm9
+c4 c2 7d 18 d9 | vbroadcastss ymm3, xmm9
+c4 c2 7d 19 d9 | vbroadcastsd ymm3, xmm9
 c4 c3 31 02 da 00 | vpblendd xmm3, xmm9, xmm10, 0
 c4 e3 31 02 5c be 10 00 | vpblendd xmm3, xmm9, xmmword ptr [rsi + 4*rdi + 16], 0
 c4 c3 31 02 da 01 | vpblendd xmm3, xmm9, xmm10, 1

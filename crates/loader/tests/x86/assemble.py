@@ -479,8 +479,13 @@ def avx2_cases():
                 f"vextracti128 {whole['xmm']}, ymm9, {imm}"]
     for op, width in (("vpbroadcastb", byte), ("vpbroadcastw", word),
                       ("vpbroadcastd", dword), ("vpbroadcastq", quad)):
-        out += [f"{op} xmm3, {width}", f"{op} ymm3, {width}"]
+        out += [f"{op} xmm3, {width}", f"{op} ymm3, {width}",
+                f"{op} xmm3, xmm9", f"{op} ymm3, xmm9"]
     out += [f"vbroadcasti128 ymm3, {whole['xmm']}"]
+    # The register forms of these broadcasts are valid; the 128-bit forms of
+    # VPBROADCASTB/W/D/Q and the two forms of VBROADCASTSS are AVX2 extensions.
+    out += ["vbroadcastss xmm3, xmm9", "vbroadcastss ymm3, xmm9",
+            "vbroadcastsd ymm3, xmm9"]
     for v in ("xmm", "ymm"):
         for imm in (0, 1, 0x5A, 0xFF):
             out += [f"vpblendd {v}3, {v}9, {v}10, {imm}",
