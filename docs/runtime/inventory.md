@@ -12,16 +12,16 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 974 |
+| Canonical services | 975 |
 | Typed registry services | 302 |
-| Manual code registrations | 672 |
+| Manual code registrations | 673 |
 | Canonical libraries | 25 |
 | Implemented | 246 |
-| Partial | 728 |
+| Partial | 729 |
 | Stub | 0 |
 | Data-import services | 7 |
-| Aliases of every kind | 954 |
-| API-set aliases | 753 |
+| Aliases of every kind | 955 |
+| API-set aliases | 754 |
 | Ordinal aliases | 35 |
 | Statuses never explicitly set | 78 |
 | Duplicate canonical registrations | 0 |
@@ -36,7 +36,7 @@ independent acceptance or compatibility claims.
 | <code>api-ms-win-crt-process-l1-1-0.dll</code> | <code>c-runtime</code> | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 |
 | <code>bcrypt.dll</code> | <code>other</code> | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 |
 | <code>combase.dll</code> | <code>other</code> | 14 | 14 | 0 | 0 | 0 | 14 | 0 | 0 |
-| <code>kernel32.dll</code> | <code>windows-system</code> | 321 | 59 | 262 | 0 | 42 | 279 | 0 | 28 |
+| <code>kernel32.dll</code> | <code>windows-system</code> | 322 | 59 | 263 | 0 | 42 | 280 | 0 | 28 |
 | <code>libgcc_s_seh-1.dll</code> | <code>c++-support</code> | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
 | <code>libstdc++-6.dll</code> | <code>c++-support</code> | 18 | 3 | 15 | 0 | 15 | 3 | 0 | 0 |
 | <code>libwinpthread-1.dll</code> | <code>c++-support</code> | 8 | 0 | 8 | 0 | 4 | 4 | 0 | 0 |
@@ -64,7 +64,7 @@ metadata, are in `inventory.json`.
 
 | Alias kind | Count |
 | --- | --- |
-| API-set | 753 |
+| API-set | 754 |
 | Ordinal | 35 |
 | Other module | 166 |
 

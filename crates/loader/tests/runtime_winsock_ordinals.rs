@@ -107,14 +107,13 @@ fn ordinal_lookup_aliases_the_named_implementations() {
             .resolve(MODULE, &ImportName::Name("Ordinal#7".to_owned()))
             .is_none()
     );
-    for ordinal in [24] {
-        assert!(
-            registry
-                .resolve(MODULE, &ImportName::Ordinal(ordinal))
-                .is_none(),
-            "ordinal {ordinal} should remain unresolved"
-        );
-    }
+    let ordinal = 24;
+    assert!(
+        registry
+            .resolve(MODULE, &ImportName::Ordinal(ordinal))
+            .is_none(),
+        "ordinal {ordinal} should remain unresolved"
+    );
 }
 
 #[test]
@@ -209,13 +208,12 @@ fn ordinal_iat_entries_bind_and_run_representative_socket_calls() {
 
 #[test]
 fn ordinal_iat_entries_without_named_implementations_stay_missing() {
-    for ordinal in [24] {
-        let (bytes, _) = build_ordinal_image(&[(MODULE, ordinal)]);
-        assert!(
-            matches!(bind_error(&bytes), ImportError::UnresolvedImport { .. }),
-            "ordinal {ordinal} should remain unresolved"
-        );
-    }
+    let ordinal = 24;
+    let (bytes, _) = build_ordinal_image(&[(MODULE, ordinal)]);
+    assert!(
+        matches!(bind_error(&bytes), ImportError::UnresolvedImport { .. }),
+        "ordinal {ordinal} should remain unresolved"
+    );
 
     let (bytes, _) = build_image(&[(MODULE, "Ordinal#7")], &[]);
     assert!(

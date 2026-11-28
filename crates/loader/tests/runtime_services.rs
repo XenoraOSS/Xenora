@@ -8838,7 +8838,7 @@ fn com_api_set_exports_are_registered_individually() {
     assert!(
         registry
             .binding("api-ms-win-core-com-l1-1-0.dll", "CoCreateInstance")
-            .is_none()
+            .is_some()
     );
 }
 

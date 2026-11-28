@@ -834,6 +834,17 @@ pub fn execute(
                 cpu.gpr[register] = u64::from(value);
             }
         }
+        Op::Rdtsc => {
+            // EDX takes the high 32 bits of the counter and EAX the low 32,
+            // and bits 63:32 of RAX and RDX are cleared. No flag changes
+            // (Intel SDM Vol. 2B, "RDTSC"). The counter is the guest's own
+            // (`GuestMemory::time_stamp_counter`), never a host timer, so both
+            // engines read the same sequence. CR4.TSD is not modelled; RDTSC
+            // behaves as with that flag clear, at any privilege level.
+            let value = memory.read_time_stamp_counter();
+            cpu.gpr[RAX] = value & 0xFFFF_FFFF;
+            cpu.gpr[RDX] = value >> 32;
+        }
         Op::Movs | Op::Stos | Op::Lods | Op::Scas | Op::Cmps => {
             // One element per execution. A repeated form with elements left
             // keeps RIP on itself, so every element is a step of its own: it

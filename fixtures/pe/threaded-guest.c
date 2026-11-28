@@ -18,6 +18,7 @@ IMPORT int SetFilePointerEx(u64 file, long long distance, u64 *position, u32 ori
 IMPORT u64 CreateEventW(void *security, int manual_reset, int initial, const u16 *name);
 IMPORT int SetEvent(u64 event);
 IMPORT u32 WaitForSingleObject(u64 handle, u32 milliseconds);
+IMPORT u32 SignalObjectAndWait(u64 signal, u64 wait, u32 milliseconds, int alertable);
 IMPORT int CloseHandle(u64 handle);
 IMPORT u64 CreateThread(void *security, u64 stack_size, u32 (*entry)(void *),
                         void *parameter, u32 flags, u32 *thread_id);
@@ -180,7 +181,7 @@ void entry(void) {
         expected_journal[frames] = (unsigned char)('0' + expected_column);
 
         job->command = command;
-        require(SetEvent(work_ready) && WaitForSingleObject(work_done, WAIT_MS) == WAIT_OBJECT_0, 6);
+        require(SignalObjectAndWait(work_ready, work_done, WAIT_MS, 0) == WAIT_OBJECT_0, 6);
         u32 column = job->column;
         require(job->worker_id == worker_id && job->sequence == frames + 1 && column == expected_column, 6);
 

@@ -189,12 +189,37 @@ pub struct GuestMemory {
     /// The filter `SetUnhandledExceptionFilter` stored, or 0 for none. One
     /// filter serves every guest thread of the process.
     pub(crate) unhandled_filter: u64,
+    /// The guest time-stamp counter: the value the next RDTSC reads. One
+    /// counter serves every guest thread of the process. It lives here, not in
+    /// `CpuState`, because exception dispatch restores earlier register
+    /// snapshots, which would move a per-register counter backward.
+    time_stamp_counter: u64,
 }
 
 impl GuestMemory {
     /// Create a new empty guest address space.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The value the next RDTSC reads. It is 0 when the address space is
+    /// created. Only RDTSC and [`GuestMemory::advance_time_stamp_counter_to`]
+    /// change it; no host timer is read.
+    pub fn time_stamp_counter(&self) -> u64 {
+        self.time_stamp_counter
+    }
+
+    /// Move the guest time-stamp counter forward to `value`. A value at or
+    /// below the current one changes nothing, so this never moves it backward.
+    pub fn advance_time_stamp_counter_to(&mut self, value: u64) {
+        self.time_stamp_counter = self.time_stamp_counter.max(value);
+    }
+
+    /// The counter for one RDTSC, which then advances it by one, modulo 2^64.
+    pub(crate) fn read_time_stamp_counter(&mut self) -> u64 {
+        let value = self.time_stamp_counter;
+        self.time_stamp_counter = value.wrapping_add(1);
+        value
     }
 
     /// Map a new region into guest virtual memory.

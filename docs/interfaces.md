@@ -381,6 +381,11 @@ whole milliseconds since the synthetic runtime was created. The 32-bit value
 wraps at 2³² milliseconds. Both use the monotonic clock and are available
 through Kernel32 and the system-information API set.
 
+RDTSC does not read this clock. It reads a separate guest time-stamp counter
+that counts RDTSC executions and does not advance with time. The
+[instruction registry](cpu/instruction-registry.md#guest-time-stamp-counter-and-rdtsc)
+specifies that counter.
+
 See Microsoft's documentation for
 [QueryPerformanceCounter](https://learn.microsoft.com/windows/win32/api/profileapi/nf-profileapi-queryperformancecounter)
 [QueryPerformanceFrequency](https://learn.microsoft.com/windows/win32/api/profileapi/nf-profileapi-queryperformancefrequency),

@@ -24,6 +24,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "combase.dll",
+      "canonical_symbol": "CoCreateInstance",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoCreateInstance"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
       "canonical_symbol": "CoInitializeEx",
       "kind": "name",
       "library": "api-ms-win-core-com-l1-1-0.dll",
@@ -13360,6 +13370,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "SignalObjectAndWait"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "Sleep"
     },
     {
@@ -19844,17 +19864,17 @@
     }
   ],
   "summary": {
-    "aliases": 954,
-    "api_set_aliases": 753,
+    "aliases": 955,
+    "api_set_aliases": 754,
     "canonical_services": 974,
     "data_import_services": 7,
     "duplicate_registrations": 0,
     "implemented": 246,
     "implicit_status_services": 78,
     "libraries": 25,
-    "manual_services": 672,
+    "manual_services": 673,
     "ordinal_aliases": 35,
-    "partial": 728,
+    "partial": 729,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,
