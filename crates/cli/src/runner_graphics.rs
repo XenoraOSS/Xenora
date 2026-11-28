@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Graphics adapters for the worker that runs a selected PE.
+//! Shared graphics adapters for hosted PE workers.
 
 use std::error::Error;
 use std::sync::Arc;
@@ -11,13 +11,13 @@ use xenora_metal::NativeCompute;
 use xenora_shader::{Architecture, PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT, compile_graphics};
 
 #[derive(Clone, Copy)]
-pub(super) enum Backend {
+pub enum Backend {
     Reference,
     Metal,
 }
 
 impl Backend {
-    pub(super) fn parse(name: &str) -> Option<Self> {
+    pub fn parse(name: &str) -> Option<Self> {
         match name {
             "reference" => Some(Self::Reference),
             "metal" => Some(Self::Metal),
@@ -25,15 +25,22 @@ impl Backend {
         }
     }
 
-    pub(super) fn name(self) -> &'static str {
+    pub fn name(self) -> &'static str {
         match self {
             Self::Reference => "reference",
             Self::Metal => "metal",
         }
     }
+
+    pub fn id(self) -> GraphicsBackendId {
+        match self {
+            Self::Reference => GraphicsBackendId::SoftwareReference,
+            Self::Metal => GraphicsBackendId::MetalNative,
+        }
+    }
 }
 
-pub(super) fn compile_rgba_shader() -> Result<String, Box<dyn Error>> {
+pub fn compile_rgba_shader() -> Result<String, Box<dyn Error>> {
     Ok(compile_graphics(
         Architecture::Gfx1030,
         include_bytes!("../../../fixtures/rdna2/x9-constant-vs.bin"),
@@ -42,7 +49,7 @@ pub(super) fn compile_rgba_shader() -> Result<String, Box<dyn Error>> {
     .msl)
 }
 
-pub(super) fn install_metal(state: &ServicesState) -> Result<(), Box<dyn Error>> {
+pub fn install_metal(state: &ServicesState) -> Result<(), Box<dyn Error>> {
     let msl = compile_rgba_shader()?;
     let gpu = Arc::new(NativeCompute::new()?);
     let renderer = Arc::clone(&gpu);
@@ -82,7 +89,7 @@ fn backend_error(error: impl std::fmt::Display) -> GraphicsError {
     GraphicsError::BackendError(error.to_string())
 }
 
-pub(super) fn trace(state: &ServicesState) {
+pub fn trace(state: &ServicesState) {
     let Ok(graphics) = state.graphics.lock() else {
         return;
     };

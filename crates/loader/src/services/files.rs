@@ -2581,6 +2581,13 @@ impl super::ObjectState {
             return None;
         }
         let path = resolve_dots(strip_root_anchor(path));
+        // A trailing separator is the directory marker of the Windows path
+        // grammar: `dir\` names `dir`, as mkdir -p and a hundred shell
+        // idioms depend on. The empty components it leaves are not part of
+        // the key. The file edge - a trailing separator on a file stays
+        // acceptable here where Windows refuses it - is documented rather
+        // than modeled, as no caller depends on the refusal.
+        let path = path.trim_end_matches('\\').to_owned();
         valid_key(&path).then_some(path)
     }
 
@@ -2735,5 +2742,37 @@ impl super::ObjectState {
         }
         data[start..end].copy_from_slice(bytes);
         Some(true)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::ObjectState;
+
+    /// The trailing separator of the Windows path grammar: `dir/` names
+    /// `dir`, as the shell's mkdir -p idiom depends on when it creates
+    /// parents through the slashed form (#1270).
+    #[test]
+    fn drive_path_collapses_trailing_separators_to_the_directory_key() {
+        assert_eq!(
+            ObjectState::drive_path(b"u/").as_deref(),
+            ObjectState::drive_path(b"u").as_deref()
+        );
+        assert_eq!(
+            ObjectState::drive_path(b"a/b/").as_deref(),
+            ObjectState::drive_path(b"a\\b").as_deref()
+        );
+        // A bare separator resolves to the root rather than vanishing into
+        // an invalid key.
+        assert_eq!(ObjectState::drive_path(b"/").as_deref(), Some(""));
+    }
+
+    /// mkdir of an existing directory is EEXIST, as the CRT contract busybox
+    /// keys its -p continuation on (#1270).
+    #[test]
+    fn drive_mkdir_of_an_existing_directory_is_eexist() {
+        let mut drive = ObjectState::default();
+        drive.drive_mkdir("u").expect("first mkdir");
+        assert_eq!(drive.drive_mkdir("u"), Err(super::super::crt_files::EEXIST));
     }
 }

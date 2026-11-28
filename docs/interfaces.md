@@ -2186,6 +2186,146 @@ on an M5 Pro), so the tests use endpoint colours only. Pipeline
 state objects do not exist yet, so the backend, not the guest, chooses the
 pixel shader. These entry points are not yet wired to guest imports.
 
+## Bounded GPU workload resource budget
+
+This is the consolidated description of the resource limits implemented today
+across the guest graphics command path, the persistent X9 resource profile,
+native compute submission and staged texture upload. It cross-references the
+[guest graphics command path](#guest-graphics-command-path),
+[guest texture binding](#guest-texture-binding-descriptor-tables),
+[persistent guest graphics resources](#persistent-guest-graphics-resources-x9),
+[synthetic tiled textures](#synthetic-tiled-textures), [graphics draw and blend
+contracts](#graphics-draw-and-blend-contracts), and the
+[guest graphics service ABI](runtime/guest-graphics.md). The source of truth is
+the validation code and named constants in `crates/loader/src/graphics.rs`,
+`crates/loader/src/services/graphics.rs`, `experiments/x1/src/x9.rs`,
+`crates/metal/src/compute.rs`, `crates/metal/src/render.rs`,
+`crates/metal/src/texture_pipeline.rs` and `crates/texture/src/upload.rs`;
+this section collects their existing contracts, not a new API. The limits are
+independent per-subsystem caps, not
+one shared CPU/GPU ledger or a claim about a platform-wide allocation
+guarantee. A common accounting interface remains separate work.
+
+Failure is explicit where a bound is enforced. Recording-time checks reject an
+operation before it is appended; execution-time checks reject a draw, dispatch
+or transfer before it submits GPU work or writes a result. The caller sees an
+`HRESULT` from `xenora_graphics.dll`, a `FaultKind` from the X9 resource
+service, a `GraphicsError` from the loader API or a `MetalError` from the native
+backend. A rejection is never a silent clamp, an empty success, or a fallback
+to a smaller workload. If a command list fails during execution, commands
+already completed stay completed and the rejected command does not run. The
+guest command path refuses destruction while a queue, allocator or
+still-recording command list holds an object. The X9 profile instead retires a
+slot on destruction while a queued immutable view keeps its bytes. Each backend
+validates the inputs it consumes before execution; this section does not claim
+that every backend performs every check in the same place.
+
+### Guest-visible resource limits
+
+- The `xenora_graphics.dll` command path exposes opaque, generation-checked
+  handles, not host pointers. One draw is at most one triangle with one
+  instance: `DrawInstanced` accepts three vertices and one instance, and
+  `DrawIndexedInstanced` accepts three indices and one instance. A nonempty
+  flat draw also requires zero `startVertex` and `startInstance`; a textured
+  draw requires zero `startInstance` and allows any `startVertex`. The
+  non-indexed paths skip zero vertex or instance counts, and the indexed path
+  skips zero index or instance counts only after rejecting an instance count
+  above one or a nonzero start instance. Each vertex holds a `float4` position
+  plus, for a textured draw, a `float4` texture coordinate; sampling is point
+  filtering with clamp addressing. Render targets are `R8G8B8A8_UNORM`;
+  sampled textures are `R8G8B8A8_UNORM` or `BC1_UNORM`. Both are at most 64
+  texels per side, and BC1 dimensions must be multiples of four. Viewports
+  accept dimensions from 1 through 4096. Shader-visible descriptor heaps hold
+  1 through 64 descriptors, with a 32-byte handle increment. Root signatures
+  consist of exactly one shader-resource-view table at `t0` and one sampler
+  table at `s0`; constant buffers, unordered-access views, render-target
+  views, depth views, upload heaps and readback heaps are not exposed.
+- At most 16 timeline fences are live in one graphics context and eight
+  distinct fences may be pending on one queue. A host wait is bounded to one
+  second and reports a timeout with the completed value when the target is not
+  reached. A queue wait whose producer has not signalled also reports a
+  timeout and keeps the dependency so the guest can signal and retry. The
+  maximum `u64` fence value is reserved, and decreasing signals are refused.
+- The X9 resource service gives each guest run eight generation-checked slots.
+  Buffers and compressed texture payloads are at most 4096 bytes; a view's
+  offset and length must be nonzero multiples of four and lie inside the
+  resource. At most one submission may be pending and at most 16 readbacks are
+  retained per profile. Queueing captures one immutable view, so a later
+  update or destruction cannot change queued bytes. Exhaustion returns
+  `ResourceLimit` or `SubmissionPending`; no new queue or readback is
+  performed. Guest exit drops the run's slots and queued views.
+
+### Native submission and compilation limits
+
+- `NativeCompute` inputs hold from one to 4096 words. The default threadgroup
+  width is at most 64 threads and no dispatch may require more than 64 groups;
+  an explicit width is bounded by the device and pipeline limits. An MSL source
+  string is at most 64 KiB and entry names must be nonempty. A batch accepts
+  one to eight commands in one command buffer and completion wait; distinct
+  output slots stay independent, a reused slot shares one output buffer, and a
+  buffer-scope barrier follows every dispatch except the last so a later
+  command sees an earlier write. Outputs are read after the whole batch
+  completes, so a shared slot yields its final contents rather than one
+  command's intermediate value. At most 16 compute submissions may be in
+  flight and at most 128 queued commands may be outstanding across them;
+  batch size and queue depth are checked before encoding, and a rejected batch
+  releases every buffer it acquired.
+- Idle shared Metal buffers are pooled only up to 32 buffers and 1 MiB of
+  idle storage. A buffer beyond that pool is released after use rather than
+  retained, so a large fixture cannot grow the pool without bound.
+- Each `NativeCompute` context caches at most 16 compute pipelines, keyed by
+  the exact source, entry and shader-validation setting with least-recently-
+  used eviction. Concurrent misses for one key share one build. A valid key
+  too large to own is compiled but not cached; source validation still applies.
+  This is a compute cache only. No render-pipeline cache, cross-process cache
+  or persisted shader artifact is part of this contract.
+- Native offscreen render passes accept at most 4096 output pixels. Blend and
+  depth passes accept at most 16 draws. Indexed passes accept at most 1024
+  vertices and 4096 indices, and reject index or resolved vertex ranges that
+  leave their buffers. These are bounded fixture paths, not a general
+  Direct3D implementation.
+
+### Texture staging and transfer limits
+
+- A `StagingBudget` must be a nonzero multiple of the four-byte RGBA8 texel
+  size. A fresh staged upload supplies whole rows of every mip level in level
+  order; an update may supply a subset and omitted levels keep their contents.
+  No submission exceeds its budget. A budget smaller than one row, a missing
+  level in a fresh upload, a repeated level or a row-length violation is
+  rejected before GPU work starts.
+- The RGBA8 texture planner rejects dimensions whose total pixel count
+  overflows or exceeds its 16,384-times-16,384 structural cap. Guest-visible
+  texture and software textured-draw limits are smaller and bind first.
+- Native BC1 readback uses the 4096-texel compute limit. Original guest BC1
+  levels also use the guest's 64-texel side limit. Native BC7 readback uses one
+  word per texel at the same 4096-texel limit; BC6H returns four 32-bit words
+  per texel and is therefore limited to 1024 texels per level. Compressed
+  uploads keep their declared pitches and reject lengths that do not satisfy
+  the pitched layout.
+
+### Compatibility and future work
+
+The original fixtures described in the linked contracts stay within these
+bounds. A workload outside a listed bound is unsupported until a separate
+interface change defines it; none of these limits is a new GPU result. The
+backend identifier reported to the guest distinguishes a software frame from a
+native Metal frame; a synthetic service name alone does not establish GPU
+execution.
+
+Indirect draws and dispatches are not implemented. If they are added, argument
+buffers must be range-checked when recorded, and counts written by the GPU
+must be checked before consumption, either by device-side predication or by a
+bounded readback followed by explicit rejection. An over-budget count must not
+be clamped, truncated, or allowed to launch an unbounded workload. A future
+synthetic fixture should cover one in-budget GPU-written command that produces
+the expected output and one over-budget count that is rejected or suppressed
+before a draw or dispatch runs; no such fixture exists today. This is a future
+requirement, not current behavior.
+
+No game execution, Xbox graphics ABI, Windows driver behavior, all-device GPU
+capability or independent acceptance follows from this description. Hardware
+differences already recorded for BC decoding remain per-device observations.
+
 ## Native app: running an executable and the Metal HUD
 
 `Xenora.app` runs a chosen executable only through the `xenora run` worker,

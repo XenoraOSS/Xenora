@@ -12,16 +12,16 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 1005 |
-| Typed registry services | 302 |
-| Manual code registrations | 703 |
+| Canonical services | 1015 |
+| Typed registry services | 304 |
+| Manual code registrations | 711 |
 | Canonical libraries | 28 |
-| Implemented | 247 |
-| Partial | 758 |
+| Implemented | 249 |
+| Partial | 766 |
 | Stub | 0 |
-| Data-import services | 13 |
-| Aliases of every kind | 961 |
-| API-set aliases | 755 |
+| Data-import services | 12 |
+| Aliases of every kind | 968 |
+| API-set aliases | 760 |
 | Ordinal aliases | 35 |
 | Statuses never explicitly set | 78 |
 | Duplicate canonical registrations | 0 |
@@ -45,7 +45,7 @@ independent acceptance or compatibility claims.
 | <code>msvcp140_codecvt_ids.dll</code> | <code>other</code> | 4 | 0 | 4 | 4 | 0 | 4 | 0 | 0 |
 | <code>msvcrt.dll</code> | <code>c-runtime</code> | 41 | 13 | 28 | 7 | 14 | 27 | 0 | 14 |
 | <code>psapi.dll</code> | <code>windows-system</code> | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
-| <code>ucrtbase.dll</code> | <code>c-runtime</code> | 307 | 211 | 96 | 0 | 104 | 203 | 0 | 10 |
+| <code>ucrtbase.dll</code> | <code>c-runtime</code> | 309 | 213 | 96 | 0 | 104 | 205 | 0 | 10 |
 | <code>user32.dll</code> | <code>other</code> | 10 | 0 | 10 | 0 | 0 | 10 | 0 | 0 |
 | <code>winhttp.dll</code> | <code>other</code> | 18 | 0 | 18 | 0 | 0 | 18 | 0 | 0 |
 | <code>ws2_32.dll</code> | <code>windows-networking</code> | 65 | 0 | 65 | 0 | 6 | 59 | 0 | 6 |
@@ -53,7 +53,7 @@ independent acceptance or compatibility claims.
 | <code>xenora_fixture.dll</code> | <code>xenora-fixture</code> | 22 | 0 | 22 | 0 | 22 | 0 | 0 | 20 |
 | <code>xenora_graphics.dll</code> | <code>xenora-fixture</code> | 34 | 0 | 34 | 0 | 34 | 0 | 0 | 0 |
 | <code>xenora_xaudio2.dll</code> | <code>xenora-fixture</code> | 43 | 0 | 43 | 0 | 0 | 43 | 0 | 0 |
-| <code>xgameruntime.dll</code> | <code>xbox-gaming</code> | 13 | 0 | 13 | 0 | 4 | 9 | 0 | 0 |
+| <code>xgameruntime.dll</code> | <code>xbox-gaming</code> | 22 | 0 | 22 | 0 | 6 | 16 | 0 | 0 |
 | <code>xinput1_3.dll</code> | <code>other</code> | 8 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
 | <code>xinput1_4.dll</code> | <code>other</code> | 8 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
 | <code>xinput9_1_0.dll</code> | <code>other</code> | 4 | 0 | 4 | 0 | 0 | 4 | 0 | 0 |
@@ -67,9 +67,9 @@ metadata, are in `inventory.json`.
 
 | Alias kind | Count |
 | --- | --- |
-| API-set | 755 |
+| API-set | 760 |
 | Ordinal | 35 |
-| Other module | 171 |
+| Other module | 173 |
 
 Every API-set, module and ordinal alias is listed in `inventory.json`.
 
