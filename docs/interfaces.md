@@ -641,7 +641,8 @@ or game execution is claimed.
 
 ### Structured exceptions and CPU faults
 
-`__C_specific_handler` (`ucrtbase.dll`, and the CRT private API set) is the
+`__C_specific_handler` is registered as a partial service for `ucrtbase.dll`,
+`msvcrt.dll`, `vcruntime140.dll` and the CRT private API set. It is the
 language handler of MSVC-style C structured exception handling (`__try`,
 `__except`, `__finally`) and of the mingw-w64 C runtime's startup frames
 (#453). It reads the function's scope table, calls `__except` filters in the

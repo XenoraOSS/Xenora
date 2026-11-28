@@ -12,15 +12,15 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 1015 |
+| Canonical services | 1016 |
 | Typed registry services | 304 |
-| Manual code registrations | 711 |
+| Manual code registrations | 712 |
 | Canonical libraries | 28 |
 | Implemented | 249 |
-| Partial | 766 |
+| Partial | 767 |
 | Stub | 0 |
-| Data-import services | 12 |
-| Aliases of every kind | 968 |
+| Data-import services | 13 |
+| Aliases of every kind | 969 |
 | API-set aliases | 760 |
 | Ordinal aliases | 35 |
 | Statuses never explicitly set | 78 |
@@ -69,7 +69,7 @@ metadata, are in `inventory.json`.
 | --- | --- |
 | API-set | 760 |
 | Ordinal | 35 |
-| Other module | 173 |
+| Other module | 174 |
 
 Every API-set, module and ordinal alias is listed in `inventory.json`.
 
