@@ -279,6 +279,7 @@ pclmulqdq = { ref = "sdm PCLMULQDQ" }
 pblendvb = { ref = "sdm PBLENDVB" }
 ptest = { writes = "cf zf sf of pf af", ref = "sdm PTEST" }
 pmaskmov = { ref = "sdm VPMASKMOVD VPMASKMOVQ" }
+maskmovdqu = { faults = true, ref = "sdm MASKMOVDQU" }
 pmuldq = { ref = "sdm PMULDQ" }
 pcmpeqq = { ref = "sdm PCMPEQQ" }
 packusdw = { ref = "sdm PACKUSDW" }
@@ -2259,6 +2260,16 @@ prefix = "66"
 opcode = 0xD7
 enc = "reg_xmm"
 size = "y"
+src = "x"
+register_only = true
+
+[[form]]
+op = "maskmovdqu"
+map = "0f"
+prefix = "66"
+opcode = 0xF7
+enc = "xmm_rm"
+size = "x"
 src = "x"
 register_only = true
 
@@ -4924,6 +4935,16 @@ opcode = 0xD7
 enc = "reg_xmm"
 length = "any"
 src = "v"
+register_only = true
+
+[[vex]]
+op = "maskmovdqu"
+map = "0f"
+prefix = "66"
+opcode = 0xF7
+enc = "xmm_rm"
+length = "128"
+src = "x"
 register_only = true
 
 [[vex]]
