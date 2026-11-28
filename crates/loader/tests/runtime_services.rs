@@ -7980,6 +7980,71 @@ fn legacy_fstat64_fills_the_legacy_structure() {
     assert_eq!(guest.errno(), EINVAL);
 }
 
+/// `_fmode` controls the default translation of `_open`, exactly as the
+/// CRT documents: an open whose flags say neither `_O_BINARY` nor `_O_TEXT`
+/// translates newlines when the variable is text and not when it is binary
+/// (#1312). busybox-w32 links the binary default into the CRT cell at
+/// startup, and the exact-size copies of its `tar` depend on the byte
+/// counts matching. The control case pins the initial text default, so the
+/// pair proves the variable itself acts.
+#[test]
+fn fmode_controls_the_default_translation_of_open() {
+    let mut guest = Guest::new();
+    let buf = guest.call("malloc", &[0x100]);
+    let write_two = |guest: &mut Guest, name: &[u8]| {
+        guest.memory.write_bytes(buf, name).unwrap();
+        guest.memory.write_u8(buf + name.len() as u64, 0).unwrap();
+        let fd = guest.call("_open", &[buf, 1 | 0x100 | 0x200, 0]) & 0xFFFF_FFFF;
+        assert!((3..0x8000).contains(&fd), "{fd:x}");
+        guest.memory.write_bytes(buf + 32, b"x\n").unwrap();
+        assert_eq!(guest.call("_write", &[fd, buf + 32, 2]) & 0xFFFF_FFFF, 2);
+        assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
+    };
+    let raw_len = |guest: &mut Guest, name: &[u8]| -> u64 {
+        // Reading the file back through an explicitly binary descriptor
+        // counts the bytes the drive really carries.
+        guest.memory.write_bytes(buf, name).unwrap();
+        guest.memory.write_u8(buf + name.len() as u64, 0).unwrap();
+        let fd = guest.call("_open", &[buf, 0 | 0x8000, 0]) & 0xFFFF_FFFF;
+        assert!((3..0x8000).contains(&fd), "{fd:x}");
+        let mut total = 0;
+        loop {
+            let n = guest.call("_read", &[fd, buf + 32, 16]) & 0xFFFF_FFFF;
+            if n == 0 || n == MINUS_ONE {
+                break;
+            }
+            total += n;
+        }
+        total
+    };
+    // The documented initial value is text: the newline pair grows a CR.
+    write_two(&mut guest, b"tm1.bin");
+    assert_eq!(
+        raw_len(&mut guest, b"tm1.bin"),
+        3,
+        "text default translates"
+    );
+    // Binary selected: the same open writes the bytes exactly.
+    let mode_ptr = guest.call("__p__fmode", &[]);
+    assert_ne!(mode_ptr, 0);
+    guest.memory.write_u32(mode_ptr, 0x8000).unwrap();
+    write_two(&mut guest, b"tm2.bin");
+    assert_eq!(
+        raw_len(&mut guest, b"tm2.bin"),
+        2,
+        "binary default is exact"
+    );
+    // An explicit `_O_BINARY` flag overrides even a text variable, and an
+    // explicit `_O_TEXT` overrides a binary one.
+    guest.memory.write_u32(mode_ptr, 0x4000).unwrap();
+    guest.memory.write_bytes(buf, b"tm3.bin\0").unwrap();
+    let fd = guest.call("_open", &[buf, 1 | 0x100 | 0x200 | 0x8000, 0]) & 0xFFFF_FFFF;
+    guest.memory.write_bytes(buf + 32, b"x\n").unwrap();
+    assert_eq!(guest.call("_write", &[fd, buf + 32, 2]) & 0xFFFF_FFFF, 2);
+    assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
+    assert_eq!(raw_len(&mut guest, b"tm3.bin"), 2, "the flag wins");
+}
+
 /// `_fstat64` of a pipe end answers the FIFO mode, as the CRT stats an
 /// anonymous pipe: busybox-w32's `tar cf -` stats its standard output to
 /// refuse a terminal, and the failure killed archive creation before any

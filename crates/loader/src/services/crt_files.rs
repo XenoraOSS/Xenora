@@ -79,7 +79,7 @@ pub(super) struct Mode {
 /// `r`, `w` or `a` first, then `+`, `b` and `t` in any order, each at most
 /// once and not both `b` and `t`. Anything else is not a mode this runtime
 /// opens, including the other characters the page lists.
-pub(super) fn parse_mode(mode: &[u8]) -> Option<Mode> {
+pub(super) fn parse_mode(mode: &[u8], default_binary: bool) -> Option<Mode> {
     let (&kind, rest) = mode.split_first()?;
     let (mut update, mut binary, mut text) = (false, false, false);
     for &byte in rest {
@@ -102,13 +102,21 @@ pub(super) fn parse_mode(mode: &[u8]) -> Option<Mode> {
         b'a' => (update, true, true, false, false),
         _ => return None,
     };
+    // An explicit b or t fixes the translation; without one the stream
+    // takes the `_fmode` default, exactly as the CRT documents fopen.
     Some(Mode {
         readable,
         writable,
         append,
         existing,
         truncate,
-        text: !binary,
+        text: if binary {
+            false
+        } else if text {
+            true
+        } else {
+            !default_binary
+        },
     })
 }
 
@@ -289,11 +297,12 @@ impl FileStreams {
         drive: &mut ObjectState,
         name: &[u8],
         mode: &[u8],
+        default_binary: bool,
     ) -> Result<u64, u32> {
         // An empty name or mode is an invalid parameter: neither is a mode
         // nor a name the drive accepts. Xenora's choice: so is any other mode
         // it does not open and any other name the drive rejects.
-        let mode = parse_mode(mode).ok_or(EINVAL)?;
+        let mode = parse_mode(mode, default_binary).ok_or(EINVAL)?;
         let path = ObjectState::drive_path(name).ok_or(EINVAL)?;
         if self.open.len() >= MAX_OPEN_STREAMS {
             return Err(EMFILE);
@@ -790,11 +799,7 @@ impl FileStreams {
     /// it anymore. A pipe end reports the FIFO mode and no size, exactly as
     /// the CRT stats an anonymous pipe; a handle that is no file at all -
     /// a thread, an event - is not a valid file descriptor to stat.
-    pub(super) fn descriptor_stat(
-        &self,
-        drive: &ObjectState,
-        fd: u32,
-    ) -> Result<(u64, u16), u32> {
+    pub(super) fn descriptor_stat(&self, drive: &ObjectState, fd: u32) -> Result<(u64, u16), u32> {
         const REGULAR: u16 = 0x8000; // _S_IFREG
         const FIFO: u16 = 0x1000; // _S_IFIFO
         let fd = self.descriptor_terminal(fd)?;
@@ -1144,6 +1149,7 @@ impl FileStreams {
         drive: &mut ObjectState,
         name: &[u8],
         flags: u32,
+        default_binary: bool,
     ) -> Result<u32, u32> {
         let path = ObjectState::drive_path(name).ok_or(EINVAL)?;
         let (readable, writable) = match flags & 3 {
@@ -1156,8 +1162,16 @@ impl FileStreams {
         let create = flags & 0x100 != 0;
         let truncate = flags & 0x200 != 0;
         let exclusive = flags & 0x400 != 0;
-        // Text unless binary, as `_fmode` starts as `_O_TEXT`.
-        let text = flags & 0x8000 == 0;
+        // `_O_BINARY` and `_O_TEXT` in the flags fix the translation;
+        // without either the descriptor takes the `_fmode` default, as
+        // Microsoft Learn documents for `_open`.
+        let text = if flags & 0x8000 != 0 {
+            false
+        } else if flags & 0x4000 != 0 {
+            true
+        } else {
+            !default_binary
+        };
         if !writable && truncate {
             return Err(EINVAL);
         }
@@ -1486,7 +1500,12 @@ impl FileStreams {
             if stream.writable {
                 access |= FILE_WRITE;
             }
-            (stream.path.clone(), access, stream.position, stream.osfhandle)
+            (
+                stream.path.clone(),
+                access,
+                stream.position,
+                stream.osfhandle,
+            )
         };
         if let Some(handle) = cached {
             return Ok(handle);
@@ -1776,7 +1795,7 @@ mod tests {
             .map_region(0x1000, 0x4000, crate::memory::MemoryPermissions::READ_WRITE)
             .unwrap();
         let file = streams
-            .open(&mut memory, &mut drive, b"target", b"w")
+            .open(&mut memory, &mut drive, b"target", b"w", false)
             .expect("open");
         // Every byte of the 48-byte `_iobuf` is mapped and zero: `_cnt` at 8
         // for the decrement, `_ptr` at 0 for the step, and the slack the
@@ -1807,7 +1826,7 @@ mod tests {
         // exact unlock. A second unlock of the same range is the caller's
         // error, as an unmatched unlock is.
         let fd = streams
-            .open_descriptor(&mut drive, b"target", 2 | 0x100)
+            .open_descriptor(&mut drive, b"target", 2 | 0x100, false)
             .expect("open");
         assert_eq!(streams.lock_range(fd, 2, 10), Ok(()));
         assert_eq!(streams.lock_range(fd, 0, 10), Ok(()));
@@ -1819,7 +1838,7 @@ mod tests {
         // non-overlapping tail is free.
         assert_eq!(streams.lock_range(fd, 2, 6), Ok(()));
         let other = streams
-            .open_descriptor(&mut drive, b"target", 2)
+            .open_descriptor(&mut drive, b"target", 2, false)
             .expect("open");
         assert_eq!(streams.lock_range(other, 2, 3), Err(EDEADLOCK));
         // Even the holder's own ranges conflict with a new overlapping one,
@@ -1853,11 +1872,11 @@ mod tests {
         // Undisturbed standard descriptors are the standard streams: no
         // allocation may take them, so the first open lands at 3.
         let first = streams
-            .open(&mut memory, &mut drive, b"first", b"w")
+            .open(&mut memory, &mut drive, b"first", b"w", false)
             .expect("first open");
         assert!(first != 0);
         let fd = streams
-            .open_descriptor(&mut drive, b"first", 1)
+            .open_descriptor(&mut drive, b"first", 1, false)
             .expect("first descriptor");
         assert_eq!(fd, 3);
 
@@ -1865,14 +1884,14 @@ mod tests {
         // close-then-open redirection idiom depends on the number.
         streams.closed[0] = true;
         let zero = streams
-            .open_descriptor(&mut drive, b"first", 0)
+            .open_descriptor(&mut drive, b"first", 0, false)
             .expect("open onto the closed number");
         assert_eq!(zero, 0);
 
         // The table now carries 0, so the next open skips it and every
         // undisturbed standard number, landing at 4.
         let four = streams
-            .open_descriptor(&mut drive, b"first", 0)
+            .open_descriptor(&mut drive, b"first", 0, false)
             .expect("next descriptor");
         assert_eq!(four, 4);
 
@@ -1904,7 +1923,7 @@ mod tests {
                     spellings.push(format!("{}{suffix}+", &mode[..1]));
                 }
                 for spelling in spellings {
-                    let parsed = parse_mode(spelling.as_bytes())
+                    let parsed = parse_mode(spelling.as_bytes(), false)
                         .unwrap_or_else(|| panic!("{spelling} is a mode"));
                     assert_eq!(
                         (
@@ -1956,7 +1975,7 @@ mod tests {
             " r",
             "rb+t",
         ] {
-            assert!(parse_mode(mode.as_bytes()).is_none(), "{mode:?}");
+            assert!(parse_mode(mode.as_bytes(), false).is_none(), "{mode:?}");
         }
     }
 }
