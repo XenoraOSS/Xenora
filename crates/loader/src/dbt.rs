@@ -159,6 +159,7 @@ impl Default for HotBlockProfiler {
 }
 
 impl HotBlockProfiler {
+    #[inline]
     fn record(
         &mut self,
         key: (u64, usize),
@@ -703,12 +704,14 @@ impl DbtEngine {
             self.metrics.instructions_executed += executed;
             self.metrics.interpreter_fallbacks += ctx.helper_instructions as usize;
             self.link_metrics.links_followed += ctx.links_followed as usize;
-            self.hot_profiler.record(
-                selected.key,
-                executed,
-                selected.source_len,
-                selected.native_bytes,
-            );
+            if self.hot_profiler.enabled {
+                self.hot_profiler.record(
+                    selected.key,
+                    executed,
+                    selected.source_len,
+                    selected.native_bytes,
+                );
+            }
             if ctx.epoch != self.epoch || ctx.exit_reason.is_some() {
                 // Guest code may have changed, or a fault dispatch may write
                 // guest memory next.
