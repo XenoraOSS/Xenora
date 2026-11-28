@@ -364,11 +364,26 @@ VC headers 14.44.35207 and Windows SDK 10.0.22621.0. The Microsoft STL headers
 are copyright Microsoft Corporation and licensed Apache-2.0 WITH LLVM-exception;
 no vendor headers or redistributable binaries are included in this fixture.
 
-In that local build, four of seven imports resolve to standard services; the
-`cout` object and `write` and `flush` methods remain unresolved. A
+In that local build, six of seven imports resolve to standard services; the `cout` object remains
+unresolved. This is import resolution only, not successful execution. A
 separate local run with Microsoft redistributable DLLs supplied as guest
 modules stopped before execution with 77 required imports unresolved. No
 complete C++ stream execution or cleanup is claimed.
+
+### Microsoft ostream write and flush (#1163)
+
+The narrow `basic_ostream::write` and `flush` exports support a guest-provided
+x64 stream object with a guest stream buffer. They call the buffer lock,
+`xsputn` or `sync`, and unlock virtual functions through the guest callback
+boundary. Short writes and sync failure set `badbit`. A tied stream,
+unit-buffered sentry, or exception requiring C++ unwinding stops explicitly;
+these paths are not silently reported as successful. The documented method
+behavior follows the public [Microsoft STL ostream implementation](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/__msvc_ostream.hpp)
+and [stream buffer header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/streambuf),
+copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception. The vtable
+slots and virtual-base layout were inspected using Clang with those headers.
+The original synthetic-layout guests test callbacks, failure state and refusal
+paths; they do not construct `std::cout` or validate general iostream ABI.
 
 ### Microsoft stream state queries (#1163)
 

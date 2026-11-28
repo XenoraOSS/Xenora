@@ -8,7 +8,7 @@
 //! the final destructor therefore stops instead of claiming to have flushed.
 
 use crate::cpu::ExitReason;
-use crate::imports::{ImportRegistry, ServiceStatus};
+use crate::imports::{CallbackStart, CallbackStep, CallbackTask, ImportRegistry, ServiceStatus};
 use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
 use std::sync::{Arc, Mutex};
 
@@ -36,6 +36,8 @@ fn count_address(slot: &mut Option<u64>, memory: &mut GuestMemory) -> Result<u64
 }
 
 pub(super) fn register(registry: &mut ImportRegistry) {
+    register_ostream_flush(registry);
+    register_ostream_write(registry);
     // x64 ios_base stores its iostate after the vptr and _Stdstr. These
     // accessors inspect only that field; construction remains unsupported.
     for (symbol, mask, raw) in [
@@ -196,6 +198,290 @@ pub(super) fn register_atomic_deadlines(
                 .rcx
                 .saturating_sub(clock.uptime_millis())
                 .min(864_000_000))
+        },
+    );
+}
+
+const OSTREAM_FLUSH: &str = "?flush@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@XZ";
+
+fn field(base: u64, offset: u64) -> Result<u64, ExitReason> {
+    base.checked_add(offset)
+        .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))
+}
+
+fn stream_virtual(memory: &GuestMemory, buffer: u64, index: u64) -> Result<u64, ExitReason> {
+    let table = memory.read_u64(buffer).map_err(ExitReason::MemoryFault)?;
+    memory
+        .read_u64(field(table, index * 8)?)
+        .map_err(ExitReason::MemoryFault)
+}
+
+// Equivalent to basic_ios::setstate for the supported non-throwing path.
+fn merge_state(memory: &mut GuestMemory, ios: u64, bits: u32) -> Result<(), ExitReason> {
+    let address = field(ios, 16)?;
+    let current = memory.read_u32(address).map_err(ExitReason::MemoryFault)?;
+    let buffer = memory
+        .read_u64(field(ios, 72)?)
+        .map_err(ExitReason::MemoryFault)?;
+    let next = (current | bits | if buffer == 0 { 4 } else { 0 }) & 0x17;
+    memory
+        .write_u32(address, next)
+        .map_err(ExitReason::MemoryFault)?;
+    let exceptions = memory
+        .read_u32(field(ios, 20)?)
+        .map_err(ExitReason::MemoryFault)?;
+    if next & exceptions != 0 {
+        return Err(LIMIT);
+    }
+    Ok(())
+}
+
+enum FlushPhase {
+    Locked,
+    Synced,
+    Unlocked,
+}
+struct FlushTask {
+    stream: u64,
+    ios: u64,
+    buffer: u64,
+    phase: FlushPhase,
+}
+impl FlushTask {
+    fn unlock(&mut self, memory: &GuestMemory) -> Result<CallbackStep, ExitReason> {
+        let buffer = memory
+            .read_u64(field(self.ios, 72)?)
+            .map_err(ExitReason::MemoryFault)?;
+        if buffer == 0 {
+            return Ok(CallbackStep::Return(self.stream));
+        }
+        self.phase = FlushPhase::Unlocked;
+        Ok(CallbackStep::Call {
+            entry: stream_virtual(memory, buffer, 2)?,
+            args: [buffer, 0, 0, 0],
+        })
+    }
+}
+impl CallbackTask for FlushTask {
+    fn resume(
+        &mut self,
+        result: u64,
+        _: u64,
+        memory: &mut GuestMemory,
+    ) -> Result<CallbackStep, ExitReason> {
+        match self.phase {
+            FlushPhase::Locked => {
+                let state = memory
+                    .read_u32(field(self.ios, 16)?)
+                    .map_err(ExitReason::MemoryFault)?;
+                let tie = memory
+                    .read_u64(field(self.ios, 80)?)
+                    .map_err(ExitReason::MemoryFault)?;
+                let flags = memory
+                    .read_u32(field(self.ios, 24)?)
+                    .map_err(ExitReason::MemoryFault)?;
+                if (state == 0 && tie != 0 && tie != self.stream) || flags & 2 != 0 {
+                    return Err(LIMIT);
+                }
+                if state == 0 {
+                    self.phase = FlushPhase::Synced;
+                    Ok(CallbackStep::Call {
+                        entry: stream_virtual(memory, self.buffer, 13)?,
+                        args: [self.buffer, 0, 0, 0],
+                    })
+                } else {
+                    self.unlock(memory)
+                }
+            }
+            FlushPhase::Synced => {
+                merge_state(
+                    memory,
+                    self.ios,
+                    if result as u32 == u32::MAX { 4 } else { 0 },
+                )?;
+                let state = memory
+                    .read_u32(field(self.ios, 16)?)
+                    .map_err(ExitReason::MemoryFault)?;
+                let flags = memory
+                    .read_u32(field(self.ios, 24)?)
+                    .map_err(ExitReason::MemoryFault)?;
+                if state == 0 && flags & 2 != 0 {
+                    return Err(LIMIT);
+                }
+                self.unlock(memory)
+            }
+            FlushPhase::Unlocked => Ok(CallbackStep::Return(self.stream)),
+        }
+    }
+}
+
+fn register_ostream_flush(registry: &mut ImportRegistry) {
+    registry.register_callback_task(
+        MODULE,
+        OSTREAM_FLUSH,
+        ServiceStatus::Partial,
+        |args, _, memory, _| {
+            let stream = args.rcx;
+            let vbtable = memory.read_u64(stream).map_err(ExitReason::MemoryFault)?;
+            let displacement = memory
+                .read_u32(field(vbtable, 4)?)
+                .map_err(ExitReason::MemoryFault)? as i32;
+            let ios = stream
+                .checked_add_signed(i64::from(displacement))
+                .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?;
+            let buffer = memory
+                .read_u64(field(ios, 72)?)
+                .map_err(ExitReason::MemoryFault)?;
+            if buffer == 0 {
+                return Ok(CallbackStart::Return(stream));
+            }
+            let tie = memory
+                .read_u64(field(ios, 80)?)
+                .map_err(ExitReason::MemoryFault)?;
+            let flags = memory
+                .read_u32(field(ios, 24)?)
+                .map_err(ExitReason::MemoryFault)?;
+            // Flushing another tied stream and unit-buffered sentry teardown need
+            // additional nested flush/exception semantics; stop explicitly.
+            if (tie != 0 && tie != stream) || flags & 2 != 0 {
+                return Err(LIMIT);
+            }
+            let entry = stream_virtual(memory, buffer, 1)?;
+            Ok(CallbackStart::Call {
+                task: Box::new(FlushTask {
+                    stream,
+                    ios,
+                    buffer,
+                    phase: FlushPhase::Locked,
+                }),
+                entry,
+                args: [buffer, 0, 0, 0],
+            })
+        },
+    );
+}
+
+const OSTREAM_WRITE: &str =
+    "?write@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@PEBD_J@Z";
+enum WritePhase {
+    Locked,
+    Written,
+    Unlocked,
+}
+struct WriteTask {
+    stream: u64,
+    ios: u64,
+    input: u64,
+    count: u64,
+    phase: WritePhase,
+}
+impl WriteTask {
+    fn finish(&mut self, memory: &mut GuestMemory, bad: bool) -> Result<CallbackStep, ExitReason> {
+        merge_state(memory, self.ios, if bad { 4 } else { 0 })?;
+        let state = memory
+            .read_u32(field(self.ios, 16)?)
+            .map_err(ExitReason::MemoryFault)?;
+        let flags = memory
+            .read_u32(field(self.ios, 24)?)
+            .map_err(ExitReason::MemoryFault)?;
+        if state == 0 && flags & 2 != 0 {
+            return Err(LIMIT);
+        }
+        let buffer = memory
+            .read_u64(field(self.ios, 72)?)
+            .map_err(ExitReason::MemoryFault)?;
+        if buffer == 0 {
+            return Ok(CallbackStep::Return(self.stream));
+        }
+        self.phase = WritePhase::Unlocked;
+        Ok(CallbackStep::Call {
+            entry: stream_virtual(memory, buffer, 2)?,
+            args: [buffer, 0, 0, 0],
+        })
+    }
+    fn after_lock(&mut self, memory: &mut GuestMemory) -> Result<CallbackStep, ExitReason> {
+        let state = memory
+            .read_u32(field(self.ios, 16)?)
+            .map_err(ExitReason::MemoryFault)?;
+        let tie = memory
+            .read_u64(field(self.ios, 80)?)
+            .map_err(ExitReason::MemoryFault)?;
+        let flags = memory
+            .read_u32(field(self.ios, 24)?)
+            .map_err(ExitReason::MemoryFault)?;
+        if (state == 0 && tie != 0 && tie != self.stream) || flags & 2 != 0 {
+            return Err(LIMIT);
+        }
+        if state != 0 {
+            return self.finish(memory, true);
+        }
+        if (self.count as i64) <= 0 {
+            return self.finish(memory, false);
+        }
+        let buffer = memory
+            .read_u64(field(self.ios, 72)?)
+            .map_err(ExitReason::MemoryFault)?;
+        self.phase = WritePhase::Written;
+        Ok(CallbackStep::Call {
+            entry: stream_virtual(memory, buffer, 9)?,
+            args: [buffer, self.input, self.count, 0],
+        })
+    }
+}
+impl CallbackTask for WriteTask {
+    fn resume(
+        &mut self,
+        result: u64,
+        _: u64,
+        memory: &mut GuestMemory,
+    ) -> Result<CallbackStep, ExitReason> {
+        match self.phase {
+            WritePhase::Locked => self.after_lock(memory),
+            WritePhase::Written => self.finish(memory, result != self.count),
+            WritePhase::Unlocked => Ok(CallbackStep::Return(self.stream)),
+        }
+    }
+}
+fn register_ostream_write(registry: &mut ImportRegistry) {
+    registry.register_callback_task(
+        MODULE,
+        OSTREAM_WRITE,
+        ServiceStatus::Partial,
+        |args, _, memory, _| {
+            let stream = args.rcx;
+            let vbtable = memory.read_u64(stream).map_err(ExitReason::MemoryFault)?;
+            let displacement = memory
+                .read_u32(field(vbtable, 4)?)
+                .map_err(ExitReason::MemoryFault)? as i32;
+            let ios = stream
+                .checked_add_signed(i64::from(displacement))
+                .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?;
+            let buffer = memory
+                .read_u64(field(ios, 72)?)
+                .map_err(ExitReason::MemoryFault)?;
+            let mut task = WriteTask {
+                stream,
+                ios,
+                input: args.rdx,
+                count: args.r8,
+                phase: WritePhase::Locked,
+            };
+            let step = if buffer == 0 {
+                task.after_lock(memory)?
+            } else {
+                CallbackStep::Call {
+                    entry: stream_virtual(memory, buffer, 1)?,
+                    args: [buffer, 0, 0, 0],
+                }
+            };
+            Ok(match step {
+                CallbackStep::Return(value) => CallbackStart::Return(value),
+                CallbackStep::Call { entry, args } => CallbackStart::Call {
+                    task: Box::new(task),
+                    entry,
+                    args,
+                },
+            })
         },
     );
 }

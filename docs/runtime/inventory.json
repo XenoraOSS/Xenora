@@ -14200,6 +14200,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "?flush@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@XZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "?good@ios_base@std@@QEBA_NXZ"
     },
     {
@@ -14211,6 +14221,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "?rdstate@ios_base@std@@QEBAHXZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?write@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@PEBD_J@Z"
     },
     {
       "data_import": false,
@@ -20086,15 +20106,15 @@
   "summary": {
     "aliases": 960,
     "api_set_aliases": 754,
-    "canonical_services": 992,
+    "canonical_services": 994,
     "data_import_services": 12,
     "duplicate_registrations": 0,
     "implemented": 246,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 690,
+    "manual_services": 692,
     "ordinal_aliases": 35,
-    "partial": 746,
+    "partial": 748,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,

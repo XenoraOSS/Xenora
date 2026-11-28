@@ -7,6 +7,7 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- Added partial Microsoft x64 `ostream::write` and `flush` dispatch through guest stream-buffer virtual methods, with state updates and explicit refusal of unsupported tied, unit-buffered and throwing paths. Standard stream objects remain unavailable (#1163).
 - Microsoft x64 `ios_base` state query exports now read guest state bits, including `good`, `eof`, `fail`, `bad` and `rdstate`; constructed C++ stream objects are not yet supplied (#1163).
 - Added an original Microsoft-header iostream fixture and local build script for measuring `std::cout` import and execution gaps; its complete workload is not yet supported (#1163).
 - Microsoft atomic-wait deadline helpers now use the guest monotonic clock, including infinite and capped timeouts. Actual atomic waits and notifications remain unsupported (#1163).
