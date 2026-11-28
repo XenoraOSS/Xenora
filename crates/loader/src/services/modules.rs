@@ -520,12 +520,24 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 return state.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
             let path = if main {
-                state
-                    .crt_arguments()
-                    .for_command_line()
-                    .first()
-                    .cloned()
-                    .unwrap_or_default()
+                // The process image path is the image the process runs, not
+                // its first argument: a multi-call binary re-executed under
+                // an applet name still has the one image, as busybox-w32's
+                // forkshell re-execution does when it passes the shell's
+                // name as argv[0] and then stats its own executable before
+                // spawning (#1290). The argument form stays as the fallback
+                // of a machine that keeps no image.
+                let image = state.spawn_image_name();
+                if image.is_empty() {
+                    state
+                        .crt_arguments()
+                        .for_command_line()
+                        .first()
+                        .cloned()
+                        .unwrap_or_default()
+                } else {
+                    image
+                }
             } else {
                 dynamic_name.expect("validated dynamic module name")
             };

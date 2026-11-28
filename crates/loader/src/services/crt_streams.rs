@@ -1507,12 +1507,12 @@ impl StandardStreams {
         if fd < 0 || buffer == 0 {
             return Ok(Err(Failed(-1, EINVAL)));
         }
-        let length = match self.opened.descriptor_stat(drive, fd as u32) {
-            Ok(length) => length,
+        let (length, kind) = match self.opened.descriptor_stat(drive, fd as u32) {
+            Ok(stat) => stat,
             Err(errno) => return Ok(Err(Failed(-1, errno))),
         };
         let mut stat = [0u8; 56];
-        stat[6..8].copy_from_slice(&(0x8000_u16 | 0o666).to_le_bytes()); // _S_IFREG | rw
+        stat[6..8].copy_from_slice(&(kind | 0o666).to_le_bytes());
         stat[8..10].copy_from_slice(&1_i16.to_le_bytes()); // one link
         stat[24..32].copy_from_slice(&length.to_le_bytes());
         memory.write_bytes(buffer, &stat).map_err(fault)?;
@@ -2028,7 +2028,14 @@ impl StandardStreams {
                 self.opened.close(memory, drive, file);
                 Ok(Ok(0))
             }
-            _ => Err(RUNTIME_LIMIT),
+            // Closing a standard stream is legal on Windows - the CRT does
+            // not reserve them - and every later operation on the descriptor
+            // fails with EBADF, exactly as `_close` of the descriptor itself
+            // behaves. awk and other filter applets close their input when
+            // it reaches EOF, before exit (#1273).
+            Stream::Input => self.close_descriptor(memory, drive, 0),
+            Stream::Output => self.close_descriptor(memory, drive, 1),
+            Stream::Error => self.close_descriptor(memory, drive, 2),
         }
     }
 
@@ -2927,6 +2934,29 @@ mod tests {
             .expect("write")
             .expect("no errno");
         assert_eq!(streams.output(), b"captured");
+    }
+
+    /// Closing a standard stream is legal: awk and other filter applets
+    /// close their input when it reaches EOF, before exit, and the CRT does
+    /// not reserve the standard streams (#1273). The close marks the
+    /// descriptor closed exactly as `_close` of it does, every later
+    /// operation fails, and a second close has nothing to close.
+    #[test]
+    fn fclose_of_a_standard_stream_closes_the_descriptor_once() {
+        let (mut streams, mut memory, mut drive) = fixture();
+        let stdin = streams.file(&mut memory, 0).expect("stdin object");
+        // The close succeeds rather than stopping the guest.
+        let closed = streams
+            .close(&mut memory, &mut drive, stdin)
+            .expect("no stop");
+        assert!(matches!(closed, Ok(0)));
+        // The descriptor is marked closed exactly as `_close(0)` marks it.
+        assert!(streams.opened.closed[0]);
+        // A second close fails rather than closing again.
+        let twice = streams
+            .close(&mut memory, &mut drive, stdin)
+            .expect("no stop");
+        assert!(matches!(twice, Err(_)));
     }
 
     /// A spawned child inherits a position snapshot of each file-backed
