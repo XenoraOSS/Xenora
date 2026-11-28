@@ -1886,7 +1886,8 @@ fn mulx_destinations_hold_independent_halves_of_the_product() {
     // high and low halves, so exchanging the destinations fails; the last two
     // make the first two operands identical, where the SDM says the single
     // register keeps the high half.
-    let checks: &[(&str, &[(usize, u64)], &[(usize, u64)])] = &[
+    type RegInputs = [(usize, u64)];
+    let checks: &[(&str, &RegInputs, &RegInputs)] = &[
         (
             "mulx ebx, r9d, ecx",
             &[(1, 3), (2, 0x8000_0001)],
