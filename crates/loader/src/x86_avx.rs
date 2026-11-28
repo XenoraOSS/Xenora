@@ -16,7 +16,7 @@ use crate::x86_exec::{
 };
 use crate::x86_float;
 use crate::x86_simd::{
-    controlled, execute_legacy, insert_general, lane, lane_immediate, packed, select, shift_by,
+    aes, controlled, execute_legacy, insert_general, lane, lane_immediate, packed, select, shift_by,
 };
 use crate::x86_table::{FORMS, Op};
 
@@ -516,6 +516,15 @@ pub(crate) fn execute(
                     let control = read_ymm(cpu, (imm >> 4) as u8);
                     [0, 1].map(|half| select(op, first[half], source[half], control[half]))
                 }
+                // The VEX AES forms are the non-destructive encodings of the
+                // legacy round operations: the state comes from VEX.vvvv, and
+                // the round key or the source from the ModRM operand. AESIMC
+                // and AESKEYGENASSIST have no VEX.vvvv source.
+                (Op::Aesenc | Op::Aesenclast | Op::Aesdec | Op::Aesdeclast, _) => {
+                    [0, 1].map(|half| aes(op, first[half], source[half], 0))
+                }
+                (Op::Aesimc, _) => [0, 1].map(|half| aes(op, 0, source[half], 0)),
+                (Op::Aeskeygenassist, _) => [0, 1].map(|half| aes(op, 0, source[half], imm)),
                 (_, Encoding::XmmRmImm) => {
                     // Immediate bits for the low half only; others serve both.
                     let used = match op {

@@ -762,6 +762,65 @@ c4 e2 79 41 d2 | vphminposuw xmm2, xmm2
 c4 c2 79 17 d9 | vptest xmm3, xmm9
 c4 62 79 17 64 be 10 | vptest xmm12, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 79 17 d2 | vptest xmm2, xmm2
+c4 c2 31 dc da | vaesenc xmm3, xmm9, xmm10
+c4 62 71 dc 64 be 10 | vaesenc xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c4 e2 69 dc d2 | vaesenc xmm2, xmm2, xmm2
+c4 e2 31 dc db | vaesenc xmm3, xmm9, xmm3
+c4 e2 61 dc dd | vaesenc xmm3, xmm3, xmm5
+c4 c2 31 dd da | vaesenclast xmm3, xmm9, xmm10
+c4 62 71 dd 64 be 10 | vaesenclast xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c4 e2 69 dd d2 | vaesenclast xmm2, xmm2, xmm2
+c4 e2 31 dd db | vaesenclast xmm3, xmm9, xmm3
+c4 e2 61 dd dd | vaesenclast xmm3, xmm3, xmm5
+c4 c2 31 de da | vaesdec xmm3, xmm9, xmm10
+c4 62 71 de 64 be 10 | vaesdec xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c4 e2 69 de d2 | vaesdec xmm2, xmm2, xmm2
+c4 e2 31 de db | vaesdec xmm3, xmm9, xmm3
+c4 e2 61 de dd | vaesdec xmm3, xmm3, xmm5
+c4 c2 31 df da | vaesdeclast xmm3, xmm9, xmm10
+c4 62 71 df 64 be 10 | vaesdeclast xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16]
+c4 e2 69 df d2 | vaesdeclast xmm2, xmm2, xmm2
+c4 e2 31 df db | vaesdeclast xmm3, xmm9, xmm3
+c4 e2 61 df dd | vaesdeclast xmm3, xmm3, xmm5
+c4 c2 79 db d9 | vaesimc xmm3, xmm9
+c4 62 79 db 64 be 10 | vaesimc xmm12, xmmword ptr [rsi + 4*rdi + 16]
+c4 e2 79 db d2 | vaesimc xmm2, xmm2
+c4 c3 79 df d9 00 | vaeskeygenassist xmm3, xmm9, 0
+c4 63 79 df 64 be 10 00 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 0
+c4 e3 79 df d2 00 | vaeskeygenassist xmm2, xmm2, 0
+c4 c3 79 df d9 01 | vaeskeygenassist xmm3, xmm9, 1
+c4 63 79 df 64 be 10 01 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 1
+c4 e3 79 df d2 01 | vaeskeygenassist xmm2, xmm2, 1
+c4 c3 79 df d9 02 | vaeskeygenassist xmm3, xmm9, 2
+c4 63 79 df 64 be 10 02 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 2
+c4 e3 79 df d2 02 | vaeskeygenassist xmm2, xmm2, 2
+c4 c3 79 df d9 04 | vaeskeygenassist xmm3, xmm9, 4
+c4 63 79 df 64 be 10 04 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 4
+c4 e3 79 df d2 04 | vaeskeygenassist xmm2, xmm2, 4
+c4 c3 79 df d9 08 | vaeskeygenassist xmm3, xmm9, 8
+c4 63 79 df 64 be 10 08 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 8
+c4 e3 79 df d2 08 | vaeskeygenassist xmm2, xmm2, 8
+c4 c3 79 df d9 10 | vaeskeygenassist xmm3, xmm9, 16
+c4 63 79 df 64 be 10 10 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 16
+c4 e3 79 df d2 10 | vaeskeygenassist xmm2, xmm2, 16
+c4 c3 79 df d9 20 | vaeskeygenassist xmm3, xmm9, 32
+c4 63 79 df 64 be 10 20 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 32
+c4 e3 79 df d2 20 | vaeskeygenassist xmm2, xmm2, 32
+c4 c3 79 df d9 40 | vaeskeygenassist xmm3, xmm9, 64
+c4 63 79 df 64 be 10 40 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 64
+c4 e3 79 df d2 40 | vaeskeygenassist xmm2, xmm2, 64
+c4 c3 79 df d9 5a | vaeskeygenassist xmm3, xmm9, 90
+c4 63 79 df 64 be 10 5a | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 90
+c4 e3 79 df d2 5a | vaeskeygenassist xmm2, xmm2, 90
+c4 c3 79 df d9 80 | vaeskeygenassist xmm3, xmm9, 128
+c4 63 79 df 64 be 10 80 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 128
+c4 e3 79 df d2 80 | vaeskeygenassist xmm2, xmm2, 128
+c4 c3 79 df d9 a5 | vaeskeygenassist xmm3, xmm9, 165
+c4 63 79 df 64 be 10 a5 | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 165
+c4 e3 79 df d2 a5 | vaeskeygenassist xmm2, xmm2, 165
+c4 c3 79 df d9 ff | vaeskeygenassist xmm3, xmm9, 255
+c4 63 79 df 64 be 10 ff | vaeskeygenassist xmm12, xmmword ptr [rsi + 4*rdi + 16], 255
+c4 e3 79 df d2 ff | vaeskeygenassist xmm2, xmm2, 255
 c4 c2 7d 17 d9 | vptest ymm3, ymm9
 c4 62 7d 17 64 be 10 | vptest ymm12, ymmword ptr [rsi + 4*rdi + 16]
 c4 e2 7d 17 d2 | vptest ymm2, ymm2

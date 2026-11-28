@@ -1362,6 +1362,67 @@ size = "x"
 src = "x"
 imm = "ub"
 
+# The VEX AES-NI forms are the non-destructive encodings of the same round
+# operations: the state comes from VEX.vvvv, the round key or source from the
+# ModRM operand. All are 128-bit only.
+[[vex]]
+op = "aesimc"
+map = "0f38"
+prefix = "66"
+opcode = 0xDB
+enc = "xmm_rm"
+length = "128"
+src = "x"
+
+[[vex]]
+op = "aesenc"
+map = "0f38"
+prefix = "66"
+opcode = 0xDC
+enc = "xmm_rm"
+length = "128"
+src = "v"
+nds = true
+
+[[vex]]
+op = "aesenclast"
+map = "0f38"
+prefix = "66"
+opcode = 0xDD
+enc = "xmm_rm"
+length = "128"
+src = "v"
+nds = true
+
+[[vex]]
+op = "aesdec"
+map = "0f38"
+prefix = "66"
+opcode = 0xDE
+enc = "xmm_rm"
+length = "128"
+src = "v"
+nds = true
+
+[[vex]]
+op = "aesdeclast"
+map = "0f38"
+prefix = "66"
+opcode = 0xDF
+enc = "xmm_rm"
+length = "128"
+src = "v"
+nds = true
+
+[[vex]]
+op = "aeskeygenassist"
+map = "0f3a"
+prefix = "66"
+opcode = 0xDF
+enc = "xmm_rm_imm"
+length = "128"
+src = "x"
+
 # PCLMULQDQ has no VEX form. SDM Table 4-13 names imm8[0] and imm8[4] as the
 # qword selectors for the first and second sources; all other immediate bits
 # are ignored by the operation.
