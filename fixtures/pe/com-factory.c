@@ -24,6 +24,7 @@ typedef struct {
 struct Factory { const FactoryTable *vtable; };
 
 __declspec(dllimport) __declspec(noreturn) void ExitProcess(u32);
+__declspec(dllimport) i32 DllCanUnloadNow(void);
 __declspec(dllimport) i32 CoInitializeEx(void*, u32);
 __declspec(dllimport) void CoUninitialize(void);
 __declspec(dllimport) i32 CoGetClassObject(const GUID*, u32, void*, const GUID*, void**);
@@ -39,8 +40,11 @@ void entry(void) {
     Unknown *object = 0;
     void *other = 0;
     Multi interfaces[3] = {{&unknown, 0, 0}, {&unsupported, 0, 0}, {&unknown, 0, 0}};
+    REQUIRE(24, DllCanUnloadNow() == 0);
     REQUIRE(1, CoInitializeEx(0, 0) == 0);
     REQUIRE(2, CoGetClassObject(&clsid, 1, 0, &factory_iid, (void**)&factory) == 0 && factory);
+    REQUIRE(25, DllCanUnloadNow() == 1);
+    REQUIRE(26, factory->vtable->lock(factory, 0) == (i32)0x8000ffff);
     REQUIRE(3, factory->vtable->query(factory, &unknown, &other) == 0 && other == factory);
     REQUIRE(4, ((Unknown*)other)->vtable->release((Unknown*)other) == 1);
     other = factory;
@@ -54,12 +58,27 @@ void entry(void) {
     REQUIRE(8, object->vtable->release(object) == 1);
     REQUIRE(9, object->vtable->release(object) == 0);
 #ifdef TEST_STALE
+    REQUIRE(27, factory->vtable->lock(factory, 1) == 0);
     { const UnknownTable *volatile stale = object->vtable; (void)stale; }
     ExitProcess(99);
 #endif
+    REQUIRE(27, factory->vtable->lock(factory, 1) == 0);
+    REQUIRE(28, factory->vtable->lock(factory, -1) == 0);
+    REQUIRE(29, factory->vtable->lock(factory, 0) == 0);
     REQUIRE(10, factory->vtable->release(factory) == 0);
+    // The synthetic server remains addressable after releasing the factory.
+    // This observes the remaining lock with no live interface references.
+    REQUIRE(30, DllCanUnloadNow() == 1);
+    REQUIRE(31, CoGetClassObject(&clsid, 1, 0, &factory_iid, (void**)&factory) == 0 && factory);
+    REQUIRE(32, factory->vtable->lock(factory, 0) == 0);
+    REQUIRE(33, factory->vtable->lock(factory, 0) == (i32)0x8000ffff);
+    REQUIRE(34, DllCanUnloadNow() == 1);
+    REQUIRE(35, factory->vtable->release(factory) == 0);
+    REQUIRE(36, DllCanUnloadNow() == 0);
     REQUIRE(11, CoCreateInstance(&clsid, 0, 1, &unknown, (void**)&object) == 0 && object);
+    REQUIRE(37, DllCanUnloadNow() == 1);
     REQUIRE(12, object->vtable->release(object) == 0);
+    REQUIRE(38, DllCanUnloadNow() == 0);
     REQUIRE(15, CoCreateInstanceEx(&clsid, 0, 1, 0, 3, interfaces) == 0x80012);
     REQUIRE(16, interfaces[0].object && interfaces[0].hr == 0 && !interfaces[1].object && interfaces[1].hr == (i32)0x80004002);
     REQUIRE(17, interfaces[2].object == interfaces[0].object && interfaces[2].hr == 0);
@@ -74,6 +93,7 @@ void entry(void) {
     interfaces[0].hr = 0;
     REQUIRE(22, CoCreateInstanceEx(&clsid, 0, 1, 0, 1, interfaces) == 0);
     REQUIRE(23, interfaces[0].object && interfaces[0].object->vtable->release(interfaces[0].object) == 0);
+    REQUIRE(39, DllCanUnloadNow() == 0);
     CoUninitialize();
     ExitProcess(0);
 }

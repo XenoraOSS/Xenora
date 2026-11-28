@@ -32,17 +32,26 @@ This work adds no `oleaut32.dll` automation exports or
 
 Original C fixtures exercise the partial services, thread retirement and the
 opt-in host factory through translated guest code. The synthetic factory
-supports `IUnknown` and `IClassFactory` query, reference counts and creation;
-`LockServer` is unsupported. A C++ fixture exercises virtual calls and
-reference counts within guest code. These are local synthetic tests, not
-independent acceptance or a compatibility claim for commercial applications.
+supports `IUnknown` and `IClassFactory` query, reference counts and creation.
+`IClassFactory::LockServer` counts nested locks separately from interface
+references. An unmatched unlock returns `E_UNEXPECTED` in this fixture.
+The synthetic module's `DllCanUnloadNow` returns `S_OK` after the last
+lock and the last live factory or object are gone. While either is present it
+returns `S_FALSE`. The query only reports eligibility. The fixture remains
+opt-in, and it performs no DLL unloading.
+A fresh guest session starts with no locks or live objects. A C++ fixture
+exercises virtual calls and reference counts within guest code. The tests use
+original synthetic programs on ARM64. Independent review remains pending.
 Rebuild or compare the compiled fixtures with the four `build-com-*.sh` scripts
 in `fixtures/pe`; run `cargo test --locked -p xenora-loader --test guest_com`
-to execute them.
+to execute them. The factory build accepts `LLD_LINK` to select another
+ARM64 `lld-link`, such as the wrapper bundled with Rust.
 
 Public contracts: [COM initialization](https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex),
 [class activation](https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-cocreateinstance),
 [GUID parsing](https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-clsidfromstring),
+[server locking](https://learn.microsoft.com/en-us/windows/win32/api/unknwn/nf-unknwn-iclassfactory-lockserver),
+[unload eligibility](https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-dllcanunloadnow),
 and [variant clearing](https://learn.microsoft.com/en-us/windows/win32/api/propidl/nf-propidl-propvariantclear).
 See the [generated service table](services.md) for registered aliases and
 individual limits.

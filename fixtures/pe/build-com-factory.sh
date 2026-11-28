@@ -12,11 +12,12 @@ trap 'rm -rf "$scratch"' EXIT
 cd "$scratch"
 printf 'LIBRARY kernel32.dll\nEXPORTS\n    ExitProcess\n' > kernel32.def
 printf 'LIBRARY ole32.dll\nEXPORTS\n    CoInitializeEx\n    CoUninitialize\n    CoGetClassObject\n    CoCreateInstance\n    CoCreateInstanceEx\n' > ole32.def
-for module in kernel32 ole32; do arch -arm64 "$linker" /lib "/def:$module.def" /machine:x64 "/out:$module.lib"; done
+printf 'LIBRARY xenora_com_fixture.dll\nEXPORTS\n    DllCanUnloadNow\n' > fixture.def
+for module in kernel32 ole32 fixture; do arch -arm64 "$linker" /lib "/def:$module.def" /machine:x64 "/out:$module.lib"; done
 arch -arm64 "$clang" --target=x86_64-pc-windows-msvc -O1 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-vectorize -fno-slp-vectorize -c "$here/com-factory.c" -o guest.obj
-arch -arm64 "$linker" /entry:entry /subsystem:console /nodefaultlib /timestamp:0 /machine:x64 /out:com-factory.exe guest.obj kernel32.lib ole32.lib
+arch -arm64 "$linker" /entry:entry /subsystem:console /nodefaultlib /timestamp:0 /machine:x64 /out:com-factory.exe guest.obj kernel32.lib ole32.lib fixture.lib
 arch -arm64 "$clang" --target=x86_64-pc-windows-msvc -O1 -Wall -Wextra -Werror -ffreestanding -fno-builtin -fno-stack-protector -fno-vectorize -fno-slp-vectorize -DTEST_STALE -c "$here/com-factory.c" -o stale.obj
-arch -arm64 "$linker" /entry:entry /subsystem:console /nodefaultlib /timestamp:0 /machine:x64 /out:com-factory-stale.exe stale.obj kernel32.lib ole32.lib
+arch -arm64 "$linker" /entry:entry /subsystem:console /nodefaultlib /timestamp:0 /machine:x64 /out:com-factory-stale.exe stale.obj kernel32.lib ole32.lib fixture.lib
 if [ "${1:-}" = --check ]; then
     cmp com-factory.exe "$here/com-factory.exe"
     cmp com-factory-stale.exe "$here/com-factory-stale.exe"

@@ -18,6 +18,7 @@ pub const CLASS_ID: [u8; 16] = [
 const IID_UNKNOWN: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46];
 const IID_FACTORY: [u8; 16] = [1, 0, 0, 0, 0, 0, 0, 0, 0xc0, 0, 0, 0, 0, 0, 0, 0x46];
 const E_NOINTERFACE: i32 = 0x8000_4002u32 as i32;
+const E_UNEXPECTED: u64 = 0x8000_ffff;
 const E_POINTER: i32 = 0x8000_4003u32 as i32;
 const E_OUTOFMEMORY: i32 = 0x8007_000eu32 as i32;
 const CLASS_E_NOAGGREGATION: i32 = 0x8004_0110u32 as i32;
@@ -38,6 +39,7 @@ pub(super) struct Fixture {
     methods: Option<[u64; 5]>,
     heap: Option<u64>,
     objects: BTreeMap<u64, Object>,
+    server_locks: u32,
 }
 
 fn fault(error: MemoryError) -> ExitReason {
@@ -295,9 +297,45 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
             Ok(0)
         },
     );
-    registry.register_with_status(MODULE, "LockServer", ServiceStatus::Partial, |_, _, _| {
-        Err(UNSUPPORTED)
-    });
+    let state_lock = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "LockServer",
+        ServiceStatus::Partial,
+        move |args, _, _| {
+            let mut fixture = state_lock.com_fixture.lock().expect("COM fixture");
+            if !fixture
+                .objects
+                .get(&args.rcx)
+                .is_some_and(|object| object.kind == Kind::Factory)
+            {
+                return Err(UNSUPPORTED);
+            }
+            // BOOL is a signed 32-bit value and any nonzero value means TRUE.
+            let next = if args.rdx as u32 == 0 {
+                fixture.server_locks.checked_sub(1)
+            } else {
+                fixture.server_locks.checked_add(1)
+            };
+            let Some(next) = next else {
+                return Ok(E_UNEXPECTED);
+            };
+            fixture.server_locks = next;
+            Ok(0)
+        },
+    );
+    let state_unload = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "DllCanUnloadNow",
+        ServiceStatus::Partial,
+        move |_, _, _| {
+            let fixture = state_unload.com_fixture.lock().expect("COM fixture");
+            Ok(u64::from(
+                fixture.server_locks != 0 || !fixture.objects.is_empty(),
+            ))
+        },
+    );
     let trampolines = registry.dynamic_trampolines();
     let names = [
         "QueryInterface",
