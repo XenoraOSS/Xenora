@@ -189,63 +189,6 @@ impl CachedBlock {
     }
 }
 
-/// Number of direct-mapped slots in the dispatcher's front cache.
-const DISPATCH_CACHE_SLOTS: usize = 64;
-
-/// One front-cache slot. The key is the complete identity used by the two
-/// backing HashMaps, so a shorter budget-limited block can never satisfy a
-/// full-block lookup at the same guest address.
-#[derive(Clone, Copy)]
-struct DispatchEntry {
-    key: (u64, usize),
-    /// Address of a `CachedBlock` owned by one of the backing HashMaps. The
-    /// block is boxed so HashMap rehashing cannot move the pointee.
-    block: *const CachedBlock,
-}
-
-/// Small direct-mapped cache ahead of the block HashMaps. A hit still verifies
-/// the cached guest bytes; a stale hit removes the front entry and lets the
-/// original HashMap path perform link retirement and invalidation accounting.
-struct DispatchCache {
-    entries: Vec<Option<DispatchEntry>>,
-}
-
-impl DispatchCache {
-    fn new() -> Self {
-        Self {
-            entries: vec![None; DISPATCH_CACHE_SLOTS],
-        }
-    }
-
-    fn index(key: (u64, usize)) -> usize {
-        let (rip, block_limit) = key;
-        let mixed = (rip >> 4) ^ (block_limit as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
-        mixed as usize & (DISPATCH_CACHE_SLOTS - 1)
-    }
-
-    fn get(&self, key: (u64, usize)) -> Option<*const CachedBlock> {
-        self.entries[Self::index(key)]
-            .as_ref()
-            .filter(|entry| entry.key == key)
-            .map(|entry| entry.block)
-    }
-
-    fn insert(&mut self, key: (u64, usize), block: *const CachedBlock) {
-        debug_assert!(!block.is_null());
-        self.entries[Self::index(key)] = Some(DispatchEntry { key, block });
-    }
-
-    fn remove(&mut self, key: (u64, usize)) {
-        let index = Self::index(key);
-        if self.entries[index]
-            .as_ref()
-            .is_some_and(|entry| entry.key == key)
-        {
-            self.entries[index] = None;
-        }
-    }
-}
-
 /// Dynamic Binary Translator and native execution runtime.
 ///
 /// # Direct block linking
@@ -279,9 +222,8 @@ impl DispatchCache {
 /// keeps its lookup and byte check.
 pub struct DbtEngine {
     jit: JitMemory,
-    block_cache: HashMap<u64, Box<CachedBlock>>,
-    limited_block_cache: HashMap<(u64, usize), Box<CachedBlock>>,
-    dispatch_cache: DispatchCache,
+    block_cache: HashMap<u64, CachedBlock>,
+    limited_block_cache: HashMap<(u64, usize), CachedBlock>,
     assembler: Arm64Assembler,
     /// Scratch for fault-patch positions while a block is emitted. Its length
     /// is always zero between translations; keeping only the capacity avoids
@@ -312,7 +254,6 @@ impl DbtEngine {
             jit: JitMemory::new(capacity)?,
             block_cache: HashMap::new(),
             limited_block_cache: HashMap::new(),
-            dispatch_cache: DispatchCache::new(),
             assembler: Arm64Assembler::new(),
             fault_guard_scratch: Vec::new(),
             decoded_blocks: Vec::new(),
@@ -609,111 +550,62 @@ impl DbtEngine {
         memory: &GuestMemory,
         block_limit: usize,
     ) -> Result<SelectedBlock, ExitReason> {
-        let key = (rip, block_limit);
-
-        // Front-cache hits keep the original byte check and link verification,
-        // but avoid hashing and indexing either backing HashMap.
-        if let Some(block) = self.dispatch_cache.get(key) {
-            let (code, links, source_len, current) = unsafe {
-                let cached = &*block;
-                (
-                    cached.code,
-                    cached.links,
-                    cached.source.len(),
-                    cached.is_current(memory),
-                )
-            };
-            if current {
-                self.metrics.cache_hits += 1;
-                self.link_metrics.bytes_verified += source_len;
-                if !links.is_null() {
-                    // SAFETY: owned by `self.links`; no translated code
-                    // runs while the dispatcher selects a block.
-                    unsafe { (*links).target.verified_epoch = self.epoch };
-                }
-                return Ok(SelectedBlock { code, links });
-            }
-            // A stale front entry must not bypass the HashMap's retirement and
-            // invalidation accounting. Drop it and take the original path.
-            self.dispatch_cache.remove(key);
-        }
-
         if block_limit == MAX_BLOCK_INSTRUCTIONS {
-            let cached = self
-                .block_cache
-                .get(&rip)
-                .map(|block| block.as_ref() as *const CachedBlock);
-            if let Some(block) = cached {
-                let (code, links, source_len, current) = unsafe {
-                    let cached = &*block;
-                    (
-                        cached.code,
-                        cached.links,
-                        cached.source.len(),
-                        cached.is_current(memory),
-                    )
-                };
-                if current {
-                    self.dispatch_cache.insert(key, block);
+            if let Some(cached) = self.block_cache.get(&rip) {
+                if cached.is_current(memory) {
                     self.metrics.cache_hits += 1;
-                    self.link_metrics.bytes_verified += source_len;
-                    if !links.is_null() {
-                        // SAFETY: as above.
-                        unsafe { (*links).target.verified_epoch = self.epoch };
+                    self.link_metrics.bytes_verified += cached.source.len();
+                    if !cached.links.is_null() {
+                        // SAFETY: owned by `self.links`; no translated code
+                        // runs while the dispatcher selects a block.
+                        unsafe { (*cached.links).target.verified_epoch = self.epoch };
                     }
-                    return Ok(SelectedBlock { code, links });
+                    return Ok(SelectedBlock {
+                        code: cached.code,
+                        links: cached.links,
+                    });
                 }
                 // Blocks linked to the old translation fall back to the
                 // dispatcher from now on. A stale block stays cached when its
                 // new translation fails, so it is retired only once.
                 // SAFETY: as above.
-                if !links.is_null() && unsafe { (*links).target.verified_epoch } != RETIRED_EPOCH {
-                    unsafe { (*links).target.verified_epoch = RETIRED_EPOCH };
+                if !cached.links.is_null()
+                    && unsafe { (*cached.links).target.verified_epoch } != RETIRED_EPOCH
+                {
+                    unsafe { (*cached.links).target.verified_epoch = RETIRED_EPOCH };
                     self.link_metrics.targets_retired += 1;
                 }
                 self.metrics.blocks_invalidated += 1;
             }
             self.metrics.cache_misses += 1;
-            let compiled = Box::new(self.compile_block(rip, memory, block_limit)?);
-            let block = compiled.as_ref() as *const CachedBlock;
+            let compiled = self.compile_block(rip, memory, block_limit)?;
             let selected = SelectedBlock {
                 code: compiled.code,
                 links: compiled.links,
             };
-            self.dispatch_cache.insert(key, block);
             self.block_cache.insert(rip, compiled);
             return Ok(selected);
         }
 
         // Keep budget-limited blocks separate so they cannot shorten a later run.
-        let cached = self
-            .limited_block_cache
-            .get(&key)
-            .map(|block| block.as_ref() as *const CachedBlock);
-        if let Some(block) = cached {
-            let (code, source_len, current) = unsafe {
-                let cached = &*block;
-                (cached.code, cached.source.len(), cached.is_current(memory))
-            };
-            if current {
-                self.dispatch_cache.insert(key, block);
+        let key = (rip, block_limit);
+        if let Some(cached) = self.limited_block_cache.get(&key) {
+            if cached.is_current(memory) {
                 self.metrics.cache_hits += 1;
-                self.link_metrics.bytes_verified += source_len;
+                self.link_metrics.bytes_verified += cached.source.len();
                 return Ok(SelectedBlock {
-                    code,
+                    code: cached.code,
                     links: std::ptr::null_mut(),
                 });
             }
             self.metrics.blocks_invalidated += 1;
         }
         self.metrics.cache_misses += 1;
-        let compiled = Box::new(self.compile_block(rip, memory, block_limit)?);
-        let block = compiled.as_ref() as *const CachedBlock;
+        let compiled = self.compile_block(rip, memory, block_limit)?;
         let selected = SelectedBlock {
             code: compiled.code,
             links: std::ptr::null_mut(),
         };
-        self.dispatch_cache.insert(key, block);
         self.limited_block_cache.insert(key, compiled);
         Ok(selected)
     }
@@ -2313,121 +2205,6 @@ mod tests {
         assert_eq!(engine.metrics.blocks_compiled, 1);
         assert_eq!(engine.metrics.cache_hits, 1);
         assert_eq!(engine.metrics.blocks_invalidated, 0);
-    }
-
-    #[test]
-    fn front_cache_serves_hits_and_repopulates_from_backing_map() {
-        let (mut engine, mut memory) = writable_fixture(&mov_eax(1));
-        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
-        assert!(
-            engine
-                .dispatch_cache
-                .get((ENTRY, MAX_BLOCK_INSTRUCTIONS))
-                .is_some()
-        );
-
-        // A HashMap hit after eviction must refill the front cache without
-        // compiling a second translation or changing hit accounting.
-        engine
-            .dispatch_cache
-            .remove((ENTRY, MAX_BLOCK_INSTRUCTIONS));
-        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
-        assert_eq!(engine.metrics.blocks_compiled, 1);
-        assert_eq!(engine.metrics.cache_misses, 1);
-        assert_eq!(engine.metrics.cache_hits, 1);
-        assert_eq!(engine.link_metrics.bytes_verified, mov_eax(1).len());
-        assert!(
-            engine
-                .dispatch_cache
-                .get((ENTRY, MAX_BLOCK_INSTRUCTIONS))
-                .is_some()
-        );
-
-        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
-        assert_eq!(engine.metrics.cache_hits, 2);
-        assert_eq!(engine.metrics.blocks_compiled, 1);
-    }
-
-    #[test]
-    fn front_cache_keeps_budget_limited_blocks_separate() {
-        let code = [
-            0xB8, 0x01, 0x00, 0x00, 0x00, // mov eax, 1
-            0x83, 0xC0, 0x01, // add eax, 1
-            0xF4, // hlt
-        ];
-        let (mut engine, mut memory) = writable_fixture(&code);
-
-        for _ in 0..2 {
-            let mut cpu = CpuState::new(ENTRY, 0);
-            let result = engine.run(&mut cpu, &mut memory, 2);
-            assert_eq!(result.exit_reason, ExitReason::StepLimitExceeded);
-            assert_eq!(cpu.get(Register::Rax), 2);
-        }
-        assert_eq!(engine.metrics.blocks_compiled, 1);
-        assert_eq!(engine.metrics.cache_hits, 1);
-        assert!(engine.dispatch_cache.get((ENTRY, 2)).is_some());
-        assert!(
-            engine
-                .dispatch_cache
-                .get((ENTRY, MAX_BLOCK_INSTRUCTIONS))
-                .is_none()
-        );
-
-        // A full block at the same RIP has a different front-cache identity.
-        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 2);
-        assert_eq!(engine.metrics.blocks_compiled, 2);
-        assert!(
-            engine
-                .dispatch_cache
-                .get((ENTRY, MAX_BLOCK_INSTRUCTIONS))
-                .is_some()
-        );
-    }
-
-    #[test]
-    fn front_cache_does_not_hide_changed_guest_bytes() {
-        let (mut engine, mut memory) = writable_fixture(&mov_eax(1));
-        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
-        memory.write_bytes(ENTRY + 1, &[2]).unwrap();
-        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 2);
-        assert_eq!(engine.metrics.blocks_compiled, 2);
-        assert_eq!(engine.metrics.blocks_invalidated, 1);
-
-        let block = engine
-            .dispatch_cache
-            .get((ENTRY, MAX_BLOCK_INSTRUCTIONS))
-            .unwrap();
-        // SAFETY: the pointer is owned by the engine's backing HashMap and no
-        // translated code runs while this test reads its cached source.
-        assert_eq!(unsafe { (*block).source[1] }, 2);
-    }
-
-    #[test]
-    fn front_cache_evicts_by_slot_without_key_aliasing() {
-        let block = CachedBlock {
-            code: std::ptr::null(),
-            start: 0,
-            source: Box::new([]),
-            links: std::ptr::null_mut(),
-        };
-        let pointer = &block as *const CachedBlock;
-        let first = (ENTRY, MAX_BLOCK_INSTRUCTIONS);
-        let same_slot = (
-            ENTRY + DISPATCH_CACHE_SLOTS as u64 * 16,
-            MAX_BLOCK_INSTRUCTIONS,
-        );
-        assert_eq!(DispatchCache::index(first), DispatchCache::index(same_slot));
-
-        let mut cache = DispatchCache::new();
-        cache.insert(first, pointer);
-        assert_eq!(cache.get(first), Some(pointer));
-        cache.insert(same_slot, pointer);
-        assert_eq!(cache.get(first), None);
-        assert_eq!(cache.get(same_slot), Some(pointer));
-        cache.remove(first);
-        assert_eq!(cache.get(same_slot), Some(pointer));
-        cache.remove(same_slot);
-        assert_eq!(cache.get(same_slot), None);
     }
 
     #[test]
