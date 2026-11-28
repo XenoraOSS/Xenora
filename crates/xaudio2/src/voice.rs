@@ -84,6 +84,8 @@ pub(crate) struct SourceState {
     pub started: bool,
     /// The number of samples the voice has played since the last stream end.
     pub samples_played: u64,
+    /// Fractional progress retained by the synthetic engine clock.
+    pub frame_remainder: u64,
     /// The buffers the voice holds, the playing one first.
     pub queue: VecDeque<QueuedBuffer>,
 }
@@ -170,6 +172,9 @@ pub(crate) fn advance(state: &mut SourceState, frames: u32) -> Vec<Event> {
             events.push(Event::StreamEnd);
             state.samples_played = 0;
         }
+    }
+    if state.queue.is_empty() {
+        state.frame_remainder = 0;
     }
     events
 }
