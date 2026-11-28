@@ -74,9 +74,9 @@ rust_release="$cargo_target_dir/$target/release"
 
 # Match the app's LSMinimumSystemVersion so the static library links cleanly.
 MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release -p xenora-ffi --target "$target"
-# The `xenora run` worker the app's Run action launches, so a run from the app
-# gets the same worker process, wall deadline and step limit as the command line.
-MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release -p xenora --target "$target"
+# Reuse the same bounded runners as the command line for the app's PE tools.
+MACOSX_DEPLOYMENT_TARGET=14.0 cargo build --locked --release -p xenora --target "$target" \
+    --bin xenora --bin xenora-pe-session
 swift build --package-path app -c release --arch arm64 \
     -Xlinker -L -Xlinker "$rust_release"
 
@@ -85,6 +85,7 @@ rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS"
 cp "$(swift build --package-path app -c release --arch arm64 --show-bin-path)/Xenora" "$bundle/Contents/MacOS/Xenora"
 cp "$rust_release/xenora" "$bundle/Contents/MacOS/xenora-cli"
+cp "$rust_release/xenora-pe-session" "$bundle/Contents/MacOS/xenora-pe-session"
 cat > "$bundle/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -111,12 +112,17 @@ cat > "$bundle/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 # Ad-hoc signature for local development only. No entitlements are requested.
-# The bundled worker translates guest code into JIT memory; without the hardened
-# runtime an ad-hoc signed executable needs no JIT entitlement for that.
+# The app and helpers use JIT memory. Local ad-hoc signing leaves Hardened
+# Runtime off, so they need no JIT entitlement here.
+worker="$bundle/Contents/MacOS/xenora-cli"
+session="$bundle/Contents/MacOS/xenora-pe-session"
+codesign --force --sign - "$worker"
+codesign --force --sign - "$session"
 codesign --force --sign - "$bundle"
 
 binary="$bundle/Contents/MacOS/Xenora"
-for executable in "$binary" "$bundle/Contents/MacOS/xenora-cli"; do
+for executable in "$binary" "$worker" "$session"; do
+    codesign --verify --strict "$executable"
     [ "$(lipo -archs "$executable")" = arm64 ] || fail "executable is not arm64-only: $(lipo -archs "$executable")"
     file "$executable"
     otool -L "$executable"
@@ -129,6 +135,7 @@ for executable in "$binary" "$bundle/Contents/MacOS/xenora-cli"; do
         esac
     done
 done
+codesign --verify --strict "$bundle"
 "$binary" --smoke
 "$binary" --smoke-inspection-order
 "$binary" --smoke-import-result
@@ -138,9 +145,14 @@ done
 "$binary" --smoke-run-program "$root/fixtures/pe/delay-imports.exe" 125 relocated \
     "unresolved import dependency: fixture-ordinary.dll!OrdinaryByName"
 if [ "$mode" = --test ]; then
-    swift test --package-path app -c release --arch arm64 --jobs 2 \
+    session_fixtures=$(mktemp -d "${TMPDIR:-/tmp}/xenora-bundle-session.XXXXXX")
+    trap 'rm -rf "$session_fixtures"' EXIT
+    sh fixtures/pe/authored-session/build-authored-session.sh "$session_fixtures"
+    XENORA_PE_SESSION_TEST_DIRECTORY="$session_fixtures" XENORA_PE_SESSION="$session" \
+        swift test --package-path app -c release --arch arm64 --jobs 2 \
         -Xlinker -L -Xlinker "$rust_release"
     "$binary" --smoke-loop-lifecycle
     "$binary" --smoke-audio-vfs-controls
+    python3 scripts/smoke-pe-session.py "$session" "$session_fixtures"
 fi
 echo "build-app: built $bundle"

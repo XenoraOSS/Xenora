@@ -654,6 +654,7 @@ struct ContentView: View {
     @ObservedObject var inspection = InspectionModel.shared
     @ObservedObject var programRun = ProgramRunModel.shared
     @ObservedObject var hud = HudSettings.shared
+    @StateObject private var authoredSession = AuthoredPESessionModel()
     private var frame: GuestFrame? { model.frame }
 
     private func ms(_ value: Double?) -> String {
@@ -665,6 +666,11 @@ struct ContentView: View {
         Form {
             InspectorView(model: inspection)
             ProgramRunView(url: inspection.url, model: programRun, hud: hud)
+            AuthoredPESessionView(
+                inspectionURL: inspection.url,
+                inspectedExecutable: inspection.busy || inspection.failed ? nil : inspection.url,
+                model: authoredSession
+            )
             Section("Display") {
                 Toggle("Show Metal HUD", isOn: $hud.enabled)
                 Text("Overlays the Metal device, frame size, frame counters and host-measured timings on guest frames. Program runs get startup stage traces instead, because they have no draw path yet.")
@@ -768,7 +774,7 @@ struct ContentView: View {
             LabeledContent("Interface version", value: "\(probe.abiVersion)")
             LabeledContent("Trusted fixture sections", value: "\(probe.sections)")
             LabeledContent("Trusted fixture entry RVA", value: String(format: "0x%X", probe.entryRVA))
-            Text("The bundled fixtures run in the app. Other executables run through the bundled xenora runner and show their output; they do not draw yet. Presentation uses read-back Metal frames.")
+            Text("Run Program shows executable output. Authored PE Session displays verified frames from guests that implement its session protocol.")
                 .foregroundStyle(.secondary)
         }
         .formStyle(.grouped)
@@ -781,6 +787,7 @@ struct ContentView: View {
             return true
         }
         .frame(minWidth: 520, minHeight: 680)
+        .onDisappear { authoredSession.cancel() }
     }
 }
 
