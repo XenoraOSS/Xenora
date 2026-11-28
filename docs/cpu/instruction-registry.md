@@ -116,6 +116,24 @@ What this does not include:
 
 The registry key `rm = 3` makes the form match that one ModRM byte. The other register bytes of `DB /4` are different instructions (`DB E2` is FNCLEX), so the form cannot ignore the r/m field the way the fences do. `fninit_is_the_only_x87_encoding_accepted` in `tests/x86_integer.rs` tries every ModRM byte under the eight x87 opcodes, `D8` to `DF`, in both engines. A segment override or REX prefix before FNINIT is accepted and has no effect, as for other forms without operands. `prefixes_accepted_before_fninit_have_no_effect` pins that as a local rule; it was not derived from a manual statement. The 0x66, F2, F3 and LOCK prefixes are refused. Nothing here has been compared with x86 hardware.
 
+## The address-size override prefix 67H
+
+The 67H address-size override is implemented for ModRM memory operands and LEA, in both engines. It exists because the mingw-w64 C runtime startup reads its thread-local storage through `mov rax, gs:[eax]` — `65 67 48 8B 00` — so a program built with a current mingw-w64 runtime cannot reach `main` without it. The semantics follow Intel SDM Vol. 2A, 2.2.1.6 and Vol. 1, 3.3.7.1:
+
+- **Truncation of the total.** The effective address — base, scaled index and displacement summed at full width, including a RIP-relative displacement resolved at decode — is truncated to 32 bits and zero-extended. The truncation applies to the total, not to any register contribution alone.
+- **Segment ordering.** The truncation applies to the effective address only. An FS or GS base is added afterwards at full width, so a thread-local-storage base above 4 GiB survives.
+- **RIP-relative addressing is not disabled.** The override does not select an absolute form for a ModRM byte that would be RIP-relative; the manual states the prefix does not disable RIP-relative addressing. The RIP-relative total is truncated like any other.
+- **LEA computes the same truncated address** without a memory access.
+- **Register-only instructions ignore the prefix**, and a repeated prefix is idempotent, exactly as the other legacy prefixes.
+
+What is not implemented, and refused at decode rather than answered with wrong width or wrong registers:
+
+- **String instructions** under the override, which would address through ESI, EDI and ECX instead of RSI, RDI and RCX.
+- **Accumulator offset forms** (`A0` to `A3`) under the override, where the offset itself shortens from eight bytes to four.
+- **VEX after the override**, rejected exactly as after the other legacy prefixes the decoder refuses there.
+
+`tests/cpu_addrsize.rs` pins the truncation, the segment ordering with a GS base above 4 GiB, the base-plus-index-plus-displacement total wrapping past 2^32, LEA, the register-only and repeated-prefix cases and the three refusals, in both engines, with expectations derived from the manual text. Nothing has been compared with x86 hardware.
+
 ## String instructions
 
 MOVS, STOS and LODS exist for 8-, 16-, 32- and 64-bit elements, alone and with REP (F3). So do the string compares SCAS and CMPS, alone, with REPE (F3) and with REPNE (F2). The direction flag exists, with CLD and STD. `CpuState::df` holds the flag. It is not one of the six status flags the registry tracks.
@@ -171,7 +189,7 @@ The counter is Xenora's own. It is neither a host timer nor derived from one, so
 
 ## Rejected on purpose
 
-LOCK except as described above, F2 or F3 where it is neither PAUSE nor part of a declared form, F2 combined with F3, address-size overrides, an ignored segment override after FS or GS, 16-bit stack and branch forms, 16-bit BSWAP and MOVSXD, bit tests of memory by a register index, REPNE on MOVS, STOS and LODS, every x87 instruction except FNINIT, MMX, the RCP and RSQRT approximations, SSE3, the MMX forms of SSSE3, SSE4a, AES, SHA, MOVBE, VEX except as described above, EVEX and XOP. The legacy PCLMULQDQ accepts every imm8 because SDM Table 4-13 ignores all bits except 0 and 4; its VEX form remains refused. The DBT also refuses raw SYSCALL.
+LOCK except as described above, F2 or F3 where it is neither PAUSE nor part of a declared form, F2 combined with F3, an ignored segment override after FS or GS, 16-bit stack and branch forms, 16-bit BSWAP and MOVSXD, bit tests of memory by a register index, REPNE on MOVS, STOS and LODS, every x87 instruction except FNINIT, MMX, the RCP and RSQRT approximations, SSE3, the MMX forms of SSSE3, SSE4a, AES, SHA, MOVBE, VEX except as described above, EVEX and XOP. The legacy PCLMULQDQ accepts every imm8 because SDM Table 4-13 ignores all bits except 0 and 4; its VEX form remains refused. The DBT also refuses raw SYSCALL.
 
 
 ## CPU semantic expansion audit
