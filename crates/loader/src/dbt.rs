@@ -2672,6 +2672,80 @@ mod tests {
         );
     }
 
+    /// Run one original fixture on the native DBT and on the interpreter, and
+    /// require the same architectural state and a clean halt from both.
+    fn assert_both_engines(code: &[u8], setup: impl Fn(&mut CpuState)) -> CpuState {
+        let (mut engine, mut native, mut native_memory) = fixture(code);
+        setup(&mut native);
+        let translated = engine.run(&mut native, &mut native_memory, 16);
+        assert_eq!(translated.exit_reason, ExitReason::Halt);
+
+        let (_, mut interpreted, mut memory) = fixture(code);
+        setup(&mut interpreted);
+        let result = crate::cpu::Interpreter::new(interpreted, &mut memory, 16).run();
+        assert_eq!(result.exit_reason, ExitReason::Halt);
+        assert_eq!(result.final_state, translated.final_state);
+        translated.final_state
+    }
+
+    #[test]
+    fn lea_widths_sib_and_segment_override_match_the_interpreter() {
+        // lea eax, [rbx+rcx*4-0x80]
+        let state = assert_both_engines(&[0x8D, 0x44, 0x8B, 0x80, 0xF4], |cpu| {
+            cpu.set(Register::Rax, u64::MAX);
+            cpu.set(Register::Rbx, 0x1000);
+            cpu.set(Register::Rcx, 3);
+        });
+        assert_eq!(state.get(Register::Rax), 0xF8C);
+
+        // lea ax, [rbx+rcx*8+0x1234]; the upper 48 bits are preserved.
+        let state = assert_both_engines(&[0x66, 0x8D, 0x84, 0xCB, 0x34, 0x12, 0, 0, 0xF4], |cpu| {
+            cpu.set(Register::Rax, 0x1122_3333_5555_AAAA);
+            cpu.set(Register::Rbx, 0x1000);
+            cpu.set(Register::Rcx, 2);
+        });
+        assert_eq!(state.get(Register::Rax), 0x1122_3333_5555_2244);
+
+        // lea rax, [r13+r12*4+0x10]: REX.X and REX.B extend the SIB indexes.
+        let state = assert_both_engines(&[0x4B, 0x8D, 0x44, 0xA5, 0x10, 0xF4], |cpu| {
+            cpu.set(Register::R12, 0x10);
+            cpu.set(Register::R13, 0x2000);
+        });
+        assert_eq!(state.get(Register::Rax), 0x2050);
+
+        // lea rax, fs:[rbx-0x10]: LEA computes an effective address and so
+        // ignores the segment base that a memory access would add.
+        let state = assert_both_engines(&[0x64, 0x48, 0x8D, 0x43, 0xF0, 0xF4], |cpu| {
+            cpu.set(Register::Rbx, 0x3000);
+            cpu.fs_base = 0x4000;
+        });
+        assert_eq!(state.get(Register::Rax), 0x2FF0);
+    }
+
+    #[test]
+    fn rip_relative_lea_uses_the_end_of_the_instruction_for_either_displacement() {
+        // lea rax, [rip+0x10]: end ENTRY+7, positive displacement.
+        let state = assert_both_engines(&[0x48, 0x8D, 0x05, 0x10, 0, 0, 0, 0xF4], |_| {});
+        assert_eq!(state.get(Register::Rax), ENTRY + 7 + 0x10);
+
+        // lea rax, [rip-0x10]: the sign-extended disp32 wraps below ENTRY.
+        let state = assert_both_engines(&[0x48, 0x8D, 0x05, 0xF0, 0xFF, 0xFF, 0xFF, 0xF4], |_| {});
+        assert_eq!(state.get(Register::Rax), ENTRY + 7 - 0x10);
+
+        // lea eax, [rip-8]: the 32-bit result zero-extends the wrapped address.
+        let state = assert_both_engines(&[0x8D, 0x05, 0xF8, 0xFF, 0xFF, 0xFF, 0xF4], |_| {});
+        assert_eq!(state.get(Register::Rax), ENTRY + 6 - 8);
+
+        // lea ax, [rip-0x200]: a 16-bit write keeps the upper 48 bits.
+        let state = assert_both_engines(&[0x66, 0x8D, 0x05, 0x00, 0xFE, 0xFF, 0xFF, 0xF4], |cpu| {
+            cpu.set(Register::Rax, 0x1122_3333_5555_AAAA)
+        });
+        assert_eq!(
+            state.get(Register::Rax),
+            0x1122_3333_5555_0000 | (ENTRY + 7 - 0x200)
+        );
+    }
+
     // FS/GS segment override regression tests from #280 (#72), restored after a
     // merge-conflict resolution dropped them.
     /// A segment-relative store and load through the FS base.
