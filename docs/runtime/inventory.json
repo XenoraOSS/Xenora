@@ -7274,6 +7274,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_time64",
+      "kind": "name",
+      "library": "api-ms-win-crt-time-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "_time64"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "asctime",
       "kind": "name",
       "library": "api-ms-win-crt-time-l1-1-0.dll",
@@ -7414,11 +7424,31 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "rand",
+      "kind": "name",
+      "library": "api-ms-win-crt-utility-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "rand"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "rand_s",
       "kind": "name",
       "library": "api-ms-win-crt-utility-l1-1-0.dll",
       "status": "partial",
       "symbol": "rand_s"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "srand",
+      "kind": "name",
+      "library": "api-ms-win-crt-utility-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "srand"
     },
     {
       "api_set": true,
@@ -15858,6 +15888,16 @@
       "kind": "name",
       "library": "ucrtbase.dll",
       "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "_time64"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "manual",
       "status": "partial",
       "status_explicit": true,
       "symbol": "_ui64toa"
@@ -17278,6 +17318,16 @@
       "kind": "name",
       "library": "ucrtbase.dll",
       "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "rand"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "manual",
       "status": "partial",
       "status_explicit": true,
       "symbol": "rand_s"
@@ -17451,6 +17501,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "sqrtf"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "srand"
     },
     {
       "data_import": false,
@@ -20404,17 +20464,17 @@
     }
   ],
   "summary": {
-    "aliases": 968,
-    "api_set_aliases": 760,
-    "canonical_services": 1015,
-    "data_import_services": 12,
+    "aliases": 971,
+    "api_set_aliases": 763,
+    "canonical_services": 1019,
+    "data_import_services": 13,
     "duplicate_registrations": 0,
-    "implemented": 249,
+    "implemented": 252,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 711,
+    "manual_services": 715,
     "ordinal_aliases": 35,
-    "partial": 766,
+    "partial": 767,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 304,
