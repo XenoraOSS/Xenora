@@ -1195,6 +1195,28 @@ path. An empty view returns a null pointer and zero units. Short, invalid or
 overlapping output spans fail before any output changes. The supported flags
 are zero and `ICU_REJECT_USERPWD`. Percent escapes remain intact.
 
+`WinHttpCreateUrl` composes a URL from the same record without opening a
+connection. A null component pointer omits the component; a zero length reads
+a zero-terminated string and a nonzero length counts units exactly, as the
+`URL_COMPONENTS` remarks document. A scheme string wins over `nScheme`,
+mirroring the precedence the WinINet twin documents; either must resolve to
+HTTP or HTTPS because WinHTTP recognizes no other scheme. `ICU_REJECT_USERPWD`
+fails credential input with `ERROR_WINHTTP_INVALID_URL`, and `ICU_ESCAPE`
+escapes the unsafe set the public URL page lists - control characters, DEL,
+space, percent, `"< > # { } | \ ^ ~ [ ] ` '"` - in path and extra info, even
+inside an existing escape triplet. The sizing contract follows the documented
+example: an insufficient or absent buffer reports the required wide-character
+count including the terminator through the length pointer and fails with
+`ERROR_INSUFFICIENT_BUFFER` without touching output, while success writes the
+count excluding the terminator. Choices the public text leaves silent are
+Xenora canonical decisions: scheme text is emitted verbatim, host verbatim, a
+port equal to the scheme default or zero is elided so canonical URLs round
+trip, a nonempty path without a leading slash gains one, empty components
+contribute nothing, a password without a user name is an invalid URL,
+non-ASCII characters percent-encode as UTF-8 because Xenora models no system
+code page, and unpaired surrogates are invalid URLs. Unknown flags fail with
+`ERROR_NOT_SUPPORTED`. No network use occurs in either direction.
+
 `WinHttpConnect` requires a live session handle of the correct type, a
 nonempty ASCII host or address string rather than a URL, a zero reserved field
 and a 16-bit `INTERNET_PORT`; only the low sixteen bits of the Win64 argument
