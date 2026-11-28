@@ -368,13 +368,16 @@ voices through vtables the loader writes into guest memory.
 ### The clock until the mixer arrives
 
 - **Xenora.** The mixer of issue #306 owns the real clock. Until it lands,
-  every `IXAudio2SourceVoice::GetState` call first advances every started
-  source voice of the same engine by one quantum: a hundredth of a second
-  of the mastering rate, 480 frames at 48000 hertz, turned into frames of
-  the source rate with the frequency ratio of the voice and rounded down.
-  A stopped engine does not move its voices. This is a stand-in for the
-  mixer and not an audio path: nothing is mixed, resampled or played, and
-  no sample is ever read.
+  every valid `IXAudio2SourceVoice::GetState` call first advances every
+  started source voice of the same engine by one 10 ms quantum. The model
+  converts that quantum from the mastering rate, 480 frames at 48 kHz,
+  to the source rate using the voice's frequency ratio and rounds down.
+  A stopped engine does not move its voices. An unknown flag or an output
+  that cannot hold the complete state leaves the engine clock, queues, and
+  guest memory unchanged. The void call records the failure in diagnostics.
+  `XAUDIO2_VOICE_NOSAMPLESPLAYED` still returns buffer state and advances
+  the clock. The reference clock reads no samples and performs no mixing,
+  resampling or playback.
 
 ## Not implemented
 

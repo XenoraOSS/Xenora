@@ -12,8 +12,9 @@ use crate::imports::Win64Args;
 use crate::memory::GuestMemory;
 use crate::runtime::Call;
 use crate::services::ServicesState;
-use xenora_xaudio2::BufferDesc;
+use xenora_xaudio2::consts::XAUDIO2_VOICE_NOSAMPLESPLAYED;
 use xenora_xaudio2::hresult::{E_NOTIMPL, E_POINTER, S_OK, XAUDIO2_E_INVALID_CALL};
+use xenora_xaudio2::{BufferDesc, VoiceState};
 
 /// The channel mask of a stereo voice: front left and front right.
 const SPEAKER_FRONT_LEFT: u32 = 0x1;
@@ -186,7 +187,16 @@ fn get_state(
         xaudio2.diagnostics.silent += 1;
         return Ok(0);
     };
-    // The clock of the engine moves one quantum before the state is read.
+    if !matches!(flags, 0 | XAUDIO2_VOICE_NOSAMPLESPLAYED) {
+        xaudio2.diagnostics.silent += 1;
+        return Ok(0);
+    }
+    if out == 0 || memory.check_write(out, VoiceState::SIZE).is_err() {
+        xaudio2.diagnostics.pointer += 1;
+        xaudio2.diagnostics.silent += 1;
+        return Ok(0);
+    }
+    // Only a valid query advances the synthetic clock before reading state.
     let _ = xaudio2.runtime.advance_engine_clock(engine);
     let Ok(voice_state) = xaudio2.runtime.state(voice, flags) else {
         xaudio2.diagnostics.silent += 1;

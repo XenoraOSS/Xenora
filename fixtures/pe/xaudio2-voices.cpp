@@ -9,7 +9,7 @@
 // buffer is gone afterwards.
 //
 // Clock contract until the #306 mixer drives it (docs/runtime/xaudio2.md):
-// each IXAudio2SourceVoice::GetState call first advances every started source
+// each valid IXAudio2SourceVoice::GetState call first advances every started source
 // voice of the engine by one 10 ms quantum of the mastering rate (480 frames
 // at 48 kHz, frequency ratio 1, same source and mastering rate).
 
@@ -142,6 +142,43 @@ static XAUDIO2_VOICE_STATE state_of(IXAudio2SourceVoice *s) {
     return st;
 }
 
+static void verify_get_state_validation(IXAudio2 *engine, const WAVEFORMATEX &format,
+                                        const XAUDIO2_BUFFER &buffer) {
+    IXAudio2SourceVoice *source = nullptr;
+    IXAudio2SourceVoice *peer = nullptr;
+    expect(engine->v->CreateSourceVoice(engine, &source, &format, 0, 2.0f, nullptr, nullptr, nullptr) == S_OK && source);
+    expect(engine->v->CreateSourceVoice(engine, &peer, &format, 0, 2.0f, nullptr, nullptr, nullptr) == S_OK && peer);
+    expect(source->v->SubmitSourceBuffer(source, &buffer, nullptr) == S_OK);
+    expect(peer->v->SubmitSourceBuffer(peer, &buffer, nullptr) == S_OK);
+    expect(source->v->Start(source, 0, 0) == S_OK && peer->v->Start(peer, 0, 0) == S_OK);
+
+    XAUDIO2_VOICE_STATE invalid_flags = {(void *)1, 0xffffffffu, 0xffffffffffffffffull};
+    source->v->GetState(source, &invalid_flags, 1);
+    expect(invalid_flags.pCurrentBufferContext == (void *)1
+        && invalid_flags.BuffersQueued == 0xffffffffu
+        && invalid_flags.SamplesPlayed == 0xffffffffffffffffull);
+    expect(state_of(source).SamplesPlayed == 480);
+
+    static const XAUDIO2_VOICE_STATE read_only = {(void *)2, 3, 4};
+    source->v->GetState(source, const_cast<XAUDIO2_VOICE_STATE *>(&read_only), 0);
+    source->v->GetState(source, nullptr, 0);
+    // A valid query advances every started source exactly once. The peer
+    // would be ahead here if either rejected query had advanced the engine.
+    XAUDIO2_VOICE_STATE st = state_of(peer);
+    expect(st.SamplesPlayed == 960 && st.BuffersQueued == 1
+        && st.pCurrentBufferContext == buffer.pContext);
+
+    const u32 no_samples_played = 0x100;
+    st.SamplesPlayed = 0xffffffffffffffffull;
+    source->v->GetState(source, &st, no_samples_played);
+    expect(st.SamplesPlayed == 0 && st.BuffersQueued == 1
+        && st.pCurrentBufferContext == buffer.pContext);
+    expect(state_of(peer).SamplesPlayed == 1920);
+
+    peer->v->DestroyVoice(peer);
+    source->v->DestroyVoice(source);
+}
+
 static void round_trip(bool first) {
     IXAudio2 *x = nullptr;
     expect(XAudio2Create(nullptr, 0, 1) == E_POINTER);
@@ -221,7 +258,7 @@ static void round_trip(bool first) {
     expect(s->v->SubmitSourceBuffer(s, &b, nullptr) == S_OK);
     expect(s->v->SetSourceSampleRate(s, 24000) == INVALID_CALL);
 
-    // A stopped voice does not advance; GetState writes all 24 bytes.
+    // A stopped voice does not advance; GetState writes the packed 20-byte state.
     XAUDIO2_VOICE_STATE st = state_of(s);
     expect(st.pCurrentBufferContext == (void *)0xA && st.BuffersQueued == 2 && st.SamplesPlayed == 0);
 
@@ -262,6 +299,8 @@ static void round_trip(bool first) {
     expect(s->v->FlushSourceBuffers(s) == S_OK);
     expect(state_of(s).BuffersQueued == 0);
 
+    if (first) verify_get_state_validation(x, f, a);
+
     // The mastering voice cannot go while a source voice targets it.
     m->v->DestroyVoice(m);
     expect(x->v->CreateMasteringVoice(x, &m2, 2, 48000, 0, nullptr, nullptr, 6) == INVALID_CALL);
@@ -275,7 +314,6 @@ static void round_trip(bool first) {
 
     // The final Release tears the engine and its remaining voice down.
     expect(x->v->Release(x) == 0);
-    (void)first;
 }
 
 extern "C" void entry() {
