@@ -324,6 +324,15 @@ attribute bit, is truncated, or uses the earlier virtual-address descriptor form
 is reported in `delay_import_error` and in the Markdown report, together with
 the entries read before it.
 
+### Microsoft atomic-wait deadlines (#1163)
+
+`msvcp140_atomic_wait.dll` exposes deadline creation and remaining-time
+helpers backed by the guest monotonic clock. Infinite deadlines retain their
+sentinel, elapsed deadlines return zero, and finite wait intervals are capped
+at ten days. The behavior is derived from the public [Microsoft STL source](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/src/atomic_wait.cpp)
+(copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception). Atomic
+waiting, notification and scheduling are not provided by these helpers.
+
 ### Microsoft codecvt locale-ID data (#1163)
 
 The four `msvcp140_codecvt_ids.dll` UTF conversion facet ID exports each

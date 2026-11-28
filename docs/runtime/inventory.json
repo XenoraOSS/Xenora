@@ -14163,6 +14163,26 @@
       "symbol": "?_Init_dtor@Init@ios_base@std@@CAXPEAV123@@Z"
     },
     {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_atomic_wait.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "__std_atomic_wait_get_deadline"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_atomic_wait.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "__std_atomic_wait_get_remaining_timeout"
+    },
+    {
       "data_import": true,
       "family": "other",
       "kind": "name",
@@ -20016,15 +20036,15 @@
   "summary": {
     "aliases": 960,
     "api_set_aliases": 754,
-    "canonical_services": 985,
+    "canonical_services": 987,
     "data_import_services": 12,
     "duplicate_registrations": 0,
     "implemented": 246,
     "implicit_status_services": 78,
-    "libraries": 27,
-    "manual_services": 683,
+    "libraries": 28,
+    "manual_services": 685,
     "ordinal_aliases": 35,
-    "partial": 739,
+    "partial": 741,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,

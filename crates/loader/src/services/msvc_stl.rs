@@ -133,3 +133,40 @@ pub(super) fn register_vcruntime_memory(registry: &mut ImportRegistry) {
         registry.alias("vcruntime140.dll", "ucrtbase.dll", symbol);
     }
 }
+
+/// Microsoft STL atomic-wait deadline arithmetic, using the same guest clock
+/// as GetTickCount64. This does not implement atomic waiting or notification.
+pub(super) fn register_atomic_deadlines(
+    registry: &mut ImportRegistry,
+    state: &Arc<super::ServicesState>,
+) {
+    const ATOMIC: &str = "msvcp140_atomic_wait.dll";
+    let clock = Arc::clone(state);
+    registry.register_with_status(
+        ATOMIC,
+        "__std_atomic_wait_get_deadline",
+        ServiceStatus::Partial,
+        move |args, _, _| {
+            Ok(if args.rcx == u64::MAX {
+                u64::MAX
+            } else {
+                clock.uptime_millis().wrapping_add(args.rcx)
+            })
+        },
+    );
+    let clock = Arc::clone(state);
+    registry.register_with_status(
+        ATOMIC,
+        "__std_atomic_wait_get_remaining_timeout",
+        ServiceStatus::Partial,
+        move |args, _, _| {
+            if args.rcx == u64::MAX {
+                return Ok(u64::from(u32::MAX));
+            }
+            Ok(args
+                .rcx
+                .saturating_sub(clock.uptime_millis())
+                .min(864_000_000))
+        },
+    );
+}
