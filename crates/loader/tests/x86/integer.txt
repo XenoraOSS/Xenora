@@ -1134,6 +1134,7 @@ c4 e2 33 f6 d9 | mulx ebx, r9d, ecx
 c4 62 1b f6 54 be 10 | mulx r10d, r12d, dword ptr [rsi + 4*rdi + 16]
 c4 e2 33 f6 d2 | mulx edx, r9d, edx
 c4 62 03 f6 d1 | mulx r10d, r15d, ecx
+c4 e2 63 f6 d9 | mulx ebx, ebx, ecx
 c4 c3 7b f0 d9 00 | rorx ebx, r9d, 0
 c4 63 7b f0 54 be 10 00 | rorx r10d, dword ptr [rsi + 4*rdi + 16], 0
 c4 c3 7b f0 d9 01 | rorx ebx, r9d, 1
@@ -1179,6 +1180,7 @@ c4 e2 b3 f6 d9 | mulx rbx, r9, rcx
 c4 62 9b f6 54 be 10 | mulx r10, r12, qword ptr [rsi + 4*rdi + 16]
 c4 e2 b3 f6 d2 | mulx rdx, r9, rdx
 c4 62 83 f6 d1 | mulx r10, r15, rcx
+c4 e2 e3 f6 d9 | mulx rbx, rbx, rcx
 c4 c3 fb f0 d9 00 | rorx rbx, r9, 0
 c4 63 fb f0 54 be 10 00 | rorx r10, qword ptr [rsi + 4*rdi + 16], 0
 c4 c3 fb f0 d9 01 | rorx rbx, r9, 1

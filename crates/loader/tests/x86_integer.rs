@@ -830,10 +830,12 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
         "mulx" => {
             // Intel SDM Vol. 2B MULX: the r/m operand is the unsigned
             // multiplicand and RDX is the implicit unsigned multiplier. The
-            // ModRM register receives the low product; VEX.vvvv, printed as
-            // the second operand, receives the high product. Build the product
+            // ModRM register receives the high product; VEX.vvvv, printed as
+            // the second operand, receives the low product. Build the product
             // by shifted additions so this reference does not share a multiply
-            // instruction with the executor. No flag is written.
+            // instruction with the executor. The low write happens first so
+            // that an identical first and second operand keeps the high half.
+            // No flag is written.
             let multiplicand = read(m, places[2], bits);
             let multiplier = read(m, rdx(bits), bits);
             let limit = 1u128 << bits;
@@ -844,8 +846,8 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
                     product += multiplicand << index;
                 }
             }
-            write(m, places[1], product / limit);
-            write(m, places[0], product % limit);
+            write(m, places[1], product % limit);
+            write(m, places[0], product / limit);
             Outcome::Done(none)
         }
         "bt" | "bts" | "btr" | "btc" => {
@@ -1669,28 +1671,47 @@ fn mulx_destinations_hold_independent_halves_of_the_product() {
     const MEM64: &str = "mulx r10, r12, qword ptr [rsi + 4*rdi + 16]";
     let all = cases();
     // Text, source registers, exact destination answers. RDX is implicit and
-    // is set explicitly in each input set.
+    // is set explicitly in each input set. The asymmetric pairs have different
+    // high and low halves, so exchanging the destinations fails; the last two
+    // make the first two operands identical, where the SDM says the single
+    // register keeps the high half.
     let checks: &[(&str, &[(usize, u64)], &[(usize, u64)])] = &[
         (
             "mulx ebx, r9d, ecx",
             &[(1, 3), (2, 0x8000_0001)],
-            &[(3, 0x8000_0003), (9, 1)],
+            &[(3, 1), (9, 0x8000_0003)],
         ),
         (
             "mulx rbx, r9, rcx",
             &[(1, 0x8000_0000_0000_0001), (2, 3)],
-            &[(3, 0x8000_0000_0000_0003), (9, 1)],
+            &[(3, 1), (9, 0x8000_0000_0000_0003)],
         ),
         (
             "mulx edx, r9d, edx",
             &[(2, 0xFFFF_FFFF)],
-            &[(2, 1), (9, 0xFFFF_FFFE)],
+            &[(2, 0xFFFF_FFFE), (9, 1)],
         ),
-        (MEM32, &[(2, 0x8000_0001)], &[(10, 0x8000_0003), (12, 1)]),
+        (MEM32, &[(2, 0x8000_0001)], &[(10, 1), (12, 0x8000_0003)]),
         (
             MEM64,
             &[(2, u64::MAX)],
-            &[(10, 1), (12, 0xFFFF_FFFF_FFFF_FFFE)],
+            &[(10, 0xFFFF_FFFF_FFFF_FFFE), (12, 1)],
+        ),
+        (
+            "mulx ebx, r9d, ecx",
+            &[(1, 0x1_0002), (2, 0x3_0004)],
+            &[(3, 3), (9, 0xA_0008)],
+        ),
+        (
+            "mulx rbx, r9, rcx",
+            &[(1, 0x1_0000_0003), (2, 0x1_0000_0005)],
+            &[(3, 1), (9, 0x8_0000_000F)],
+        ),
+        ("mulx ebx, ebx, ecx", &[(1, 3), (2, 0x8000_0001)], &[(3, 1)]),
+        (
+            "mulx rbx, rbx, rcx",
+            &[(1, 0x8000_0000_0000_0001), (2, 3)],
+            &[(3, 1)],
         ),
     ];
     for &(text, inputs, outputs) in checks {
