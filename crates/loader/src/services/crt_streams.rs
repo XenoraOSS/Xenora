@@ -586,6 +586,12 @@ impl StandardStreams {
         self.opened.close_pipe_ends_for_exit(drive);
     }
 
+    /// The positions a finished `_P_WAIT` child left behind, written back
+    /// into the streams they were inherited from.
+    pub(super) fn absorb_child_positions(&mut self, child: &StandardStreams) {
+        self.opened.absorb_child_positions(&child.opened);
+    }
+
     pub(super) fn inherit_for_spawn(&self) -> StandardStreams {
         StandardStreams {
             opened: self.opened.inherit_for_spawn(),
@@ -734,6 +740,16 @@ impl StandardStreams {
         };
         if mark.is_some_and(|fd| self.opened.closed[fd]) {
             return Ok(Err(EBADF));
+        }
+        // A standard stream writes through its descriptor, exactly as the
+        // CRT's streams write through 1 and 2: when the table carries the
+        // number - a redirection `_dup2` put it there - the ordinary
+        // descriptor machinery answers rather than the captured output.
+        if let Some(fd) = mark
+            && self.opened.has_descriptor(fd as u32)
+            && self.opened.standard_terminal(fd as u32).is_none()
+        {
+            return Ok(self.opened.descriptor_write(drive, fd as u32, bytes));
         }
         let orientation = match stream {
             Stream::Output => &mut self.output_orientation,
@@ -2822,4 +2838,102 @@ pub(super) fn register_legacy(registry: &mut ImportRegistry, state: &Arc<Service
             Err(crt_scan::ScanError::Memory(error)) => Err(fault(error)),
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::GuestMemory;
+    use crate::services::ObjectState;
+
+    fn fixture() -> (StandardStreams, GuestMemory, ObjectState) {
+        let memory = GuestMemory::new();
+        (StandardStreams::default(), memory, ObjectState::default())
+    }
+
+    /// A redirection `_dup2` onto a standard number routes the standard
+    /// stream's writes through the descriptor machinery into the file, as
+    /// the CRT writes its streams through descriptors 1 and 2; restoring
+    /// the standard wiring returns the writes to the capture.
+    #[test]
+    fn standard_stream_writes_follow_a_rewired_descriptor_and_return_on_restore() {
+        let (mut streams, mut memory, mut drive) = fixture();
+        let _file = streams
+            .opened
+            .open(&mut memory, &mut drive, b"target", b"w")
+            .expect("open");
+        let file_fd = streams
+            .opened
+            .open_descriptor(&mut drive, b"target", 1)
+            .expect("write descriptor");
+        // The same write through the descriptor itself succeeds, so the
+        // assertions below isolate the routing rather than the file.
+        streams
+            .opened
+            .descriptor_write(&mut drive, file_fd, b"direct")
+            .expect("direct write");
+        // The shell's redirection frame saves stdout before rewiring it:
+        // the duplication happens while 1 is still the standard stream.
+        let saved = streams.opened.descriptor_duplicate(1).expect("save stdout");
+        // Dup2 the file onto 1: writes through the stdout stream must reach
+        // the file rather than the capture.
+        streams
+            .opened
+            .descriptor_duplicate2(&mut memory, &mut drive, file_fd, 1)
+            .expect("dup2 onto stdout");
+        streams
+            .write(&mut drive, Stream::Output, b"redirected")
+            .expect("write")
+            .expect("no errno");
+        assert!(streams.output().is_empty());
+        assert_eq!(drive.drive_file("target"), Some(&b"directredirected"[..]));
+        // Restoring the standard wiring - `_dup2` of a saved copy of the
+        // standard stream back onto 1 - returns the writes to the capture.
+        streams
+            .opened
+            .descriptor_duplicate2(&mut memory, &mut drive, saved, 1)
+            .expect("restore stdout");
+        streams
+            .write(&mut drive, Stream::Output, b"captured")
+            .expect("write")
+            .expect("no errno");
+        assert_eq!(streams.output(), b"captured");
+    }
+
+    /// A spawned child inherits a position snapshot of each file-backed
+    /// descriptor, and the positions it leaves behind write back into the
+    /// parent's streams: one advancing position across the two processes.
+    #[test]
+    fn spawn_inheritance_snapshots_positions_and_writes_the_childs_back() {
+        let (mut parent, memory, mut drive) = fixture();
+        drive.drive_create("shared");
+        drive.drive_write("shared", 0, b"0123456789");
+        let fd = parent
+            .opened
+            .open_descriptor(&mut drive, b"shared", 0)
+            .expect("parent descriptor");
+        let _ = memory;
+        let _ = fd;
+        // The parent reads two bytes before spawning: position 2 carries.
+        let read = parent
+            .opened
+            .descriptor_read(&drive, fd, 2)
+            .expect("parent read");
+        assert_eq!(read, b"01");
+        let mut child = parent.opened.inherit_for_spawn();
+        // The child reads at the inherited position, not at the start.
+        let child_fd = fd;
+        let read = child
+            .descriptor_read(&drive, child_fd, 2)
+            .expect("child read");
+        assert_eq!(read, b"23");
+        // The positions the child leaves write back: the parent continues
+        // where the child stopped, as one shared open file description.
+        parent.opened.absorb_child_positions(&child);
+        let read = parent
+            .opened
+            .descriptor_read(&drive, fd, 2)
+            .expect("parent continues");
+        assert_eq!(read, b"45");
+    }
 }

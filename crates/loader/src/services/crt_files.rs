@@ -122,6 +122,7 @@ fn orient(stream: &mut FileStream, wide: bool) -> bool {
     stream.orientation == wanted
 }
 
+#[derive(Clone)]
 struct FileStream {
     path: String,
     /// Where the next read, or the next write of a stream that does not
@@ -200,10 +201,12 @@ impl FileStreams {
         let closed = self.closed;
         // Kernel-backed and positional descriptors carry: pipes share the
         // one state, wrapped handles name machine-wide objects, aliases and
-        // standard wirings are numbers. The file streams a descriptor owns
-        // do not: their positions are the parent's own, and sharing them
-        // across processes is not modelled, so the child starts without
-        // them rather than with positions that would diverge.
+        // standard wirings are numbers. File-backed descriptors carry as
+        // position snapshots of their stream: the parent is suspended for
+        // the whole `_P_WAIT`, so the snapshot cannot diverge while the
+        // child runs, and the positions the child leaves behind write back
+        // when it exits - one advancing position across the two processes,
+        // as the shared open file description behaves on Windows.
         let descriptors = self
             .descriptors
             .iter()
@@ -212,7 +215,8 @@ impl FileStreams {
                     Descriptor::Alias(other) => Descriptor::Alias(*other),
                     Descriptor::Handle(handle) => Descriptor::Handle(*handle),
                     Descriptor::Standard(fd) => Descriptor::Standard(*fd),
-                    Descriptor::Owned(_) | Descriptor::Shared(_) => return None,
+                    Descriptor::Owned(stream) => Descriptor::Owned(stream.clone()),
+                    Descriptor::Shared(file) => Descriptor::Owned(self.open.get(file)?.clone()),
                 };
                 Some((*fd, inherited))
             })
@@ -222,6 +226,44 @@ impl FileStreams {
             temporary_counter: self.temporary_counter,
             descriptors,
             closed,
+        }
+    }
+
+    /// The positions a finished `_P_WAIT` child left behind, written back
+    /// into the streams they were inherited from. The parent was suspended
+    /// for the whole run, so no position moved in between; the descriptor
+    /// the child wrote through resolves to the same terminal number here
+    /// because the wiring copies unchanged. A descriptor the child closed
+    /// early writes nothing back, which the comments on the spawn service
+    /// note as the remaining simplification.
+    pub(super) fn absorb_child_positions(&mut self, child: &FileStreams) {
+        let mut writebacks: Vec<(u32, u64)> = Vec::new();
+        for (&fd, descriptor) in &child.descriptors {
+            let Descriptor::Owned(stream) = descriptor else {
+                continue;
+            };
+            if self.descriptors.contains_key(&fd) {
+                writebacks.push((fd, stream.position));
+            }
+        }
+        for (fd, position) in writebacks {
+            let Ok(terminal) = self.descriptor_terminal(fd) else {
+                continue;
+            };
+            match self.descriptors.get(&terminal) {
+                Some(Descriptor::Owned(_)) => {
+                    if let Some(Descriptor::Owned(stream)) = self.descriptors.get_mut(&terminal) {
+                        stream.position = position;
+                    }
+                }
+                Some(Descriptor::Shared(file)) => {
+                    let file = *file;
+                    if let Some(stream) = self.open.get_mut(&file) {
+                        stream.position = position;
+                    }
+                }
+                _ => {}
+            }
         }
     }
 

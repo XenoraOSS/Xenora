@@ -296,10 +296,12 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ), // vpclmulqdq xmm0, xmm1, xmm2, 0
         ("SSSE3", 1, ECX, 9, &[0x0F, 0x38, 0x00, 0xC1]), // pshufb mm0, mm1
         ("MOVBE", 1, ECX, 22, &[0x0F, 0x38, 0xF0, 0x06]), // movbe eax, [rsi]
-        ("AESNI", 1, ECX, 25, &[0x66, 0x0F, 0x38, 0xDC, 0xC1]), // aesenc xmm0, xmm1
-        ("XSAVE", 1, ECX, 26, &[0x0F, 0x01, 0xD0]),      // xgetbv
-        ("AVX", 1, ECX, 28, &[0xC5, 0xFC, 0x53, 0xC1]),  // vrcpps ymm0, ymm1
-        ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]),     // rdrand eax
+        // All six legacy AES-NI forms now run; only the VEX form remains a
+        // genuine refusal while the CPUID bit awaits independent acceptance.
+        ("AESNI", 1, ECX, 25, &[0xC4, 0xE2, 0x71, 0xDC, 0xD0]), // vaesenc xmm0, xmm1, xmm2
+        ("XSAVE", 1, ECX, 26, &[0x0F, 0x01, 0xD0]),             // xgetbv
+        ("AVX", 1, ECX, 28, &[0xC5, 0xFC, 0x53, 0xC1]),         // vrcpps ymm0, ymm1
+        ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]),            // rdrand eax
         // AVX2 cross-lane permutes, broadcasts, blends, per-lane shifts and
         // the 256-bit immediate shuffles are implemented; moving the 256-bit
         // byte mask to a general register is still refused.
