@@ -4,6 +4,7 @@
 
 use std::sync::Arc;
 use xenora_loader::cpu::ExitReason;
+use xenora_loader::import_table::ImportName;
 use xenora_loader::imports::ImportRegistry;
 use xenora_loader::services::{MockClock, ServicesState, register_standard_services};
 use xenora_loader::startup::{
@@ -50,6 +51,21 @@ fn retired_guest_thread_does_not_leave_an_apartment_behind() {
 }
 
 #[test]
+fn standard_services_do_not_expose_fixture_unload_query() {
+    let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+    let mut registry = ImportRegistry::new();
+    register_standard_services(&mut registry, state);
+    assert!(
+        registry
+            .resolve(
+                "xenora_com_fixture.dll",
+                &ImportName::Name("DllCanUnloadNow".to_owned()),
+            )
+            .is_none()
+    );
+}
+
+#[test]
 fn guest_calls_an_opt_in_host_factory_and_object() {
     assert_eq!(
         run(include_bytes!("../../../fixtures/pe/com-factory.exe"), true),
@@ -66,6 +82,12 @@ fn released_host_object_is_unmapped() {
         ),
         ExitReason::MemoryFault(_)
     ));
+    // The faulting fixture exits with a held lock. A fresh session starts
+    // eligible to unload and has no references left over from that failure.
+    assert_eq!(
+        run(include_bytes!("../../../fixtures/pe/com-factory.exe"), true),
+        ExitReason::ProcessExit(0)
+    );
 }
 
 fn run(bytes: &[u8], fixture: bool) -> ExitReason {
