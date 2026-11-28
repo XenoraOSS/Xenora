@@ -27,6 +27,7 @@ IMPORT void ExitProcess(u32);
 #define WAIT_FAILED 0xffffffffu
 #define ERROR_FILE_NOT_FOUND 2u
 #define ERROR_ACCESS_DENIED 5u
+#define ERROR_NOT_SUPPORTED 50u
 #define ERROR_ALREADY_EXISTS 183u
 #define ERROR_TOO_MANY_POSTS 298u
 #define CURRENT_PROCESS ((handle)-1)
@@ -35,17 +36,37 @@ IMPORT void ExitProcess(u32);
 static const char name_a[] = "XenoraSemaphore1347";
 static const u16 name_w[] = L"XenoraSemaphore1347";
 static const char other_case[] = "xenoraSemaphore1347";
+static const u16 unicode_w[] = L"XenoraSema\u00e9";
+static const char unicode_a[] = "XenoraSema\xc3\xa9";
+static const u16 scoped_name[] = L"Global\\XenoraSemaphore1347";
 
 void entry(void) {
     CHECK(!OpenSemaphoreW(SYNCHRONIZE, 0, name_w));
     CHECK(GetLastError() == ERROR_FILE_NOT_FOUND);
 
     handle first = CreateSemaphoreW(0, 1, 2, name_w);
-    CHECK(first);
-    handle ansi = CreateSemaphoreA(0, 0, 1, name_a);
+    CHECK(first && GetLastError() == 0);
+    handle ansi = CreateSemaphoreA(0, -1, 0, name_a);
     CHECK(ansi && GetLastError() == ERROR_ALREADY_EXISTS);
     handle ex_wait = CreateSemaphoreExW(0, 3, 4, name_w, 0, SYNCHRONIZE);
     CHECK(ex_wait && GetLastError() == ERROR_ALREADY_EXISTS);
+    // These cases exercise the bounded Xenora namespace and UTF-8 A mapping.
+    handle unicode = CreateSemaphoreW(0, 1, 1, unicode_w);
+    CHECK(unicode && GetLastError() == 0);
+    handle unicode_wait = OpenSemaphoreA(SYNCHRONIZE, 0, unicode_a);
+    CHECK(unicode_wait);
+    CHECK(WaitForSingleObject(unicode_wait, 0) == WAIT_OBJECT_0);
+    CHECK(WaitForSingleObject(unicode, 0) == WAIT_TIMEOUT);
+    CHECK(CloseHandle(unicode_wait));
+    CHECK(CloseHandle(unicode));
+
+    CHECK(!OpenSemaphoreW(SYNCHRONIZE, 1, name_w));
+    CHECK(GetLastError() == ERROR_NOT_SUPPORTED);
+    CHECK(!OpenSemaphoreW(SYNCHRONIZE, 0, scoped_name));
+    CHECK(GetLastError() == ERROR_NOT_SUPPORTED);
+    CHECK(!CreateSemaphoreW(0, 0, 1, scoped_name));
+    CHECK(GetLastError() == ERROR_NOT_SUPPORTED);
+
     handle open_modify = OpenSemaphoreA(MODIFY_STATE, 0, name_a);
     CHECK(open_modify);
     handle open_wait = OpenSemaphoreW(SYNCHRONIZE, 0, name_w);
