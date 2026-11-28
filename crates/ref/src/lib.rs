@@ -822,8 +822,9 @@ fn f32_round(negative: bool, magnitude: u128, power: i32) -> Option<u32> {
     Some(sign | (biased as u32) << 23 | (significand as u32 & 0x007f_ffff))
 }
 
-/// VOP1 32-bit integer and bit forms with a general SRC0, and the binary32
-/// rounding forms (AMD RDNA 2 ISA guide section 12.8). None writes VCC or SCC.
+/// VOP1 32-bit integer and bit forms with a general SRC0, the binary32
+/// rounding forms and the integer to binary32 conversions (AMD RDNA 2 ISA
+/// guide section 12.8). None writes VCC or SCC.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VectorUnary {
     /// 55: D = ~S0.
@@ -845,6 +846,12 @@ pub enum VectorUnary {
     RoundNearestEven,
     /// 36: binary32 rounded toward -infinity.
     Floor,
+    /// 5: D.f = (float)S0.i.
+    ConvertI32ToF32,
+    /// 6: D.f = (float)S0.u.
+    ConvertU32ToF32,
+    /// 17-20: D.f = (float)S0.u[8n+7:8n] for byte n.
+    ConvertUbyteToF32(u8),
 }
 
 impl VectorUnary {
@@ -860,6 +867,9 @@ impl VectorUnary {
             34 => Self::Ceiling,
             35 => Self::RoundNearestEven,
             36 => Self::Floor,
+            5 => Self::ConvertI32ToF32,
+            6 => Self::ConvertU32ToF32,
+            17..=20 => Self::ConvertUbyteToF32(opcode - 17),
             _ => return None,
         })
     }
@@ -894,6 +904,12 @@ impl VectorUnary {
                 let positive = if (s0 as i32) < 0 { !s0 } else { s0 };
                 found(positive.leading_zeros())
             }
+            // Guide 12.8 (pages 138-139). The host conversion rounds to
+            // nearest, ties to even: MODE.FP_ROUND[1:0] = 0, the pinned mode.
+            // Bytes and values below 2^24 are exact.
+            Self::ConvertI32ToF32 => (s0 as i32 as f32).to_bits(),
+            Self::ConvertU32ToF32 => (s0 as f32).to_bits(),
+            Self::ConvertUbyteToF32(byte) => f32::from((s0 >> (8 * byte)) as u8).to_bits(),
             _ => unreachable!("binary32 rounding is handled by round_f32"),
         }
     }

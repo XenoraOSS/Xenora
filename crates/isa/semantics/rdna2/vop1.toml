@@ -1,4 +1,5 @@
-# Wave32 VOP1 integer and binary32 rounding forms, AMD RDNA 2 ISA guide 12.8.
+# Wave32 VOP1 integer, binary32 rounding and integer to binary32 conversion
+# forms, AMD RDNA 2 ISA guide 12.8.
 
 [operand_rules.vop1_vgpr]
 family = "VOP1"
@@ -204,4 +205,112 @@ exec = "unchanged"
 wave = "wave32"
 operands = "vop1_f32"
 spec = [{ document = "guide", section = "12.8", page = 140 }]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+# Integer to binary32 conversions (AMD RDNA 2 ISA guide 12.8, pages 138-139).
+# SRC0 is an integer, so integer inline constants are read as their values;
+# float inline constants stay outside the subset (rule vop1_vgpr). An inexact
+# I32 or U32 result rounds by MODE.FP_ROUND[1:0], pinned to 0 (nearest even;
+# guide 3.5, page 15, and 6.4, page 47); docs/shaders/vector-unary.md.
+
+[[form]]
+name = "V_CVT_F32_I32"
+family = "VOP1"
+opcode = 5
+variant = "CvtF32I32"
+operation = "cvt_f32"
+signedness = "signed"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "unchanged"
+exec = "unchanged"
+wave = "wave32"
+operands = "vop1_vgpr"
+spec = [{ document = "guide", section = "12.8", page = 138 }]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CVT_F32_U32"
+family = "VOP1"
+opcode = 6
+variant = "CvtF32U32"
+operation = "cvt_f32"
+signedness = "unsigned"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "unchanged"
+exec = "unchanged"
+wave = "wave32"
+operands = "vop1_vgpr"
+spec = [{ document = "guide", section = "12.8", page = 138 }]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CVT_F32_UBYTE0"
+family = "VOP1"
+opcode = 17
+variant = "CvtF32Ubyte0"
+operation = "cvt_f32_ubyte0"
+signedness = "unsigned"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "unchanged"
+exec = "unchanged"
+wave = "wave32"
+operands = "vop1_vgpr"
+spec = [{ document = "guide", section = "12.8", page = 139 }]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CVT_F32_UBYTE1"
+family = "VOP1"
+opcode = 18
+variant = "CvtF32Ubyte1"
+operation = "cvt_f32_ubyte1"
+signedness = "unsigned"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "unchanged"
+exec = "unchanged"
+wave = "wave32"
+operands = "vop1_vgpr"
+spec = [{ document = "guide", section = "12.8", page = 139 }]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CVT_F32_UBYTE2"
+family = "VOP1"
+opcode = 19
+variant = "CvtF32Ubyte2"
+operation = "cvt_f32_ubyte2"
+signedness = "unsigned"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "unchanged"
+exec = "unchanged"
+wave = "wave32"
+operands = "vop1_vgpr"
+spec = [{ document = "guide", section = "12.8", page = 139 }]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_CVT_F32_UBYTE3"
+family = "VOP1"
+opcode = 20
+variant = "CvtF32Ubyte3"
+operation = "cvt_f32_ubyte3"
+signedness = "unsigned"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "unchanged"
+exec = "unchanged"
+wave = "wave32"
+operands = "vop1_vgpr"
+spec = [{ document = "guide", section = "12.8", page = 139 }]
 verify = ["reference", "independent", "metal", "llvm_encoding"]

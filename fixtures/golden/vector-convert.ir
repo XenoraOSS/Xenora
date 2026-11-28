@@ -1,0 +1,19 @@
+0000: t0 = load.u32 input[index]
+000c: t1 = cvt.f32.i32 t0
+0010: t2 = cvt.f32.u32 t0
+0014: t3 = cvt.f32.ubyte0 t0
+0018: t4 = cvt.f32.ubyte1 t0
+001c: t5 = cvt.f32.ubyte2 t0
+0028: t6 = cvt.f32.ubyte3 t0
+0028: t7 = merge.lanes mask=0x55555555, t6, t5
+0030: t8 = const.u32 0x01000001
+0030: t9 = cvt.f32.u32 t8
+0038: t10 = const.u32 0xfffffff0
+0038: t11 = cvt.f32.i32 t10
+003c: t12 = xor.b32 t1, t2
+0040: t13 = xor.b32 t3, t12
+0044: t14 = xor.b32 t4, t13
+0048: t15 = xor.b32 t7, t14
+004c: t16 = xor.b32 t9, t15
+0050: t17 = xor.b32 t11, t16
+0054: store.u32 output[index], t17

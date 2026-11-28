@@ -21,7 +21,10 @@
 //! FFBL_B32 and FFBH_I32 (any SRC0 a VOPC compare takes; bit scans as the
 //! guide's loops over bits from integer division), the binary32 rounding
 //! forms TRUNC, CEIL, RNDNE and FLOOR (host binary64 rounding of the exactly
-//! widened input; NaN inputs and integer inline constants are refused) and SWAP_B32 (VGPR SRC0),
+//! widened input; NaN inputs and integer inline constants are refused), the
+//! integer to binary32 conversions CVT_F32_I32, CVT_F32_U32 and
+//! CVT_F32_UBYTE0-3 (a power-of-two search and integer division with
+//! round-to-nearest-even on the remainder) and SWAP_B32 (VGPR SRC0),
 //! VOP2 bitwise, shift and arithmetic-shift, the VOP2 binary32 forms
 //! ADD/SUB/SUBREV/MUL/MUL_LEGACY/MIN/MAX_F32 (host binary32 arithmetic; subnormal and
 //! NaN inputs, signalling NaNs to MIN/MAX, NaN results and results below
@@ -132,7 +135,8 @@ enum Insn {
     /// VOP3 three-input binary32 form: VDST, SRC0/SRC1/SRC2, ABS and NEG.
     VTernaryVop3(u8, CmpSrc, CmpSrc, CmpSrc, u8, u8),
     VIntVcc(u32, u8, CmpSrc, u8),
-    /// VOP1 integer opcode 55-59 or binary32 rounding opcode 33-36: VDST, SRC0.
+    /// VOP1 integer opcode 55-59, binary32 rounding opcode 33-36 or integer
+    /// to binary32 conversion opcode 5, 6 or 17-20: VDST, SRC0.
     VUnary(u32, u8, CmpSrc),
     /// `v_swap_b32 vD, vS` (VOP1 opcode 101).
     VSwap(u8, u8),
@@ -1451,6 +1455,8 @@ fn lane_step(
             };
             let d = if (33..=36).contains(&opcode) {
                 vector_round(opcode, a, offset)?
+            } else if matches!(opcode, 5 | 6 | 17..=20) {
+                vector_convert(opcode, a)
             } else {
                 vector_unary(opcode, a)
             };
@@ -1469,6 +1475,44 @@ fn lane_step(
     };
     lane.vgpr[value.0 as usize] = Some(value.1);
     Ok(())
+}
+
+/// D of VOP1 integer to binary32 conversion opcode 5, 6 or 17-20 (guide
+/// 12.8, pages 138-139) for S0 = `value`, rounding to nearest, ties to even
+/// (MODE.FP_ROUND[1:0] = 0, the pinned mode). No host float conversion: the
+/// magnitude is written as q * 2^s + r with 2^23 <= q < 2^24 by repeated
+/// division, and r is compared with half of 2^s.
+fn vector_convert(opcode: u32, value: u32) -> u32 {
+    let (negative, magnitude) = match opcode {
+        5 if value >= 0x8000_0000 => (true, (1_u64 << 32) - u64::from(value)),
+        5 | 6 => (false, u64::from(value)),
+        _ => (
+            false,
+            u64::from(value) / (1_u64 << (8 * (opcode - 17))) % 256,
+        ),
+    };
+    if magnitude == 0 {
+        return 0;
+    }
+    // Highest power of two not above the magnitude: 2^exponent.
+    let mut exponent = 0_u64;
+    while magnitude / 2_u64.pow(exponent as u32 + 1) != 0 {
+        exponent += 1;
+    }
+    let (mut q, mut exponent) = if exponent <= 23 {
+        (magnitude * 2_u64.pow(23 - exponent as u32), exponent)
+    } else {
+        let divisor = 2_u64.pow(exponent as u32 - 23);
+        let (q, r) = (magnitude / divisor, magnitude % divisor);
+        let up = 2 * r > divisor || (2 * r == divisor && q % 2 == 1);
+        (q + u64::from(up), exponent)
+    };
+    if q == 1 << 24 {
+        q /= 2;
+        exponent += 1;
+    }
+    let bits = (exponent + 127) * (1 << 23) + (q - (1 << 23));
+    bits as u32 + if negative { 0x8000_0000 } else { 0 }
 }
 
 /// D of VOP1 binary32 rounding opcode 33-36 (guide 12.8) for S0 = `bits`.
@@ -1784,8 +1828,8 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
     if first >> 25 == 0b011_1111 {
         let dst = (first >> 17) as u8;
         match (first >> 9) & 0xff {
-            opcode @ (33..=36 | 55..=59) => {
-                if opcode <= 36 && (128..=208).contains(&(first & 0x1ff)) {
+            opcode @ (5 | 6 | 17..=20 | 33..=36 | 55..=59) => {
+                if (33..=36).contains(&opcode) && (128..=208).contains(&(first & 0x1ff)) {
                     return Err(fail("integer inline constant as a binary32 source"));
                 }
                 let (src0, len) = vector_src0(code, offset, first, "VOP1")?;

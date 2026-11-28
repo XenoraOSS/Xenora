@@ -677,6 +677,12 @@ fn reference_op(instruction: Instruction) -> Op {
                 VectorUnaryOp::CeilF32 => VectorUnary::Ceiling,
                 VectorUnaryOp::RndneF32 => VectorUnary::RoundNearestEven,
                 VectorUnaryOp::FloorF32 => VectorUnary::Floor,
+                VectorUnaryOp::CvtF32I32 => VectorUnary::ConvertI32ToF32,
+                VectorUnaryOp::CvtF32U32 => VectorUnary::ConvertU32ToF32,
+                VectorUnaryOp::CvtF32Ubyte0 => VectorUnary::ConvertUbyteToF32(0),
+                VectorUnaryOp::CvtF32Ubyte1 => VectorUnary::ConvertUbyteToF32(1),
+                VectorUnaryOp::CvtF32Ubyte2 => VectorUnary::ConvertUbyteToF32(2),
+                VectorUnaryOp::CvtF32Ubyte3 => VectorUnary::ConvertUbyteToF32(3),
             },
             dst,
             match src {
@@ -1131,6 +1137,7 @@ fn compares_fixture_instructions_against_llvm() {
         include_bytes!("../../../fixtures/rdna2/vector-unary.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-round.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-f32.bin"),
+        include_bytes!("../../../fixtures/rdna2/vector-convert.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-compare-16.bin"),
         include_bytes!("../../../fixtures/rdna2/vector-compare-f32.bin"),
         include_bytes!("../../../fixtures/rdna2/vop3-integer.bin"),
@@ -1148,7 +1155,7 @@ fn compares_fixture_instructions_against_llvm() {
     ] {
         count += compare_against_llvm(fixture, &mut forms);
     }
-    assert_eq!(forms.len(), 210, "forms compared: {forms:?}");
+    assert_eq!(forms.len(), 216, "forms compared: {forms:?}");
     eprintln!(
         "{count} three-way instruction comparisons across {} forms",
         forms.len()
@@ -1260,6 +1267,23 @@ fn assemble_matrix() -> Vec<u8> {
             for vsrc1 in ["v0", "v255"] {
                 writeln!(assembly, "v_{name}_f32_e32 v128, {src0}, {vsrc1}").unwrap();
             }
+        }
+    }
+    // Every integer to binary32 conversion with each accepted SRC0 class:
+    // VGPRs and SGPRs at both ends, vcc_lo, both inline integer ends and a literal.
+    for name in ["i32", "u32", "ubyte0", "ubyte1", "ubyte2", "ubyte3"] {
+        for src0 in [
+            "v255",
+            "v0",
+            "s0",
+            "s105",
+            "vcc_lo",
+            "0",
+            "64",
+            "-16",
+            "0x80000001",
+        ] {
+            writeln!(assembly, "v_cvt_f32_{name}_e32 v128, {src0}").unwrap();
         }
     }
     // Every SOPK compare on the lowest and highest readable SGPR.
@@ -1470,9 +1494,11 @@ fn normalize_llvm_assembly(assembly: &str, next_offset: usize) -> String {
             let target = next_offset + displacement * 4;
             format!("{mnemonic} -> 0x{target:04x}")
         }
-        // VOPC and registry VOP2 forms print SRC0 as bits.
+        // VOPC, registry VOP2 and the VOP1 integer to binary32 conversions
+        // print SRC0 as bits.
         mnemonic
             if mnemonic.starts_with("v_cmp_")
+                || mnemonic.starts_with("v_cvt_f32_")
                 || VectorAluOp::ALL
                     .iter()
                     .any(|op| op.assembly_name() == mnemonic) =>

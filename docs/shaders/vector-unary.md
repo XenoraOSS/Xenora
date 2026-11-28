@@ -100,3 +100,49 @@ Metal), and the compiler refuses the 604 encodings at the same offset. The
 four forms, a partial EXEC and a literal source, and the LLVM three-way check
 covers each form with every accepted source class. Independent acceptance is
 pending. Xbox hardware agreement is unknown.
+
+## Integer to binary32 conversion
+
+Six more VOP1 forms convert an integer to binary32, defined in guide section
+12.8 (pages 138 and 139 of the 30 November 2020 guide).
+
+| Form | Result in each active lane |
+| --- | --- |
+| `v_cvt_f32_i32_e32` | `(float)S0.i`, the signed integer. |
+| `v_cvt_f32_u32_e32` | `(float)S0.u`, the unsigned integer. |
+| `v_cvt_f32_ubyte0_e32` to `v_cvt_f32_ubyte3_e32` | `(float)S0.u[8n+7:8n]`, unsigned byte n. |
+
+SRC0 takes the same sources as the integer forms, including inline integers
+`-16`-`64`, which convert as their values. Float inline constants stay outside
+the VOP1 subset. EXEC, VCC and SCC behave as for the integer forms.
+
+A byte, and any I32 or U32 magnitude below 2^24, converts exactly. From 2^24
+up the result can be inexact, and the guide gives "0.5ULP accuracy" with the
+rounding set by MODE.FP_ROUND[1:0] (guide 3.5, page 15, and 6.4, page 47).
+The compute ABI pins it to 0, round to nearest, ties to even: `2^24 + 1` gives
+`2^24`, `2^24 + 3` gives `2^24 + 4`, `0x7fffffff` gives `2^31` and
+`0xffffffff` as U32 gives `2^32`. No MODE-writing instruction is in the subset,
+so the other three round modes cannot be selected and are outside the
+contract. No input value is refused.
+
+The MSL computes every result from the register bits with unsigned integer
+operations and `clz`: no Metal float conversion runs, so its rounding mode
+and fast math cannot change a result. The CPU reference uses the host's
+integer-to-float conversion, which rounds to nearest even; the second
+interpreter finds the leading power of two and rounds the remainder of an
+integer division. Neither shares code with the MSL.
+
+The [guide-derived oracle](../../tests/validation/tests/vop1_int_to_float.rs)
+has a hand-written table of 21 inputs (0, 1, -1 and `UINT_MAX`, -16,
+`INT_MIN` and `INT_MIN + 1`, `2^31 - 1`, `2^24 - 1`, `2^24`, `2^24 + 1`,
+`2^24 + 3` and their negations, and mixed byte patterns), checked against an
+exact binary64 widening rounded once to binary32. A negative control checks
+that the table's round-up cases differ from truncation. Its 258 accepted cases
+pass on both CPU interpreters and, through the translator, on native Metal
+(Apple M4, macOS 27.2.1, API and shader validation on: 258 cases in 127
+programs). Both interpreters and the compiler refuse the 420 rejected
+encodings at the same instruction. The
+[LLVM-assembled fixture](../../fixtures/rdna2/vector-convert.s) exercises all
+six forms, a partial EXEC, an inexact literal and an inline integer, and the
+LLVM three-way check covers each form with every accepted source class.
+Independent acceptance is pending. Xbox hardware agreement is unknown.

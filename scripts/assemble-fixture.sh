@@ -20,7 +20,8 @@ fixtures='add bitwise-branch float-exact or shifts ashr
     vector-round vector-compare-f32 vop3-compare-f32
     vector-f32 vop3-float-975 llvm-xcheck
     image-sample-lz-dmask1 image-sample-lz-dmask8 image-sample-lz-dmask5
-    image-sample-lz-dmaskf image-sample-l-lod0 image-sample-l-lod1'
+    image-sample-lz-dmaskf image-sample-l-lod0 image-sample-l-lod1
+    vector-convert'
 
 for name in $fixtures; do
     "$llvm_bin/llvm-mc" -triple=amdgcn-amd-amdhsa -mcpu=gfx1030 -mattr=+wavefrontsize32 \

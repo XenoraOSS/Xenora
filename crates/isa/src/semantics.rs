@@ -129,10 +129,20 @@ pub enum Operation {
     /// MIMG `image_sample_l`: sample a 2D texture at an explicit level of
     /// detail read from the address tuple.
     ImageSampleL,
+    /// Signed or unsigned 32-bit integer to binary32 (guide 12.8).
+    ConvertToF32,
+    /// Unsigned byte 0 (bits 7:0) to binary32 (guide 12.8).
+    ConvertByte0ToF32,
+    /// Unsigned byte 1 (bits 15:8) to binary32 (guide 12.8).
+    ConvertByte1ToF32,
+    /// Unsigned byte 2 (bits 23:16) to binary32 (guide 12.8).
+    ConvertByte2ToF32,
+    /// Unsigned byte 3 (bits 31:24) to binary32 (guide 12.8).
+    ConvertByte3ToF32,
 }
 
 /// Per-lane operation with one input and one result: integer and bit forms,
-/// and binary32 rounding to an integral value.
+/// binary32 rounding to an integral value and integer to binary32 conversion.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VectorUnary {
     /// Bitwise complement.
@@ -153,6 +163,18 @@ pub enum VectorUnary {
     RoundNearestEvenF32,
     /// Binary32 rounding toward -infinity.
     FloorF32,
+    /// Signed 32-bit integer to binary32, rounding to nearest even.
+    ConvertI32ToF32,
+    /// Unsigned 32-bit integer to binary32, rounding to nearest even.
+    ConvertU32ToF32,
+    /// Unsigned byte 0 to binary32 (exact).
+    ConvertUbyte0ToF32,
+    /// Unsigned byte 1 to binary32 (exact).
+    ConvertUbyte1ToF32,
+    /// Unsigned byte 2 to binary32 (exact).
+    ConvertUbyte2ToF32,
+    /// Unsigned byte 3 to binary32 (exact).
+    ConvertUbyte3ToF32,
 }
 
 /// The per-lane integer operation a vector form lowers to. One reusable MSL
