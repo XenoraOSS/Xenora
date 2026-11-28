@@ -75,6 +75,10 @@ pub struct VexForm {
     pub memory: u8,
     /// VEX.vvvv names a register. Otherwise it must be all ones.
     pub nds: bool,
+    /// The memory operand is vector-indexed (VSIB): the SIB index names a
+    /// vector register rather than a general one, and there is no no-index
+    /// escape (Intel SDM Vol. 2A, 2.6.4).
+    pub vsib: bool,
 }
 
 /// The operands only a VEX-encoded instruction has.
@@ -203,6 +207,9 @@ pub struct MemOperand {
     /// address is truncated and zero-extended to 32 bits before any segment
     /// base is added (Intel SDM Vol. 2A, 2.2.1.6).
     pub addr32: bool,
+    /// The index names a vector register (VSIB gathering). The register number
+    /// and scale are in `index` as usual, but 4 is a valid index.
+    pub vsib: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -336,6 +343,7 @@ fn memory_operand<E, F: FnMut(u64) -> Result<u8, E>>(
     rex_b: u8,
     segment: Option<Segment>,
     addr32: bool,
+    vsib: bool,
 ) -> Result<(MemOperand, bool), DecodeError<E>> {
     let mode = modrm >> 6;
     let mut rip_relative = false;
@@ -345,15 +353,17 @@ fn memory_operand<E, F: FnMut(u64) -> Result<u8, E>>(
         disp: 0,
         segment,
         addr32,
+        vsib,
     };
     let mut low_base = modrm & 7;
     if low_base == 4 {
         let sib = cursor.u8()?;
         low_base = sib & 7;
         operand.base = Some(low_base | rex_b);
-        // Index 100b means no index unless REX.X selects R12.
+        // Index 100b means no index unless REX.X selects R12. VSIB has no such
+        // escape: the index always names a vector register.
         let index = ((sib >> 3) & 7) | rex_x;
-        operand.index = (index != 4).then_some((index, sib >> 6));
+        operand.index = (vsib || index != 4).then_some((index, sib >> 6));
     } else {
         rip_relative = mode == 0 && low_base == 5;
     }
@@ -462,7 +472,12 @@ fn decode_vex<E, F: FnMut(u64) -> Result<u8, E>>(
         } else {
             let operand;
             (operand, rip_relative) =
-                memory_operand(&mut cursor, modrm, rex_x, rex_b, segment, false)?;
+                memory_operand(&mut cursor, modrm, rex_x, rex_b, segment, false, rule.vsib)?;
+            // A gather addresses memory by vector index: the SIB byte and its
+            // index are mandatory, as the operation sections specify.
+            if rule.vsib && operand.index.is_none() {
+                return Err(unsupported);
+            }
             rm = Some(RmOperand::Mem(operand));
         }
     }
@@ -728,8 +743,15 @@ pub fn decode<E>(
                 return Err(DecodeError::Unsupported(opcode));
             }
             let operand;
-            (operand, rip_relative) =
-                memory_operand(&mut cursor, modrm, rex_x, rex_b, segment, address_size)?;
+            (operand, rip_relative) = memory_operand(
+                &mut cursor,
+                modrm,
+                rex_x,
+                rex_b,
+                segment,
+                address_size,
+                false,
+            )?;
             rm = Some(RmOperand::Mem(operand));
         }
     } else if form.immediate == Immediate::Offset {
@@ -747,6 +769,7 @@ pub fn decode<E>(
             disp: cursor.bytes(8)? as i64,
             segment,
             addr32: false,
+            vsib: false,
         }));
     } else if matches!(form.encoding, Encoding::OpReg | Encoding::OpRegImm) {
         reg = register(opcode & 7, rex_b, size);
@@ -764,6 +787,7 @@ pub fn decode<E>(
             disp: 0,
             segment,
             addr32: false,
+            vsib: false,
         }));
     }
     // LOCK is an invalid opcode unless the instruction is lockable and its

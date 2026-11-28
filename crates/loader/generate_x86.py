@@ -29,7 +29,7 @@ OPERATION_KEYS = {"reads", "writes", "undefined", "conditional", "terminator", "
 FORM_KEYS = {"op", "map", "prefix", "opcode", "count", "digit", "enc", "size", "imm", "src",
              "memory_only", "register_only", "rm", "no_rex_b", "unaligned", "lock"}
 VEX_KEYS = {"op", "map", "prefix", "opcode", "digit", "enc", "length", "w", "src", "nds",
-            "memory_only", "register_only", "aligned"}
+            "memory_only", "register_only", "aligned", "vsib"}
 GROUP_KEYS = {"map", "opcodes", "digits", "lock"}
 FLAGS = ["cf", "zf", "sf", "of", "pf", "af"]
 PREFIXES = {"", "66", "f3", "f2"}
@@ -301,7 +301,7 @@ def load_vex(entry, operations):
     form.setdefault("src", "")
     form.setdefault("w", "any")
     form.setdefault("digit", None)
-    for key in ("nds", "memory_only", "register_only", "aligned"):
+    for key in ("nds", "memory_only", "register_only", "aligned", "vsib"):
         form[key] = bool(form.get(key))
     for key, allowed in (("op", operations), ("map", VEX_MAPS), ("prefix", VEX_PREFIXES),
                          ("enc", VEX_ENCS), ("length", VEX_LENGTHS), ("w", VEX_WIDTHS),
@@ -329,6 +329,10 @@ def load_vex(entry, operations):
         fail(f"{where}: source size does not match the encoding")
     if form["aligned"] and form["src"] not in ("v", "x"):
         fail(f"{where}: alignment applies only to whole vectors")
+    # A gather's operand is a vector-indexed memory address: VSIB needs the
+    # SIB byte, never a register, and the mask in VEX.vvvv.
+    if form["vsib"] and (form["enc"] != "xmm_rm" or not form["memory_only"] or not form["nds"]):
+        fail(f"{where}: a gather is a memory-only xmm_rm form with the mask in VEX.vvvv")
     # VPMASKMOVD/Q's store form is the exception that reads VEX.vvvv: the
     # mask register, with the stored value in the ModRM register.
     if form["enc"] == "rm_xmm" and form["nds"] and not form["register_only"] and not form["memory_only"]:
@@ -341,7 +345,7 @@ def load_vex(entry, operations):
     form["vex"] = {
         "key": VEX_MAPS[form["map"]] << 10 | VEX_PREFIXES[form["prefix"]] << 8 | form["opcode"],
         "digit": form["digit"], "length": VEX_LENGTHS[form["length"]], "w": VEX_WIDTHS[form["w"]],
-        "memory": VEX_SRCS[form["src"]], "nds": form["nds"]}
+        "memory": VEX_SRCS[form["src"]], "nds": form["nds"], "vsib": form["vsib"]}
     return form
 
 
@@ -436,7 +440,8 @@ def generate(operations, forms):
         vex = forms[index]["vex"]
         out.append(f"    VexForm {{ key: 0x{key:03x}, form: {index}, digit: {optional(vex['digit'])}, "
                    f"length: {optional(vex['length'])}, wide: {optional(vex['w'])}, "
-                   f"memory: {vex['memory']}, nds: {str(vex['nds']).lower()} }},")
+                   f"memory: {vex['memory']}, nds: {str(vex['nds']).lower()}, "
+                   f"vsib: {str(vex['vsib']).lower()} }},")
     out += ["];", ""]
     for name, entries in tables.items():
         out.append(f"pub static {name}: [Entry; 256] = [")

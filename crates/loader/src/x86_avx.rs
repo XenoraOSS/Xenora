@@ -252,6 +252,77 @@ pub(crate) fn execute(
                 )?;
             }
         }
+        // The gathers load each lane from its own address: base register,
+        // sign-extended index lane times the SIB scale, plus the displacement.
+        // The mask lane of the data width decides by its sign bit; a lane is
+        // written and its mask lane cleared as it completes, so a fault in a
+        // later lane leaves exactly the partial state the manuals specify for
+        // a restart. Masked lanes are never accessed.
+        (
+            Op::Gatherdd
+            | Op::Gatherdq
+            | Op::Gatherqd
+            | Op::Gatherqq
+            | Op::Gatherdps
+            | Op::Gatherqps
+            | Op::Gatherdpd
+            | Op::Gatherqpd,
+            _,
+        ) => {
+            let bits = if vex.wide { 64 } else { 32 };
+            let ibits = if matches!(
+                insn.op,
+                Op::Gatherdd | Op::Gatherdq | Op::Gatherdps | Op::Gatherdpd
+            ) {
+                32
+            } else {
+                64
+            };
+            let width = (bits / 8) as u8;
+            let RmOperand::Mem(operand) = rm_operand(insn)? else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            if !operand.vsib {
+                return Err(ExitReason::IllegalInstruction(0));
+            }
+            let Some((vector, scale)) = operand.index else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let indices = read_ymm(cpu, vector);
+            let lanes = u32::from(length) * 8 / bits.max(ibits);
+            let base = operand.base.map_or(0, |index| cpu.gpr[usize::from(index)]);
+            let mask_target = vex.source.ok_or(ExitReason::IllegalInstruction(0))?;
+            let mut mask = first;
+            let mut result = read_ymm(cpu, reg);
+            for lane_index in 0..lanes {
+                if element(mask, bits, lane_index) >> (bits - 1) & 1 == 0 {
+                    continue;
+                }
+                let raw = element(indices, ibits, lane_index);
+                let index = if ibits == 32 {
+                    i64::from(raw as u32 as i32) as u64
+                } else {
+                    raw
+                };
+                let address = base
+                    .wrapping_add(index.wrapping_mul(1u64 << scale))
+                    .wrapping_add(operand.disp as u64);
+                let value = read_mem(memory, address, width)?;
+                let per_half = 128 / bits;
+                let half = (lane_index / per_half) as usize;
+                let lane_mask = ((1u128 << bits) - 1) << (bits * (lane_index % per_half));
+                result[half] = result[half] & !lane_mask
+                    | u128::from(value) << (bits * (lane_index % per_half));
+                // The lane is complete: it is written and its mask lane
+                // cleared before the next lane is read, so a fault leaves
+                // exactly the partial state the restart model specifies.
+                mask[half] &= !lane_mask;
+                write_ymm(cpu, mask_target, mask, length);
+                write_ymm(cpu, reg, result, (lanes * bits / 8) as u8);
+            }
+            write_ymm(cpu, reg, result, (lanes * bits / 8) as u8);
+            write_ymm(cpu, mask_target, [0, 0], length);
+        }
         // The result is a general register, memory or flags, as in the legacy form.
         (_, Encoding::RegXmm | Encoding::GprXmmImm | Encoding::RegXmmImm)
         | (

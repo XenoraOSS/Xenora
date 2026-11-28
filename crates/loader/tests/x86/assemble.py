@@ -536,6 +536,32 @@ def avx2_cases():
                     f"{op} {v}2, {v}2, {v}2", f"{op} {v}3, {v}9, {v}3"]
     # The masked moves have no register form: the ModRM operand is always
     # memory. Aliasing the mask and the value or destination is valid.
+    # The gathers index memory by vector: the SIB index is a vector register,
+    # the scale applies to the sign-extended index lane. Aliasing the mask and
+    # the destination or indices is valid. The index width and count vary with
+    # the form: doubleword indices for the 90/92 families, quadword for 91/93.
+    for op, iv, width in (
+        ("vpgatherdd", "xmm9", "dword"), ("vpgatherdd", "ymm9", "dword"),
+        ("vpgatherdq", "xmm9", "qword"), ("vpgatherqd", "xmm9", "dword"),
+        ("vpgatherqd", "ymm9", "dword"), ("vpgatherqq", "xmm9", "qword"),
+        ("vpgatherqq", "ymm9", "qword"), ("vgatherdps", "xmm9", "dword"),
+        ("vgatherdps", "ymm9", "dword"), ("vgatherdpd", "xmm9", "qword"),
+        ("vgatherqps", "xmm9", "dword"), ("vgatherqps", "ymm9", "dword"),
+        ("vgatherdpd", "xmm9", "qword"), ("vgatherqpd", "xmm9", "qword"),
+        ("vgatherqpd", "ymm9", "qword"),
+    ):
+        dv = "ymm" if op in ("vpgatherdd", "vgatherdps", "vpgatherqq", "vgatherqpd") and iv == "ymm9" else "xmm"
+        if op in ("vpgatherdd", "vgatherdps"):
+            dv = "ymm" if iv == "ymm9" else "xmm"
+        out += [f"{op} {dv}3, {width} ptr [rsi + {iv}*4], {dv}10",
+                f"{op} {dv}3, {width} ptr [rsi + {iv}*2 + 8], {dv}10",
+                f"{op} {dv}3, {width} ptr [{iv}*8], {dv}10",
+                f"{op} {dv}3, {width} ptr [rsi + {iv}*4], {dv}3"]
+    # VPGATHERDQ and VGATHERDPD at 256 bits keep their indices in an xmm
+    # vector: four doubleword lanes for four quadword loads.
+    for op, width in (("vpgatherdq", "qword"), ("vgatherdpd", "qword")):
+        out += [f"{op} ymm3, {width} ptr [rsi + xmm9*4], ymm10",
+                f"{op} ymm3, {width} ptr [rsi + xmm9*4], ymm3"]
     for op in ("vpmaskmovd", "vpmaskmovq"):
         for v in ("xmm", "ymm"):
             out += [f"{op} {v}3, {v}9, {whole[v]}",

@@ -358,6 +358,14 @@ mulpd = { faults = true, ref = "sdm MULPD" }
 mulss = { faults = true, ref = "sdm MULSS" }
 mulsd = { faults = true, ref = "sdm MULSD" }
 subps = { faults = true, ref = "sdm SUBPS" }
+gatherdd = { faults = true, ref = "sdm VPGATHERDD" }
+gatherdq = { faults = true, ref = "sdm VPGATHERDQ" }
+gatherqd = { faults = true, ref = "sdm VPGATHERQD" }
+gatherqq = { faults = true, ref = "sdm VPGATHERQQ" }
+gatherdps = { faults = true, ref = "sdm VGATHERDPS" }
+gatherqps = { faults = true, ref = "sdm VGATHERQPS" }
+gatherdpd = { faults = true, ref = "sdm VGATHERDPD" }
+gatherqpd = { faults = true, ref = "sdm VGATHERQPD" }
 subpd = { faults = true, ref = "sdm SUBPD" }
 subss = { faults = true, ref = "sdm SUBSS" }
 subsd = { faults = true, ref = "sdm SUBSD" }
@@ -5716,6 +5724,110 @@ enc = "xmm_rm"
 length = "any"
 src = "q"
 nds = true
+
+[[vex]]
+op = "gatherdd"
+map = "0f38"
+prefix = "66"
+opcode = 0x90
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+memory_only = true
+vsib = true
+
+[[vex]]
+op = "gatherdq"
+map = "0f38"
+prefix = "66"
+opcode = 0x90
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+memory_only = true
+vsib = true
+
+[[vex]]
+op = "gatherqd"
+map = "0f38"
+prefix = "66"
+opcode = 0x91
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+memory_only = true
+vsib = true
+
+[[vex]]
+op = "gatherqq"
+map = "0f38"
+prefix = "66"
+opcode = 0x91
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+memory_only = true
+vsib = true
+
+[[vex]]
+op = "gatherdps"
+map = "0f38"
+prefix = "66"
+opcode = 0x92
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+memory_only = true
+vsib = true
+
+[[vex]]
+op = "gatherdpd"
+map = "0f38"
+prefix = "66"
+opcode = 0x92
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+memory_only = true
+vsib = true
+
+[[vex]]
+op = "gatherqps"
+map = "0f38"
+prefix = "66"
+opcode = 0x93
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+memory_only = true
+vsib = true
+
+[[vex]]
+op = "gatherqpd"
+map = "0f38"
+prefix = "66"
+opcode = 0x93
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+memory_only = true
+vsib = true
 
 [[vex]]
 op = "addps"
