@@ -1314,7 +1314,7 @@ fn guest_gdk_dispatch_runs_callback_and_resumes_caller() {
     code.extend_from_slice(&[0x48, 0x89, 0x44, 0x24, 0x20]);
     set_args(&mut code, &[queue, 0, 30, output]);
     append_import_call(&mut code, 0x2060);
-    set_args(&mut code, &[queue, 0, 1000]);
+    set_args(&mut code, &[queue, 0, 1001]);
     append_import_call(&mut code, 0x21a0);
     code.extend_from_slice(&[0x48, 0x89, 0xc3]); // retain successful dispatch in RBX
     set_args(&mut code, &[queue, 0, 0]);
@@ -1728,7 +1728,19 @@ fn test_guest_synthetic_file_io_through_iat() {
     let namespace = |symbol, path| path_call(symbol, path, 0, 0, None);
     let call = |symbol, args: &[u64]| call_service_fixture(&state, "kernel32.dll", symbol, args);
     let output = PROCESS_FIXTURE_OUTPUT;
-    assert_eq!(open("C:/../outside", 0x4000_0000, 2), u64::MAX);
+    // `C:/../outside` escapes nothing: the root cannot be climbed past, so
+    // the path resolves lexically to exactly `outside` at the drive root -
+    // the clamping is the protection - and the open succeeds as it does on
+    // Windows.
+    let clamped = open("C:/../outside", 0x4000_0000, 2);
+    assert_ne!(clamped, u64::MAX);
+    assert_eq!(
+        call("CloseHandle", &[clamped])
+            .execution
+            .final_state
+            .get(Register::Rax),
+        1
+    );
     let writer = open("C:/Sample.dat", 0x4000_0000, 2);
     assert_ne!(writer, u64::MAX);
     assert_eq!(open("sample.dat", 0x8000_0000, 3), u64::MAX);
@@ -1842,7 +1854,11 @@ fn test_guest_synthetic_file_io_through_iat() {
     assert_eq!(open("C:/Data/save.bin", 0x4000_0000, 2), u64::MAX);
     assert_eq!(namespace("CreateDirectoryW", "C:/Data"), 1);
     assert_eq!(namespace("CreateDirectoryW", "C:/Data/Nested"), 1);
-    assert_eq!(namespace("CreateDirectoryW", "C:/Data/../escape"), 0);
+    // `C:/Data/../escape` is no invalid name: the dot components resolve
+    // lexically to exactly `escape` at the drive root, and the creation
+    // succeeds there.
+    assert_eq!(namespace("CreateDirectoryW", "C:/Data/../escape"), 1);
+    assert_eq!(namespace("RemoveDirectoryW", "escape"), 1);
     assert_eq!(namespace("CreateDirectoryW", "data/nested"), 0);
     let nested = open("Data/Nested/save.bin", 0x4000_0000, 2);
     assert_ne!(nested, u64::MAX);
@@ -1887,9 +1903,25 @@ fn test_guest_synthetic_file_io_through_iat() {
     let found = path_result("FindFirstFileW", "C:/Archive/*.*", find_data, 0, None);
     let search = found.execution.final_state.get(Register::Rax);
     assert_ne!(search, u64::MAX);
+    // The enumeration begins with the dot entries, exactly as the real one
+    // does: `.` is the directory itself and `..` its parent.
     assert_eq!(found.image.memory.read_u32(find_data).unwrap(), 0x10);
     assert_eq!(
         found.image.memory.read_u16(find_data + 44).unwrap(),
+        u16::from(b'.')
+    );
+    let dots = call("FindNextFileW", &[search, find_data]);
+    assert_eq!(dots.execution.final_state.get(Register::Rax), 1);
+    assert_eq!(dots.image.memory.read_u32(find_data).unwrap(), 0x10);
+    assert_eq!(
+        dots.image.memory.read_u16(find_data + 46).unwrap(),
+        u16::from(b'.')
+    );
+    let extra = call("FindNextFileW", &[search, find_data]);
+    assert_eq!(extra.execution.final_state.get(Register::Rax), 1);
+    assert_eq!(extra.image.memory.read_u32(find_data).unwrap(), 0x10);
+    assert_eq!(
+        extra.image.memory.read_u16(find_data + 44).unwrap(),
         u16::from(b'e')
     );
     assert_eq!(

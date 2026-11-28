@@ -743,6 +743,51 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
                 ..none
             })
         }
+        "bextr" | "bzhi" => {
+            // Intel SDM Vol. 2A: BEXTR takes START from control[7:0] and LEN
+            // from control[15:8] and extracts that window of the source, zero
+            // filled past its width; BZHI clears the bits at and above the
+            // index in control[7:0] and reports an out-of-range index in CF.
+            let source = read(m, places[1], bits);
+            let control = read(m, places[2], bits);
+            let low = control % 256;
+            let mut value = 0;
+            if name == "bextr" {
+                let len = (control / 256) % 256;
+                for index in 0..bits {
+                    let position = u128::from(index);
+                    if position >= low && position - low < len && bit(source, index) {
+                        value += 1u128 << (position - low);
+                    }
+                }
+                m.flags.cf = false;
+                m.flags.of = false;
+                m.flags.zf = value == 0;
+                write(m, places[0], value);
+                Outcome::Done(Undefined {
+                    sf: true,
+                    pf: true,
+                    af: true,
+                    ..none
+                })
+            } else {
+                for index in 0..bits {
+                    if u128::from(index) < low && bit(source, index) {
+                        value += 1u128 << index;
+                    }
+                }
+                m.flags.cf = low >= u128::from(bits);
+                m.flags.of = false;
+                m.flags.zf = value == 0;
+                m.flags.sf = bit(value, bits - 1);
+                write(m, places[0], value);
+                Outcome::Done(Undefined {
+                    pf: true,
+                    af: true,
+                    ..none
+                })
+            }
+        }
         "shlx" | "shrx" | "sarx" => {
             // Intel SDM Vol. 2B: the count is the second source masked to the
             // operand width; no flags are written. Bit by bit, one step at a

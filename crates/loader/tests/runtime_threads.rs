@@ -59,6 +59,8 @@ fn program(main: &str) -> Program {
     };
     let listing = if main.starts_with("main_fls_") {
         include_str!("threads/fls.txt")
+    } else if main.starts_with("main_tq_") {
+        include_str!("threads/taskqueue.txt")
     } else {
         include_str!("threads/program.txt")
     };
@@ -154,6 +156,8 @@ fn image(main: &str) -> Vec<u8> {
     for (index, name) in names.iter().enumerate() {
         let module: &[u8] = if *name == "_errno" {
             b"api-ms-win-crt-runtime-l1-1-0.dll"
+        } else if name.starts_with("XTaskQueue") {
+            b"xgameruntime.dll"
         } else {
             b"KERNEL32.dll"
         };
@@ -1331,4 +1335,138 @@ fn a_continued_run_keeps_a_condition_sleep() {
     assert_eq!(guest.clock.performance_count(), 10_000_000);
     let out = |index: u64| guest.memory.read_u64(SHARED + 8 * index).unwrap();
     assert_eq!((out(0), out(1), out(2)), (0, 1460, 1));
+}
+
+#[test]
+fn task_queue_ready_work_survives_long_and_infinite_timeouts() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_ready", quantum, BUDGET).halted();
+        assert_eq!(run.outs(8), [1, 1, 1, 1, 1, 1, 1, 2], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn a_waiting_task_queue_dispatch_does_not_block_other_guest_threads() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_cross_thread_submit", quantum, BUDGET).halted();
+        // Dispatch returned true, the callback ran on the main thread, and the
+        // worker's submit succeeded.
+        assert_eq!(run.outs(4), [1, 1, 1, 1], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn terminating_a_task_queue_wakes_an_infinite_dispatch_as_false() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_infinite_terminated", quantum, BUDGET).halted();
+        assert_eq!(run.outs(4), [0, 1, 0, 1], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn a_task_queue_dispatch_timeout_expires_without_dropping_the_queue() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_timeout", quantum, BUDGET).halted();
+        assert_eq!(run.outs(5), [0, 1, 1, 1, 1], "quantum {quantum}");
+        // The monotonic test clock starts at zero; the waiter sleeps exactly 25 ms.
+        assert_eq!(run.clock.performance_count(), 250_000, "quantum {quantum}");
+    }
+}
+
+#[test]
+fn work_submitted_after_a_task_queue_deadline_stays_queued() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_late_submit", quantum, BUDGET).halted();
+        assert_eq!(run.outs(5), [0, 1, 1, 1, 1], "quantum {quantum}");
+        assert_eq!(run.clock.performance_count(), 500_000, "quantum {quantum}");
+    }
+}
+
+#[test]
+fn task_queue_termination_orders_ports_and_completion_callback() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_termination_order", quantum, BUDGET).halted();
+        // Creation/submission/termination succeeded; the first completion poll is
+        // gated, then work, completion and termination callbacks dispatch once.
+        assert_eq!(
+            run.outs(9),
+            [1, 1, 1, 1, 0, 1, 1, 1, 0],
+            "quantum {quantum}"
+        );
+        let low = |index| run.out(index) & 0xffff_ffff;
+        assert_eq!((low(20), low(21), low(22)), (1, 2, 3), "quantum {quantum}");
+        assert_eq!(run.out(20) >> 32, 1, "work cancellation");
+        assert_eq!(run.out(21) >> 32, 1, "completion cancellation");
+    }
+}
+
+#[test]
+fn synchronous_task_queue_termination_waits_for_callback_return() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_termination_wait", quantum, BUDGET).halted();
+        assert_eq!(run.outs(6), [1, 1, 1, 1, 3, 3], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn task_queue_termination_follows_queue_object_ownership() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_termination_owner_scope", quantum, BUDGET).halted();
+        assert_eq!(
+            run.outs(11),
+            [1, 1, 1, 1, 0x8000_4004, 1, 0, 1, 1, 1, 1],
+            "quantum {quantum}"
+        );
+        assert_eq!(run.out(20) >> 32, 1, "duplicate handle cancellation");
+        assert_eq!(run.out(21) >> 32, 0, "composite remains independent");
+    }
+}
+
+#[test]
+fn threadpool_work_is_automatic_while_manual_completion_waits() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_threadpool_work_manual_completion", quantum, BUDGET).halted();
+        assert_eq!(run.outs(7), [1, 1, 1, 1, 0, 1, 2], "quantum {quantum}");
+        assert_ne!(run.out(18), u64::from(MAIN_ID), "work thread");
+        assert_eq!(run.out(19), u64::from(MAIN_ID), "completion thread");
+        assert_eq!((run.out(28), run.out(29)), (0, 0), "not cancelled");
+    }
+}
+
+#[test]
+fn threadpool_both_ports_run_without_a_manual_pump() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_threadpool_both_ports", quantum, BUDGET).halted();
+        assert_eq!((run.out(0), run.out(1), run.out(2)), (1, 1, 1));
+        assert!(run.out(3) != 0 && run.out(4) != 0, "both callbacks ran");
+        assert_ne!(run.out(18), u64::from(MAIN_ID), "work thread");
+        assert_ne!(run.out(19), u64::from(MAIN_ID), "completion thread");
+    }
+}
+
+#[test]
+fn synchronous_termination_covers_a_not_yet_started_threadpool_worker() {
+    let run = run_with("main_tq_threadpool_termination_wait", 1_000_000, BUDGET).halted();
+    assert_eq!(run.outs(6), [1, 1, 1, 1, 1, 1]);
+}
+
+#[test]
+fn unsupported_task_queue_modes_fail_explicitly() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_threadpool_unsupported_modes", quantum, BUDGET).halted();
+        assert_eq!(
+            run.outs(5),
+            [0x8007_0032, 0x8007_0032, 0x8007_0057, 0, 0x8007_0032],
+            "quantum {quantum}"
+        );
+    }
+}
+
+#[test]
+fn delayed_task_queue_work_uses_the_scheduler_clock() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_delayed_infinite", quantum, BUDGET).halted();
+        assert_eq!(run.outs(4), [1, 1, 1, 1], "quantum {quantum}");
+        assert_eq!(run.clock.performance_count(), 250_000, "quantum {quantum}");
+    }
 }

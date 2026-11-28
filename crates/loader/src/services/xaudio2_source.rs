@@ -154,11 +154,18 @@ fn discontinuity(
 fn exit_loop(
     state: &ServicesState,
     _memory: &mut GuestMemory,
-    _args: &Win64Args,
+    args: &Win64Args,
     _cpu: &CpuState,
 ) -> Result<u64, ExitReason> {
-    state.xaudio2().diagnostics.not_implemented += 1;
-    Ok(E_NOTIMPL as u64)
+    let mut xaudio2 = state.xaudio2();
+    let Some(voice) = xaudio2.voice_of(args.rcx, Kind::Source) else {
+        xaudio2.diagnostics.invalid_call += 1;
+        return Ok(XAUDIO2_E_INVALID_CALL as u64);
+    };
+    match xaudio2.runtime.exit_loop(voice, args.rdx as u32) {
+        Ok(()) => Ok(S_OK as u64),
+        Err(error) => Ok(error.hresult() as u64),
+    }
 }
 
 /// IXAudio2SourceVoice::GetState.
@@ -246,11 +253,21 @@ fn get_frequency_ratio(
 fn set_source_sample_rate(
     state: &ServicesState,
     _memory: &mut GuestMemory,
-    _args: &Win64Args,
+    args: &Win64Args,
     _cpu: &CpuState,
 ) -> Result<u64, ExitReason> {
-    state.xaudio2().diagnostics.not_implemented += 1;
-    Ok(E_NOTIMPL as u64)
+    let mut xaudio2 = state.xaudio2();
+    let Some(voice) = xaudio2.voice_of(args.rcx, Kind::Source) else {
+        xaudio2.diagnostics.invalid_call += 1;
+        return Ok(XAUDIO2_E_INVALID_CALL as u64);
+    };
+    match xaudio2
+        .runtime
+        .set_source_sample_rate(voice, args.rdx as u32)
+    {
+        Ok(()) => Ok(S_OK as u64),
+        Err(error) => Ok(error.hresult() as u64),
+    }
 }
 
 /// IXAudio2MasteringVoice::GetChannelMask.

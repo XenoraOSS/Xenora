@@ -719,6 +719,57 @@ pub fn execute(
             cpu.flags.zf = insn.op != Op::Blsmsk && value == 0;
             cpu.flags.sf = value & sign_bit(size) != 0;
         }
+        Op::Bextr | Op::Bzhi => {
+            let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let source = read_rm(cpu, memory, insn)? & mask(size);
+            let control = read_reg(
+                cpu,
+                RegOperand {
+                    index: vvvv,
+                    high: false,
+                },
+                size,
+            );
+            let bits = u64::from(8 * size);
+            let field = |width: u64| {
+                if width >= 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << width) - 1
+                }
+            };
+            if insn.op == Op::Bextr {
+                // START in control[7:0], LEN in control[15:8]; the extraction
+                // window saturates against the zero-extended source.
+                let start = control & 0xFF;
+                let len = (control >> 8) & 0xFF;
+                let value = if len == 0 || start >= bits {
+                    0
+                } else {
+                    (source >> start) & field(len.min(bits - start))
+                };
+                write_reg(cpu, insn.reg, size, value);
+                cpu.flags.cf = false;
+                cpu.flags.of = false;
+                cpu.flags.zf = value == 0;
+            } else {
+                // The low control byte is the index above which bits clear;
+                // CF reports an index outside the operand.
+                let index = control & 0xFF;
+                let value = if index < bits {
+                    source & field(index)
+                } else {
+                    source
+                };
+                write_reg(cpu, insn.reg, size, value);
+                cpu.flags.cf = index >= bits;
+                cpu.flags.of = false;
+                cpu.flags.zf = value == 0;
+                cpu.flags.sf = value & sign_bit(size) != 0;
+            }
+        }
         Op::Shlx | Op::Shrx | Op::Sarx => {
             let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
                 return Err(ExitReason::IllegalInstruction(0));

@@ -263,14 +263,11 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("AVX", 1, ECX, 28, &[0xC5, 0xFC, 0x53, 0xC1]),  // vrcpps ymm0, ymm1
         ("F16C", 1, ECX, 29, &[0xC4, 0xE2, 0x79, 0x13, 0xC1]), // vcvtph2ps xmm0, xmm1
         ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]),     // rdrand eax
-        // ANDN, BLSI, BLSMSK and BLSR are implemented; BEXTR is the BMI1
-        // witness while it stays refused.
-        ("BMI1", 7, EBX, 3, &[0xC4, 0xE2, 0x70, 0xF7, 0xC2]), // bextr eax, edx, ecx
         // AVX2 cross-lane permutes, broadcasts, blends and per-lane shifts are
         // implemented; the 256-bit immediate shuffle is still refused.
         ("AVX2", 7, EBX, 5, &[0xC5, 0xFD, 0x70, 0xC1, 0x1B]), // vpshufd ymm0, ymm1, 27
-        // SHLX, SHRX, SARX, RORX, PDEP and PEXT are implemented; MULX is the
-        // BMI2 witness while it and BZHI stay refused.
+        // SHLX, SHRX, SARX, RORX, BZHI, PDEP and PEXT are implemented; MULX
+        // is the remaining BMI2 refusal and the witness.
         ("BMI2", 7, EBX, 8, &[0xC4, 0xE2, 0x73, 0xF6, 0xC2]), // mulx eax, ecx, edx
         ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),          // rdseed eax
         ("ADX", 7, EBX, 19, &[0x66, 0x0F, 0x38, 0xF6, 0xC1]), // adcx eax, ecx
