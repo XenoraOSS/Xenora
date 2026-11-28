@@ -190,6 +190,7 @@ struct TransportState {
     stream: Option<BufReader<TcpStream>>,
     response: Option<ResponseHead>,
     write_remaining: u64,
+    chunked_upload: bool,
     body: BodyKind,
     chunked: ChunkedState,
 }
@@ -213,6 +214,7 @@ impl TransportState {
             stream: None,
             response: None,
             write_remaining: 0,
+            chunked_upload: false,
             body: BodyKind::Empty,
             chunked: ChunkedState::new(),
         }
@@ -379,10 +381,10 @@ fn parse_request_headers(
         if !valid_header_name(name) || !valid_header_value(value) {
             return Err(ERROR_INVALID_PARAMETER);
         }
-        if matches!(
-            name.to_ascii_lowercase().as_str(),
-            "host" | "content-length" | "connection" | "transfer-encoding"
-        ) {
+        let lowered = name.to_ascii_lowercase();
+        if matches!(lowered.as_str(), "host" | "content-length" | "connection")
+            || (lowered == "transfer-encoding" && !value.eq_ignore_ascii_case("chunked"))
+        {
             return Err(ERROR_NOT_SUPPORTED);
         }
         headers.push((name.to_owned(), value.to_owned()));
@@ -1477,6 +1479,20 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     if request.phase != TransportPhase::New {
                         return send.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
                     }
+                    let chunked_upload = additional
+                        .iter()
+                        .chain(request.request_headers.iter())
+                        .any(|(name, value)| {
+                            name.eq_ignore_ascii_case("transfer-encoding")
+                                && value.eq_ignore_ascii_case("chunked")
+                        });
+                    // The public contract requires absent optional data when
+                    // the Transfer-Encoding header is present, and the
+                    // Content-Length that dwTotalLength specifies cannot
+                    // combine with it.
+                    if chunked_upload && (optional_length != 0 || total_length != 0) {
+                        return send.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                    }
                     let wire = match build_request_wire(
                         &snapshot,
                         &request.request_headers,
@@ -1487,6 +1503,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                         Err(error) => return send.fail(cpu.gs_base, error, 0),
                     };
                     request.phase = TransportPhase::Busy;
+                    request.chunked_upload = chunked_upload;
                     request.write_remaining = u64::from(total_length - optional_length);
                     wire
                 };
@@ -1502,7 +1519,9 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             match result {
                 Ok(stream) => {
                     let mut transport_guard = transport.lock().expect("WinHTTP transport");
-                    transport_guard.phase = if transport_guard.write_remaining == 0 {
+                    transport_guard.phase = if transport_guard.write_remaining == 0
+                        && !transport_guard.chunked_upload
+                    {
                         TransportPhase::Sent
                     } else {
                         TransportPhase::Writing
@@ -1551,7 +1570,9 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             if transport_guard.phase != TransportPhase::Writing {
                 return write_data.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
             }
-            if u64::from(wanted) > transport_guard.write_remaining {
+            if !transport_guard.chunked_upload
+                && u64::from(wanted) > transport_guard.write_remaining
+            {
                 return write_data.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
             let result = match transport_guard.stream.as_mut() {
@@ -1560,9 +1581,11 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             };
             match result {
                 Ok(()) => {
-                    transport_guard.write_remaining -= u64::from(wanted);
-                    if transport_guard.write_remaining == 0 {
-                        transport_guard.phase = TransportPhase::Sent;
+                    if !transport_guard.chunked_upload {
+                        transport_guard.write_remaining -= u64::from(wanted);
+                        if transport_guard.write_remaining == 0 {
+                            transport_guard.phase = TransportPhase::Sent;
+                        }
                     }
                     memory.write_u32(args.r9, wanted).map_err(memory_fault)?;
                     Ok(1)
@@ -1592,7 +1615,10 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 }
             };
             let mut transport_guard = transport.lock().expect("WinHTTP transport");
-            if transport_guard.phase != TransportPhase::Sent {
+            let acceptable = transport_guard.phase == TransportPhase::Sent
+                || (transport_guard.phase == TransportPhase::Writing
+                    && transport_guard.chunked_upload);
+            if !acceptable {
                 return receive.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
             }
             let verb = transport_guard.verb.clone();
@@ -2591,6 +2617,17 @@ mod tests {
                     .position(|window| window == b"\r\n\r\n")
                     .is_some_and(|header_end| {
                         let head = String::from_utf8_lossy(&request[..header_end]);
+                        let chunked = head.split("\r\n").any(|line| {
+                            line.split_once(':').is_some_and(|(name, value)| {
+                                name.trim().eq_ignore_ascii_case("transfer-encoding")
+                                    && value.trim().eq_ignore_ascii_case("chunked")
+                            })
+                        });
+                        if chunked {
+                            return request[header_end + 4..]
+                                .windows(5)
+                                .any(|window| window == b"0\r\n\r\n");
+                        }
                         let body_length = head
                             .split("\r\n")
                             .find_map(|line| {
@@ -2731,7 +2768,7 @@ mod tests {
             ("bad name: data", ERROR_INVALID_PARAMETER),
             ("X-Okay: value\nX-Other: data", ERROR_INVALID_PARAMETER),
             ("hOsT: outside", ERROR_NOT_SUPPORTED),
-            ("Transfer-Encoding: chunked", ERROR_NOT_SUPPORTED),
+            ("Transfer-Encoding: gzip", ERROR_NOT_SUPPORTED),
         ] {
             write_wide(&mut fixture.memory, 0x2700, text);
             assert_eq!(
@@ -2917,6 +2954,101 @@ mod tests {
         assert!(text.starts_with("POST /fixture HTTP/1.1\r\n"));
         assert!(text.contains("Content-Length: 4\r\n"));
         assert!(wire.ends_with(b"data"));
+    }
+
+    #[test]
+    fn chunked_upload_writes_verbatim_and_receives_after_the_terminal_chunk() {
+        let (port, captured, server) =
+            serve_once(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+        let mut fixture = Fixture::new();
+        write_wide(&mut fixture.memory, 0x2200, "POST");
+        let request = open_loopback_request(&mut fixture, port);
+        write_wide(
+            &mut fixture.memory,
+            0x2700,
+            "Transfer-Encoding: chunked\r\n",
+        );
+        assert_eq!(
+            fixture.call(
+                "WinHttpSendRequest",
+                &[request, 0x2700, u32::MAX as u64, 0, 0, 0, 0]
+            ),
+            1
+        );
+        // The caller frames the chunks itself; the transport copies bytes verbatim.
+        for chunk in [
+            b"5\r\n" as &[u8],
+            b"hello",
+            b"\r\n6\r\n world",
+            b"\r\n0\r\n\r\n",
+        ] {
+            fixture.memory.write_bytes(0x2800, chunk).unwrap();
+            fixture.memory.write_u32(0x2904, 0).unwrap();
+            assert_eq!(
+                fixture.call(
+                    "WinHttpWriteData",
+                    &[request, 0x2800, chunk.len() as u64, 0x2904]
+                ),
+                1
+            );
+            assert_eq!(
+                fixture.memory.read_u32(0x2904).unwrap() as usize,
+                chunk.len()
+            );
+        }
+        // No fixed-length accounting completes the upload; the terminal chunk
+        // is caller data, so receiving is accepted from the writing phase.
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+        let wire = captured.lock().unwrap().clone();
+        let text = String::from_utf8_lossy(&wire);
+        assert!(text.starts_with("POST /fixture HTTP/1.1\r\n"));
+        assert!(text.contains("Transfer-Encoding: chunked\r\n"));
+        assert!(!text.contains("Content-Length"));
+        assert!(wire.ends_with(b"5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n"));
+    }
+
+    #[test]
+    fn chunked_upload_rejects_length_combinations_and_extra_writes() {
+        let (port, _captured, server) =
+            serve_once(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n");
+        let mut fixture = Fixture::new();
+        write_wide(&mut fixture.memory, 0x2200, "POST");
+        let request = open_loopback_request(&mut fixture, port);
+        write_wide(
+            &mut fixture.memory,
+            0x2700,
+            "Transfer-Encoding: chunked\r\n",
+        );
+        fixture.memory.write_bytes(0x2800, b"data").unwrap();
+        // Optional data or a declared total length cannot combine with the
+        // Transfer-Encoding header, as the WinHttpSendRequest reference states.
+        for args in [
+            [request, 0x2700, u32::MAX as u64, 0x2800, 4, 4, 0],
+            [request, 0x2700, u32::MAX as u64, 0, 0, 8, 0],
+        ] {
+            assert_eq!(fixture.call("WinHttpSendRequest", &args), 0);
+            assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
+        }
+        // A fixed-length request still completes and refuses further writes.
+        write_wide(&mut fixture.memory, 0x2700, "X-Fixture: yes\r\n");
+        assert_eq!(
+            fixture.call(
+                "WinHttpSendRequest",
+                &[request, 0x2700, u32::MAX as u64, 0x2800, 4, 4, 0]
+            ),
+            1
+        );
+        assert_eq!(
+            fixture.call("WinHttpWriteData", &[request, 0x2800, 1, 0x2904]),
+            0
+        );
+        assert_eq!(
+            fixture.state.last_error(0),
+            ERROR_WINHTTP_INCORRECT_HANDLE_STATE
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
     }
 
     #[test]
