@@ -180,6 +180,8 @@ pub const CPUID_CMOV: u32 = 1 << 15;
 pub const CPUID_CMPXCHG16B: u32 = 1 << 13;
 /// CPUID leaf 1, ECX: POPCNT.
 pub const CPUID_POPCNT: u32 = 1 << 23;
+/// CPUID leaf 7, EBX: BMI1.
+pub const CPUID_BMI1: u32 = 1 << 3;
 /// CPUID leaf 0x8000_0001, ECX: LAHF and SAHF in 64-bit mode.
 pub const CPUID_LAHF_SAHF: u32 = 1;
 /// CPUID leaf 0x8000_0001, ECX: LZCNT.
@@ -191,13 +193,14 @@ pub const CPUID_LONG_MODE: u32 = 1 << 29;
 ///
 /// The table is fixed and never reads the host. It names a synthetic
 /// processor, not an Intel or AMD product, and sets a feature bit only when
-/// every instruction of that feature is implemented. A leaf that is not
-/// listed returns zeros.
-pub fn cpuid(leaf: u32, _subleaf: u32) -> [u32; 4] {
+/// every instruction of that feature is implemented. Leaves 2 through 6 are
+/// zero because Xenora models no cache, topology, monitor or power state. A
+/// leaf or subleaf that is not listed returns zeros.
+pub fn cpuid(leaf: u32, subleaf: u32) -> [u32; 4] {
     let word = |text: &[u8; 4]| u32::from_le_bytes(*text);
     match leaf {
         // Highest basic leaf, then "Xenora guest" in EBX, EDX, ECX.
-        0 => [1, word(b"Xeno"), word(b"uest"), word(b"ra g")],
+        0 => [7, word(b"Xeno"), word(b"uest"), word(b"ra g")],
         // No family, model or stepping: this is no shipped processor.
         1 => [
             0,
@@ -205,6 +208,10 @@ pub fn cpuid(leaf: u32, _subleaf: u32) -> [u32; 4] {
             CPUID_CMPXCHG16B | CPUID_POPCNT,
             CPUID_TSC | CPUID_CX8 | CPUID_CMOV,
         ],
+        // Structured extended features. EAX is the maximum subleaf. Only
+        // BMI1 is reported because all six of its instruction families run;
+        // AVX2, BMI2 and the other leaf-7 features remain partial or absent.
+        7 if subleaf == 0 => [0, CPUID_BMI1, 0, 0],
         // Highest extended leaf.
         0x8000_0000 => [0x8000_0001, 0, 0, 0],
         0x8000_0001 => [0, 0, CPUID_LAHF_SAHF | CPUID_LZCNT, CPUID_LONG_MODE],
