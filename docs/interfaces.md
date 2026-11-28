@@ -2348,6 +2348,11 @@ both to `--export-guest-file` before the guest arguments. The CLI exports at
 most 16 MiB from a successful run and preserves any existing destination.
 The Run panel shows export errors in the worker output.
 
+The CLI resolves `.` and `..` in export sources against the synthetic C:
+root. A parent component at that root stays there. For example,
+`C:\scratch\..\guest-export.bin` names the same file as
+`C:\guest-export.bin` even if `scratch` has never existed.
+
 To exercise this path with the original file-writing guest, build it with
 `sh tests/compat_fixtures/build-guest-file-export.sh "$PWD/artifacts/app-guest-export"`,
 then set `XENORA_GUEST_FILE_EXPORT_FIXTURE="$PWD/artifacts/app-guest-export/guest-file-export.exe"`
