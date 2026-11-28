@@ -12,12 +12,12 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 976 |
+| Canonical services | 978 |
 | Typed registry services | 302 |
-| Manual code registrations | 674 |
+| Manual code registrations | 676 |
 | Canonical libraries | 25 |
 | Implemented | 247 |
-| Partial | 729 |
+| Partial | 731 |
 | Stub | 0 |
 | Data-import services | 7 |
 | Aliases of every kind | 955 |
@@ -44,7 +44,7 @@ independent acceptance or compatibility claims.
 | <code>psapi.dll</code> | <code>windows-system</code> | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
 | <code>ucrtbase.dll</code> | <code>c-runtime</code> | 306 | 211 | 95 | 0 | 104 | 202 | 0 | 10 |
 | <code>user32.dll</code> | <code>other</code> | 10 | 0 | 10 | 0 | 0 | 10 | 0 | 0 |
-| <code>winhttp.dll</code> | <code>other</code> | 16 | 0 | 16 | 0 | 0 | 16 | 0 | 0 |
+| <code>winhttp.dll</code> | <code>other</code> | 18 | 0 | 18 | 0 | 0 | 18 | 0 | 0 |
 | <code>ws2_32.dll</code> | <code>windows-networking</code> | 65 | 0 | 65 | 0 | 6 | 59 | 0 | 6 |
 | <code>xaudio2_9.dll</code> | <code>other</code> | 2 | 2 | 0 | 0 | 0 | 2 | 0 | 0 |
 | <code>xenora_fixture.dll</code> | <code>xenora-fixture</code> | 22 | 0 | 22 | 0 | 22 | 0 | 0 | 20 |

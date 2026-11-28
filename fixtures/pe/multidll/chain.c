@@ -7,6 +7,9 @@
 
 __declspec(dllimport) unsigned int XenoraAdd(unsigned int a, unsigned int b);
 __declspec(dllimport) unsigned int XenoraMathInit;
+#ifdef XENORA_EXIT_ATTACH
+__declspec(dllimport) void ExitProcess(unsigned int status);
+#endif
 
 __declspec(dllexport) unsigned int XenoraChainInit;
 __declspec(dllexport) unsigned int XenoraChainDetach;
@@ -26,6 +29,12 @@ int DllMain(void *module, unsigned int reason, void *reserved) {
     (void)module;
     (void)reserved;
     if (reason == 1) {
+#ifdef XENORA_REJECT_ATTACH
+        return 0;
+#endif
+#ifdef XENORA_EXIT_ATTACH
+        ExitProcess(33);
+#endif
         XenoraChainInit = XenoraMathInit == 1 ? 2 : 0xBAD;
     } else if (reason == 0) {
         XenoraChainDetach = 1;

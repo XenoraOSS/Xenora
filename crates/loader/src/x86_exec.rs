@@ -719,6 +719,57 @@ pub fn execute(
             cpu.flags.zf = insn.op != Op::Blsmsk && value == 0;
             cpu.flags.sf = value & sign_bit(size) != 0;
         }
+        Op::Bextr | Op::Bzhi => {
+            let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let source = read_rm(cpu, memory, insn)? & mask(size);
+            let control = read_reg(
+                cpu,
+                RegOperand {
+                    index: vvvv,
+                    high: false,
+                },
+                size,
+            );
+            let bits = u64::from(8 * size);
+            let field = |width: u64| {
+                if width >= 64 {
+                    u64::MAX
+                } else {
+                    (1u64 << width) - 1
+                }
+            };
+            if insn.op == Op::Bextr {
+                // START in control[7:0], LEN in control[15:8]; the extraction
+                // window saturates against the zero-extended source.
+                let start = control & 0xFF;
+                let len = (control >> 8) & 0xFF;
+                let value = if len == 0 || start >= bits {
+                    0
+                } else {
+                    (source >> start) & field(len.min(bits - start))
+                };
+                write_reg(cpu, insn.reg, size, value);
+                cpu.flags.cf = false;
+                cpu.flags.of = false;
+                cpu.flags.zf = value == 0;
+            } else {
+                // The low control byte is the index above which bits clear;
+                // CF reports an index outside the operand.
+                let index = control & 0xFF;
+                let value = if index < bits {
+                    source & field(index)
+                } else {
+                    source
+                };
+                write_reg(cpu, insn.reg, size, value);
+                cpu.flags.cf = index >= bits;
+                cpu.flags.of = false;
+                cpu.flags.zf = value == 0;
+                cpu.flags.sf = value & sign_bit(size) != 0;
+            }
+        }
         Op::Shlx | Op::Shrx | Op::Sarx => {
             let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
                 return Err(ExitReason::IllegalInstruction(0));
@@ -753,6 +804,39 @@ pub fn execute(
                 (value >> count) | (value << (bits - count))
             } & mask(size);
             write_reg(cpu, insn.reg, size, result);
+        }
+        Op::Mulx => {
+            // Intel SDM Vol. 2B MULX: the ModRM r/m operand is the unsigned
+            // multiplicand, RDX is the implicit unsigned multiplier, the
+            // ModRM register receives the high product and VEX.vvvv receives
+            // the low product. Read both sources before either destination
+            // so aliasing cannot change the product. The low write comes
+            // first: when the first two operands are the same register the
+            // SDM says that register holds the high half. No flag is written.
+            let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let source = read_rm(cpu, memory, insn)? & mask(size);
+            let multiplier = read_reg(
+                cpu,
+                RegOperand {
+                    index: RDX as u8,
+                    high: false,
+                },
+                size,
+            );
+            let product = u128::from(source) * u128::from(multiplier);
+            let bits = 8 * u32::from(size);
+            write_reg(
+                cpu,
+                RegOperand {
+                    index: vvvv,
+                    high: false,
+                },
+                size,
+                product as u64,
+            );
+            write_reg(cpu, insn.reg, size, (product >> bits) as u64);
         }
         Op::Push => {
             let value = match insn.encoding {

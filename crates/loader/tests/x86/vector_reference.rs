@@ -441,7 +441,7 @@ fn carryless_product(a: u64, b: u64) -> u128 {
         if b >> index & 1 != 0 {
             for bit in 0..64 {
                 if a >> bit & 1 != 0 {
-                    product |= 1u128 << (bit + index);
+                    product ^= 1u128 << (bit + index);
                 }
             }
         }

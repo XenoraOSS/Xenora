@@ -100,10 +100,25 @@ def cases():
         for op in ("blsi", "blsmsk", "blsr"):
             out += [f"{op} {reg(3, bits)}, {reg(9, bits)}", f"{op} {reg(10, bits)}, {mem(bits)}",
                     f"{op} {reg(2, bits)}, {reg(2, bits)}"]
+        for op in ("bextr", "bzhi"):
+            out += [f"{op} {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
+                    f"{op} {reg(10, bits)}, {mem(bits)}, {reg(12, bits)}",
+                    f"{op} {reg(2, bits)}, {reg(2, bits)}, {reg(2, bits)}",
+                    f"{op} {reg(5, bits)}, {reg(9, bits)}, {reg(5, bits)}"]
         for op in ("shlx", "shrx", "sarx"):
             out += [f"{op} {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
                     f"{op} {reg(10, bits)}, {mem(bits)}, {reg(12, bits)}",
                     f"{op} {reg(2, bits)}, {reg(2, bits)}, {reg(2, bits)}"]
+        # MULX writes the high product to the first destination and the low
+        # product to VEX.vvvv, taking the multiplicand from the last operand.
+        # The third case aliases the high destination with RDX; the fifth
+        # makes both destinations the same register, where the SDM says the
+        # high half wins.
+        out += [f"mulx {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
+                f"mulx {reg(10, bits)}, {reg(12, bits)}, {mem(bits)}",
+                f"mulx {reg(2, bits)}, {reg(9, bits)}, {reg(2, bits)}",
+                f"mulx {reg(10, bits)}, {reg(15, bits)}, {reg(1, bits)}",
+                f"mulx {reg(3, bits)}, {reg(3, bits)}, {reg(1, bits)}"]
         for count in (0, 1, 7, bits - 1, bits, bits + 5):
             out += [f"rorx {reg(3, bits)}, {reg(9, bits)}, {count}",
                     f"rorx {reg(10, bits)}, {mem(bits)}, {count}"]
@@ -527,6 +542,20 @@ def fma_cases():
     return list(dict.fromkeys(out))
 
 
+def f16c_cases():
+    place = " ptr [rsi + 4*rdi + 16]"
+    quad, xmm = "qword" + place, "xmmword" + place
+    out = []
+    # imm8[1:0] is the rounding mode when imm8[2] is clear; imm8[2] selects
+    # MXCSR.RC; imm8[7:3] is ignored.
+    for n in (0, 1, 2, 3, 4, 7, 8, 255):
+        out += [f"vcvtps2ph xmm3, xmm9, {n}", f"vcvtps2ph {quad}, xmm9, {n}",
+                f"vcvtps2ph xmm3, ymm9, {n}", f"vcvtps2ph {xmm}, ymm9, {n}"]
+    out += ["vcvtph2ps xmm3, xmm9", f"vcvtph2ps xmm3, {quad}",
+            "vcvtph2ps ymm3, xmm9", f"vcvtph2ps ymm3, {xmm}"]
+    return list(dict.fromkeys(out))
+
+
 def assemble(lines):
     with tempfile.TemporaryDirectory() as directory:
         source, obj = Path(directory, "a.s"), Path(directory, "a.o")
@@ -553,7 +582,8 @@ def main(argv):
                         ("float.txt", float_cases()), ("avx.txt", avx_cases()),
                         ("avx_forms.txt", avx_form_cases()),
                         ("fma.txt", fma_cases()),
-                        ("avx2.txt", avx2_cases())):
+                        ("avx2.txt", avx2_cases()),
+                        ("f16c.txt", f16c_cases())):
         text = assemble(lines)
         if argv[1] == "generate":
             (HERE / name).write_text(text)

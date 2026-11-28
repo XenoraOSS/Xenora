@@ -265,7 +265,7 @@ fn pclmulqdq_known_products_match_selected_qwords() {
         machine.xmm[9][..8].copy_from_slice(&b_low.to_le_bytes());
         machine.xmm[9][8..].copy_from_slice(&b_high.to_le_bytes());
         let (cpu, _) = load(&machine, &case.code, MemoryPermissions::READ_WRITE);
-        let mut expected = cpu;
+        let mut expected = cpu.clone();
         expected.rip += case.code.len() as u64;
         let mut product = [0; 16];
         product[..8].copy_from_slice(&low.to_le_bytes());
@@ -481,7 +481,7 @@ fn unsupported_vector_encodings_are_rejected() {
         &[0x66, 0x0F, 0x38, 0x13, 0xC1],             // unassigned without VEX
         &[0x66, 0x0F, 0x3A, 0x18, 0xC1, 0x00],       // unassigned without VEX
         &[0x66, 0x0F, 0x38, 0xDC, 0xC1],             // aesenc
-        &[0x66, 0x0F, 0x3A, 0x44, 0xC1, 0x00],       // pclmulqdq
+        &[0x66, 0x0F, 0x3A, 0x44, 0xC1, 0x08],       // reserved pclmulqdq imm8
         &[0x66, 0x0F, 0x3A, 0x00, 0xC1, 0x00],       // unassigned without VEX
         &[0x66, 0x0F, 0x39, 0x00, 0xC1],             // 0F 39 is no escape
         &[0xC5, 0xFD, 0x70, 0xC1, 0x1B],             // vpshufd ymm (AVX2)

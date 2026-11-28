@@ -1,0 +1,36 @@
+c4 63 79 1d cb 00 | vcvtps2ph xmm3, xmm9, 0
+c4 63 79 1d 4c be 10 00 | vcvtps2ph qword ptr [rsi + 4*rdi + 16], xmm9, 0
+c4 63 7d 1d cb 00 | vcvtps2ph xmm3, ymm9, 0
+c4 63 7d 1d 4c be 10 00 | vcvtps2ph xmmword ptr [rsi + 4*rdi + 16], ymm9, 0
+c4 63 79 1d cb 01 | vcvtps2ph xmm3, xmm9, 1
+c4 63 79 1d 4c be 10 01 | vcvtps2ph qword ptr [rsi + 4*rdi + 16], xmm9, 1
+c4 63 7d 1d cb 01 | vcvtps2ph xmm3, ymm9, 1
+c4 63 7d 1d 4c be 10 01 | vcvtps2ph xmmword ptr [rsi + 4*rdi + 16], ymm9, 1
+c4 63 79 1d cb 02 | vcvtps2ph xmm3, xmm9, 2
+c4 63 79 1d 4c be 10 02 | vcvtps2ph qword ptr [rsi + 4*rdi + 16], xmm9, 2
+c4 63 7d 1d cb 02 | vcvtps2ph xmm3, ymm9, 2
+c4 63 7d 1d 4c be 10 02 | vcvtps2ph xmmword ptr [rsi + 4*rdi + 16], ymm9, 2
+c4 63 79 1d cb 03 | vcvtps2ph xmm3, xmm9, 3
+c4 63 79 1d 4c be 10 03 | vcvtps2ph qword ptr [rsi + 4*rdi + 16], xmm9, 3
+c4 63 7d 1d cb 03 | vcvtps2ph xmm3, ymm9, 3
+c4 63 7d 1d 4c be 10 03 | vcvtps2ph xmmword ptr [rsi + 4*rdi + 16], ymm9, 3
+c4 63 79 1d cb 04 | vcvtps2ph xmm3, xmm9, 4
+c4 63 79 1d 4c be 10 04 | vcvtps2ph qword ptr [rsi + 4*rdi + 16], xmm9, 4
+c4 63 7d 1d cb 04 | vcvtps2ph xmm3, ymm9, 4
+c4 63 7d 1d 4c be 10 04 | vcvtps2ph xmmword ptr [rsi + 4*rdi + 16], ymm9, 4
+c4 63 79 1d cb 07 | vcvtps2ph xmm3, xmm9, 7
+c4 63 79 1d 4c be 10 07 | vcvtps2ph qword ptr [rsi + 4*rdi + 16], xmm9, 7
+c4 63 7d 1d cb 07 | vcvtps2ph xmm3, ymm9, 7
+c4 63 7d 1d 4c be 10 07 | vcvtps2ph xmmword ptr [rsi + 4*rdi + 16], ymm9, 7
+c4 63 79 1d cb 08 | vcvtps2ph xmm3, xmm9, 8
+c4 63 79 1d 4c be 10 08 | vcvtps2ph qword ptr [rsi + 4*rdi + 16], xmm9, 8
+c4 63 7d 1d cb 08 | vcvtps2ph xmm3, ymm9, 8
+c4 63 7d 1d 4c be 10 08 | vcvtps2ph xmmword ptr [rsi + 4*rdi + 16], ymm9, 8
+c4 63 79 1d cb ff | vcvtps2ph xmm3, xmm9, 255
+c4 63 79 1d 4c be 10 ff | vcvtps2ph qword ptr [rsi + 4*rdi + 16], xmm9, 255
+c4 63 7d 1d cb ff | vcvtps2ph xmm3, ymm9, 255
+c4 63 7d 1d 4c be 10 ff | vcvtps2ph xmmword ptr [rsi + 4*rdi + 16], ymm9, 255
+c4 c2 79 13 d9 | vcvtph2ps xmm3, xmm9
+c4 e2 79 13 5c be 10 | vcvtph2ps xmm3, qword ptr [rsi + 4*rdi + 16]
+c4 c2 7d 13 d9 | vcvtph2ps ymm3, xmm9
+c4 e2 7d 13 5c be 10 | vcvtph2ps ymm3, xmmword ptr [rsi + 4*rdi + 16]

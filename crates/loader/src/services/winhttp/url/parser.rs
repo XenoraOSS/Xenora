@@ -78,7 +78,7 @@ fn find(units: &[u16], ascii: u8) -> Option<usize> {
     units.iter().position(|&unit| unit == u16::from(ascii))
 }
 
-fn parse_scheme(scheme: &[u16]) -> Result<(u32, u16), u32> {
+pub(super) fn parse_scheme(scheme: &[u16]) -> Result<(u32, u16), u32> {
     let mut ascii = scheme.iter().copied().map(u8::try_from);
     if !ascii
         .next()

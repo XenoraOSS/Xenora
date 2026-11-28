@@ -1913,7 +1913,10 @@ fn test_guest_synthetic_file_io_through_iat() {
     let dots = call("FindNextFileW", &[search, find_data]);
     assert_eq!(dots.execution.final_state.get(Register::Rax), 1);
     assert_eq!(dots.image.memory.read_u32(find_data).unwrap(), 0x10);
-    assert_eq!(dots.image.memory.read_u16(find_data + 46).unwrap(), u16::from(b'.'));
+    assert_eq!(
+        dots.image.memory.read_u16(find_data + 46).unwrap(),
+        u16::from(b'.')
+    );
     let extra = call("FindNextFileW", &[search, find_data]);
     assert_eq!(extra.execution.final_state.get(Register::Rax), 1);
     assert_eq!(extra.image.memory.read_u32(find_data).unwrap(), 0x10);

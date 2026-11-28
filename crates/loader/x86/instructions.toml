@@ -111,10 +111,13 @@ andn = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm ANDN" }
 blsi = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSI" }
 blsmsk = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSMSK" }
 blsr = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSR" }
+bextr = { writes = "cf zf of", undefined = "sf pf af", ref = "sdm BEXTR" }
+bzhi = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BZHI" }
 shlx = { ref = "sdm SHLX/SHRX/SARX" }
 shrx = { ref = "sdm SHLX/SHRX/SARX" }
 sarx = { ref = "sdm SHLX/SHRX/SARX" }
 rorx = { ref = "sdm RORX" }
+mulx = { ref = "sdm MULX" }
 push = { ref = "sdm PUSH" }
 pop = { ref = "sdm POP" }
 leave = { ref = "sdm LEAVE" }
@@ -381,6 +384,8 @@ cvtsi2sd = { faults = true, ref = "sdm CVTSI2SD" }
 cvttsd2si = { faults = true, ref = "sdm CVTTSD2SI" }
 cvtsd2si = { faults = true, ref = "sdm CVTSD2SI" }
 
+vcvtph2ps = { faults = true, ref = "sdm VCVTPH2PS" }
+vcvtps2ph = { faults = true, ref = "sdm VCVTPS2PH" }
 vpermd = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
 vpermps = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
 vpermq = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
@@ -6096,6 +6101,22 @@ length = "128"
 nds = true
 
 [[vex]]
+op = "bextr"
+map = "0f38"
+opcode = 0xF7
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "bzhi"
+map = "0f38"
+opcode = 0xF5
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
 op = "blsi"
 map = "0f38"
 opcode = 0xF3
@@ -6156,6 +6177,19 @@ prefix = "f2"
 opcode = 0xF0
 enc = "reg_rm_ub"
 length = "128"
+
+# MULX writes the low product to the ModRM register and the high product to
+# VEX.vvvv. The ModRM r/m operand is the multiplicand and RDX is the implicit
+# multiplier. LLVM's encoding for `mulx r10d, r12d, [rsi + 4*rdi + 16]` uses
+# VEX.F2.0F38.F6 with VEX.vvvv naming the high destination.
+[[vex]]
+op = "mulx"
+map = "0f38"
+prefix = "f2"
+opcode = 0xF6
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
 
 [[vex]]
 op = "fmaddsub132p"
@@ -7007,3 +7041,46 @@ length = "any"
 w = "0"
 src = "v"
 nds = true
+
+# F16C. The source of VCVTPH2PS is 64 bits at VEX.128 and 128 bits at VEX.256;
+# VCVTPS2PH writes the same widths. VEX.W must be zero and VEX.vvvv must be
+# 1111b, as the operation sections require.
+[[vex]]
+op = "vcvtph2ps"
+map = "0f38"
+prefix = "66"
+opcode = 0x13
+enc = "xmm_rm"
+length = "128"
+w = "0"
+src = "q"
+
+[[vex]]
+op = "vcvtph2ps"
+map = "0f38"
+prefix = "66"
+opcode = 0x13
+enc = "xmm_rm"
+length = "256"
+w = "0"
+src = "x"
+
+[[vex]]
+op = "vcvtps2ph"
+map = "0f3a"
+prefix = "66"
+opcode = 0x1D
+enc = "rm_xmm_imm"
+length = "128"
+w = "0"
+src = "q"
+
+[[vex]]
+op = "vcvtps2ph"
+map = "0f3a"
+prefix = "66"
+opcode = 0x1D
+enc = "rm_xmm_imm"
+length = "256"
+w = "0"
+src = "x"
