@@ -23,7 +23,7 @@ use crate::cpu::ExitReason;
 use crate::imports::{
     CallbackStart, CallbackStep, CallbackTask, ImportRegistry, ServiceStatus, Win64Args,
 };
-use crate::memory::GuestMemory;
+use crate::memory::{GuestMemory, MemoryError};
 use crate::runtime::HResult;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -53,7 +53,6 @@ const E_NOT_SUPPORTED: u64 = 0x8007_0032;
 const E_NO_TASK_QUEUE: u64 = 0x8007_01AB;
 
 /// The `XAsyncBlock` field offsets, per the documented layout.
-const BLOCK_QUEUE: u64 = 0;
 const BLOCK_CALLBACK: u64 = 16;
 /// The `internal` space the provider data block is written into.
 const BLOCK_INTERNAL: u64 = 24;
@@ -85,6 +84,12 @@ impl AsyncOperations {
     }
 }
 
+fn block_field(block: u64, offset: u64) -> Result<u64, ExitReason> {
+    block
+        .checked_add(offset)
+        .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))
+}
+
 /// Write the provider data block into the operation's internal space:
 /// `async` is the block itself, `context` never changes after begin, and
 /// the buffer fields are meaningful only for a GetResult invocation.
@@ -94,14 +99,18 @@ fn write_provider_data(
     buffer_size: u64,
     buffer: u64,
     context: u64,
-) -> Result<(), ExitReason> {
-    let data = block + BLOCK_INTERNAL;
+) -> Result<u64, ExitReason> {
+    let address = block_field(block, BLOCK_INTERNAL)?;
+    let mut data = [0; 32];
+    let (fields, _) = data.as_chunks_mut::<8>();
+    for (slot, value) in fields.iter_mut().zip([block, buffer_size, buffer, context]) {
+        *slot = value.to_le_bytes();
+    }
+    // GuestMemory validates the entire span before modifying any bytes.
     memory
-        .write_u64(data, block)
-        .and_then(|()| memory.write_u64(data + 8, buffer_size))
-        .and_then(|()| memory.write_u64(data + 16, buffer))
-        .and_then(|()| memory.write_u64(data + 24, context))
-        .map_err(ExitReason::MemoryFault)
+        .write_bytes(address, &data)
+        .map_err(ExitReason::MemoryFault)?;
+    Ok(address)
 }
 
 /// The queue an operation schedules on: the block's own when it names one,
@@ -155,13 +164,16 @@ fn xasync_begin_start(
     if block == 0 || provider == 0 || memory.fetch_instruction_byte(provider).is_err() {
         return Ok(CallbackStart::Return(E_INVALIDARG));
     }
-    let block_queue = memory
-        .read_u64(block + BLOCK_QUEUE)
+    let mut header = [[0; 8]; BLOCK_INTERNAL as usize / 8];
+    memory
+        .read_bytes(block, header.as_flattened_mut())
         .map_err(ExitReason::MemoryFault)?;
+    let block_queue = u64::from_le_bytes(header[0]);
     let queue = match resolve_queue(state, block_queue) {
         Ok(queue) => queue,
         Err(error) => return Ok(CallbackStart::Return(error)),
     };
+    let data = write_provider_data(memory, block, 0, 0, context)?;
     {
         let mut ops = state.xasync_ops.lock().expect("XAsync operation table");
         ops.ops.insert(
@@ -176,13 +188,12 @@ fn xasync_begin_start(
             },
         );
     }
-    write_provider_data(memory, block, 0, 0, context)?;
     Ok(CallbackStart::Call {
         task: Box::new(BeginTask {
             state: Arc::clone(state),
         }),
         entry: provider,
-        args: [OP_BEGIN, block + BLOCK_INTERNAL, 0, 0],
+        args: [OP_BEGIN, data, 0, 0],
     })
 }
 
@@ -231,15 +242,9 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     _ => return Ok(E_INVALIDARG),
                 }
             };
+            let data = block_field(block, BLOCK_INTERNAL)?;
             let mut queues = schedule.gdk_queues.lock().expect("GDK queue handle table");
-            match queues.schedule_provider(
-                block,
-                queue,
-                provider,
-                block + BLOCK_INTERNAL,
-                OP_DO_WORK,
-                delay,
-            ) {
+            match queues.schedule_provider(block, queue, provider, data, OP_DO_WORK, delay) {
                 Ok(()) => {
                     schedule.gdk_queue_changed.notify_all();
                     Ok(HResult::OK.guest_return())
@@ -266,7 +271,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 return Ok(0);
             }
             let callback = memory
-                .read_u64(block + BLOCK_CALLBACK)
+                .read_u64(block_field(block, BLOCK_CALLBACK)?)
                 .map_err(ExitReason::MemoryFault)?;
             let queue = {
                 let mut ops = complete.xasync_ops.lock().expect("XAsync operation table");
@@ -345,11 +350,11 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     _ => return Ok(CallbackStart::Return(0)),
                 }
             };
-            write_provider_data(memory, block, 0, 0, context)?;
+            let data = write_provider_data(memory, block, 0, 0, context)?;
             Ok(CallbackStart::Call {
                 task: Box::new(ProviderCallTask { answer: 0 }),
                 entry: provider,
-                args: [OP_CANCEL, block + BLOCK_INTERNAL, 0, 0],
+                args: [OP_CANCEL, data, 0, 0],
             })
         },
     );
@@ -434,7 +439,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     .map_err(ExitReason::MemoryFault)?;
             }
             let _ = result;
-            write_provider_data(memory, block, buffer_size, buffer, context)?;
+            let data = write_provider_data(memory, block, buffer_size, buffer, context)?;
             Ok(CallbackStart::Call {
                 task: Box::new(GetResultTask {
                     block,
@@ -445,7 +450,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     answer: 0,
                 }),
                 entry: provider,
-                args: [OP_GET_RESULT, block + BLOCK_INTERNAL, 0, 0],
+                args: [OP_GET_RESULT, data, 0, 0],
             })
         },
     );
@@ -478,11 +483,11 @@ impl CallbackTask for GetResultTask {
                 return Ok(CallbackStep::Return(self.answer));
             }
             // Cleanup is the operation's final provider invocation.
-            write_provider_data(memory, self.block, 0, 0, self.context)?;
+            let data = write_provider_data(memory, self.block, 0, 0, self.context)?;
             self.step = 1;
             return Ok(CallbackStep::Call {
                 entry: self.provider,
-                args: [OP_CLEANUP, self.block + BLOCK_INTERNAL, 0, 0],
+                args: [OP_CLEANUP, data, 0, 0],
             });
         }
         self.state
@@ -497,4 +502,135 @@ impl CallbackTask for GetResultTask {
 
 fn guest_hresult_err(error: u32) -> u64 {
     HResult::from_win32(error).guest_return()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cpu::CpuState;
+    use crate::import_table::ImportName;
+    use crate::memory::MemoryPermissions;
+    use crate::services::{MockClock, register_standard_services};
+
+    #[test]
+    fn complete_refuses_an_overflowing_callback_address() {
+        let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+        let mut registry = ImportRegistry::new();
+        register_standard_services(&mut registry, state);
+        let complete = registry
+            .resolve(MODULE, &ImportName::Name("XAsyncComplete".into()))
+            .unwrap();
+        let mut cpu = CpuState::new(0, 0);
+        let mut args = Win64Args::new(&cpu);
+        args.rcx = u64::MAX;
+        assert_eq!(
+            (complete.handler)(&args, &mut cpu, &mut GuestMemory::new()),
+            Err(ExitReason::MemoryFault(MemoryError::Overflow))
+        );
+    }
+
+    fn begin_fixture() -> (Arc<ServicesState>, GuestMemory, Win64Args, u64) {
+        let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+        let mut registry = ImportRegistry::new();
+        register_standard_services(&mut registry, Arc::clone(&state));
+        let create_queue = registry
+            .resolve(MODULE, &ImportName::Name("XTaskQueueCreate".into()))
+            .unwrap();
+
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x1000, 0x1000, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        let provider = 0x3000;
+        memory
+            .map_region_with_data(provider, 0x1000, MemoryPermissions::READ_EXECUTE, &[0xc3])
+            .unwrap();
+
+        let mut cpu = CpuState::new(0, 0x1100);
+        let mut args = Win64Args::new(&cpu);
+        let queue_slot = 0x1200;
+        args.r8 = queue_slot;
+        assert_eq!((create_queue.handler)(&args, &mut cpu, &mut memory), Ok(0));
+        let queue = memory.read_u64(queue_slot).unwrap();
+        memory.write_u64(args.rsp + 40, provider).unwrap();
+        args.rdx = 0x55;
+        args.r8 = 0;
+        (state, memory, args, queue)
+    }
+
+    #[test]
+    fn begin_does_not_publish_or_write_partially_when_provider_data_is_unmapped() {
+        let (state, mut memory, mut args, queue) = begin_fixture();
+        let block = 0x1fd8;
+        let data = 0x1ff0;
+        memory.write_u64(block, queue).unwrap();
+        let sentinel = [0xa5; 16];
+        memory.write_bytes(data, &sentinel).unwrap();
+        args.rcx = block;
+
+        assert!(matches!(
+            xasync_begin_start(&state, &args, &mut memory),
+            Err(ExitReason::MemoryFault(MemoryError::UnmappedAddress(
+                0x2000
+            )))
+        ));
+        let mut observed = [0; 16];
+        memory.read_bytes(data, &mut observed).unwrap();
+        assert_eq!(observed, sentinel);
+        assert!(!state.xasync_ops.lock().unwrap().ops.contains_key(&block));
+
+        memory
+            .map_region(0x2000, 0x1000, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        assert!(matches!(
+            xasync_begin_start(&state, &args, &mut memory),
+            Ok(CallbackStart::Call {
+                entry: 0x3000,
+                args: [OP_BEGIN, 0x1ff0, 0, 0],
+                ..
+            })
+        ));
+        assert_eq!(memory.read_u64(data).unwrap(), block);
+        assert_eq!(memory.read_u64(data + 24).unwrap(), args.rdx);
+        assert!(state.xasync_ops.lock().unwrap().ops.contains_key(&block));
+    }
+
+    #[test]
+    fn begin_validates_the_header_before_writing_provider_data() {
+        let (state, mut memory, mut args, queue) = begin_fixture();
+        let block = 0x4000;
+        let context = 0x4008;
+        let data = 0x4018;
+        let sentinel = [0xa5; 32];
+        args.rcx = block;
+        memory
+            .map_region_with_data(block, 8, MemoryPermissions::READ_ONLY, &queue.to_le_bytes())
+            .unwrap();
+        memory
+            .map_region_with_data(data, 32, MemoryPermissions::READ_WRITE, &sentinel)
+            .unwrap();
+
+        assert!(matches!(
+            xasync_begin_start(&state, &args, &mut memory),
+            Err(ExitReason::MemoryFault(MemoryError::UnmappedAddress(address))) if address == context
+        ));
+        let mut observed = [0; 32];
+        memory.read_bytes(data, &mut observed).unwrap();
+        assert_eq!(observed, sentinel);
+        assert!(!state.xasync_ops.lock().unwrap().ops.contains_key(&block));
+
+        memory
+            .map_region(context, 16, MemoryPermissions::READ_ONLY)
+            .unwrap();
+        assert!(matches!(
+            xasync_begin_start(&state, &args, &mut memory),
+            Ok(CallbackStart::Call {
+                entry: 0x3000,
+                args: [OP_BEGIN, 0x4018, 0, 0],
+                ..
+            })
+        ));
+        assert_eq!(memory.read_u64(data).unwrap(), block);
+        assert!(state.xasync_ops.lock().unwrap().ops.contains_key(&block));
+    }
 }
