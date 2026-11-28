@@ -37,7 +37,10 @@
       "issue": null,
       "pr": 1152,
       "test_status": "Merged at 552dcf50; local Apple Silicon fixtures passed; no independent acceptance.",
-      "limitations": "CPUID FMA bit remains clear; no x86 hardware comparison."
+      "limitations": "CPUID FMA bit remains clear; no x86 hardware comparison.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1154",
@@ -51,7 +54,10 @@
       "issue": 1150,
       "pr": 1154,
       "test_status": "Merged at 353b96de; local dual-engine fixtures passed.",
-      "limitations": "Gathers, masked moves and remaining AVX2 forms stay refused; CPUID AVX2 remains clear."
+      "limitations": "Gathers, masked moves and remaining AVX2 forms stay refused; CPUID AVX2 remains clear.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1155",
@@ -65,7 +71,10 @@
       "issue": null,
       "pr": 1155,
       "test_status": "Merged at 872bd122; 36 forms and 882 vectors passed locally.",
-      "limitations": "CPUID F16C bit remains clear pending independent acceptance."
+      "limitations": "CPUID F16C bit remains clear pending independent acceptance.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1156",
@@ -79,7 +88,10 @@
       "issue": null,
       "pr": 1156,
       "test_status": "Merged at 33b85166; local fixtures passed.",
-      "limitations": "Address-size override and VEX combinations are separate contracts."
+      "limitations": "Address-size override and VEX combinations are separate contracts.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1157",
@@ -93,7 +105,10 @@
       "issue": null,
       "pr": 1157,
       "test_status": "Merged at 8c88f56c; local fixtures passed.",
-      "limitations": "No independent review claim."
+      "limitations": "No independent review claim.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1158",
@@ -107,7 +122,10 @@
       "issue": null,
       "pr": 1158,
       "test_status": "Merged at 4bb8e37c; local profiling checks passed.",
-      "limitations": "Profile counters are process-local diagnostics, not application performance evidence."
+      "limitations": "Profile counters are process-local diagnostics, not application performance evidence.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1159",
@@ -123,7 +141,10 @@
       "issue": null,
       "pr": 1159,
       "test_status": "Merged at b8576535; local profiling checks passed.",
-      "limitations": "Hot-block accounting is bounded and does not prove guest application speedup."
+      "limitations": "Hot-block accounting is bounded and does not prove guest application speedup.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1170",
@@ -137,7 +158,10 @@
       "issue": null,
       "pr": 1170,
       "test_status": "Merged at bc72c91b; local dual-engine fixtures passed.",
-      "limitations": "CPUID BMI2 bit remains clear; no x86 hardware comparison."
+      "limitations": "CPUID BMI2 bit remains clear; no x86 hardware comparison.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1175",
@@ -151,7 +175,10 @@
       "issue": null,
       "pr": 1175,
       "test_status": "Merged at 53becd7d; local dual-engine fixtures passed.",
-      "limitations": "CPUID BMI2 bit remains clear pending independent acceptance."
+      "limitations": "CPUID BMI2 bit remains clear pending independent acceptance.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1187",
@@ -165,7 +192,10 @@
       "issue": null,
       "pr": 1187,
       "test_status": "Merged at 2fb67506; local dual-engine fixtures passed.",
-      "limitations": "CPUID bit stays clear while the VEX form remains unimplemented."
+      "limitations": "CPUID bit stays clear while the VEX form remains unimplemented.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1202",
@@ -179,7 +209,10 @@
       "issue": null,
       "pr": 1202,
       "test_status": "Merged at 22301d91; local fixtures, semantic review and audits passed.",
-      "limitations": "No x86 hardware comparison or independent acceptance; AES artifacts preserved locally."
+      "limitations": "No x86 hardware comparison or independent acceptance; AES artifacts preserved locally.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1214",
@@ -193,7 +226,10 @@
       "issue": null,
       "pr": 1214,
       "test_status": "Merged at bdedc62d; local loader tests passed.",
-      "limitations": "Returns virtual processor zero; no Windows runtime comparison."
+      "limitations": "Returns virtual processor zero; no Windows runtime comparison.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1215",
@@ -207,7 +243,10 @@
       "issue": 1177,
       "pr": 1215,
       "test_status": "Merged at d57e81a3; refused-witness tests passed in both engines.",
-      "limitations": "Other leaf-7 features remain clear because their executions are incomplete."
+      "limitations": "Other leaf-7 features remain clear because their executions are incomplete.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-PR-1222",
@@ -221,7 +260,10 @@
       "issue": 1218,
       "pr": 1222,
       "test_status": "Merged at 39a6f4c8; local CRT macro fixture tests passed.",
-      "limitations": "No independent acceptance; other CRT FILE surfaces remain partial."
+      "limitations": "No independent acceptance; other CRT FILE surfaces remain partial.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-PR-1226",
@@ -235,7 +277,10 @@
       "issue": null,
       "pr": 1226,
       "test_status": "Merged at 19f91982; local dual-engine checks passed.",
-      "limitations": "67 E0..E3 remains an explicit refusal."
+      "limitations": "67 E0..E3 remains an explicit refusal.",
+      "ownership_state": "CPU contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-459",
@@ -249,7 +294,10 @@
       "issue": 459,
       "pr": 1223,
       "test_status": "Merged at 3d0d78d8; local Apple Silicon loader and fixture tests passed; merge integration confirmed on origin/main.",
-      "limitations": "Deterministic synthetic per-process cookie; not Windows-compatible or cryptographic. Pointer worktree removed after clean merge."
+      "limitations": "Deterministic synthetic per-process cookie; not Windows-compatible or cryptographic. Pointer worktree removed after clean merge.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-137",
@@ -263,7 +311,10 @@
       "issue": 137,
       "pr": 1242,
       "test_status": "Merged at 0c841bcd; Apple M5 measured batch and individual medians; focused tests, semantic review, native audit and audits passed; batching worktree removed after clean merge.",
-      "limitations": "One-device debug-build measurement; scripts/test-gpu.sh frame_loop timeout documented; no general speedup claim or independent acceptance."
+      "limitations": "One-device debug-build measurement; scripts/test-gpu.sh frame_loop timeout documented; no general speedup claim or independent acceptance.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-1224",
@@ -277,7 +328,10 @@
       "issue": 1224,
       "pr": 1225,
       "test_status": "Merged at 1efeeb24; local dual-engine fixture evidence stated in PR #1225.",
-      "limitations": "Contributor-owned lane; no independent acceptance claimed here."
+      "limitations": "Contributor-owned lane; no independent acceptance claimed here.",
+      "ownership_state": "CPU contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1227",
@@ -291,7 +345,10 @@
       "issue": 1227,
       "pr": 1228,
       "test_status": "PR #1228 open with local dual-engine fixture evidence stated in its body.",
-      "limitations": "Gathers remain the AVX2 refusal witness; review not complete."
+      "limitations": "Gathers remain the AVX2 refusal witness; review not complete.",
+      "ownership_state": "CPU contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1230",
@@ -305,7 +362,10 @@
       "issue": 1230,
       "pr": 1231,
       "test_status": "PR #1231 open with local dual-engine fixture evidence stated in its body.",
-      "limitations": "Review and independent acceptance not complete."
+      "limitations": "Review and independent acceptance not complete.",
+      "ownership_state": "CPU contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1232",
@@ -319,7 +379,10 @@
       "issue": 1232,
       "pr": 1233,
       "test_status": "PR #1233 open with local dual-engine fixture evidence stated in its body.",
-      "limitations": "Gathers remain refused; review and independent acceptance not complete."
+      "limitations": "Gathers remain refused; review and independent acceptance not complete.",
+      "ownership_state": "CPU contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-PR-1234",
@@ -333,7 +396,10 @@
       "issue": null,
       "pr": 1234,
       "test_status": "PR #1234 open with local WinHTTP tests stated in its body.",
-      "limitations": "No linked issue; TLS and external network behavior remain out of scope."
+      "limitations": "No linked issue; TLS and external network behavior remain out of scope.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1241",
@@ -347,7 +413,10 @@
       "issue": 1241,
       "pr": null,
       "test_status": "Claim recorded; no implementation evidence in tracker.",
-      "limitations": "Claimed by catminou4; wait for PR before implementation."
+      "limitations": "Claimed by catminou4; wait for PR before implementation.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1240",
@@ -356,12 +425,15 @@
       "priority": "P1",
       "dependencies": [],
       "owner": "catminou4",
-      "status": "CLAIMED",
+      "status": "MERGED",
       "evidence_class": "E",
       "issue": 1240,
-      "pr": null,
-      "test_status": "Claim recorded; no implementation evidence in tracker.",
-      "limitations": "Claimed by catminou4; preserve lane separation from stream and batching work."
+      "pr": 1248,
+      "test_status": "Merged at PR #1248; digest-pinned PE packages now run in persistent Reference and Metal sessions.",
+      "limitations": "Claimed by catminou4; preserve lane separation from stream and batching work.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1239",
@@ -375,7 +447,10 @@
       "issue": 1239,
       "pr": null,
       "test_status": "No local implementation or test evidence.",
-      "limitations": "Duplicate of #1235; reconcile duplication before claiming."
+      "limitations": "Duplicate of #1235; reconcile duplication before claiming.",
+      "ownership_state": "CPU contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1238",
@@ -389,7 +464,10 @@
       "issue": 1238,
       "pr": null,
       "test_status": "Claim recorded; no implementation evidence in tracker.",
-      "limitations": "Claimed by catminou4; do not duplicate."
+      "limitations": "Claimed by catminou4; do not duplicate.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1237",
@@ -403,7 +481,10 @@
       "issue": 1237,
       "pr": null,
       "test_status": "Claim recorded; no implementation evidence in tracker.",
-      "limitations": "Claimed by catminou4; do not duplicate."
+      "limitations": "Claimed by catminou4; do not duplicate.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1236",
@@ -412,12 +493,15 @@
       "priority": "P2",
       "dependencies": [],
       "owner": "catminou4",
-      "status": "CLAIMED",
+      "status": "MERGED",
       "evidence_class": "E",
       "issue": 1236,
-      "pr": null,
-      "test_status": "Claim recorded; no implementation evidence in tracker.",
-      "limitations": "Claimed by catminou4; single-process blocking semantics remain synthetic."
+      "pr": 1246,
+      "test_status": "Merged at PR #1246; CRT byte-range locking and _commit are implemented by Catminou.",
+      "limitations": "Claimed by catminou4; single-process blocking semantics remain synthetic.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-1229",
@@ -431,7 +515,10 @@
       "issue": 1229,
       "pr": null,
       "test_status": "Claim recorded; cause not yet isolated.",
-      "limitations": "Claimed by catminou4; do not duplicate."
+      "limitations": "Claimed by catminou4; do not duplicate.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-946",
@@ -439,13 +526,16 @@
       "description": "Fault on unsupported Itanium guard acquisition instead of returning an unsafe value.",
       "priority": "P1",
       "dependencies": [],
-      "owner": "ranveersoni98; catminou4",
+      "owner": "catminou4",
       "status": "BLOCKED",
       "evidence_class": "E",
       "issue": 946,
       "pr": null,
       "test_status": "Two overlapping claims recorded; no implementation evidence in tracker.",
-      "limitations": "Conflicting claims require owner coordination before editing."
+      "limitations": "Conflicting claims require owner coordination before editing.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-942",
@@ -459,7 +549,10 @@
       "issue": 942,
       "pr": null,
       "test_status": "Several sub-PRs merged; campaign overall remains partial.",
-      "limitations": "Physical controller testing and full app integration remain incomplete."
+      "limitations": "Physical controller testing and full app integration remain incomplete.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-923",
@@ -470,13 +563,16 @@
         "WP-918",
         "WP-921"
       ],
-      "owner": "ranveersoni98",
+      "owner": "catminou4",
       "status": "BLOCKED",
       "evidence_class": "D",
       "issue": 923,
       "pr": null,
       "test_status": "Claim recorded; blocked until initializer and registry dependencies land.",
-      "limitations": "No unloading, true concurrency or guest DLL dependency search yet."
+      "limitations": "No unloading, true concurrency or guest DLL dependency search yet.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-921",
@@ -490,7 +586,10 @@
       "issue": 921,
       "pr": null,
       "test_status": "Issue closed; local synthetic module registry tests recorded in changelog.",
-      "limitations": "No PR reference in tracker; unloading and LoadLibrary conversion remain separate."
+      "limitations": "No PR reference in tracker; unloading and LoadLibrary conversion remain separate.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-918",
@@ -504,7 +603,10 @@
       "issue": 918,
       "pr": null,
       "test_status": "Claim recorded; partial loader layers already merged.",
-      "limitations": "Host services, unloading, thread notifications and reentrancy out of scope."
+      "limitations": "Host services, unloading, thread notifications and reentrancy out of scope.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-888",
@@ -518,7 +620,10 @@
       "issue": 888,
       "pr": null,
       "test_status": "Guest boundary batches merged locally; runtime remains partial.",
-      "limitations": "Mixing, audible output and hardware comparison remain unsupported."
+      "limitations": "Mixing, audible output and hardware comparison remain unsupported.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-632",
@@ -532,7 +637,10 @@
       "issue": 632,
       "pr": null,
       "test_status": "Narrow _setmode work claimed; broader convenience forms excluded.",
-      "limitations": "Claimed by catminou4; do not duplicate."
+      "limitations": "Claimed by catminou4; do not duplicate.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-587",
@@ -546,7 +654,10 @@
       "issue": 587,
       "pr": null,
       "test_status": "Claim recorded; no implementation evidence in tracker.",
-      "limitations": "Claimed by IamHeavyLazer; no x86 hardware comparison."
+      "limitations": "Claimed by IamHeavyLazer; no x86 hardware comparison.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-414",
@@ -560,7 +671,10 @@
       "issue": 414,
       "pr": null,
       "test_status": "No local implementation or test evidence.",
-      "limitations": "Coordination-sensitive graphics lane; do not duplicate other contributors."
+      "limitations": "Coordination-sensitive graphics lane; do not duplicate other contributors.",
+      "ownership_state": "Awaiting external dependency",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-164",
@@ -574,7 +688,10 @@
       "issue": 164,
       "pr": null,
       "test_status": "Local branch gpu/resource-budget-contract at 8c323411; no PR published.",
-      "limitations": "Branch is behind updated origin/main; GPU-written indirect counts remain future work."
+      "limitations": "Branch is behind updated origin/main; GPU-written indirect counts remain future work.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-151",
@@ -588,7 +705,10 @@
       "issue": 151,
       "pr": null,
       "test_status": "Test-only scope proposed in comments; ownership not confirmed.",
-      "limitations": "Coordinate with texture and graphics owners before editing."
+      "limitations": "Coordinate with texture and graphics owners before editing.",
+      "ownership_state": "Awaiting external dependency",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-143",
@@ -602,7 +722,10 @@
       "issue": 143,
       "pr": null,
       "test_status": "Baseline on c76e974 recorded in issue comments; no implementation evidence tracked here.",
-      "limitations": "Claimed by catminou4; benchmark-only scope."
+      "limitations": "Claimed by catminou4; benchmark-only scope.",
+      "ownership_state": "Graphics contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-133",
@@ -616,7 +739,10 @@
       "issue": 133,
       "pr": null,
       "test_status": "Apple M5 Pro baseline recorded in issue comments; no implementation evidence tracked here.",
-      "limitations": "Claimed by elforeign; do not duplicate."
+      "limitations": "Claimed by elforeign; do not duplicate.",
+      "ownership_state": "Graphics contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-789",
@@ -630,7 +756,10 @@
       "issue": 789,
       "pr": null,
       "test_status": "Coordination lane; no new implementation started here.",
-      "limitations": "Owned by another contributor; preserve lane separation."
+      "limitations": "Owned by another contributor; preserve lane separation.",
+      "ownership_state": "Awaiting external dependency",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-207",
@@ -644,7 +773,10 @@
       "issue": 207,
       "pr": null,
       "test_status": "No local implementation or test evidence.",
-      "limitations": "Shares common infrastructure; coordinate before editing."
+      "limitations": "Shares common infrastructure; coordinate before editing.",
+      "ownership_state": "Awaiting external dependency",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-215",
@@ -658,7 +790,10 @@
       "issue": 215,
       "pr": null,
       "test_status": "Incremental registry work merged; full campaign remains open.",
-      "limitations": "AMD XML used for encodings only; missing behavior stays unsupported."
+      "limitations": "AMD XML used for encodings only; missing behavior stays unsupported.",
+      "ownership_state": "Graphics contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-203",
@@ -666,13 +801,16 @@
       "description": "Track virtual memory reserve, commit and decommit state.",
       "priority": "P2",
       "dependencies": [],
-      "owner": "vedantdadhich21",
+      "owner": "catminou4",
       "status": "BLOCKED",
       "evidence_class": "E",
       "issue": 203,
       "pr": null,
       "test_status": "Conditional claim requests scope approval; no implementation evidence in tracker.",
-      "limitations": "Awaiting scope approval; do not edit claimed files."
+      "limitations": "Awaiting scope approval; do not edit claimed files.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-199",
@@ -686,7 +824,10 @@
       "issue": 199,
       "pr": null,
       "test_status": "Claim recorded; no implementation evidence in tracker.",
-      "limitations": "Narrowed to single-thread baseline; no hardware comparison."
+      "limitations": "Narrowed to single-thread baseline; no hardware comparison.",
+      "ownership_state": "CPU contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-181",
@@ -700,7 +841,10 @@
       "issue": 181,
       "pr": null,
       "test_status": "Claim recorded with identity questions outstanding.",
-      "limitations": "Awaiting maintainer decisions; no guessed identities."
+      "limitations": "Awaiting maintainer decisions; no guessed identities.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-180",
@@ -714,7 +858,10 @@
       "issue": 180,
       "pr": null,
       "test_status": "Isolated smoke evidence documented in docs/coordination/agent-queue-smoke.md.",
-      "limitations": "No production queue enablement claimed."
+      "limitations": "No production queue enablement claimed.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-410",
@@ -728,7 +875,10 @@
       "issue": 410,
       "pr": null,
       "test_status": "Claim recorded; no implementation evidence in tracker.",
-      "limitations": "Coordinate with diagnostics and app owners before editing shared files."
+      "limitations": "Coordinate with diagnostics and app owners before editing shared files.",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "assignment_side": "personal"
     },
     {
       "id": "WP-1233",
@@ -744,7 +894,10 @@
       "issue": 1233,
       "pr": null,
       "test_status": "Superseded by WP-1232 and PR #1233.",
-      "limitations": "Duplicate issue; close or link after PR review."
+      "limitations": "Duplicate issue; close or link after PR review.",
+      "ownership_state": "CPU contributor-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     },
     {
       "id": "WP-983",
@@ -758,7 +911,511 @@
       "issue": 983,
       "pr": null,
       "test_status": "No local implementation or test evidence.",
-      "limitations": "Research only; host dependency and licensing boundary not established."
+      "limitations": "Research only; host dependency and licensing boundary not established.",
+      "ownership_state": "Awaiting external dependency",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1163",
+      "subsystem": "Runtime",
+      "description": "Microsoft STL standard-stream initialization and wider runtime completion.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "C",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "issue": 1163,
+      "pr": 1256,
+      "test_status": "PR #1256 completes the narrow std::cout slice with 1662 loader tests passing; remaining #1163 scope transferred.",
+      "limitations": "No streambuf vtable, locale, wide streams, cerr/clog, Microsoft DLL or independent acceptance; Catminou owns subsequent work.",
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-CPU-SSE",
+      "subsystem": "CPU",
+      "description": "Implement and verify a bounded SSE/SSE2 integer and move subset with fault and CPUID agreement.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "ranveersoni98",
+      "status": "UNCLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "No implementation evidence in tracker.",
+      "limitations": "Coordinate with CPU contributors; unsupported forms must fail explicitly.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-DBT-CACHE",
+      "subsystem": "DBT",
+      "description": "Research and validate safe persistent translation caching with identity, invalidation and atomic update rules.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "ranveersoni98",
+      "status": "RESEARCHING",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Architecture research not yet complete.",
+      "limitations": "No cached translation is currently trusted; corrupted cache handling remains unresolved.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XBOX-STARTUP",
+      "subsystem": "Startup research",
+      "description": "Map publicly documented Xbox/GDK startup contracts and compatibility architecture claims with a source ledger.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "ranveersoni98",
+      "status": "RESEARCHING",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Public source review ongoing; no new fixture evidence in tracker.",
+      "limitations": "No restricted SDK, leaked material or security circumvention; console ABI remains unknown.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-METAL-INTEGRATION",
+      "subsystem": "Graphics",
+      "description": "Integrate native Metal submission, synchronization, resource lifetime and repeated frame loops with guest execution.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-137"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "D",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Submission batching merged; broader integration evidence not yet recorded.",
+      "limitations": "Do not duplicate RDNA2 shader work or contributor-owned graphics lanes.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-01",
+      "subsystem": "XTRE",
+      "description": "Unified runtime architecture with explicit ownership and session isolation.",
+      "priority": "P0",
+      "dependencies": [],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-02",
+      "subsystem": "XTRE",
+      "description": "Application configuration validation using publicly documented metadata only.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-01"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-03",
+      "subsystem": "XTRE",
+      "description": "Executable and module lifecycle orchestration over existing loader infrastructure.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-01",
+        "WP-921"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-04",
+      "subsystem": "XTRE",
+      "description": "Process and thread lifecycle orchestration with cleanup and repeated sessions.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-01"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-05",
+      "subsystem": "XTRE",
+      "description": "Integration of Catminou C/C++ runtime components into the application lifecycle.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-1163",
+        "WP-918"
+      ],
+      "owner": "ranveersoni98",
+      "status": "BLOCKED",
+      "evidence_class": "E",
+      "ownership_state": "Awaiting external dependency",
+      "counts_toward_personal_workload": false,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-06",
+      "subsystem": "XTRE",
+      "description": "Synthetic Gaming Runtime lifecycle with explicit unsupported-service boundaries.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-01"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-07",
+      "subsystem": "XTRE",
+      "description": "Asynchronous task orchestration, cancellation and shutdown with outstanding work.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-01"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-08",
+      "subsystem": "XTRE",
+      "description": "Filesystem and storage integration with isolated fixture directories.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-01"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-09",
+      "subsystem": "XTRE",
+      "description": "Graphics startup connected to native Metal services.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-01",
+        "WP-METAL-INTEGRATION"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-10",
+      "subsystem": "XTRE",
+      "description": "Persistent original application sessions with tracked resources and orderly shutdown.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-04",
+        "WP-XTRE-07",
+        "WP-XTRE-09"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-11",
+      "subsystem": "XTRE",
+      "description": "Structured machine-readable and human-readable startup diagnostics.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-01"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-12",
+      "subsystem": "XTRE",
+      "description": "End-to-end application-wide acceptance suite with positive, negative and repeated cases.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-10",
+        "WP-XTRE-11"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-XTRE-13",
+      "subsystem": "XTRE",
+      "description": "Reliability and performance measurement across complete application sessions.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-12"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Work package retained under revised ownership; no implementation evidence recorded here.",
+      "limitations": "Must integrate existing services rather than reimplement Catminou runtime components.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-V1",
+      "subsystem": "Vertical integration",
+      "description": "Original compiled CPU fixture with matching interpreter and DBT architectural state.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-CPU-SSE"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
+      "limitations": "Synthetic fixture success is not commercial title compatibility.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-V2",
+      "subsystem": "Vertical integration",
+      "description": "Multi-module runtime integration fixture using existing loader services.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-03"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
+      "limitations": "Synthetic fixture success is not commercial title compatibility.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-V3",
+      "subsystem": "Vertical integration",
+      "description": "Concurrent application fixture with threads, synchronization and asynchronous work.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-04",
+        "WP-XTRE-07"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
+      "limitations": "Synthetic fixture success is not commercial title compatibility.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-V4",
+      "subsystem": "Vertical integration",
+      "description": "Complete synthetic title lifecycle through configuration, loading and shutdown.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-12"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
+      "limitations": "Synthetic fixture success is not commercial title compatibility.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-V5",
+      "subsystem": "Vertical integration",
+      "description": "First integrated native frame with verified frame contents.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-09"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
+      "limitations": "Synthetic fixture success is not commercial title compatibility.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-V6",
+      "subsystem": "Vertical integration",
+      "description": "Persistent interactive fixture with repeated frames, input and background tasks.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-10"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
+      "limitations": "Synthetic fixture success is not commercial title compatibility.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-V7",
+      "subsystem": "Vertical integration",
+      "description": "Reliability acceptance across repeated complete sessions.",
+      "priority": "P1",
+      "dependencies": [
+        "WP-XTRE-13"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
+      "limitations": "Synthetic fixture success is not commercial title compatibility.",
+      "assignment_side": "personal"
+    },
+    {
+      "id": "WP-V8",
+      "subsystem": "Vertical integration",
+      "description": "Reproducible performance acceptance for supported integration applications.",
+      "priority": "P2",
+      "dependencies": [
+        "WP-XTRE-13"
+      ],
+      "owner": "ranveersoni98",
+      "status": "CLAIMED",
+      "evidence_class": "E",
+      "ownership_state": "DeepSeek-owned",
+      "counts_toward_personal_workload": true,
+      "issue": null,
+      "pr": null,
+      "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
+      "limitations": "Synthetic fixture success is not commercial title compatibility.",
+      "assignment_side": "personal"
     }
-  ]
+  ],
+  "ownership_states": {
+    "DeepSeek-owned": "Implementation lane delegated to the DeepSeek coding agent under the maintainer’s ownership.",
+    "Catminou-owned": "Transferred C/C++ runtime, CRT, ABI, exception, COM and Windows runtime dependency work.",
+    "CPU contributor-owned": "CPU implementation owned by an existing CPU contributor.",
+    "Graphics contributor-owned": "RDNA2, shader or graphics implementation owned by an existing graphics contributor.",
+    "Awaiting external dependency": "Blocked on another owner, scope approval or missing upstream component.",
+    "Ready for integration": "Implementation completed or published and awaiting merge, integration or review.",
+    "Verified": "Independently verified completion; no package is promoted here without independent evidence."
+  },
+  "workload_policy": "Transferred runtime work remains visible but does not count toward the maintainer’s remaining implementation workload."
 }
