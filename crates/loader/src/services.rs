@@ -526,10 +526,26 @@ impl ServicesState {
     }
 
     /// Keep the entry executable's image bytes for a later `_spawnve` of the
-    /// program itself. The runner calls this once before the run.
+    /// program itself. The runner calls this once before the run. The image
+    /// is provisioned into the synthetic drive at the same time, because it
+    /// honestly exists in the guest world: a CRT that probes the module path
+    /// with `GetFileAttributesEx`, as the win32 fork emulation does before
+    /// re-executing the program, or one that reads the image bytes, sees
+    /// exactly what was started. Provisioning is all-or-nothing inside the
+    /// drive's ordinary bounds: an image that does not fit stays absent
+    /// rather than truncated, which would answer reads wrongly.
     pub fn set_spawn_image(&self, name: &str, bytes: &[u8]) {
         *self.spawn_image.lock().expect("spawn image") =
             Some((name.to_owned(), Arc::new(bytes.to_vec())));
+        if let Some(key) = ObjectState::drive_path(name.as_bytes()) {
+            let mut objects = self.objects.lock().expect("guest object state");
+            if objects.drive_file(&key).is_none()
+                && objects.drive_create(&key)
+                && objects.drive_write(&key, 0, bytes) != Some(true)
+            {
+                objects.drive_remove(&key);
+            }
+        }
     }
 
     /// The kept entry image, when the runner stored one.
