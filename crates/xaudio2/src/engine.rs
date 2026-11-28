@@ -227,6 +227,7 @@ impl Runtime {
             frequency_ratio: 1.0,
             started: false,
             samples_played: 0,
+            frame_remainder: 0,
             queue: VecDeque::new(),
         };
         let (slot, generation) = self.voices.insert(Voice {

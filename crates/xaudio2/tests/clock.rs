@@ -9,7 +9,7 @@
 use std::time::{Duration, Instant};
 
 use xenora_xaudio2::consts::{XAUDIO2_END_OF_STREAM, XAUDIO2_LOOP_INFINITE};
-use xenora_xaudio2::{BufferDesc, Event, Runtime, VoiceId, VoiceState, WaveFormat};
+use xenora_xaudio2::{BufferDesc, EngineId, Event, Runtime, VoiceId, VoiceState, WaveFormat};
 
 /// A mono PCM16 48 kHz WAVEFORMATEX: one frame is two bytes.
 fn mono_pcm16() -> WaveFormat {
@@ -46,12 +46,7 @@ fn desc(
 /// A started voice holding a mix of plain, partial-play, looping and
 /// end-of-stream buffers: 150 + 40 + (60 + 3 * 25) + 30 + 50 frames in all.
 fn loaded_voice() -> (Runtime, VoiceId) {
-    let mut rt = Runtime::new();
-    let engine = rt.create_engine(0, 1).unwrap();
-    rt.create_mastering_voice(engine, 0, 0, 0, 0, 0, 6).unwrap();
-    let voice = rt
-        .create_source_voice(engine, &mono_pcm16(), 0, 2.0, 0, 0, 0)
-        .unwrap();
+    let (mut rt, _, voice) = engine_with_empty_source(0);
     for buffer in [
         desc(150, (0, 0), (0, 0, 0), 0, 1),
         desc(100, (30, 40), (0, 0, 0), 0, 2),
@@ -218,4 +213,58 @@ fn an_hour_of_looping_audio_advances_in_one_fast_call() {
     // Generous bound for a debug build: stepping 172.8 million frames one at a
     // time takes far longer than this.
     assert!(elapsed < Duration::from_millis(250), "took {elapsed:?}");
+}
+
+fn engine_with_empty_source(rate: u32) -> (Runtime, EngineId, VoiceId) {
+    let mut rt = Runtime::new();
+    let engine = rt.create_engine(0, 1).unwrap();
+    rt.create_mastering_voice(engine, 0, rate, 0, 0, 0, 6)
+        .unwrap();
+    let voice = rt
+        .create_source_voice(engine, &mono_pcm16(), 0, 2.0, 0, 0, 0)
+        .unwrap();
+    (rt, engine, voice)
+}
+
+#[test]
+fn fractional_frames_accumulate_without_drift_at_supported_mastering_rates() {
+    for rate in [44_100, 48_000] {
+        let (mut rt, engine, voice) = engine_with_empty_source(rate);
+        rt.set_source_sample_rate(voice, 11_025).unwrap();
+        rt.submit_source_buffer(voice, &desc(12_000, (0, 0), (0, 0, 0), 0, 1), 0)
+            .unwrap();
+        rt.start(voice, 0, 0).unwrap();
+        for tick in 1..=100 {
+            assert_eq!(rt.advance_engine_clock(engine).unwrap(), rate / 100);
+            assert_eq!(
+                rt.state(voice, 0).unwrap().samples_played,
+                tick * 11_025 / 100
+            );
+        }
+    }
+}
+
+#[test]
+fn flushing_the_tail_preserves_fractional_progress_on_the_current_buffer() {
+    let (mut rt, engine, voice) = engine_with_empty_source(48_000);
+    rt.set_frequency_ratio(voice, 1.0 / 1024.0, 0).unwrap();
+    rt.submit_source_buffer(voice, &desc(1, (0, 0), (0, 0, 0), 0, 1), 0)
+        .unwrap();
+    rt.start(voice, 0, 0).unwrap();
+    for _ in 0..2 {
+        rt.advance_engine_clock(engine).unwrap();
+        rt.submit_source_buffer(voice, &desc(1, (0, 0), (0, 0, 0), 0, 2), 0)
+            .unwrap();
+        assert_eq!(
+            rt.flush_source_buffers(voice).unwrap(),
+            [Event::BufferEnd { context: 2 }]
+        );
+        let state = rt.state(voice, 0).unwrap();
+        assert_eq!(state.samples_played, 0);
+        assert_eq!(state.current_buffer_context, 1);
+    }
+    rt.advance_engine_clock(engine).unwrap();
+    let state = rt.state(voice, 0).unwrap();
+    assert_eq!(state.samples_played, 1);
+    assert_eq!(state.buffers_queued, 0);
 }

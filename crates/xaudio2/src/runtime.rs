@@ -251,6 +251,9 @@ impl Runtime {
                 removed.push(buffer);
             }
         }
+        if source.queue.is_empty() {
+            source.frame_remainder = 0;
+        }
         removed.reverse();
         Ok(removed
             .into_iter()

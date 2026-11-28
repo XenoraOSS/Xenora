@@ -13,7 +13,12 @@ use crate::consts::XAUDIO2_QUANTUM_DENOMINATOR;
 use crate::engine::EngineId;
 use crate::hresult::Error;
 use crate::runtime::Runtime;
-use crate::voice::{VoiceId, VoiceKind};
+use crate::voice::{VoiceKind, advance};
+
+// Every supported binary32 ratio in [2^-10, 2^10] is an integer
+// multiple of 2^-33. Even the largest scaled ratio times 200 kHz fits u64.
+const RATIO_SCALE: u64 = 1 << 33;
+const QUANTUM_SCALE: u64 = RATIO_SCALE * XAUDIO2_QUANTUM_DENOMINATOR as u64;
 
 impl Runtime {
     /// Starts the clock of an engine.
@@ -54,10 +59,10 @@ impl Runtime {
     /// Advances every started source voice of an engine by one quantum.
     ///
     /// A quantum is a hundredth of a second of the mastering rate of the
-    /// engine: 480 frames at 48000 hertz. The quantum of the mastering rate
-    /// becomes frames of the source rate with the frequency ratio of the
-    /// voice, the quantum times the ratio times the source rate divided by
-    /// the mastering rate, rounded down.
+    /// engine, which is 480 frames at 48 kHz. The supported mastering rates
+    /// divide evenly into these intervals. Each started voice with queued
+    /// data advances by its source rate times its frequency ratio per
+    /// hundredth of a second. Fractional frames carry across quanta.
     ///
     /// The call reports the quantum in mastering frames, which is how far the
     /// clock of the engine moved. The events the voices reached are not
@@ -82,32 +87,22 @@ impl Runtime {
             return Ok(0);
         }
         let quantum = mastering_rate / XAUDIO2_QUANTUM_DENOMINATOR;
-        for source in sources {
-            let frames = self.source_frames_for(source, quantum, mastering_rate)?;
-            self.consume(source, frames)?;
+        for voice in sources {
+            let state = self
+                .voices
+                .get_mut(voice.slot(), voice.generation())
+                .ok_or(Error::InvalidCall("the voice handle is no longer valid"))?;
+            let VoiceKind::Source(source) = &mut state.kind else {
+                return Err(Error::InvalidCall("the voice is not a source voice"));
+            };
+            if !source.started || source.queue.is_empty() {
+                continue;
+            }
+            let ratio = (f64::from(source.frequency_ratio) * RATIO_SCALE as f64) as u64;
+            let progress = u64::from(source.format.sample_rate) * ratio + source.frame_remainder;
+            source.frame_remainder = progress % QUANTUM_SCALE;
+            advance(source, (progress / QUANTUM_SCALE) as u32);
         }
         Ok(quantum)
-    }
-
-    /// The frames of the source rate that a quantum of the mastering rate
-    /// becomes for one voice.
-    fn source_frames_for(
-        &self,
-        voice: VoiceId,
-        quantum: u32,
-        mastering_rate: u32,
-    ) -> Result<u32, Error> {
-        let state = self
-            .voices
-            .get(voice.slot(), voice.generation())
-            .ok_or(Error::InvalidCall("the voice handle is no longer valid"))?;
-        let VoiceKind::Source(source) = &state.kind else {
-            return Ok(0);
-        };
-        let frames = f64::from(quantum)
-            * f64::from(source.frequency_ratio)
-            * f64::from(source.format.sample_rate)
-            / f64::from(mastering_rate);
-        Ok(frames.floor().clamp(0.0, f64::from(u32::MAX)) as u32)
     }
 }
