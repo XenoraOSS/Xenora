@@ -1244,6 +1244,25 @@ after 3000 are `EINVAL`, as the Microsoft pages say. All `implemented`.
 `GetDateFormatW` and `GetTimeFormatW` belong to the locale package and are
 not served.
 
+**UCRT random numbers and wall-clock seconds (#1393).** The utility API set
+`api-ms-win-crt-utility-l1-1-0.dll` and `ucrtbase.dll` share the same `rand`
+and `srand` state per guest thread. Each thread starts with seed 1 and
+reseeding makes it repeat the same sequence of values from 0 through 32767.
+The legacy `msvcrt.dll` generator has its own state. These are deterministic
+pseudorandom sequences for C compatibility. [Microsoft `rand`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/rand) and [Microsoft `srand`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/srand).
+
+`_time64` through the time API set and `ucrtbase.dll` returns signed UTC
+seconds since the Unix epoch from the injected wall clock. A non-null
+destination receives the same eight-byte value. The conversion truncates
+subseconds toward zero and follows the Windows SDK 10.0.22621 UCRT
+cutoff of 32,536,799,999 seconds. Beyond the cutoff it returns and stores
+`-1`. Microsoft Learn documents calendar support through December 3000.
+The original AMD64 guest tests check both module routes and compare the
+guest's full-width output against explicit clock vectors.
+[Microsoft `_time64`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/time-time32-time64),
+[SDK time calculation](https://github.com/reactos/reactos/blob/04e0dc4a7a18bb1ab69f7ae9720259786025c530/sdk/lib/ucrt/time/time.cpp#L28-L91), and
+[SDK bound](https://github.com/reactos/reactos/blob/04e0dc4a7a18bb1ab69f7ae9720259786025c530/sdk/lib/ucrt/inc/corecrt_internal_time.h#L90-L103).
+
 **The wide conversions and classification (#459, package 6, first
 part).** `mbtowc`/`wctomb`/`mblen`/`mbstowcs`/`wcstombs`/`mbsrtowcs`/
 `wcsrtombs` through `api-ms-win-crt-convert-l1-1-0.dll`, and `iswctype`,
