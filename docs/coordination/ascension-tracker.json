@@ -1741,7 +1741,7 @@
       "evidence_class": "D",
       "issue": 1356,
       "pr": 1360,
-      "test_status": "Two independent ARM64 runs at be277f32 passed nine module TLS tests, including late rollback, slot reuse and split templates.",
+      "test_status": "Two independent ARM64 runs at be277f32 passed nine module TLS tests, including late rollback, slot reuse and split templates. An isolated native release probe measured about 96 MiB lower peak resident memory when a 96 MiB guest payload was already resident. Two separate reviewers reproduced the isolated TLS and no-TLS measurements at 96 MiB.",
       "limitations": "The draft awaits interface documentation scope. Staging covers the initial package thread. Worker TLS and dynamic loading remain open. The exact GitHub ARM64 job stopped on the pre-existing generated inventory counts.",
       "ownership_state": "Awaiting external dependency",
       "counts_toward_personal_workload": false,
@@ -1865,6 +1865,40 @@
       "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
+    },
+    {
+      "id": "WP-1395",
+      "subsystem": "Runtime",
+      "description": "Cross-DLL FLS cleanup of C++ records on two simultaneous guest workers",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "D",
+      "issue": 1395,
+      "pr": 1398,
+      "test_status": "Two independent native ARM64 macOS runs at 792edaa8 passed the compiled worker package. Both handles stayed unsignaled before release, and each worker’s return or explicit exit invoked its own callback, destructor and heap release before join. The exact missing consumer import was refused before entry and the complete package passed on fresh replay.",
+      "limitations": "Covers scheduled worker termination with FLS in the explicit package loader. Worker PE static TLS, C++ language thread-local destructors, fiber switching and forced termination are outside this witness.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1396",
+      "subsystem": "Runtime",
+      "description": "Character and string destination widths in narrow CRT scanf",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "D",
+      "issue": 1396,
+      "pr": 1401,
+      "test_status": "Two independent native ARM64 macOS runs at 47df4ac8 passed all four compiled cases, including non-ASCII wide conversion and short secure wide-buffer refusals. All 17 scanner unit tests passed. The legacy runtime_services scanf selection had seven passes and one failure because it still expects %ls to be refused.",
+      "limitations": "Draft PR awaits coordination for the shared legacy test. Wide destinations cover ASCII input under the supported C-locale behavior. Secure buffer sizes count destination elements, and the compiled refusal covers a destination that lacks room for the wide terminator.",
+      "ownership_state": "Awaiting external dependency",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     }
   ],
   "ownership_states": {
@@ -1882,13 +1916,14 @@
       "id": "R1",
       "status": "PARTIAL",
       "goal": "Original compiled C application with comprehensive supported CRT coverage",
-      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit. Open PR #1330 adds byte-exact narrow time formatting and six documented directives, with two independent native fixture runs. Open PR #1385 verifies that escaped percent signs count toward the narrow and wide CRT output limits, with successful sizing at the limit and refusal one unit above it. Open PR #1391 combines CRT environment variables, file scanning, exact floating arithmetic, leap-day UTC formatting and file output in one original hosted C program. It checks absent initial state, a malformed scan and fresh replay at two compiler optimization levels.",
+      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit. Open PR #1330 adds byte-exact narrow time formatting and six documented directives, with two independent native fixture runs. Open PR #1385 verifies that escaped percent signs count toward the narrow and wide CRT output limits, with successful sizing at the limit and refusal one unit above it. Open PR #1391 combines CRT environment variables, file scanning, exact floating arithmetic, leap-day UTC formatting and file output in one original hosted C program. It checks absent initial state, a malformed scan and fresh replay at two compiler optimization levels. Draft PR #1401 independently verifies narrow-input scanf character and string destination widths for ASCII, including secure wide buffers and terminator capacity. One shared legacy test still expects %ls to be unsupported and awaits coordination.",
       "remaining": "Integrate the hosted workloads, consolidate positive and negative coverage by supported CRT family, and record full R1 acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/gate-a.md",
         "https://github.com/ranveersoni98/Xenora/pull/1330",
         "https://github.com/ranveersoni98/Xenora/pull/1385",
-        "https://github.com/ranveersoni98/Xenora/pull/1391"
+        "https://github.com/ranveersoni98/Xenora/pull/1391",
+        "https://github.com/ranveersoni98/Xenora/pull/1401"
       ]
     },
     {
@@ -1909,7 +1944,7 @@
       "id": "R3",
       "status": "PARTIAL",
       "goal": "Multi-DLL application with cross-module runtime ownership",
-      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs. Open PR #1328 checks shared runtime data, bidirectional writes and fresh-state zero initialization across the EXE and both DLLs. Open PR #1343 verifies independent static TLS templates and cross-module accesses on the initial guest thread. Draft PR #1360 verifies transactional initial-thread TLS staging and rollback. Open PR #1370 verifies GNU exception propagation through two C DLL frames. Open PR #1387 verifies pre-entry refusal for Microsoft x64 typeid, pointer downcast and side cast, and cast to the complete object through void*. Its RTTI-free control runs virtual calls.",
+      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs. Open PR #1328 checks shared runtime data, bidirectional writes and fresh-state zero initialization across the EXE and both DLLs. Open PR #1343 verifies independent static TLS templates and cross-module accesses on the initial guest thread. Draft PR #1360 verifies transactional initial-thread TLS staging and rollback. Open PR #1370 verifies GNU exception propagation through two C DLL frames. Open PR #1387 verifies pre-entry refusal for Microsoft x64 typeid, pointer downcast and side cast, and cast to the complete object through void*. Its RTTI-free control runs virtual calls. Open PR #1398 verifies cleanup across two DLLs: the consumer receives FLS callbacks and the producer destroys and frees each C++ record.",
       "remaining": "Independently verify the full ownership milestone. Cover dynamic module lifetime and exception ownership across independently compiled C++ modules. Microsoft x64 RTTI implementation and cross-module type identity remain open.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/package_startup.rs",
@@ -1920,15 +1955,16 @@
         "https://github.com/ranveersoni98/Xenora/pull/1343",
         "https://github.com/ranveersoni98/Xenora/pull/1360",
         "https://github.com/ranveersoni98/Xenora/pull/1370",
-        "https://github.com/ranveersoni98/Xenora/pull/1387"
+        "https://github.com/ranveersoni98/Xenora/pull/1387",
+        "https://github.com/ranveersoni98/Xenora/pull/1398"
       ]
     },
     {
       "id": "R4",
       "status": "PARTIAL",
       "goal": "Multi-threaded C++ synchronization and thread-local storage",
-      "evidence": "On c8210aaf, the original C++ worker and four Itanium guard regressions passed. The compiled retry after a throw is tracked separately. Merged PR #1283 checks compiler-emitted abort after a throw and a successful retry on a different guest thread. Open PR #1343 verifies compiler-emitted Microsoft x64 accesses on the initial thread. The worker implementation needs coordination with the scheduler and thread-table owners. Draft PR #1360 verifies initial-thread package TLS storage rollback and retry. Two compiled GNU emulated TLS probes on a1b69294 reproduced a missing constant template and state reused across distinct guest worker IDs.",
-      "remaining": "Cover blocking contention, multiple workers and thread-local destructors. Coordinate emulated TLS initialization and retirement with the C++ and scheduler owners.",
+      "evidence": "On c8210aaf, the original C++ worker and four Itanium guard regressions passed. The compiled retry after a throw is tracked separately. Merged PR #1283 checks compiler-emitted abort after a throw and a successful retry on a different guest thread. Open PR #1343 verifies compiler-emitted Microsoft x64 accesses on the initial thread. The worker implementation needs coordination with the scheduler and thread-table owners. Draft PR #1360 verifies initial-thread package TLS storage rollback and retry. Two compiled GNU emulated TLS probes on a1b69294 reproduced a missing constant template and state reused across distinct guest worker IDs. Open PR #1398 verifies two simultaneously live workers, separate FLS values, and destructor and heap cleanup at worker return and explicit exit.",
+      "remaining": "Cover blocking guard contention, compiler-emitted worker TLS and C++ language thread-local destructors. Coordinate emulated TLS initialization and retirement with the C++ and scheduler owners.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cxx_guard_abi.rs",
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/runtime/threads.md",
@@ -1937,7 +1973,8 @@
         "https://github.com/ranveersoni98/Xenora/pull/1343",
         "https://github.com/ranveersoni98/Xenora/pull/1360",
         "https://github.com/ranveersoni98/Xenora/pull/312#issuecomment-7243808705",
-        "https://github.com/ranveersoni98/Xenora/issues/587"
+        "https://github.com/ranveersoni98/Xenora/issues/587",
+        "https://github.com/ranveersoni98/Xenora/pull/1398"
       ]
     },
     {
@@ -1971,7 +2008,7 @@
       "id": "R7",
       "status": "PARTIAL",
       "goal": "Repeated runtime sessions with resource and state isolation",
-      "evidence": "The authored-package session harness checks repeated runs and handle cleanup. Merged PR #1262 records a CRT success, failure and fresh-run sequence. Open PRs #1324 and #1328 verify fresh state after exact startup refusal in two additional contracts. Open PR #1344 checks last-event retirement after deliberate failure, exact detach and fresh-success replay. Draft PR #1360 verifies allocation rollback and slot reuse after failed initial-thread TLS staging. Open PR #1370 repeats a successful package run after an exact missing-provider refusal.",
+      "evidence": "The authored-package session harness checks repeated runs and handle cleanup. Merged PR #1262 records a CRT success, failure and fresh-run sequence. Open PRs #1324 and #1328 verify fresh state after exact startup refusal in two additional contracts. Open PR #1344 checks last-event retirement after deliberate failure, exact detach and fresh-success replay. Draft PR #1360 verifies allocation rollback and slot reuse after failed initial-thread TLS staging. Open PR #1370 repeats a successful package run after an exact missing-provider refusal. Open PR #1398 verifies both normal and explicit worker teardown, a missing-consumer refusal, and fresh successful package replay.",
       "remaining": "Exercise callback, worker TLS and shutdown interactions across repeated sessions and obtain independent acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/cli/tests/pe_session.rs",
@@ -1982,19 +2019,21 @@
         "https://github.com/ranveersoni98/Xenora/pull/1328",
         "https://github.com/ranveersoni98/Xenora/pull/1344",
         "https://github.com/ranveersoni98/Xenora/pull/1360",
-        "https://github.com/ranveersoni98/Xenora/pull/1370"
+        "https://github.com/ranveersoni98/Xenora/pull/1370",
+        "https://github.com/ranveersoni98/Xenora/pull/1398"
       ]
     },
     {
       "id": "R8",
       "status": "PARTIAL",
       "goal": "Runtime performance baseline and measured bottleneck improvements",
-      "evidence": "PR #1272 records a correctness-gated native qsort improvement for ordered wide records. Draft PR #1360 removes the whole-address-space copy from initial package TLS preparation. Its tests cover rollback and provide correctness evidence.",
-      "remaining": "Repeat qsort on an idle host with independent measurements, measure the TLS staging change and profile a representative compiled workload.",
+      "evidence": "PR #1272 records a correctness-gated native qsort improvement for ordered wide records. Draft PR #1360 removes the whole-address-space copy from initial package TLS preparation. Its tests cover rollback and provide correctness evidence. An isolated native release probe of prepare_module_tls with 96 MiB of guest payload already resident reduced median peak resident memory by about 96 MiB. Only module_tls.rs differed, and the control without TLS remained about 98 MiB. Two independent ARM64 reviewers reproduced all four 96 MiB observations exactly.",
+      "remaining": "Repeat qsort on an idle host with independent measurements, obtain upstream review for the isolated TLS memory result, and measure wall-clock performance on a representative compiled workload.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/benchmarks.md",
         "https://github.com/ranveersoni98/Xenora/pull/1272",
-        "https://github.com/ranveersoni98/Xenora/pull/1360"
+        "https://github.com/ranveersoni98/Xenora/pull/1360",
+        "https://github.com/ranveersoni98/Xenora/pull/1360#issuecomment-7244645259"
       ]
     },
     {
