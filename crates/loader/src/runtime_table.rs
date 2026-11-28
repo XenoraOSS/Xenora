@@ -3238,7 +3238,7 @@ pub static SERVICES: [ServiceMetadata; 302] = [
         parameters: &[Parameter { name: "clsid", kind: "ptr" }, Parameter { name: "outer", kind: "ptr" }, Parameter { name: "class_context", kind: "u32" }, Parameter { name: "iid", kind: "ptr" }, Parameter { name: "object", kind: "ptr" }],
         result: "i32",
         status: ServiceStatus::Partial,
-        aliases: &["ole32.dll"],
+        aliases: &["api-ms-win-core-com-l1-1-0.dll", "ole32.dll"],
         failure: "E_POINTER for a null out pointer, E_INVALIDARG for a null CLSID or IID, CO_E_NOTINITIALIZED for an uninitialized thread, and REGDB_E_CLASSNOTREG for unregistered classes; the out pointer is nulled first; a synthetic class exists only with explicit fixture registration",
         reference: "combaseapi.h CoCreateInstance",
         tests: &["co_create_instance_reports_an_unregistered_class"],

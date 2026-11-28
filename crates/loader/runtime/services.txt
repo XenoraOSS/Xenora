@@ -2571,6 +2571,7 @@ service combase.dll CoTaskMemRealloc(address: ptr, size: u64) -> ptr
 service combase.dll CoCreateInstance(clsid: ptr, outer: ptr, class_context: u32, iid: ptr, object: ptr) -> i32
     handler co_create_instance
     status partial
+    alias api-ms-win-core-com-l1-1-0.dll
     alias ole32.dll
     fails E_POINTER for a null out pointer, E_INVALIDARG for a null CLSID or IID, CO_E_NOTINITIALIZED for an uninitialized thread, and REGDB_E_CLASSNOTREG for unregistered classes; the out pointer is nulled first; a synthetic class exists only with explicit fixture registration
     ref combaseapi.h CoCreateInstance

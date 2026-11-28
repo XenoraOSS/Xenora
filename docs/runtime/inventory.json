@@ -24,6 +24,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "combase.dll",
+      "canonical_symbol": "CoCreateInstance",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoCreateInstance"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
       "canonical_symbol": "CoInitializeEx",
       "kind": "name",
       "library": "api-ms-win-core-com-l1-1-0.dll",
@@ -19854,9 +19864,9 @@
     }
   ],
   "summary": {
-    "aliases": 954,
-    "api_set_aliases": 753,
-    "canonical_services": 975,
+    "aliases": 955,
+    "api_set_aliases": 754,
+    "canonical_services": 974,
     "data_import_services": 7,
     "duplicate_registrations": 0,
     "implemented": 246,

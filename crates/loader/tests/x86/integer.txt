@@ -1439,6 +1439,7 @@ f5 | cmc
 9e | sahf
 90 | nop
 0f a2 | cpuid
+0f 31 | rdtsc
 0f 1f 40 08 | nop dword ptr [rax + 8]
 f3 90 | pause
 0f ae e8 | lfence

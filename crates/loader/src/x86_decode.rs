@@ -83,8 +83,8 @@ pub struct Vex {
     /// Vector length in bytes: 16 or 32.
     pub length: u8,
     /// VEX.W. A form that accepts either value reads it to select an operand
-    /// width, as the fused multiply-add family selects single or double
-    /// precision with it.
+    /// width, as the variable shifts select 32- or 64-bit lanes with it and
+    /// the fused multiply-add family selects single or double precision.
     pub wide: bool,
     /// Register named by VEX.vvvv: a further source, or the destination of a shift
     /// by an immediate.
