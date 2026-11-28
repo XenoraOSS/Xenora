@@ -508,6 +508,28 @@ fn top_bit(significand: u128, exponent: i32) -> i32 {
     exponent + 128 - significand.leading_zeros() as i32 - 1
 }
 
+/// Shift `significand * 2^exponent` down to the window's exponent, reporting
+/// whether any nonzero bit fell below it.
+///
+/// The window sits 125 bits below the larger operand's leading bit, so the
+/// larger operand is shifted left by at most 125 and only the smaller one can
+/// lose bits. Both shifts are bounded, so an aligned value stays below 2^126
+/// and a signed sum of two of them fits in an `i128`.
+fn align(significand: u128, exponent: i32, window: i32) -> (u128, bool) {
+    let shift = exponent - window;
+    if shift >= 0 {
+        (significand << shift, false)
+    } else if shift <= -128 {
+        (0, significand != 0)
+    } else {
+        let lost = -shift as u32;
+        (
+            significand >> lost,
+            significand & ((1u128 << lost) - 1) != 0,
+        )
+    }
+}
+
 /// Exact `a * b + c` with one final rounding (Intel SDM Vol. 2, "FMA").
 ///
 /// The product is formed exactly from the two unpacked significands, so no
@@ -586,34 +608,37 @@ pub fn fused_multiply_add(
             (false, true) => round(format, product_sign, product, ea + eb, false, control),
             (false, false) => {
                 let product_exponent = ea + eb;
-                // Anchor the window to the greater of the two most significant
-                // bits, so both aligned values are below 2^126 and their signed
-                // sum fits in an i128 whichever is larger.
+                // Anchor the window 125 bits below the greater of the two
+                // leading bits: the aligned sum then stays below 2^126 in
+                // magnitude, so it fits in an i128 whichever operand is larger.
                 let top = top_bit(product, product_exponent).max(top_bit(u128::from(sc), ec));
                 let window = top - 125;
-                let aligned_product = product << (product_exponent - window);
-                let (aligned_addend, lost) = if ec >= window {
-                    (u128::from(sc) << (ec - window), false)
-                } else {
-                    let shift = window - ec;
-                    let shifted = u128::from(sc) >> shift;
-                    (shifted, u128::from(sc) & ((1 << shift) - 1) != 0)
-                };
-                let signed = |value: u128, sign: bool| {
-                    (value as i128) * if sign { -1 } else { 1 }
-                };
-                let total = signed(aligned_product, product_sign)
-                    + signed(aligned_addend, addend_sign);
+                let (aligned_product, product_lost) = align(product, product_exponent, window);
+                let (aligned_addend, addend_lost) = align(u128::from(sc), ec, window);
+                // The larger operand is shifted left and the smaller is more
+                // than 125 bits below it, so at most one of them loses bits.
+                debug_assert!(!(product_lost && addend_lost));
+                let signed = |value: u128, sign: bool| (value as i128) * if sign { -1 } else { 1 };
+                let total =
+                    signed(aligned_product, product_sign) + signed(aligned_addend, addend_sign);
                 if total == 0 {
+                    // Cancellation to zero needs the two aligned values to be
+                    // equal, which rules out a lost remainder: the exact result
+                    // is a zero whose sign follows the two zero signs.
+                    debug_assert!(!product_lost && !addend_lost);
                     zero_sum(format, product_sign, addend_sign, control)
                 } else {
-                    // Bits below the window only matter as a sticky remainder.
-                    // A cancellation here cannot reach zero: a product of two
-                    // significands has at most 2 * fraction + 2 bits and the
-                    // addend at most fraction + 1, so the exact result keeps at
-                    // least fraction + 1 bits, far above the window's low end.
+                    // The lost bits are a remainder smaller than one window unit,
+                    // carrying the sign of the operand they came from. When that
+                    // sign opposes the sum, the remainder borrows a unit.
+                    let remainder_sign = if product_lost {
+                        product_sign
+                    } else {
+                        addend_sign
+                    };
+                    let lost = product_lost || addend_lost;
                     let magnitude = total.unsigned_abs();
-                    let (significand, sticky) = if lost && (total < 0) != addend_sign {
+                    let (significand, sticky) = if lost && (total < 0) != remainder_sign {
                         (magnitude - 1, true)
                     } else {
                         (magnitude, lost)

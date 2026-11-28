@@ -82,6 +82,10 @@ pub struct VexForm {
 pub struct Vex {
     /// Vector length in bytes: 16 or 32.
     pub length: u8,
+    /// VEX.W. A form that accepts either value reads it to select an operand
+    /// width, as the fused multiply-add family selects single or double
+    /// precision with it.
+    pub wide: bool,
     /// Register named by VEX.vvvv: a further source, or the destination of a shift
     /// by an immediate.
     pub source: Option<u8>,
@@ -470,6 +474,7 @@ fn decode_vex<E, F: FnMut(u64) -> Result<u8, E>>(
         repne: false,
         vex: Some(Vex {
             length,
+            wide,
             source: rule.nds.then_some(source),
         }),
     })
