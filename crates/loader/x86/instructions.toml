@@ -411,6 +411,23 @@ fmsub231s = { faults = true, ref = "sdm FMA" }
 fnmadd231s = { faults = true, ref = "sdm FMA" }
 fnmsub231s = { faults = true, ref = "sdm FMA" }
 
+vpermd = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
+vpermps = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
+vpermq = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
+vpermpd = { ref = "sdm VPERMD/VPERMPS/VPERMQ/VPERMPD" }
+vperm2i128 = { ref = "sdm VPERM2I128" }
+vinserti128 = { ref = "sdm VINSERTI128" }
+vextracti128 = { ref = "sdm VEXTRACTI128" }
+vpbroadcastb = { ref = "sdm VPBROADCAST" }
+vpbroadcastw = { ref = "sdm VPBROADCAST" }
+vpbroadcastd = { ref = "sdm VPBROADCAST" }
+vpbroadcastq = { ref = "sdm VPBROADCAST" }
+vbroadcasti128 = { ref = "sdm VPBROADCAST" }
+vpblendd = { ref = "sdm VPBLENDD" }
+vpsllv = { ref = "sdm VPSLLVD/VPSLLVQ/VPSRLVD/VPSRLVQ/VPSRAVD" }
+vpsrlv = { ref = "sdm VPSLLVD/VPSLLVQ/VPSRLVD/VPSRLVQ/VPSRAVD" }
+vpsravd = { ref = "sdm VPSLLVD/VPSLLVQ/VPSRLVD/VPSRLVQ/VPSRAVD" }
+
 # The eight classic ALU operations share six opcodes at index*8 and one digit
 # of the immediate groups 80, 81 and 83.
 [alu]
@@ -4035,7 +4052,6 @@ enc = "xmm_rm"
 length = "any"
 w = "0"
 src = "d"
-memory_only = true
 
 [[vex]]
 op = "vbroadcastsd"
@@ -4046,7 +4062,6 @@ enc = "xmm_rm"
 length = "256"
 w = "0"
 src = "q"
-memory_only = true
 
 [[vex]]
 op = "vbroadcastf128"
@@ -6776,4 +6791,195 @@ enc = "xmm_rm"
 length = "any"
 w = "1"
 src = "q"
+nds = true
+
+[[vex]]
+op = "vpermps"
+map = "0f38"
+prefix = "66"
+opcode = 0x16
+enc = "xmm_rm"
+length = "256"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vpermd"
+map = "0f38"
+prefix = "66"
+opcode = 0x36
+enc = "xmm_rm"
+length = "256"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vpermq"
+map = "0f3a"
+prefix = "66"
+opcode = 0x00
+enc = "xmm_rm_imm"
+length = "256"
+w = "1"
+src = "v"
+
+[[vex]]
+op = "vpermpd"
+map = "0f3a"
+prefix = "66"
+opcode = 0x01
+enc = "xmm_rm_imm"
+length = "256"
+w = "1"
+src = "v"
+
+[[vex]]
+op = "vperm2i128"
+map = "0f3a"
+prefix = "66"
+opcode = 0x46
+enc = "xmm_rm_imm"
+length = "256"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vinserti128"
+map = "0f3a"
+prefix = "66"
+opcode = 0x38
+enc = "xmm_rm_imm"
+length = "256"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vextracti128"
+map = "0f3a"
+prefix = "66"
+opcode = 0x39
+enc = "rm_xmm_imm"
+length = "256"
+w = "0"
+src = "x"
+
+[[vex]]
+op = "vpbroadcastb"
+map = "0f38"
+prefix = "66"
+opcode = 0x78
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "b"
+
+[[vex]]
+op = "vpbroadcastw"
+map = "0f38"
+prefix = "66"
+opcode = 0x79
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "w"
+
+[[vex]]
+op = "vpbroadcastd"
+map = "0f38"
+prefix = "66"
+opcode = 0x58
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+
+[[vex]]
+op = "vpbroadcastq"
+map = "0f38"
+prefix = "66"
+opcode = 0x59
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "q"
+
+[[vex]]
+op = "vbroadcasti128"
+map = "0f38"
+prefix = "66"
+opcode = 0x5A
+enc = "xmm_rm"
+length = "256"
+w = "0"
+src = "x"
+memory_only = true
+
+[[vex]]
+op = "vpblendd"
+map = "0f3a"
+prefix = "66"
+opcode = 0x02
+enc = "xmm_rm_imm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vpsllv"
+map = "0f38"
+prefix = "66"
+opcode = 0x47
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vpsllv"
+map = "0f38"
+prefix = "66"
+opcode = 0x47
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vpsrlv"
+map = "0f38"
+prefix = "66"
+opcode = 0x45
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vpsrlv"
+map = "0f38"
+prefix = "66"
+opcode = 0x45
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "vpsravd"
+map = "0f38"
+prefix = "66"
+opcode = 0x46
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
 nds = true
