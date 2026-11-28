@@ -45,6 +45,7 @@ const WINHTTP_QUERY_SERVER: u32 = 37;
 const WINHTTP_QUERY_DATE: u32 = 9;
 const WINHTTP_QUERY_EXPIRES: u32 = 10;
 const WINHTTP_QUERY_LAST_MODIFIED: u32 = 11;
+const WINHTTP_QUERY_RAW_HEADERS: u32 = 21;
 const WINHTTP_QUERY_RAW_HEADERS_CRLF: u32 = 22;
 const WINHTTP_QUERY_CUSTOM: u32 = 65535;
 const WINHTTP_QUERY_FLAG_SYSTEMTIME: u32 = 0x4000_0000;
@@ -2035,6 +2036,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let textual_content_type = info_level == WINHTTP_QUERY_CONTENT_TYPE;
             let textual_content_length = info_level == WINHTTP_QUERY_CONTENT_LENGTH;
             let textual_server = info_level == WINHTTP_QUERY_SERVER;
+            let raw_nul = info_level == WINHTTP_QUERY_RAW_HEADERS;
             let raw_crlf = info_level == WINHTTP_QUERY_RAW_HEADERS_CRLF;
             let custom = info_level == WINHTTP_QUERY_CUSTOM;
             let textual_date = matches!(
@@ -2050,6 +2052,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 || textual_content_type
                 || textual_content_length
                 || textual_server
+                || raw_nul
                 || raw_crlf
                 || custom;
             if !supported {
@@ -2127,6 +2130,14 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     response.status_text.clone()
                 } else if raw_crlf {
                     response.raw.clone()
+                } else if raw_nul {
+                    // The NUL-separated form is the same head with every line
+                    // ending transcribed to a terminator: the capture ends
+                    // CRLF-terminated, so the transcription ends with the last
+                    // header's terminator and the encoding path appends the
+                    // empty string's own, exactly as the public implementation
+                    // evidence lays the form out.
+                    response.raw.replace("\r\n", "\0")
                 } else {
                     header_value
                         .and_then(|value| value)
@@ -3366,6 +3377,75 @@ mod tests {
                 &[
                     request,
                     WINHTTP_QUERY_RAW_HEADERS_CRLF as u64,
+                    0,
+                    0x2a00,
+                    0x2908,
+                    0
+                ]
+            ),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), (units * 2) as u32);
+        let mut bytes = vec![0u8; units * 2 + 2];
+        fixture.memory.read_bytes(0x2a00, &mut bytes).unwrap();
+        let (words, _) = bytes.as_chunks::<2>();
+        let text = String::from_utf16(
+            &words
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(text, format!("{expected}\0"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn raw_headers_nul_separated_form_transcribes_the_wire_text_with_textual_sizing() {
+        let (port, _captured, server) = serve_once(
+            b"HTTP/1.1 203 Non-Authoritative\r\nContent-Length: 11\r\nContent-Type: text/plain\r\nX-Server: fixture\r\n\r\n",
+        );
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        // The NUL form is the same head with every line ending transcribed:
+        // each line NUL-terminated, the last terminator doubled by the empty
+        // trailing string the form carries.
+        let wire = "HTTP/1.1 203 Non-Authoritative\r\nContent-Length: 11\r\nContent-Type: text/plain\r\nX-Server: fixture\r\n";
+        let expected = wire.replace("\r\n", "\0");
+        let units = expected.encode_utf16().count();
+        let required = ((units + 1) * 2) as u32;
+        for (buffer, capacity) in [(0u64, 0u32), (0x2a00, required - 2)] {
+            fixture.memory.write_u32(0x2908, capacity).unwrap();
+            assert_eq!(
+                fixture.call(
+                    "WinHttpQueryHeaders",
+                    &[
+                        request,
+                        WINHTTP_QUERY_RAW_HEADERS as u64,
+                        0,
+                        buffer,
+                        0x2908,
+                        0
+                    ]
+                ),
+                0
+            );
+            assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+            assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), required);
+        }
+        fixture.memory.write_u32(0x2908, required).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    WINHTTP_QUERY_RAW_HEADERS as u64,
                     0,
                     0x2a00,
                     0x2908,
