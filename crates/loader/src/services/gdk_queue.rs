@@ -1,17 +1,20 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Handle ownership for the documented manual GDK task queue subset.
+//! Handle ownership for the documented Manual and ThreadPool GDK task queue subset.
 
 use super::ServicesState;
-use super::events::{INFINITE, TICKS_PER_MILLI};
-use super::threads::Pending;
-use super::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED};
-use crate::cpu::ExitReason;
-use crate::imports::{GuestCallback, ImportRegistry, ServiceStatus, Win64Args};
+use super::events::{INFINITE, TICKS_PER_MILLI, Waitable};
+use super::threads::{Pending, ThreadRequest};
+use super::{ERROR_INVALID_HANDLE, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, GuestObject};
+use crate::cpu::{ExitReason, Register};
+use crate::imports::{
+    CallbackStart, CallbackStep, CallbackTask, GuestCallback, ImportRegistry, ServiceStatus,
+    Win64Args,
+};
 use crate::memory::GuestMemory;
 use crate::runtime::HResult;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 const MODULE: &str = "xgameruntime.dll";
@@ -19,6 +22,9 @@ const MAX_HANDLES: usize = 64;
 const MAX_CALLBACKS_PER_PORT: usize = 32;
 const ERROR_OUTOFMEMORY: u32 = 14;
 const MANUAL: u32 = 0;
+const THREAD_POOL: u32 = 1;
+const SERIALIZED_THREAD_POOL: u32 = 2;
+const IMMEDIATE: u32 = 3;
 const E_ABORT: u64 = 0x8000_4004;
 
 #[derive(Default)]
@@ -26,20 +32,59 @@ pub(super) struct QueueHandles {
     last_id: u64,
     queues: BTreeMap<u64, Queue>,
     terminated: BTreeSet<u64>,
+    terminations: BTreeMap<u64, QueueTermination>,
     pending: BTreeMap<u64, VecDeque<ScheduledCallback>>,
+    pool_workers: Vec<PoolWorker>,
 }
 
 #[derive(Clone, Copy)]
 struct Queue {
     id: u64,
     ports: [u64; 2],
+    modes: [u32; 2],
+}
+
+#[derive(Default)]
+struct QueueTermination {
+    callback: Option<GuestCallback>,
+    work_remaining: usize,
+    completion_remaining: usize,
+    callback_queued: bool,
+    complete: bool,
 }
 
 struct ScheduledCallback {
     owner: u64,
+    termination: bool,
     ready_at: Instant,
     ready_ticks: Option<u64>,
     callback: GuestCallback,
+}
+
+#[derive(Clone, Copy)]
+struct ReadyCallback {
+    owner: u64,
+    port: u32,
+    termination: bool,
+    callback: GuestCallback,
+}
+
+struct PoolWorker {
+    id: u32,
+    owner: u64,
+    port: u32,
+    object: Arc<Mutex<Waitable>>,
+    finished: bool,
+}
+
+fn pool_worker_finished(worker: &PoolWorker) -> bool {
+    matches!(
+        *worker.object.lock().expect("guest thread object"),
+        Waitable::Thread {
+            exit_code: Some(_),
+            ..
+        }
+    )
 }
 
 impl QueueHandles {
@@ -52,13 +97,16 @@ impl QueueHandles {
     pub(super) fn close_all(&mut self) {
         self.queues.clear();
         self.terminated.clear();
+        self.terminations.clear();
         self.pending.clear();
+        self.pool_workers.clear();
     }
 
     fn open(
         &mut self,
         duplicate: Option<Queue>,
         composite: Option<[u64; 2]>,
+        modes: [u32; 2],
         output: u64,
         memory: &mut GuestMemory,
     ) -> Result<(), u32> {
@@ -84,6 +132,7 @@ impl QueueHandles {
                 id: handle,
                 ports: composite
                     .unwrap_or([0x5157_0000_0000_0000 | next, 0x5143_0000_0000_0000 | next]),
+                modes,
             }),
         );
         Ok(())
@@ -93,6 +142,7 @@ impl QueueHandles {
         if let Some(queue) = self.queues.remove(&handle) {
             if !self.queues.values().any(|live| live.id == queue.id) {
                 self.terminated.remove(&queue.id);
+                self.terminations.remove(&queue.id);
             }
             for port in queue.ports {
                 if !self.queues.values().any(|live| live.ports.contains(&port)) {
@@ -125,10 +175,214 @@ impl QueueHandles {
         queue.insert(index, callback);
         Ok(())
     }
+
+    /// Collect ThreadPool workers that reached their thread return. Their
+    /// thread is the callback itself, so thread exit is the exact point at
+    /// which that callback returned.
+    fn refresh_pool_workers(&mut self, now: Instant, now_ticks: Option<u64>) -> bool {
+        let mut finished = Vec::new();
+        for worker in &mut self.pool_workers {
+            if !worker.finished && pool_worker_finished(worker) {
+                worker.finished = true;
+                finished.push((worker.owner, worker.port));
+            }
+        }
+        let mut owners = BTreeSet::new();
+        for (owner, port) in finished {
+            if let Some(termination) = self.terminations.get_mut(&owner) {
+                match port {
+                    0 => {
+                        termination.work_remaining = termination.work_remaining.saturating_sub(1);
+                    }
+                    1 => {
+                        termination.completion_remaining =
+                            termination.completion_remaining.saturating_sub(1);
+                    }
+                    _ => {}
+                }
+                owners.insert(owner);
+            }
+        }
+        let mut changed = false;
+        for owner in owners {
+            changed |= self.maybe_queue_termination_callback(owner, now, now_ticks);
+        }
+        changed
+    }
+
+    /// Queue the termination callback once both ports have returned every
+    /// callback that was pending when termination started. Returns true when
+    /// waiters have to be woken.
+    fn maybe_queue_termination_callback(
+        &mut self,
+        owner: u64,
+        now: Instant,
+        now_ticks: Option<u64>,
+    ) -> bool {
+        let ready = self.terminations.get(&owner).is_some_and(|termination| {
+            termination.work_remaining == 0
+                && termination.completion_remaining == 0
+                && !termination.complete
+                && !termination.callback_queued
+        });
+        if !ready {
+            return false;
+        }
+        let Some(queue) = self
+            .queues
+            .values()
+            .find(|queue| queue.id == owner)
+            .copied()
+        else {
+            if let Some(termination) = self.terminations.get_mut(&owner) {
+                termination.complete = true;
+            }
+            return true;
+        };
+        let callback = self
+            .terminations
+            .get(&owner)
+            .and_then(|termination| termination.callback);
+        if let Some(callback) = callback {
+            let item = ScheduledCallback {
+                owner,
+                termination: true,
+                ready_at: now,
+                ready_ticks: now_ticks,
+                callback,
+            };
+            let port = queue.ports[1];
+            let ready_at = item.ready_at;
+            let ready_ticks = item.ready_ticks;
+            let pending = self.pending.entry(port).or_default();
+            // Append after callbacks already ready at this instant; later delayed
+            // callbacks of other queues keep their own deadline order.
+            let index =
+                pending.partition_point(|existing| match (existing.ready_ticks, ready_ticks) {
+                    (Some(existing), Some(new)) => existing <= new,
+                    _ => existing.ready_at <= ready_at,
+                });
+            pending.insert(index, item);
+            if let Some(termination) = self.terminations.get_mut(&owner) {
+                termination.callback_queued = true;
+            }
+        } else if let Some(termination) = self.terminations.get_mut(&owner) {
+            termination.complete = true;
+        }
+        true
+    }
+
+    /// Begin termination. Subsequent calls are idempotent so a synchronous
+    /// waiter can retry its blocked service call without queueing another
+    /// termination sequence.
+    fn terminate(
+        &mut self,
+        handle: u64,
+        context: u64,
+        entry: u64,
+        now: Instant,
+        now_ticks: Option<u64>,
+    ) -> Result<(bool, Vec<u32>), u32> {
+        let queue = *self.queues.get(&handle).ok_or(ERROR_INVALID_HANDLE)?;
+        if self.terminated.contains(&queue.id) {
+            return Ok((false, Vec::new()));
+        }
+        let mut work_remaining = 0;
+        let mut completion_remaining = 0;
+        for (port_index, port) in queue.ports.into_iter().enumerate() {
+            if let Some(pending) = self.pending.get_mut(&port) {
+                for item in pending.iter_mut().filter(|item| item.owner == queue.id) {
+                    if port_index == 0 {
+                        work_remaining += 1;
+                    } else {
+                        completion_remaining += 1;
+                    }
+                    item.ready_at = item.ready_at.min(now);
+                    if let (Some(ready), Some(now)) = (item.ready_ticks, now_ticks) {
+                        item.ready_ticks = Some(ready.min(now));
+                    }
+                    item.callback.cancelled = true;
+                }
+                pending.make_contiguous().sort_by_key(|item| item.ready_at);
+            }
+        }
+        // A ThreadPool worker is the callback thread itself. A worker that
+        // has not exited is part of the termination drain even when the
+        // cooperative scheduler has not given it its first turn yet.
+        let mut pool_worker_ids = Vec::new();
+        for worker in &self.pool_workers {
+            if worker.owner != queue.id || worker.finished || pool_worker_finished(worker) {
+                continue;
+            }
+            match worker.port {
+                0 => work_remaining += 1,
+                1 => completion_remaining += 1,
+                _ => {}
+            }
+            pool_worker_ids.push(worker.id);
+        }
+        self.terminated.insert(queue.id);
+        self.terminations.insert(
+            queue.id,
+            QueueTermination {
+                callback: (entry != 0).then_some(GuestCallback {
+                    entry,
+                    context,
+                    cancelled: false,
+                }),
+                work_remaining,
+                completion_remaining,
+                callback_queued: false,
+                complete: false,
+            },
+        );
+        self.maybe_queue_termination_callback(queue.id, now, now_ticks);
+        Ok((true, pool_worker_ids))
+    }
+
+    /// A dispatched callback returned to the queue dispatcher. Counts advance
+    /// here, not when the callback is popped, so a synchronous termination
+    /// waiter cannot pass a still-running callback.
+    fn callback_returned(
+        &mut self,
+        ready: ReadyCallback,
+        now: Instant,
+        now_ticks: Option<u64>,
+    ) -> bool {
+        if !self.terminated.contains(&ready.owner) {
+            return false;
+        }
+        if ready.termination {
+            if let Some(termination) = self.terminations.get_mut(&ready.owner) {
+                termination.complete = true;
+            }
+            return true;
+        }
+        if let Some(termination) = self.terminations.get_mut(&ready.owner) {
+            match ready.port {
+                0 => termination.work_remaining = termination.work_remaining.saturating_sub(1),
+                1 => {
+                    termination.completion_remaining =
+                        termination.completion_remaining.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+        self.maybe_queue_termination_callback(ready.owner, now, now_ticks)
+    }
+
+    fn termination_complete(&mut self, handle: u64, now: Instant, now_ticks: Option<u64>) -> bool {
+        self.refresh_pool_workers(now, now_ticks);
+        self.queues.get(&handle).is_none_or(|queue| {
+            self.terminations
+                .get(&queue.id)
+                .is_some_and(|termination| termination.complete)
+        })
+    }
 }
 
 enum DispatchPoll {
-    Ready(GuestCallback),
+    Ready(ReadyCallback),
     Wait {
         wake_at: Option<Instant>,
         wake_ticks: Option<u64>,
@@ -151,15 +405,22 @@ fn poll_dispatch(
     let Some(&port) = queue.ports.get(selector as usize) else {
         return Ok(DispatchPoll::Done);
     };
+    queues.refresh_pool_workers(Instant::now(), clock_ticks);
     let terminated = queues.terminated.contains(&queue.id);
+    let work_remaining = queues
+        .terminations
+        .get(&queue.id)
+        .map_or(0, |termination| termination.work_remaining);
     let now = Instant::now();
     let mut wake_at = None;
     let mut wake_ticks = None;
     if let Some(pending) = queues.pending.get_mut(&port)
-        && let Some((index, item)) = pending
-            .iter()
-            .enumerate()
-            .find(|(_, item)| !terminated || item.owner == queue.id)
+        && let Some((index, item)) = pending.iter().enumerate().find(|(_, item)| {
+            if !(terminated && item.owner == queue.id) {
+                return true;
+            }
+            item.termination || selector == 0 || work_remaining == 0
+        })
     {
         let ready = match (clock_ticks, item.ready_ticks) {
             (Some(now), Some(ready)) => ready <= now,
@@ -169,14 +430,33 @@ fn poll_dispatch(
             memory
                 .fetch_instruction_byte(item.callback.entry)
                 .map_err(ExitReason::MemoryFault)?;
-            let callback = pending.remove(index).expect("polled callback").callback;
-            return Ok(DispatchPoll::Ready(callback));
+            let item = pending.remove(index).expect("polled callback");
+            return Ok(DispatchPoll::Ready(ReadyCallback {
+                owner: item.owner,
+                port: selector,
+                termination: item.termination,
+                callback: item.callback,
+            }));
         }
         wake_at = Some(item.ready_at);
         wake_ticks = item.ready_ticks;
     }
     if terminated {
-        Ok(DispatchPoll::Done)
+        let complete = queues
+            .terminations
+            .get(&queue.id)
+            .is_some_and(|termination| termination.complete);
+        if complete || selector == 0 {
+            Ok(DispatchPoll::Done)
+        } else {
+            // A completion dispatcher cannot report completion while terminated
+            // callbacks are still returning or the termination callback has yet
+            // to be queued.
+            Ok(DispatchPoll::Wait {
+                wake_at,
+                wake_ticks,
+            })
+        }
     } else {
         Ok(DispatchPoll::Wait {
             wake_at,
@@ -245,7 +525,7 @@ fn dispatch_scheduled(
     teb: u64,
     timeout: u32,
     memory: &GuestMemory,
-) -> Result<Option<GuestCallback>, ExitReason> {
+) -> Result<Option<ReadyCallback>, ExitReason> {
     // A retry whose deadline has passed is over before the queue is polled:
     // work submitted after that deadline stays queued, matching the scheduler's
     // timed-wait ordering rule.
@@ -294,7 +574,7 @@ fn dispatch_host(
     args: &Win64Args,
     timeout: u32,
     memory: &GuestMemory,
-) -> Result<Option<GuestCallback>, ExitReason> {
+) -> Result<Option<ReadyCallback>, ExitReason> {
     let deadline = if timeout == INFINITE {
         None
     } else {
@@ -339,6 +619,88 @@ fn dispatch_host(
     }
 }
 
+struct DispatchTask {
+    state: Arc<ServicesState>,
+    owner: u64,
+    port: u32,
+    termination: bool,
+}
+
+impl CallbackTask for DispatchTask {
+    fn resume(&mut self, _: u64, _: u64, _: &mut GuestMemory) -> Result<CallbackStep, ExitReason> {
+        let now = Instant::now();
+        let now_ticks = self
+            .state
+            .hooks
+            .is_attached()
+            .then(|| self.state.clock.performance_count());
+        let changed = {
+            let mut queues = self
+                .state
+                .gdk_queues
+                .lock()
+                .expect("GDK queue handle table");
+            queues.callback_returned(
+                ReadyCallback {
+                    owner: self.owner,
+                    port: self.port,
+                    termination: self.termination,
+                    callback: GuestCallback {
+                        entry: 0,
+                        context: 0,
+                        cancelled: false,
+                    },
+                },
+                now,
+                now_ticks,
+            )
+        };
+        if changed {
+            self.state.gdk_queue_changed.notify_all();
+            self.state.hooks.signal();
+        }
+        Ok(CallbackStep::Return(1))
+    }
+}
+
+fn dispatch_start(
+    state: &Arc<ServicesState>,
+    args: &Win64Args,
+    teb: u64,
+    memory: &mut GuestMemory,
+) -> Result<CallbackStart, ExitReason> {
+    let timeout = args.r8 as u32;
+    let scheduled = state
+        .threads
+        .lock()
+        .expect("guest thread table")
+        .id_of(teb)
+        .is_some();
+    let ready = if scheduled {
+        dispatch_scheduled(state, args, teb, timeout, memory)?
+    } else {
+        dispatch_host(state, args, timeout, memory)?
+    };
+    let Some(ready) = ready else {
+        return Ok(CallbackStart::Return(0));
+    };
+    Ok(CallbackStart::Call {
+        task: Box::new(DispatchTask {
+            state: Arc::clone(state),
+            owner: ready.owner,
+            port: ready.port,
+            termination: ready.termination,
+        }),
+        entry: ready.callback.entry,
+        args: [
+            ready.callback.context,
+            u64::from(ready.callback.cancelled),
+            0,
+            0,
+        ],
+    })
+}
+
 fn guest_hresult(result: Result<(), u32>) -> u64 {
     match result {
         Ok(()) => HResult::OK.guest_return(),
@@ -353,11 +715,23 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "XTaskQueueCreate",
         ServiceStatus::Partial,
         move |args, _, memory| {
-            if args.rcx as u32 != MANUAL || args.rdx as u32 != MANUAL {
+            let modes = [args.rcx as u32, args.rdx as u32];
+            if modes
+                .iter()
+                .any(|mode| matches!(*mode, SERIALIZED_THREAD_POOL | IMMEDIATE))
+            {
+                return Ok(guest_hresult(Err(ERROR_NOT_SUPPORTED)));
+            }
+            if modes.iter().any(|mode| *mode > IMMEDIATE) {
+                return Ok(guest_hresult(Err(ERROR_INVALID_PARAMETER)));
+            }
+            if modes.contains(&THREAD_POOL) && !create.hooks.is_attached() {
                 return Ok(guest_hresult(Err(ERROR_NOT_SUPPORTED)));
             }
             let mut queues = create.gdk_queues.lock().expect("GDK queue handle table");
-            Ok(guest_hresult(queues.open(None, None, args.r8, memory)))
+            Ok(guest_hresult(
+                queues.open(None, None, modes, args.r8, memory),
+            ))
         },
     );
 
@@ -374,6 +748,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             Ok(guest_hresult(queues.open(
                 Some(object),
                 None,
+                object.modes,
                 args.rdx,
                 memory,
             )))
@@ -437,6 +812,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             Ok(guest_hresult(queues.open(
                 None,
                 Some(ports),
+                [MANUAL, MANUAL],
                 args.r8,
                 memory,
             )))
@@ -452,7 +828,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             MODULE,
             symbol,
             ServiceStatus::Partial,
-            move |args, _, memory| {
+            move |args, cpu, memory| {
                 let (delay, context, entry) = if delayed {
                     let Ok(entry) = args.get(4, memory) else {
                         return Ok(guest_hresult(Err(ERROR_INVALID_PARAMETER)));
@@ -464,13 +840,70 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 if entry == 0 || memory.fetch_instruction_byte(entry).is_err() {
                     return Ok(guest_hresult(Err(ERROR_INVALID_PARAMETER)));
                 }
-                let mut queues = submit.gdk_queues.lock().expect("GDK queue handle table");
-                if queues
-                    .queues
-                    .get(&args.rcx)
-                    .is_some_and(|queue| queues.terminated.contains(&queue.id))
-                {
-                    return Ok(E_ABORT);
+                let selector = args.rdx as u32;
+                let (mode, owner) = {
+                    let queues = submit.gdk_queues.lock().expect("GDK queue handle table");
+                    let Some(queue) = queues.queues.get(&args.rcx) else {
+                        return Ok(guest_hresult(Err(ERROR_INVALID_HANDLE)));
+                    };
+                    if queues.terminated.contains(&queue.id) {
+                        return Ok(E_ABORT);
+                    }
+                    let Some(mode) = queue.modes.get(selector as usize) else {
+                        return Ok(guest_hresult(Err(ERROR_INVALID_PARAMETER)));
+                    };
+                    (*mode, queue.id)
+                };
+                if mode == THREAD_POOL {
+                    if delayed {
+                        return Ok(guest_hresult(Err(ERROR_NOT_SUPPORTED)));
+                    }
+                    let request = ThreadRequest {
+                        stack: 0,
+                        start: entry,
+                        parameter: context,
+                        suspended: false,
+                        reservation: false,
+                        id_output: 0,
+                    };
+                    let handle = match submit.create_thread(cpu.gs_base, memory, &request) {
+                        Ok(0) => return Ok(guest_hresult(Err(ERROR_OUTOFMEMORY))),
+                        Ok(handle) => handle,
+                        Err(reason) => return Err(reason),
+                    };
+                    // ThreadPool workers are implementation-owned. Closing the
+                    // object handle cannot stop the thread; it only keeps one
+                    // invisible handle per callback out of the guest namespace.
+                    // The object itself remains referenced here so termination
+                    // can observe the exact worker exit.
+                    let (worker_id, worker_object) = {
+                        let mut objects = submit.objects.lock().expect("guest object state");
+                        let Some(GuestObject::Waitable { state: object, .. }) =
+                            objects.handles.get(&handle)
+                        else {
+                            return Err(ExitReason::ServiceAbiViolation);
+                        };
+                        let id = match *object.lock().expect("guest thread object") {
+                            Waitable::Thread { id, .. } => id,
+                            _ => return Err(ExitReason::ServiceAbiViolation),
+                        };
+                        let object = Arc::clone(object);
+                        objects.handles.remove(&handle);
+                        (id, object)
+                    };
+                    submit
+                        .gdk_queues
+                        .lock()
+                        .expect("GDK queue handle table")
+                        .pool_workers
+                        .push(PoolWorker {
+                            id: worker_id,
+                            owner,
+                            port: selector,
+                            object: worker_object,
+                            finished: false,
+                        });
+                    return Ok(HResult::OK.guest_return());
                 }
                 let ready_ticks = submit.hooks.is_attached().then(|| {
                     submit
@@ -480,6 +913,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 });
                 let callback = ScheduledCallback {
                     owner: 0,
+                    termination: false,
                     ready_at: Instant::now() + Duration::from_millis(u64::from(delay)),
                     ready_ticks,
                     callback: GuestCallback {
@@ -488,7 +922,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                         cancelled: false,
                     },
                 };
-                let result = queues.submit(args.rcx, args.rdx as u32, callback);
+                let mut queues = submit.gdk_queues.lock().expect("GDK queue handle table");
+                let result = queues.submit(args.rcx, selector, callback);
                 if result.is_ok() {
                     submit.gdk_queue_changed.notify_all();
                 }
@@ -501,48 +936,81 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         MODULE,
         "XTaskQueueTerminate",
         ServiceStatus::Partial,
-        move |args, _, _| {
-            if args.rdx as u8 != 0 || args.r9 != 0 {
-                return Ok(guest_hresult(Err(ERROR_NOT_SUPPORTED)));
+        move |args, cpu, memory| {
+            let wait = args.rdx as u8 != 0;
+            let (context, entry) = (args.r8, args.r9);
+            if entry != 0 && memory.fetch_instruction_byte(entry).is_err() {
+                return Ok(guest_hresult(Err(ERROR_INVALID_PARAMETER)));
             }
-            let mut queues = terminate.gdk_queues.lock().expect("GDK queue handle table");
-            let Some(&queue) = queues.queues.get(&args.rcx) else {
-                return Ok(guest_hresult(Err(ERROR_INVALID_HANDLE)));
+            let now = Instant::now();
+            let now_ticks = terminate
+                .hooks
+                .is_attached()
+                .then(|| terminate.clock.performance_count());
+            let started = {
+                let mut queues = terminate.gdk_queues.lock().expect("GDK queue handle table");
+                queues.terminate(args.rcx, context, entry, now, now_ticks)
             };
-            if queues.terminated.insert(queue.id) {
-                let now = Instant::now();
-                let now_ticks = terminate
-                    .hooks
-                    .is_attached()
-                    .then(|| terminate.clock.performance_count());
-                for pending in queues.pending.values_mut() {
-                    for item in pending.iter_mut().filter(|item| item.owner == queue.id) {
-                        item.ready_at = item.ready_at.min(now);
-                        if let (Some(ready), Some(now)) = (item.ready_ticks, now_ticks) {
-                            item.ready_ticks = Some(ready.min(now));
+            let (started, pool_worker_ids) = match started {
+                Ok(started) => started,
+                Err(error) => return Ok(guest_hresult(Err(error))),
+            };
+            if started {
+                if !pool_worker_ids.is_empty() {
+                    let mut table = terminate.threads.lock().expect("guest thread table");
+                    for id in pool_worker_ids {
+                        if let Some(thread) = table.threads.get_mut(&id)
+                            && let Some(cpu) = &mut thread.cpu
+                        {
+                            cpu.set(Register::Rdx, 1);
                         }
-                        item.callback.cancelled = true;
                     }
-                    pending.make_contiguous().sort_by_key(|item| item.ready_at);
                 }
                 terminate.gdk_queue_changed.notify_all();
+                terminate.hooks.signal();
+            }
+            if !wait {
+                return Ok(0);
+            }
+            if terminate.hooks.is_attached() {
+                let complete = {
+                    let now = Instant::now();
+                    let now_ticks = terminate
+                        .hooks
+                        .is_attached()
+                        .then(|| terminate.clock.performance_count());
+                    terminate
+                        .gdk_queues
+                        .lock()
+                        .expect("GDK queue handle table")
+                        .termination_complete(args.rcx, now, now_ticks)
+                };
+                if complete {
+                    clear_task_wait(&terminate, cpu.gs_base);
+                    return Ok(0);
+                }
+                update_task_wait(&terminate, cpu.gs_base, None, None);
+                return Err(ExitReason::GuestBlocked);
+            }
+            let mut queues = terminate.gdk_queues.lock().expect("GDK queue handle table");
+            loop {
+                let now = Instant::now();
+                if queues.termination_complete(args.rcx, now, None) {
+                    break;
+                }
+                queues = terminate
+                    .gdk_queue_changed
+                    .wait(queues)
+                    .expect("GDK queue handle table");
             }
             Ok(0)
         },
     );
     let dispatch = Arc::clone(state);
-    registry.register_callback_dispatch(MODULE, "XTaskQueueDispatch", move |args, teb, memory| {
-        let timeout = args.r8 as u32;
-        let scheduled = dispatch
-            .threads
-            .lock()
-            .expect("guest thread table")
-            .id_of(teb)
-            .is_some();
-        if scheduled {
-            dispatch_scheduled(&dispatch, args, teb, timeout, memory)
-        } else {
-            dispatch_host(&dispatch, args, timeout, memory)
-        }
-    });
+    registry.register_callback_task(
+        MODULE,
+        "XTaskQueueDispatch",
+        ServiceStatus::Partial,
+        move |args, teb, memory, _| dispatch_start(&dispatch, args, teb, memory),
+    );
 }
