@@ -743,8 +743,15 @@ pub fn decode<E>(
                 return Err(DecodeError::Unsupported(opcode));
             }
             let operand;
-            (operand, rip_relative) =
-                memory_operand(&mut cursor, modrm, rex_x, rex_b, segment, address_size, false)?;
+            (operand, rip_relative) = memory_operand(
+                &mut cursor,
+                modrm,
+                rex_x,
+                rex_b,
+                segment,
+                address_size,
+                false,
+            )?;
             rm = Some(RmOperand::Mem(operand));
         }
     } else if form.immediate == Immediate::Offset {

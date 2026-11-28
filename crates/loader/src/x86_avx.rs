@@ -259,8 +259,14 @@ pub(crate) fn execute(
         // later lane leaves exactly the partial state the manuals specify for
         // a restart. Masked lanes are never accessed.
         (
-            Op::Gatherdd | Op::Gatherdq | Op::Gatherqd | Op::Gatherqq | Op::Gatherdps
-            | Op::Gatherqps | Op::Gatherdpd | Op::Gatherqpd,
+            Op::Gatherdd
+            | Op::Gatherdq
+            | Op::Gatherqd
+            | Op::Gatherqq
+            | Op::Gatherdps
+            | Op::Gatherqps
+            | Op::Gatherdpd
+            | Op::Gatherqpd,
             _,
         ) => {
             let bits = if vex.wide { 64 } else { 32 };
@@ -284,9 +290,7 @@ pub(crate) fn execute(
             };
             let indices = read_ymm(cpu, vector);
             let lanes = u32::from(length) * 8 / bits.max(ibits);
-            let base = operand
-                .base
-                .map_or(0, |index| cpu.gpr[usize::from(index)]);
+            let base = operand.base.map_or(0, |index| cpu.gpr[usize::from(index)]);
             let mask_target = vex.source.ok_or(ExitReason::IllegalInstruction(0))?;
             let mut mask = first;
             let mut result = read_ymm(cpu, reg);
@@ -307,7 +311,8 @@ pub(crate) fn execute(
                 let per_half = 128 / bits;
                 let half = (lane_index / per_half) as usize;
                 let lane_mask = ((1u128 << bits) - 1) << (bits * (lane_index % per_half));
-                result[half] = result[half] & !lane_mask | u128::from(value) << (bits * (lane_index % per_half));
+                result[half] = result[half] & !lane_mask
+                    | u128::from(value) << (bits * (lane_index % per_half));
                 // The lane is complete: it is written and its mask lane
                 // cleared before the next lane is read, so a fault leaves
                 // exactly the partial state the restart model specifies.

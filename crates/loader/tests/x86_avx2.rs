@@ -390,6 +390,12 @@ fn every_avx2_form_matches_the_reference_in_both_engines() {
     let mut checked = 0;
     for (text, bytes) in &code {
         let (name, operands) = split(text);
+        // The gathers index memory by vector lanes rather than the fixed
+        // operand slot this harness models; `x86_gather.rs` validates them
+        // against its own byte-array reference.
+        if name.contains("gather") {
+            continue;
+        }
         let length = length(name, &operands);
         for _ in 0..8 {
             let machine = random.machine();

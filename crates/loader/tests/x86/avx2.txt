@@ -128,6 +128,66 @@ c4 c2 35 46 da | vpsravd ymm3, ymm9, ymm10
 c4 e2 35 46 5c be 10 | vpsravd ymm3, ymm9, ymmword ptr [rsi + 4*rdi + 16]
 c4 e2 6d 46 d2 | vpsravd ymm2, ymm2, ymm2
 c4 e2 35 46 db | vpsravd ymm3, ymm9, ymm3
+c4 a2 29 90 1c 8e | vpgatherdd xmm3, dword ptr [rsi + xmm9*4], xmm10
+c4 a2 29 90 5c 4e 08 | vpgatherdd xmm3, dword ptr [rsi + xmm9*2 + 8], xmm10
+c4 a2 29 90 1c cd 00 00 00 00 | vpgatherdd xmm3, dword ptr [xmm9*8], xmm10
+c4 a2 61 90 1c 8e | vpgatherdd xmm3, dword ptr [rsi + xmm9*4], xmm3
+c4 a2 2d 90 1c 8e | vpgatherdd ymm3, dword ptr [rsi + ymm9*4], ymm10
+c4 a2 2d 90 5c 4e 08 | vpgatherdd ymm3, dword ptr [rsi + ymm9*2 + 8], ymm10
+c4 a2 2d 90 1c cd 00 00 00 00 | vpgatherdd ymm3, dword ptr [ymm9*8], ymm10
+c4 a2 65 90 1c 8e | vpgatherdd ymm3, dword ptr [rsi + ymm9*4], ymm3
+c4 a2 a9 90 1c 8e | vpgatherdq xmm3, qword ptr [rsi + xmm9*4], xmm10
+c4 a2 a9 90 5c 4e 08 | vpgatherdq xmm3, qword ptr [rsi + xmm9*2 + 8], xmm10
+c4 a2 a9 90 1c cd 00 00 00 00 | vpgatherdq xmm3, qword ptr [xmm9*8], xmm10
+c4 a2 e1 90 1c 8e | vpgatherdq xmm3, qword ptr [rsi + xmm9*4], xmm3
+c4 a2 29 91 1c 8e | vpgatherqd xmm3, dword ptr [rsi + xmm9*4], xmm10
+c4 a2 29 91 5c 4e 08 | vpgatherqd xmm3, dword ptr [rsi + xmm9*2 + 8], xmm10
+c4 a2 29 91 1c cd 00 00 00 00 | vpgatherqd xmm3, dword ptr [xmm9*8], xmm10
+c4 a2 61 91 1c 8e | vpgatherqd xmm3, dword ptr [rsi + xmm9*4], xmm3
+c4 a2 2d 91 1c 8e | vpgatherqd xmm3, dword ptr [rsi + ymm9*4], xmm10
+c4 a2 2d 91 5c 4e 08 | vpgatherqd xmm3, dword ptr [rsi + ymm9*2 + 8], xmm10
+c4 a2 2d 91 1c cd 00 00 00 00 | vpgatherqd xmm3, dword ptr [ymm9*8], xmm10
+c4 a2 65 91 1c 8e | vpgatherqd xmm3, dword ptr [rsi + ymm9*4], xmm3
+c4 a2 a9 91 1c 8e | vpgatherqq xmm3, qword ptr [rsi + xmm9*4], xmm10
+c4 a2 a9 91 5c 4e 08 | vpgatherqq xmm3, qword ptr [rsi + xmm9*2 + 8], xmm10
+c4 a2 a9 91 1c cd 00 00 00 00 | vpgatherqq xmm3, qword ptr [xmm9*8], xmm10
+c4 a2 e1 91 1c 8e | vpgatherqq xmm3, qword ptr [rsi + xmm9*4], xmm3
+c4 a2 ad 91 1c 8e | vpgatherqq ymm3, qword ptr [rsi + ymm9*4], ymm10
+c4 a2 ad 91 5c 4e 08 | vpgatherqq ymm3, qword ptr [rsi + ymm9*2 + 8], ymm10
+c4 a2 ad 91 1c cd 00 00 00 00 | vpgatherqq ymm3, qword ptr [ymm9*8], ymm10
+c4 a2 e5 91 1c 8e | vpgatherqq ymm3, qword ptr [rsi + ymm9*4], ymm3
+c4 a2 29 92 1c 8e | vgatherdps xmm3, dword ptr [rsi + xmm9*4], xmm10
+c4 a2 29 92 5c 4e 08 | vgatherdps xmm3, dword ptr [rsi + xmm9*2 + 8], xmm10
+c4 a2 29 92 1c cd 00 00 00 00 | vgatherdps xmm3, dword ptr [xmm9*8], xmm10
+c4 a2 61 92 1c 8e | vgatherdps xmm3, dword ptr [rsi + xmm9*4], xmm3
+c4 a2 2d 92 1c 8e | vgatherdps ymm3, dword ptr [rsi + ymm9*4], ymm10
+c4 a2 2d 92 5c 4e 08 | vgatherdps ymm3, dword ptr [rsi + ymm9*2 + 8], ymm10
+c4 a2 2d 92 1c cd 00 00 00 00 | vgatherdps ymm3, dword ptr [ymm9*8], ymm10
+c4 a2 65 92 1c 8e | vgatherdps ymm3, dword ptr [rsi + ymm9*4], ymm3
+c4 a2 a9 92 1c 8e | vgatherdpd xmm3, qword ptr [rsi + xmm9*4], xmm10
+c4 a2 a9 92 5c 4e 08 | vgatherdpd xmm3, qword ptr [rsi + xmm9*2 + 8], xmm10
+c4 a2 a9 92 1c cd 00 00 00 00 | vgatherdpd xmm3, qword ptr [xmm9*8], xmm10
+c4 a2 e1 92 1c 8e | vgatherdpd xmm3, qword ptr [rsi + xmm9*4], xmm3
+c4 a2 29 93 1c 8e | vgatherqps xmm3, dword ptr [rsi + xmm9*4], xmm10
+c4 a2 29 93 5c 4e 08 | vgatherqps xmm3, dword ptr [rsi + xmm9*2 + 8], xmm10
+c4 a2 29 93 1c cd 00 00 00 00 | vgatherqps xmm3, dword ptr [xmm9*8], xmm10
+c4 a2 61 93 1c 8e | vgatherqps xmm3, dword ptr [rsi + xmm9*4], xmm3
+c4 a2 2d 93 1c 8e | vgatherqps xmm3, dword ptr [rsi + ymm9*4], xmm10
+c4 a2 2d 93 5c 4e 08 | vgatherqps xmm3, dword ptr [rsi + ymm9*2 + 8], xmm10
+c4 a2 2d 93 1c cd 00 00 00 00 | vgatherqps xmm3, dword ptr [ymm9*8], xmm10
+c4 a2 65 93 1c 8e | vgatherqps xmm3, dword ptr [rsi + ymm9*4], xmm3
+c4 a2 a9 93 1c 8e | vgatherqpd xmm3, qword ptr [rsi + xmm9*4], xmm10
+c4 a2 a9 93 5c 4e 08 | vgatherqpd xmm3, qword ptr [rsi + xmm9*2 + 8], xmm10
+c4 a2 a9 93 1c cd 00 00 00 00 | vgatherqpd xmm3, qword ptr [xmm9*8], xmm10
+c4 a2 e1 93 1c 8e | vgatherqpd xmm3, qword ptr [rsi + xmm9*4], xmm3
+c4 a2 ad 93 1c 8e | vgatherqpd ymm3, qword ptr [rsi + ymm9*4], ymm10
+c4 a2 ad 93 5c 4e 08 | vgatherqpd ymm3, qword ptr [rsi + ymm9*2 + 8], ymm10
+c4 a2 ad 93 1c cd 00 00 00 00 | vgatherqpd ymm3, qword ptr [ymm9*8], ymm10
+c4 a2 e5 93 1c 8e | vgatherqpd ymm3, qword ptr [rsi + ymm9*4], ymm3
+c4 a2 ad 90 1c 8e | vpgatherdq ymm3, qword ptr [rsi + xmm9*4], ymm10
+c4 a2 e5 90 1c 8e | vpgatherdq ymm3, qword ptr [rsi + xmm9*4], ymm3
+c4 a2 ad 92 1c 8e | vgatherdpd ymm3, qword ptr [rsi + xmm9*4], ymm10
+c4 a2 e5 92 1c 8e | vgatherdpd ymm3, qword ptr [rsi + xmm9*4], ymm3
 c4 e2 31 8c 5c be 10 | vpmaskmovd xmm3, xmm9, xmmword ptr [rsi + 4*rdi + 16]
 c4 e2 61 8c 5c be 10 | vpmaskmovd xmm3, xmm3, xmmword ptr [rsi + 4*rdi + 16]
 c4 62 31 8e 54 be 10 | vpmaskmovd xmmword ptr [rsi + 4*rdi + 16], xmm9, xmm10
