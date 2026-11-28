@@ -540,6 +540,7 @@ remains unsupported.
 - WinHTTP HTTP-date conversion utilities (#1109): `WinHttpTimeToSystemTime` parses the exact RFC 2616 RFC1123, RFC850 and asctime forms into bounded SYSTEMTIME values, including validated leap years, computed weekdays and a year-granularity rolling fifty-year RFC850 century window driven by the service clock. `WinHttpTimeFromSystemTime` validates input calendar fields and emits the RFC1123 generation form with a null terminator. The parser deliberately remains narrower than permissive legacy implementations: lowercase or whitespace-tolerant forms, leap seconds, non-GMT zone names and years above 9999 fail honestly. Direct service tests cover all three forms, round trips, malformed inputs and invalid guest memory on Apple Silicon; independent acceptance and real Xbox compatibility are not claimed.
 
 ### Fixed
+- A Win32 file wrapped by the CRT keeps its shared file position and stays open until the last duplicated or inherited descriptor closes (#1301).
 
 - QA verification now fingerprints tracked and non-ignored checkout inputs, including binary fixtures. A source change detected during the suites makes the evidence stale even if the original files are restored later. Suite exit codes are preserved (#1237).
 - `xenora-pe-session` refuses a DLL selected as the root before guest startup, including sessions without companion modules (#1275).

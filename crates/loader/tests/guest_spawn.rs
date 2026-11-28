@@ -47,10 +47,10 @@ fn built() -> &'static PathBuf {
     })
 }
 
-fn run() -> (StartupResult, Arc<ServicesState>) {
+fn run(args: &[&str]) -> (StartupResult, Arc<ServicesState>) {
     let bytes = std::fs::read(built().join("guest-spawn.exe")).expect("read the guest program");
     let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
-    state.set_program_arguments(&["guest-spawn.exe"]).unwrap();
+    state.set_program_arguments(args).unwrap();
     state.set_spawn_image("guest-spawn.exe", &bytes);
     let mut registry = ImportRegistry::new();
     register_standard_services(&mut registry, Arc::clone(&state));
@@ -70,7 +70,7 @@ fn output(state: &ServicesState) -> String {
 
 #[test]
 fn a_spawned_child_runs_shares_the_drive_and_returns_its_status() {
-    let (result, state) = run();
+    let (result, state) = run(&["guest-spawn.exe"]);
     assert_eq!(
         result.execution.exit_reason,
         ExitReason::ProcessExit(0),
@@ -88,7 +88,7 @@ fn a_spawned_child_runs_shares_the_drive_and_returns_its_status() {
 /// its own flow continues past the spawn with its original vector.
 #[test]
 fn the_parent_process_state_survives_the_child() {
-    let (result, state) = run();
+    let (result, state) = run(&["guest-spawn.exe"]);
     assert_eq!(result.execution.exit_reason, ExitReason::ProcessExit(0));
     // The parent's open handles from its own file work are closed at exit;
     // the shared drive keeps the file the child read.
@@ -96,4 +96,27 @@ fn the_parent_process_state_survives_the_child() {
         state.file_contents("spawn-shared.txt"),
         Some(b"parent data".to_vec())
     );
+}
+
+#[test]
+fn inherited_wrapped_file_survives_child_close_and_preserves_position() {
+    let (result, state) = run(&["guest-spawn.exe", "wrapped-parent"]);
+    assert_eq!(
+        result.execution.exit_reason,
+        ExitReason::ProcessExit(0),
+        "output so far:\n{}",
+        output(&state)
+    );
+    assert_eq!(
+        state.standard_output(),
+        concat!(
+            "wrapped child: read B and closed descriptor\r\n",
+            "wrapped parent: read C after child close\r\n",
+            "wrapped child: read D and left descriptor open\r\n",
+            "wrapped parent: read E through surviving duplicate\r\n",
+            "wrapped parent: final close released the handle\r\n",
+        )
+        .as_bytes()
+    );
+    assert_eq!(state.open_handle_count(), 0);
 }
