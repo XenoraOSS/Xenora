@@ -12,14 +12,14 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 1015 |
+| Canonical services | 1017 |
 | Typed registry services | 304 |
-| Manual code registrations | 711 |
+| Manual code registrations | 713 |
 | Canonical libraries | 28 |
 | Implemented | 249 |
-| Partial | 766 |
+| Partial | 768 |
 | Stub | 0 |
-| Data-import services | 12 |
+| Data-import services | 14 |
 | Aliases of every kind | 968 |
 | API-set aliases | 760 |
 | Ordinal aliases | 35 |
@@ -40,7 +40,7 @@ independent acceptance or compatibility claims.
 | <code>libgcc_s_seh-1.dll</code> | <code>c++-support</code> | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
 | <code>libstdc++-6.dll</code> | <code>c++-support</code> | 18 | 3 | 15 | 0 | 15 | 3 | 0 | 0 |
 | <code>libwinpthread-1.dll</code> | <code>c++-support</code> | 8 | 0 | 8 | 0 | 4 | 4 | 0 | 0 |
-| <code>msvcp140.dll</code> | <code>other</code> | 17 | 0 | 17 | 2 | 0 | 17 | 0 | 0 |
+| <code>msvcp140.dll</code> | <code>other</code> | 18 | 0 | 18 | 3 | 0 | 18 | 0 | 0 |
 | <code>msvcp140_atomic_wait.dll</code> | <code>other</code> | 2 | 0 | 2 | 0 | 0 | 2 | 0 | 0 |
 | <code>msvcp140_codecvt_ids.dll</code> | <code>other</code> | 4 | 0 | 4 | 4 | 0 | 4 | 0 | 0 |
 | <code>msvcrt.dll</code> | <code>c-runtime</code> | 41 | 13 | 28 | 7 | 14 | 27 | 0 | 14 |
