@@ -540,7 +540,8 @@ remains unsupported.
 - WinHTTP HTTP-date conversion utilities (#1109): `WinHttpTimeToSystemTime` parses the exact RFC 2616 RFC1123, RFC850 and asctime forms into bounded SYSTEMTIME values, including validated leap years, computed weekdays and a year-granularity rolling fifty-year RFC850 century window driven by the service clock. `WinHttpTimeFromSystemTime` validates input calendar fields and emits the RFC1123 generation form with a null terminator. The parser deliberately remains narrower than permissive legacy implementations: lowercase or whitespace-tolerant forms, leap seconds, non-GMT zone names and years above 9999 fail honestly. Direct service tests cover all three forms, round trips, malformed inputs and invalid guest memory on Apple Silicon; independent acceptance and real Xbox compatibility are not claimed.
 
 ### Fixed
-
+- `_get_osfhandle` of a CRT-opened file now answers the kernel file object the real CRT always has behind its descriptors, synthesized the first time a guest asks: the CRT itself opens on top of CreateFile, so win32 compatibility layers that implement their `fstat` and `isatty` through the handle and the file-type queries complete instead of dying with `EBADF` before any file-type query (#1312). Measured end-to-end on the public mingw64 BusyBox binary: `tar` creation, which stats its archive through exactly this chain, now writes and lists correct archives. A text-mode translation divergence for newline-terminated content the measurement surfaced is tracked on the issue. Local verification only.
+- `_fstat64` of a pipe end answers the FIFO mode and a zero size instead of failing `EBADF`, and one wrapping a kernel file object answers the regular-file mode with the content's length, as the CRT stats either arrangement of open file. busybox-w32 stats its standard output before writing an archive stream, so `tar cf - dir` piped onward now moves bytes where it previously died before the first one. Local verification only (public busybox mingw64 binary).
 - QA verification now fingerprints tracked and non-ignored checkout inputs, including binary fixtures. A source change detected during the suites makes the evidence stale even if the original files are restored later. Suite exit codes are preserved (#1237).
 - `xenora-pe-session` refuses a DLL selected as the root before guest startup, including sessions without companion modules (#1275).
 - The typed CRT registry regenerates the existing `_locking` and `_commit` imports from its source catalog and checks both generated reports in the normal test suite (#1264). Both services are partial. The guest drive stores writes in memory, and lock conflicts return immediately.
@@ -816,7 +817,6 @@ remains unsupported.
 - Added a correctness-gated benchmark harness that records stage timings, power source, and thermal state.
 - Repository contribution guidelines, issue forms, pull request checklist, community expectations and security reporting policy.
 
-### Changed
 
 - Added native ARM64 CI and repository audits for dependency direction, claims, and generated status. Expanded CI to check the standalone guest experiment, synthetic PE fixture bytes, and progress asset consistency.
 
@@ -842,3 +842,4 @@ remains unsupported.
 - Removed the superseded Phase 01 continuation prompt and redundant planning instructions. Candidate verification records remain in the assurance documentation.
 
 - Removed the speculative seven-phase roadmap from the README.
+- `fclose` of a standard stream no longer stops the guest: it closes the underlying descriptor exactly as `_close` of it does, as the CRT does not reserve the standard streams on Windows (#1273). BusyBox awk closes its input when stdin reaches EOF before exit — every awk construct reading stdin to end-of-file died with the refusal sentinel, while output was still correct. The full measured matrix now passes: pipelines, file redirection, numeric processing, early exit and subsequent spawns. Local verification only.

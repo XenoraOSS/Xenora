@@ -2548,9 +2548,14 @@ pub(crate) mod handlers {
     }
 
     /// `_get_osfhandle`. The kernel handle a descriptor wraps, or -1 with
-    /// `EBADF` — the CRT's own files have no kernel object behind them.
+    /// `EBADF` for one that is no file at all. A CRT-opened file answers
+    /// the kernel object the real CRT always has behind its descriptors,
+    /// synthesized the first time a guest asks (#1312).
     pub fn _get_osfhandle(context: &mut ServiceContext<'_>, fd: i32) -> Outcome<u64> {
-        let outcome = context.state.crt_streams().get_osfhandle(fd);
+        let outcome = {
+            let mut drive = context.state.objects.lock().expect("guest object state");
+            context.state.crt_streams().get_osfhandle(&mut drive, fd)
+        };
         or_errno(context, outcome)
     }
 
