@@ -87,7 +87,21 @@ impl Sort {
 
     fn permute(&self, memory: &mut GuestMemory) -> Result<(), ExitReason> {
         let width = self.width as usize;
-        let mut original = vec![0; self.indices.len() * width];
+        let len = self.indices.len() * width;
+        // The comparator has finished and may have changed the mapping.
+        // Preserve the original read/write path if either check fails.
+        if self
+            .indices
+            .iter()
+            .copied()
+            .eq(0..self.indices.len() as u32)
+            && memory.can_read(self.base, len)
+            && memory.can_write(self.base, len)
+        {
+            return Ok(());
+        }
+
+        let mut original = vec![0; len];
         memory.read_bytes(self.base, &mut original).map_err(fault)?;
         let mut ordered = Vec::with_capacity(original.len());
         for &index in &self.indices {
@@ -724,5 +738,97 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         registry.alias(CRT_UTILITY_API, UCRT, symbol);
         // The legacy CRT exports the sorting forms under the same names.
         registry.alias(MSVCRT, UCRT, symbol);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::memory::MemoryPermissions;
+
+    const BASE: u64 = 0x1_0000;
+    const COMPARE: Comparator = Comparator {
+        entry: 0x2_0000,
+        context: None,
+    };
+    const RECORDS: [u8; 8] = [7, 0, 0x12, 0x34, 7, 0, 0x56, 0x78];
+
+    #[test]
+    fn qsort_identity_keeps_equal_records_in_original_order() {
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region_with_data(BASE, RECORDS.len(), MemoryPermissions::READ_WRITE, &RECORDS)
+            .unwrap();
+        let CallbackStart::Call {
+            mut task,
+            entry,
+            args,
+        } = start_sort(&mut memory, BASE, 2, 4, COMPARE).unwrap()
+        else {
+            panic!("qsort must call the comparator");
+        };
+        assert_eq!(entry, COMPARE.entry);
+        assert_eq!(args, [BASE, BASE + 4, 0, 0]);
+        assert!(matches!(
+            task.resume(0, 0, &mut memory),
+            Ok(CallbackStep::Return(0))
+        ));
+        let mut actual = [0; RECORDS.len()];
+        memory.read_bytes(BASE, &mut actual).unwrap();
+        assert_eq!(actual, RECORDS);
+    }
+
+    #[test]
+    fn qsort_identity_still_faults_when_the_final_read_is_denied() {
+        let mut memory = GuestMemory::new();
+        let write_only = MemoryPermissions {
+            write: true,
+            ..MemoryPermissions::NO_ACCESS
+        };
+        memory
+            .map_region_with_data(BASE, RECORDS.len(), write_only, &RECORDS)
+            .unwrap();
+        let CallbackStart::Call { mut task, .. } =
+            start_sort(&mut memory, BASE, 2, 4, COMPARE).unwrap()
+        else {
+            panic!("qsort must call the comparator");
+        };
+
+        // A comparator can report a tie without reading the records.
+        assert!(matches!(
+            task.resume(0, 0, &mut memory),
+            Err(ExitReason::MemoryFault(MemoryError::PermissionViolation {
+                address: BASE,
+                required: "read",
+            }))
+        ));
+    }
+
+    #[test]
+    fn qsort_identity_still_faults_when_the_comparator_revokes_write_access() {
+        const PAGE_BYTES: usize = 4096;
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region_with_data(BASE, PAGE_BYTES, MemoryPermissions::READ_WRITE, &RECORDS)
+            .unwrap();
+        let CallbackStart::Call { mut task, .. } =
+            start_sort(&mut memory, BASE, 2, 4, COMPARE).unwrap()
+        else {
+            panic!("qsort must call the comparator");
+        };
+
+        memory
+            .protect_committed_range(BASE, BASE + PAGE_BYTES as u64, MemoryPermissions::READ_ONLY)
+            .unwrap();
+        assert!(matches!(
+            task.resume(0, 0, &mut memory),
+            Err(ExitReason::MemoryFault(MemoryError::PermissionViolation {
+                address: BASE,
+                required: "write",
+            }))
+        ));
+        let mut actual = [0; RECORDS.len()];
+        memory.read_bytes(BASE, &mut actual).unwrap();
+        assert_eq!(actual, RECORDS);
     }
 }
