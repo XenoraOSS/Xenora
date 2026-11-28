@@ -6,6 +6,7 @@ use support::{Guest, SCRATCH, SCRATCH_LEN};
 
 const IMPORTS: &[(&str, &str)] = &[
     ("winhttp.dll", "WinHttpCrackUrl"),
+    ("winhttp.dll", "WinHttpCreateUrl"),
     ("kernel32.dll", "GetLastError"),
     ("kernel32.dll", "SetLastError"),
 ];
@@ -198,5 +199,237 @@ fn unsupported_scheme_invalid_url_and_guest_pointer_failures_are_explicit() {
 
     guest.memory.write_u32(OUTPUT, 84).unwrap();
     assert_eq!(guest.call("WinHttpCrackUrl", &[URL, 0, 0, OUTPUT]), 0);
+    assert_eq!(guest.error(), 87);
+}
+
+// ---- WinHttpCreateUrl ----
+
+const COMPONENTS: u64 = OUTPUT;
+const CREATED: u64 = SCRATCH + 0x800;
+const LENGTH: u64 = SCRATCH + 0x40;
+const STRINGS: u64 = SCRATCH + 0xa00;
+
+/// Writes a UTF-16 component string plus terminator at `storage` and points
+/// the record field at it. `counted` selects the exact-length form; otherwise
+/// the zero length means the zero-terminated form.
+fn component(guest: &mut Guest, field: u64, text: &str, counted: bool, storage: u64) {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    for (index, unit) in units.iter().copied().chain([0]).enumerate() {
+        guest
+            .memory
+            .write_u16(storage + index as u64 * 2, unit)
+            .unwrap();
+    }
+    guest.memory.write_u64(COMPONENTS + field, storage).unwrap();
+    guest
+        .memory
+        .write_u32(
+            COMPONENTS + field + 8,
+            if counted { units.len() as u32 } else { 0 },
+        )
+        .unwrap();
+}
+
+fn create_setup() -> Guest {
+    let mut guest = Guest::new(IMPORTS, &[]);
+    let mut fields = [0; STRUCT_SIZE];
+    fields[..4].copy_from_slice(&(STRUCT_SIZE as u32).to_le_bytes());
+    guest.memory.write_bytes(COMPONENTS, &fields).unwrap();
+    guest
+}
+
+fn created(guest: &Guest) -> String {
+    let len = guest.u32_at(LENGTH) as usize;
+    let mut bytes = vec![0u8; len * 2];
+    guest.memory.read_bytes(CREATED, &mut bytes).unwrap();
+    let (words, _) = bytes.as_chunks::<2>();
+    String::from_utf16(
+        &words
+            .iter()
+            .copied()
+            .map(u16::from_le_bytes)
+            .collect::<Vec<_>>(),
+    )
+    .unwrap()
+}
+
+#[test]
+fn a_cracked_canonical_url_round_trips_through_creation() {
+    let mut guest = setup();
+    put_url(&mut guest, "http://user:pass@example.test:8080/p?q#f");
+    for field in [SCHEME, HOST, USER, PASSWORD, PATH, EXTRA] {
+        output(&mut guest, field, 0, u32::MAX);
+    }
+    assert_eq!(guest.call("WinHttpCrackUrl", &[URL, 0, 0, COMPONENTS]), 1);
+    guest.memory.write_u32(LENGTH, 256).unwrap();
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        1
+    );
+    let expected = "http://user:pass@example.test:8080/p?q#f";
+    assert_eq!(created(&guest), expected);
+    assert_eq!(guest.u32_at(LENGTH), expected.len() as u32);
+    // The terminator is written but not counted.
+    assert_eq!(guest.u16_at(CREATED + 2 * expected.len() as u64), 0);
+}
+
+#[test]
+fn creation_composes_scheme_port_and_path_with_canonical_choices() {
+    let mut guest = create_setup();
+    component(&mut guest, HOST, "example.test", false, STRINGS);
+    component(&mut guest, PATH, "p", true, STRINGS + 0x40);
+    // nScheme 2 selects https when no scheme string is present.
+    guest.memory.write_u32(COMPONENTS + SCHEME_KIND, 2).unwrap();
+    // The default port is elided; a non-default port is emitted.
+    for (port, expected) in [
+        (443u16, "https://example.test/p"),
+        (0, "https://example.test/p"),
+        (444, "https://example.test:444/p"),
+    ] {
+        guest.memory.write_u16(COMPONENTS + PORT, port).unwrap();
+        guest.memory.write_u32(LENGTH, 256).unwrap();
+        assert_eq!(
+            guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+            1,
+            "port {port}"
+        );
+        assert_eq!(created(&guest), expected, "port {port}");
+    }
+    // A scheme string wins over nScheme and is emitted verbatim.
+    component(&mut guest, SCHEME, "http", false, STRINGS + 0x80);
+    guest.memory.write_u16(COMPONENTS + PORT, 80).unwrap();
+    guest.memory.write_u32(LENGTH, 256).unwrap();
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        1
+    );
+    assert_eq!(created(&guest), "http://example.test/p");
+}
+
+#[test]
+fn creation_reports_required_size_before_writing() {
+    let mut guest = create_setup();
+    component(&mut guest, HOST, "example.test", false, STRINGS);
+    guest.memory.write_u32(COMPONENTS + SCHEME_KIND, 1).unwrap();
+    // "http://example.test" is 19 units; 20 with the terminator.
+    for (buffer, capacity) in [(0u64, 0u32), (CREATED, 0), (CREATED, 19)] {
+        guest.memory.write_u32(LENGTH, capacity).unwrap();
+        let before = contents(&guest, CREATED, 40);
+        assert_eq!(
+            guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, buffer, LENGTH]),
+            0
+        );
+        assert_eq!(guest.error(), 122);
+        assert_eq!(
+            guest.u32_at(LENGTH),
+            20,
+            "buffer {buffer} capacity {capacity}"
+        );
+        assert_eq!(contents(&guest, CREATED, 40), before, "nothing written");
+    }
+    guest.memory.write_u32(LENGTH, 20).unwrap();
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        1
+    );
+    assert_eq!(guest.u32_at(LENGTH), 19);
+    assert_eq!(created(&guest), "http://example.test");
+}
+
+#[test]
+fn creation_escapes_the_documented_unsafe_set_in_path_and_extra() {
+    let mut guest = create_setup();
+    component(&mut guest, HOST, "example.test", false, STRINGS);
+    component(&mut guest, PATH, "/a b%c<d>\u{1f980}", true, STRINGS + 0x40);
+    component(&mut guest, EXTRA, "?q=x y#f", true, STRINGS + 0x100);
+    guest.memory.write_u32(COMPONENTS + SCHEME_KIND, 1).unwrap();
+    guest.memory.write_u32(LENGTH, 256).unwrap();
+    assert_eq!(
+        guest.call(
+            "WinHttpCreateUrl",
+            &[COMPONENTS, 0x8000_0000, CREATED, LENGTH]
+        ),
+        1
+    );
+    assert_eq!(
+        created(&guest),
+        "http://example.test/a%20b%25c%3Cd%3E%F0%9F%A6%80?q=x%20y%23f"
+    );
+    // Without ICU_ESCAPE the same components pass through verbatim.
+    guest.memory.write_u32(LENGTH, 256).unwrap();
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        1
+    );
+    assert_eq!(
+        created(&guest),
+        "http://example.test/a b%c<d>\u{1f980}?q=x y#f"
+    );
+}
+
+#[test]
+fn creation_rejects_credentials_and_invalid_input_explicitly() {
+    let mut guest = create_setup();
+    component(&mut guest, HOST, "example.test", false, STRINGS);
+    component(&mut guest, USER, "alice", false, STRINGS + 0x40);
+    component(&mut guest, PASSWORD, "secret", false, STRINGS + 0x80);
+    guest.memory.write_u32(COMPONENTS + SCHEME_KIND, 1).unwrap();
+    guest.memory.write_u32(LENGTH, 256).unwrap();
+    // ICU_REJECT_USERPWD fails with the documented invalid-URL error.
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0x4000, CREATED, LENGTH]),
+        0
+    );
+    assert_eq!(guest.error(), 12005);
+    // Credentials compose without the flag.
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        1
+    );
+    assert_eq!(created(&guest), "http://alice:secret@example.test");
+    // A password without a user name is an invalid URL.
+    guest.memory.write_u64(COMPONENTS + USER, 0).unwrap();
+    guest.memory.write_u32(LENGTH, 256).unwrap();
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        0
+    );
+    assert_eq!(guest.error(), 12005);
+    guest.memory.write_u64(COMPONENTS + PASSWORD, 0).unwrap();
+    // Unknown flags, schemes and missing input are explicit.
+    guest.memory.write_u32(LENGTH, 256).unwrap();
+    assert_eq!(
+        guest.call(
+            "WinHttpCreateUrl",
+            &[COMPONENTS, 0x1000_0000, CREATED, LENGTH]
+        ),
+        0
+    );
+    assert_eq!(guest.error(), 50);
+    guest.memory.write_u32(COMPONENTS + SCHEME_KIND, 3).unwrap();
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        0
+    );
+    assert_eq!(guest.error(), 12006);
+    guest.memory.write_u32(COMPONENTS + SCHEME_KIND, 1).unwrap();
+    guest.memory.write_u64(COMPONENTS + HOST, 0).unwrap();
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        0
+    );
+    assert_eq!(guest.error(), 12005);
+    for (record, length) in [(0, LENGTH), (COMPONENTS, 0), (u64::MAX - 1, LENGTH)] {
+        assert_eq!(
+            guest.call("WinHttpCreateUrl", &[record, 0, CREATED, length]),
+            0
+        );
+        assert_eq!(guest.error(), 87);
+    }
+    guest.memory.write_u32(COMPONENTS, 84).unwrap();
+    assert_eq!(
+        guest.call("WinHttpCreateUrl", &[COMPONENTS, 0, CREATED, LENGTH]),
+        0
+    );
     assert_eq!(guest.error(), 87);
 }

@@ -9,7 +9,7 @@ out=$(CDPATH= cd -- "$out" && pwd)
 clang=${CLANG:-$(xcrun --find clang)}
 linker=${LLD_LINK:-"$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"}
 for tool in "$clang" "$linker"; do
-    lipo -verify_arch arm64 "$tool"
+    lipo "$tool" -verify_arch arm64
 done
 link() {
     case "${linker##*/}" in

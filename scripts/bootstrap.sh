@@ -29,7 +29,7 @@ llvm_version() {
         printf 'bootstrap: LLVM tool is missing or not executable: %s\n' "$1" >&2
         return 1
     fi
-    if ! lipo -verify_arch arm64 "$1" >/dev/null 2>&1; then
+    if ! lipo "$1" -verify_arch arm64 >/dev/null 2>&1; then
         printf 'bootstrap: LLVM tool must contain a native arm64 slice: %s\n' "$1" >&2
         return 1
     fi
