@@ -11,6 +11,7 @@ const ADD: u32 = 0x2000_0000;
 const COALESCE_WITH_COMMA: u32 = 0x4000_0000;
 const COALESCE_WITH_SEMICOLON: u32 = 0x0100_0000;
 const REPLACE: u32 = 0x8000_0000;
+const REPLACE_INDEX_MASK: u32 = 0xff;
 const KNOWN_FLAGS: u32 = ADD_IF_NEW | ADD | COALESCE_WITH_COMMA | COALESCE_WITH_SEMICOLON | REPLACE;
 
 const ERROR_WINHTTP_HEADER_ALREADY_EXISTS: u32 = 12155;
@@ -22,11 +23,13 @@ pub(super) fn update(
     additions: Vec<(String, String)>,
     modifiers: u32,
 ) -> Result<(), u32> {
-    // Bits outside the supported flags include the low-word header index.
-    if modifiers & !KNOWN_FLAGS != 0 {
+    // The SDK specifies the low eight bits for a replacement occurrence.
+    let occurrence = (modifiers & REPLACE_INDEX_MASK) as usize;
+    let flags = modifiers & !REPLACE_INDEX_MASK;
+    if flags & !KNOWN_FLAGS != 0 || (occurrence != 0 && flags & REPLACE == 0) {
         return Err(ERROR_NOT_SUPPORTED);
     }
-    let operation = modifiers & !ADD;
+    let operation = flags & !ADD;
     let separator = match operation {
         0 | ADD_IF_NEW | REPLACE => None,
         COALESCE_WITH_COMMA => Some(", "),
@@ -42,10 +45,13 @@ pub(super) fn update(
 
     let mut updated = headers.clone();
     for (name, value) in additions {
-        let first = updated
+        let matching_index = updated
             .iter()
-            .position(|(existing, _)| existing.eq_ignore_ascii_case(&name));
-        match (operation, first, separator) {
+            .enumerate()
+            .filter(|(_, (existing, _))| existing.eq_ignore_ascii_case(&name))
+            .nth(occurrence)
+            .map(|(index, _)| index);
+        match (operation, matching_index, separator) {
             (ADD_IF_NEW, Some(_), _) => return Err(ERROR_WINHTTP_HEADER_ALREADY_EXISTS),
             (REPLACE, Some(index), _) if value.is_empty() => {
                 updated.remove(index);
@@ -53,7 +59,7 @@ pub(super) fn update(
             (REPLACE, Some(index), _) => {
                 updated[index].1 = value;
             }
-            (REPLACE, None, _) if modifiers & ADD == 0 || value.is_empty() => {
+            (REPLACE, None, _) if occurrence != 0 || flags & ADD == 0 || value.is_empty() => {
                 return Err(ERROR_WINHTTP_HEADER_NOT_FOUND);
             }
             (_, Some(index), Some(separator)) => {
@@ -142,6 +148,34 @@ mod tests {
     }
 
     #[test]
+    fn indexed_replace_and_remove_preserve_other_occurrences_and_fields() {
+        let mut stored = headers(&[
+            ("X-List", "one"),
+            ("Other", "keep"),
+            ("x-list", "two"),
+            ("X-LIST", "three"),
+        ]);
+        update(&mut stored, headers(&[("X-LIST", "changed")]), REPLACE | 1).unwrap();
+        update(&mut stored, headers(&[("x-list", "")]), REPLACE | 2).unwrap();
+        let expected = headers(&[("X-List", "one"), ("Other", "keep"), ("x-list", "changed")]);
+        assert_eq!(stored, expected);
+        assert_eq!(
+            update(
+                &mut stored,
+                headers(&[("X-LIST", "new")]),
+                REPLACE | ADD | 2
+            ),
+            Err(ERROR_WINHTTP_HEADER_NOT_FOUND)
+        );
+        assert_eq!(stored, expected);
+
+        let mut full = headers(&[("X-List", "old"); MAX_REQUEST_HEADER_COUNT]);
+        update(&mut full, headers(&[("X-List", "last")]), REPLACE | 255).unwrap();
+        assert_eq!(full[254].1, "old");
+        assert_eq!(full[255].1, "last");
+    }
+
+    #[test]
     fn add_if_new_rolls_back_a_batch_with_a_later_duplicate() {
         let original = headers(&[("Existing", "one")]);
         let mut stored = original.clone();
@@ -174,7 +208,8 @@ mod tests {
         let mut stored = original.clone();
         let addition = headers(&[("X-List", "new")]);
         for (flags, error) in [
-            (REPLACE | 1, ERROR_NOT_SUPPORTED),
+            (REPLACE | 0x100, ERROR_NOT_SUPPORTED),
+            (COALESCE_WITH_COMMA | 1, ERROR_NOT_SUPPORTED),
             (0x0200_0000, ERROR_NOT_SUPPORTED),
             (ADD_IF_NEW | REPLACE, ERROR_INVALID_PARAMETER),
             (REPLACE | COALESCE_WITH_COMMA, ERROR_INVALID_PARAMETER),
