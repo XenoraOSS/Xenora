@@ -385,8 +385,11 @@ no vendor headers or redistributable binaries are included in this fixture.
 In that local build, six of seven imports resolve to standard services; the `cout` object remains
 unresolved. This is import resolution only, not successful execution. A
 separate local run with Microsoft redistributable DLLs supplied as guest
-modules stopped before execution with 76 required imports unresolved. No
-complete C++ stream execution or cleanup is claimed.
+modules stopped before execution with 76 required imports unresolved. A
+separate original freestanding guest uses the same decorated exports, including
+the `cout` data import, and executes the bounded slice described below. It does
+not make the Microsoft-header fixture executable. No complete C++ stream
+execution or cleanup is claimed.
 
 ### Static import census scope (#1163)
 
@@ -423,7 +426,8 @@ and [stream buffer header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73f
 copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception. The vtable
 slots and virtual-base layout were inspected using Clang with those headers.
 The original synthetic-layout guests test callbacks, failure state and refusal
-paths; they do not construct `std::cout` or validate general iostream ABI.
+paths with a guest-provided stream object. The bounded `std::cout` object below
+uses the CRT stream directly; neither validates general iostream ABI.
 
 ### Microsoft locale facet primitives (#1163)
 
@@ -443,8 +447,10 @@ The x64 `ios_base` exports `rdstate`, `good`, `eof`, `fail` and `bad` read
 the 32-bit state field at offset 16 of the guest `ios_base` subobject. Bit
 meanings follow the public Microsoft STL [xiosbase header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xiosbase);
 its x64 layout was inspected using Clang with Microsoft headers. Synthetic
-guest tests exercise the bits and an overflowing pointer. These accessors do
-not construct streams, validate object type, or provide exception handling.
+guest tests exercise the bits and an overflowing pointer. The accessors read
+the bounded synthetic `std::cout` object below as well as guest-provided state;
+they do not construct general streams, validate object type, or provide C++
+unwinding.
 
 ### Microsoft STL initialization count (#1163)
 
@@ -452,10 +458,10 @@ not construct streams, validate object type, or provide exception handling.
 count accessor, public constructor and destructor, and their helpers. The data import and
 accessor share one guest-memory cell, initialized to -1. Construction changes a
 negative count to 1 and otherwise increments it; destruction decrements it. On
-the final destruction Xenora stops with the runtime-limit fault because the
-standard stream objects and their required flush are not implemented. Count
-overflow also stops the guest. This is a partial initialization boundary: it
-does not initialize `std::cout` or establish general Microsoft STL support.
+the final destruction Xenora checks and flushes the bounded `std::cout` object
+below, then returns. Count overflow and a flush failure still stop the guest.
+This is a partial initialization boundary: it does not initialize other
+standard streams or establish general Microsoft STL support.
 
 The count behavior is independently implemented from the publicly available
 [Microsoft STL source at commit 0cabaf3](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/src/iostream.cpp)
@@ -464,6 +470,27 @@ These files are copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception;
 no source text was copied. The original freestanding fixture declares just the
 ABI under test, imports the public constructor and destructor, and does not include
 the Microsoft headers or prove a complete MSVC iostream program. Its output uses UCRT `puts`, not a C++ stream.
+
+### Bounded standard output object (#1163)
+
+The decorated `std::cout` data import is bound to one 128-byte writable guest
+object. Its 32-bit state word at offset 16 and exception mask at offset 20 are
+the same fields used by the `ios_base` accessors. `ostream::write` through that
+object sends up to one mebibyte directly to the CRT standard output; a short or
+failed transfer sets `badbit`, and a state bit already present in the exception
+mask stops the guest instead of unwinding C++ exceptions. `ostream::flush`
+checks the object state and the CRT descriptor; the stream holds no buffered
+bytes. The final `ios_base::Init` destructor performs that flush before
+returning.
+
+`fixtures/pe/msvc-standard-stream.cpp` declares only these x64 exports. The
+original guest writes `hello from std::cout`, flushes, checks `good`, and exits
+with code 0; variants cover a forged object, a bad stream whose exception mask
+includes `badbit`, and a transfer above the one-mebibyte bound. `fixtures/pe/build-msvc-standard-stream.sh` builds them
+with native ARM64 Clang and `lld-link` without Microsoft headers or binaries.
+This is one synthetic narrow stream: it supplies no stream buffer vtable,
+locale, wide stream, `cerr`, `clog`, Microsoft DLL, complete iostream program or
+independent acceptance.
 
 ### Import name diagnostics
 

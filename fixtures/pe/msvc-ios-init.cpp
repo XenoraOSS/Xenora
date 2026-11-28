@@ -30,5 +30,5 @@ extern "C" void entry() {
         if (std::ios_base::Init::count() != 1) ExitProcess(4);
         puts("nested initialization complete");
     }
-    ExitProcess(5); // The final destructor requires unsupported stream flushing.
+    ExitProcess(0); // The final destructor flushes the bounded cout slice.
 }
