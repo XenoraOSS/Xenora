@@ -1644,6 +1644,74 @@
       "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
+    },
+    {
+      "id": "WP-1337",
+      "subsystem": "Runtime",
+      "description": "Compiler-emitted Microsoft static TLS across guest DLLs",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "C",
+      "issue": 1337,
+      "pr": 1343,
+      "test_status": "Seventeen focused ARM64 tests passed. Two independent exact-head runs passed the new package.",
+      "limitations": "The executable and two DLLs use the initial guest thread. Worker TLS and dynamic initialization remain open.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1338",
+      "subsystem": "Runtime",
+      "description": "Guest event retirement after process exit and fresh package replay",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "C",
+      "issue": 1338,
+      "pr": 1344,
+      "test_status": "Two independent exact-head ARM64 runs passed exit 0, exit 37 with a live event, and fresh exit 0.",
+      "limitations": "Explicit package return is the cleanup boundary. DLL detach ordering and full XTRE integration remain open.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1339",
+      "subsystem": "Runtime",
+      "description": "RaiseException optional null array semantics",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "D",
+      "issue": 1339,
+      "pr": 1345,
+      "test_status": "Thirteen focused ARM64 tests passed. Two independent exact-head runs checked both null cases and the populated control.",
+      "limitations": "Compiled C filters cover the optional arguments rule. Microsoft C++ exceptions and nested dispatch remain open.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1348",
+      "subsystem": "Runtime",
+      "description": "FormatMessage A/W escapes and percent-zero termination",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "D",
+      "issue": 1348,
+      "pr": 1349,
+      "test_status": "Ten focused ARM64 tests passed. Two independent exact-head runs checked both compiled guests.",
+      "limitations": "ASCII text through both APIs. Encoding conversions, line widths and allocation are separate.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     }
   ],
   "ownership_states": {
@@ -1685,38 +1753,41 @@
       "id": "R3",
       "status": "PARTIAL",
       "goal": "Multi-DLL application with cross-module runtime ownership",
-      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs. Open PR #1328 checks shared runtime data, bidirectional writes and fresh-state zero initialization across the EXE and both DLLs.",
+      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs. Open PR #1328 checks shared runtime data, bidirectional writes and fresh-state zero initialization across the EXE and both DLLs. Open PR #1343 verifies independent static TLS templates and cross-module accesses on the initial guest thread.",
       "remaining": "Independently verify cross-DLL ownership. Cover dynamic module lifetime and cross-module exceptions.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/package_startup.rs",
         "https://github.com/ranveersoni98/Xenora/pull/1262",
         "https://github.com/ranveersoni98/Xenora/pull/1269",
         "https://github.com/ranveersoni98/Xenora/pull/1280",
-        "https://github.com/ranveersoni98/Xenora/pull/1328"
+        "https://github.com/ranveersoni98/Xenora/pull/1328",
+        "https://github.com/ranveersoni98/Xenora/pull/1343"
       ]
     },
     {
       "id": "R4",
       "status": "PARTIAL",
       "goal": "Multi-threaded C++ synchronization and thread-local storage",
-      "evidence": "On c8210aaf, the original C++ worker and four Itanium guard regressions passed. The compiled retry after a throw is tracked separately. Merged PR #1283 checks compiler-emitted abort after a throw and a successful retry on a different guest thread.",
+      "evidence": "On c8210aaf, the original C++ worker and four Itanium guard regressions passed. The compiled retry after a throw is tracked separately. Merged PR #1283 checks compiler-emitted abort after a throw and a successful retry on a different guest thread. Open PR #1343 verifies compiler-emitted Microsoft x64 accesses on the initial thread. The worker implementation needs coordination with the scheduler and thread-table owners.",
       "remaining": "Cover blocking contention, multiple workers and thread-local destructors.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cxx_guard_abi.rs",
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/runtime/threads.md",
         "https://github.com/ranveersoni98/Xenora/issues/1277",
-        "https://github.com/ranveersoni98/Xenora/pull/1283"
+        "https://github.com/ranveersoni98/Xenora/pull/1283",
+        "https://github.com/ranveersoni98/Xenora/pull/1343"
       ]
     },
     {
       "id": "R5",
       "status": "PARTIAL",
       "goal": "Original exception-handling and unwinding fixture",
-      "evidence": "On c8210aaf, two compiled GNU C++ unwinding tests and twelve compiled C structured exception tests passed.",
+      "evidence": "On c8210aaf, two compiled GNU C++ unwinding tests and twelve compiled C structured exception tests passed. Open PR #1345 verifies the documented RaiseException null argument-array rule using original compiled C filters.",
       "remaining": "Cover the Microsoft C++ personality, cross-module propagation, unsupported records and post-abort cleanup.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/research/exception-handling.md",
-        "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cpp_exceptions.rs"
+        "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cpp_exceptions.rs",
+        "https://github.com/ranveersoni98/Xenora/pull/1345"
       ]
     },
     {
@@ -1736,7 +1807,7 @@
       "id": "R7",
       "status": "PARTIAL",
       "goal": "Repeated runtime sessions with resource and state isolation",
-      "evidence": "The authored-package session harness checks repeated runs and handle cleanup. Merged PR #1262 records a CRT success, failure and fresh-run sequence. Open PRs #1324 and #1328 verify fresh state after exact startup refusal in two additional contracts.",
+      "evidence": "The authored-package session harness checks repeated runs and handle cleanup. Merged PR #1262 records a CRT success, failure and fresh-run sequence. Open PRs #1324 and #1328 verify fresh state after exact startup refusal in two additional contracts. Open PR #1344 checks last-event retirement after deliberate failure, exact detach and fresh-success replay.",
       "remaining": "Exercise callbacks, TLS and shutdown across repeated sessions and obtain independent acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/cli/tests/pe_session.rs",
@@ -1744,7 +1815,8 @@
         "https://github.com/ranveersoni98/Xenora/pull/1261",
         "https://github.com/ranveersoni98/Xenora/pull/1279",
         "https://github.com/ranveersoni98/Xenora/pull/1324",
-        "https://github.com/ranveersoni98/Xenora/pull/1328"
+        "https://github.com/ranveersoni98/Xenora/pull/1328",
+        "https://github.com/ranveersoni98/Xenora/pull/1344"
       ]
     },
     {
@@ -1762,12 +1834,13 @@
       "id": "R9",
       "status": "BLOCKED",
       "goal": "Runtime integration readiness for the Xenora Title Runtime Environment",
-      "evidence": "The runtime handoff and persistent authored-session API are merged. Runtime and XTRE retain their respective ownership.",
+      "evidence": "The runtime handoff and persistent authored-session API are merged. Runtime and XTRE retain their respective ownership. Open PR #1344 supplies another explicit-package teardown witness for the existing runtime API.",
       "remaining": "Agree the startup, unwind, ownership and shutdown interfaces with the XTRE owner and run integrated acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/pull/1260",
         "https://github.com/ranveersoni98/Xenora/pull/1266",
-        "https://github.com/ranveersoni98/Xenora/issues/923"
+        "https://github.com/ranveersoni98/Xenora/issues/923",
+        "https://github.com/ranveersoni98/Xenora/pull/1344"
       ]
     }
   ],
@@ -1911,6 +1984,33 @@
       "evidence": "The data import resolves a guest-owned synthetic standard output object used by the bounded write, flush and good fixture.",
       "source": "https://github.com/ranveersoni98/Xenora/pull/1256",
       "witness": "cargo test --locked -p xenora-loader --test guest_msvc_standard_stream"
+    },
+    {
+      "library": "kernel32.dll",
+      "kind": "name",
+      "symbol": "RaiseException",
+      "evidence_class": "D",
+      "evidence": "Existing compiled C filters cover structured exception dispatch. Open PR #1345 adds exact null-array and populated-array record tests. Nested dispatch stays partial.",
+      "source": "https://learn.microsoft.com/en-us/windows/win32/api/errhandlingapi/nf-errhandlingapi-raiseexception#parameters",
+      "witness": "PR #1345 at 8f30e248, cargo test --locked -p xenora-loader --test guest_seh_optional_arguments"
+    },
+    {
+      "library": "kernel32.dll",
+      "kind": "name",
+      "symbol": "FormatMessageA",
+      "evidence_class": "D",
+      "evidence": "Open PR #1349 covers documented escapes, percent-zero termination, numbered insertion and exact capacity using ASCII text in the API width. Encoding and line wrapping remain partial.",
+      "source": "https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-formatmessage#remarks",
+      "witness": "PR #1349 at dcf29a5b, cargo test --locked -p xenora-loader --test guest_format_message_escapes"
+    },
+    {
+      "library": "kernel32.dll",
+      "kind": "name",
+      "symbol": "FormatMessageW",
+      "evidence_class": "D",
+      "evidence": "Open PR #1349 covers documented escapes, percent-zero termination, numbered insertion and exact capacity using ASCII text in the API width. Encoding and line wrapping remain partial.",
+      "source": "https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-formatmessage#remarks",
+      "witness": "PR #1349 at dcf29a5b, cargo test --locked -p xenora-loader --test guest_format_message_escapes"
     }
   ]
 }
