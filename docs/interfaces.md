@@ -2393,14 +2393,31 @@ ERROR_MOD_NOT_FOUND because no library is ever loaded into the address
 space as an image. This is implemented behaviour verified through the unit
 tests. Nothing here was compared with Windows or with an Xbox console.
 
-### The registry is honestly empty
+### Guest registry preferences
 
-Advapi32 provides `RegOpenKeyW`, `RegOpenKeyExA/W`, `RegQueryValueExA/W`
-and `RegCloseKey` against the synthetic guest registry. A null or empty
-subkey name reopens a predefined root and returns the same handle.
-Every named subkey and value is absent and reports `ERROR_FILE_NOT_FOUND`.
-The registry is independent of the host. A guest PE test verifies the
-three-argument `RegOpenKeyW` entry point alongside the extended forms.
+Each guest starts with an empty in-memory `HKEY_CURRENT_USER` tree.
+`RegCreateKeyExW` creates the named key and any missing parents. The
+three-argument `RegOpenKeyW` and `RegOpenKeyExA/W` open existing keys by
+case-insensitive names. `RegOpenKeyW` with a null or empty subkey returns the
+same handle. The extended forms return a new handle for an open named key.
+`RegCloseKey` releases an open handle. Keys and values last for the guest run.
+
+`RegSetValueExW` writes `REG_DWORD` values and `RegQueryValueExA/W` reads them.
+A null or empty value name addresses the default value. Named-key handles need
+the requested query or set access for that operation. Size-only queries report
+four bytes. A short data buffer returns `ERROR_MORE_DATA` and the required size.
+Missing keys and values return `ERROR_FILE_NOT_FOUND`.
+
+The store is isolated from the host and starts empty for a fresh guest.
+It supports up to 128 keys including the root, 256 DWORD values, 128 live
+handles and 32 key levels. Name reads are bounded to 1,024 UTF-8 bytes or UTF-16
+code units. Narrow calls use the guest's synthetic UTF-8 encoding. Names use
+simple Unicode uppercase matching. Both WOW64 selectors address the same
+synthetic view and specifying them together returns `ERROR_INVALID_PARAMETER`.
+Other predefined roots remain empty. Both normal and volatile creation options use
+the guest-run lifetime. Custom security descriptors and additional value types
+are unsupported. An original AMD64 PE verifies creation, reopening, queries,
+handle lifetime and fresh-session isolation locally on Apple Silicon.
 
 ### Memory mappings and process creation
 
