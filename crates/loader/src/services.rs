@@ -2151,6 +2151,27 @@ pub(crate) mod handlers {
         or_errno(context, outcome)
     }
 
+    pub fn _locking(
+        context: &mut ServiceContext<'_>,
+        fd: i32,
+        mode: i32,
+        nbytes: i32,
+    ) -> Outcome<i32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            streams.lock_descriptor(fd, mode, nbytes)
+        };
+        or_errno(context, outcome)
+    }
+
+    pub fn _commit(context: &mut ServiceContext<'_>, fd: i32) -> Outcome<i32> {
+        let outcome = {
+            let mut streams = context.state.crt_streams();
+            streams.commit_descriptor(fd)
+        };
+        or_errno(context, outcome)
+    }
+
     pub fn _close(context: &mut ServiceContext<'_>, fd: i32) -> Outcome<i32> {
         let outcome = {
             let mut streams = context.state.crt_streams();

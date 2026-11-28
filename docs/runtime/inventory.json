@@ -6064,6 +6064,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_commit",
+      "kind": "name",
+      "library": "api-ms-win-crt-stdio-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "_commit"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "_creat",
       "kind": "name",
       "library": "api-ms-win-crt-stdio-l1-1-0.dll",
@@ -6189,6 +6199,16 @@
       "library": "api-ms-win-crt-stdio-l1-1-0.dll",
       "status": "implemented",
       "symbol": "_isatty"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_locking",
+      "kind": "name",
+      "library": "api-ms-win-crt-stdio-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "_locking"
     },
     {
       "api_set": true,
@@ -7734,6 +7754,16 @@
       "api_set": false,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_commit",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "_commit"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "_creat",
       "kind": "name",
       "library": "msvcrt.dll",
@@ -7919,6 +7949,16 @@
       "library": "msvcrt.dll",
       "status": "implemented",
       "symbol": "_localtime64"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_locking",
+      "kind": "name",
+      "library": "msvcrt.dll",
+      "status": "implemented",
+      "symbol": "_locking"
     },
     {
       "api_set": false,
@@ -15018,6 +15058,16 @@
       "kind": "name",
       "library": "ucrtbase.dll",
       "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "_commit"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
       "status": "partial",
       "status_explicit": true,
       "symbol": "_configthreadlocale"
@@ -15451,6 +15501,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "_lock_file"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "typed",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "_locking"
     },
     {
       "data_import": false,
@@ -20214,12 +20274,12 @@
     }
   ],
   "summary": {
-    "aliases": 961,
-    "api_set_aliases": 755,
-    "canonical_services": 1004,
+    "aliases": 965,
+    "api_set_aliases": 757,
+    "canonical_services": 1006,
     "data_import_services": 12,
     "duplicate_registrations": 0,
-    "implemented": 247,
+    "implemented": 249,
     "implicit_status_services": 78,
     "libraries": 28,
     "manual_services": 702,
@@ -20227,8 +20287,8 @@
     "partial": 757,
     "structural_consistency_findings": 0,
     "stub": 0,
-    "typed_registry_entries": 302,
-    "typed_services": 302,
+    "typed_registry_entries": 304,
+    "typed_services": 304,
     "wanted_imports": null,
     "wanted_missing": null
   },
