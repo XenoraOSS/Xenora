@@ -127,11 +127,8 @@ fn number(value: u64, hex: bool, upper: bool) -> String {
     }
 }
 
-/// Expand the insert sequences of a format text. `%%` is a literal percent
-/// sign; an insert is `%` followed by one or two digits and an optional
-/// `!specifier!`, of which `s` and `S` read a string pointer and anything
-/// else formats the word as a decimal number. Any other sequence is copied
-/// literally - none appear in the system messages.
+/// Expand message escapes and numbered inserts. `%0` ends the message.
+/// Numbered inserts are optionally passed through, while escapes always apply.
 fn expand(
     memory: &GuestMemory,
     format: &str,
@@ -146,10 +143,24 @@ fn expand(
             out.push(c);
             continue;
         }
-        if chars.peek() == Some(&'%') {
-            chars.next();
-            out.push('%');
-            continue;
+        match chars.peek().copied() {
+            Some('0') => break,
+            Some(next) if next.is_ascii_digit() => {}
+            Some(escape) => {
+                chars.next();
+                match escape {
+                    'b' => out.push(' '),
+                    'n' => out.push_str("\r\n"),
+                    'r' => out.push('\r'),
+                    't' => out.push('\t'),
+                    literal => out.push(literal),
+                }
+                continue;
+            }
+            None => {
+                out.push('%');
+                break;
+            }
         }
         let mut digits = String::new();
         while let Some(d) = chars.peek() {
@@ -159,10 +170,6 @@ fn expand(
             } else {
                 break;
             }
-        }
-        if digits.is_empty() {
-            out.push('%');
-            continue;
         }
         let index: u64 = digits.parse().unwrap_or(0);
         let mut spec = String::new();
