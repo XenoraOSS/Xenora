@@ -20,8 +20,8 @@ independent acceptance or compatibility claims.
 | Partial | 728 |
 | Stub | 0 |
 | Data-import services | 7 |
-| Aliases of every kind | 954 |
-| API-set aliases | 753 |
+| Aliases of every kind | 955 |
+| API-set aliases | 754 |
 | Ordinal aliases | 35 |
 | Statuses never explicitly set | 78 |
 | Duplicate canonical registrations | 0 |
@@ -64,7 +64,7 @@ metadata, are in `inventory.json`.
 
 | Alias kind | Count |
 | --- | --- |
-| API-set | 753 |
+| API-set | 754 |
 | Ordinal | 35 |
 | Other module | 166 |
 

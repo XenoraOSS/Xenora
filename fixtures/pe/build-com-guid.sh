@@ -55,13 +55,13 @@ EXPORTS
     CoTaskMemAlloc
     CoTaskMemFree
     CoTaskMemRealloc
-    CoCreateInstance
     PropVariantClear
 DEF
 cat > "api-ms-win-core-com-l1-1-0.def" <<'DEF'
 LIBRARY api-ms-win-core-com-l1-1-0.dll
 EXPORTS
     CoInitializeEx
+    CoCreateInstance
 DEF
 cat > ole32.def <<'DEF'
 LIBRARY ole32.dll
