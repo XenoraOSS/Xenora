@@ -827,6 +827,39 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
             write(m, places[0], value);
             Outcome::Done(none)
         }
+        "pdep" | "pext" => {
+            // Intel SDM Vol. 2A/2B: the second operand is the bit source and
+            // the third is the mask. PDEP consumes low source bits in mask
+            // order; PEXT compresses masked source bits downwards. Both leave
+            // every flag alone. Work a bit at a time, as the operation sections
+            // do, independently of the executor's shift implementation.
+            let source = read(m, places[1], bits);
+            let control = read(m, places[2], bits);
+            let mut value = 0;
+            if name == "pdep" {
+                let mut source_index = 0;
+                for destination in 0..bits {
+                    if bit(control, destination) {
+                        if bit(source, source_index) {
+                            value += 1u128 << destination;
+                        }
+                        source_index += 1;
+                    }
+                }
+            } else {
+                let mut destination = 0;
+                for source_index in 0..bits {
+                    if bit(control, source_index) {
+                        if bit(source, source_index) {
+                            value += 1u128 << destination;
+                        }
+                        destination += 1;
+                    }
+                }
+            }
+            write(m, places[0], value);
+            Outcome::Done(none)
+        }
         "mulx" => {
             // Intel SDM Vol. 2B MULX: the r/m operand is the unsigned
             // multiplicand and RDX is the implicit unsigned multiplier. The
@@ -1547,6 +1580,182 @@ fn faulting_read_modify_write_changes_nothing() {
             );
             assert_eq!(result.final_state, before, "{} native={native}", case.text);
             assert_eq!(result.instructions_executed, 0);
+        }
+    }
+}
+
+#[test]
+fn pdep_pext_faulting_memory_mask_changes_nothing() {
+    // The mask is the ModRM operand. Point RSI at an unmapped address so the
+    // read faults before either engine writes the destination register.
+    for case in cases() {
+        let name = case.text.split(' ').next().unwrap();
+        if !matches!(name, "pdep" | "pext") || !case.text.contains(" ptr ") {
+            continue;
+        }
+        let machine = Random(13).machine();
+        for native in [false, true] {
+            let (mut cpu, mut memory) = load(&machine, &case.code);
+            cpu.gpr[6] = 0x4000; // RSI
+            cpu.gpr[7] = 0; // RDI
+            let before = cpu.clone();
+            let before_bytes = bytes(&memory);
+            let result = if native {
+                DbtEngine::new(16 * 1024)
+                    .unwrap()
+                    .run(&mut cpu, &mut memory, 1)
+            } else {
+                Interpreter::new(cpu, &mut memory, 1).run()
+            };
+            assert!(
+                matches!(result.exit_reason, ExitReason::MemoryFault(_)),
+                "{}: {:?}",
+                case.text,
+                result.exit_reason
+            );
+            assert_eq!(result.final_state, before, "{} native={native}", case.text);
+            assert_eq!(result.instructions_executed, 0, "{}", case.text);
+            assert_eq!(bytes(&memory), before_bytes, "{}", case.text);
+        }
+    }
+}
+
+#[test]
+fn pdep_pext_edge_masks_match_known_answers_in_both_engines() {
+    fn index(place: Place) -> usize {
+        match place {
+            Place::Reg { index, .. } => index,
+            _ => panic!("this test uses register forms"),
+        }
+    }
+    fn set(machine: &mut Machine, place: Place, value: u64) {
+        match place {
+            Place::Reg {
+                index,
+                bits: 32,
+                high: false,
+            } => machine.gpr[index] = u64::from(value as u32),
+            Place::Reg {
+                index,
+                bits: 64,
+                high: false,
+            } => machine.gpr[index] = value,
+            _ => panic!("this test uses 32- and 64-bit register forms"),
+        }
+    }
+
+    // (fixture text, bit source, mask, destination): zero mask, all-ones
+    // mask, sparse and adjacent masks, a high-bit-only result, aliased source
+    // and mask, and VEX.vvvv naming the highest register. The expected values
+    // are written here by hand from the operation sections, not produced by
+    // the executor or by the text reference.
+    let known: &[(&str, u64, u64, u64)] = &[
+        ("pdep ebx, r9d, ecx", 0x0000_000B, 0x0000_0005, 0x0000_0005),
+        ("pext ebx, r9d, ecx", 0x0000_000B, 0x0000_0005, 0x0000_0001),
+        ("pdep ebx, r9d, ecx", 0x0000_0001, 0x8000_0000, 0x8000_0000),
+        ("pext ebx, r9d, ecx", 0x8000_0000, 0x8000_0000, 0x0000_0001),
+        ("pdep ebx, r9d, ecx", 0xFFFF_FFFF, 0xAAAA_AAAA, 0xAAAA_AAAA),
+        ("pext ebx, r9d, ecx", 0xFFFF_FFFF, 0xAAAA_AAAA, 0x0000_FFFF),
+        ("pdep ebx, r9d, ecx", 0xFFFF_FFFF, 0, 0),
+        ("pext ebx, r9d, ecx", 0xFFFF_FFFF, 0, 0),
+        ("pdep ebx, r9d, ecx", 0x8000_0001, 0xFFFF_FFFF, 0x8000_0001),
+        ("pext ebx, r9d, ecx", 0x8000_0001, 0xFFFF_FFFF, 0x8000_0001),
+        ("pdep edx, edx, edx", 0x0000_00F0, 0x0000_00F0, 0x0000_0000),
+        ("pext edx, edx, edx", 0x0000_00F0, 0x0000_00F0, 0x0000_000F),
+        ("pdep ebx, r9d, r15d", 0x0000_0003, 0x0000_0005, 0x0000_0005),
+        ("pext ebx, r9d, r15d", 0x0000_000B, 0x0000_0005, 0x0000_0001),
+        (
+            "pdep rbx, r9, rcx",
+            0x8000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+            0,
+        ),
+        (
+            "pext rbx, r9, rcx",
+            0x8000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+            1,
+        ),
+        (
+            "pdep rbx, r9, rcx",
+            0x0000_0000_0000_0001,
+            0x8000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+        ),
+        (
+            "pext rbx, r9, rcx",
+            0x0000_0000_0000_0001,
+            0x8000_0000_0000_0000,
+            0,
+        ),
+        (
+            "pdep rbx, r9, rcx",
+            u64::MAX,
+            0xAAAA_AAAA_AAAA_AAAA,
+            0xAAAA_AAAA_AAAA_AAAA,
+        ),
+        (
+            "pext rbx, r9, rcx",
+            u64::MAX,
+            0xAAAA_AAAA_AAAA_AAAA,
+            0x0000_0000_FFFF_FFFF,
+        ),
+        (
+            "pext rbx, r9, r15",
+            0x8000_0000_0000_0000,
+            0x8000_0000_0000_0000,
+            1,
+        ),
+        (
+            "pdep rdx, rdx, rdx",
+            0x0000_0000_0000_00F0,
+            0x0000_0000_0000_00F0,
+            0,
+        ),
+        (
+            "pext rdx, rdx, rdx",
+            0x0000_0000_0000_00F0,
+            0x0000_0000_0000_00F0,
+            0x0000_0000_0000_000F,
+        ),
+    ];
+    let all = cases();
+    for &(text, source, control, wanted) in known {
+        let case = all.iter().find(|case| case.text == text).unwrap();
+        let operands: Vec<_> = text.split_once(' ').unwrap().1.split(", ").collect();
+        let places: Vec<_> = operands.iter().map(|text| parse_place(text)).collect();
+        let mut machine = Random(1).machine();
+        machine.gpr = [0; 16];
+        set(&mut machine, places[1], source);
+        set(&mut machine, places[2], control);
+
+        let mut expected_machine = machine.clone();
+        assert!(
+            matches!(reference(&mut expected_machine, text), Outcome::Done(_)),
+            "{text}"
+        );
+        assert_eq!(expected_machine.gpr[index(places[0])], wanted, "{text}");
+        assert_eq!(expected_machine.flags, machine.flags, "{text}");
+
+        let (mut expected_cpu, expected_memory) = load(&expected_machine, &case.code);
+        expected_cpu.rip += case.code.len() as u64;
+        let (cpu, mut memory) = load(&machine, &case.code);
+        let interpreted = Interpreter::new(cpu, &mut memory, 1).run();
+        let (mut dbt_cpu, mut dbt_memory) = load(&machine, &case.code);
+        let translated = DbtEngine::new(16 * 1024)
+            .unwrap()
+            .run(&mut dbt_cpu, &mut dbt_memory, 1);
+        for (engine, result, actual_memory) in [
+            ("interpreter", interpreted, &memory),
+            ("DBT", translated, &dbt_memory),
+        ] {
+            assert_eq!(
+                result.exit_reason,
+                ExitReason::StepLimitExceeded,
+                "{text} on the {engine}"
+            );
+            assert_eq!(result.final_state, expected_cpu, "{text} on the {engine}");
+            assert_eq!(bytes(actual_memory), bytes(&expected_memory), "{text}");
         }
     }
 }

@@ -805,6 +805,51 @@ pub fn execute(
             } & mask(size);
             write_reg(cpu, insn.reg, size, result);
         }
+        Op::Pdep | Op::Pext => {
+            // Intel SDM Vol. 2A/2B: VEX.vvvv names the bit source (the first
+            // register operand in Intel syntax) and the ModRM operand is the
+            // mask. LLVM's own builtin lowering agrees: PDEP/PEXT of (a, mask)
+            // encodes a in VEX.vvvv and mask in ModRM. PDEP consumes
+            // consecutive low source bits for the set mask positions; PEXT
+            // compresses the set source bits into low destination positions.
+            // Neither writes flags.
+            let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let source = read_reg(
+                cpu,
+                RegOperand {
+                    index: vvvv,
+                    high: false,
+                },
+                size,
+            );
+            let control = read_rm(cpu, memory, insn)? & mask(size);
+            let bits = 8 * u32::from(size);
+            let mut result = 0u64;
+            if insn.op == Op::Pdep {
+                let mut source_index = 0u32;
+                for destination in 0..bits {
+                    if control >> destination & 1 != 0 {
+                        if source >> source_index & 1 != 0 {
+                            result |= 1u64 << destination;
+                        }
+                        source_index += 1;
+                    }
+                }
+            } else {
+                let mut destination = 0u32;
+                for source_index in 0..bits {
+                    if control >> source_index & 1 != 0 {
+                        if source >> source_index & 1 != 0 {
+                            result |= 1u64 << destination;
+                        }
+                        destination += 1;
+                    }
+                }
+            }
+            write_reg(cpu, insn.reg, size, result);
+        }
         Op::Mulx => {
             // Intel SDM Vol. 2B MULX: the ModRM r/m operand is the unsigned
             // multiplicand, RDX is the implicit unsigned multiplier, the
