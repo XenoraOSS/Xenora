@@ -6,7 +6,7 @@ import CryptoKit
 import Darwin
 import Foundation
 
-struct AuthoredPESessionImage: Sendable {
+struct AuthoredPESessionImage: Equatable, Sendable {
     let url: URL
     let sha256: String
 
@@ -383,6 +383,7 @@ final class AuthoredPESessionModel: ObservableObject {
     }
 
     @Published private(set) var phase = Phase.idle
+    @Published private(set) var launchRoot: AuthoredPESessionImage?
     @Published private(set) var frame: AuthoredPESessionFrame?
     @Published private(set) var frames = 0
     @Published private(set) var statusText = ""
@@ -413,6 +414,8 @@ final class AuthoredPESessionModel: ObservableObject {
         guard process == nil else { return }
         frames = 0
         frame = nil
+        statusText = ""
+        launchRoot = configuration.executable
         receivedDone = false
         cancelled = false
         failure = nil
