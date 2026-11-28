@@ -217,9 +217,7 @@ impl HotBlockProfiler {
     }
 
     fn reset(&mut self) {
-        for slot in &mut self.slots {
-            *slot = None;
-        }
+        self.slots.fill(None);
         self.recorded_dispatches = 0;
         self.recorded_guest_instructions = 0;
         self.untracked_dispatches = 0;
