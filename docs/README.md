@@ -17,6 +17,7 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 
 - [Translated offscreen stages](interfaces.md#translated-offscreen-stages) — Translated vertex and pixel stages for the bounded gfx1030 subset.
 - [Blend and depth passes](interfaces.md) — Native blend and depth graphics passes with per-draw state.
+- [Bounded GPU workload resource budget](interfaces.md#bounded-gpu-workload-resource-budget) — Current guest, submission, compilation and staging caps, their rejection behavior and the unimplemented indirect-work rule.
 - [Apple GPU evidence](research/apple-gpu.md) and [host lab record](research/host-lab.md) — Observed behavior and historical floating-point results.
 - [Metal acceleration-structure boundaries](research/metal-acceleration-structures.md) — Public build/refit/copy lifetime, scratch ownership, synchronization and deterministic fixture requirements.
 
