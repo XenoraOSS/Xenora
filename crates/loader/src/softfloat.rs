@@ -642,6 +642,12 @@ pub fn fused_multiply_add(
                     let lost = product_lost || addend_lost;
                     let magnitude = total.unsigned_abs();
                     let (significand, sticky) = if lost && (total < 0) != remainder_sign {
+                        // The operand that loses bits is aligned below the window,
+                        // and its aligned value is then at most 2^106, while the
+                        // other term is at least 2^125. The borrow therefore
+                        // cannot empty the sum, so the rounding path always sees
+                        // a nonzero significand.
+                        debug_assert!(magnitude > 1 << 106);
                         (magnitude - 1, true)
                     } else {
                         (magnitude, lost)

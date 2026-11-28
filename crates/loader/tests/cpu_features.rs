@@ -252,9 +252,9 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("BMI1", 7, EBX, 3, &[0xC4, 0xE2, 0x70, 0xF7, 0xC2]), // bextr eax, edx, ecx
         ("AVX2", 7, EBX, 5, &[0xC4, 0xE2, 0x75, 0x47, 0xC2]), // vpsllvd ymm0, ymm1, ymm2
         ("BMI2", 7, EBX, 8, &[0xC4, 0xE2, 0x73, 0xF6, 0xC2]), // mulx eax, ecx, edx
-        ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),     // rdseed eax
+        ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),          // rdseed eax
         ("ADX", 7, EBX, 19, &[0x66, 0x0F, 0x38, 0xF6, 0xC1]), // adcx eax, ecx
-        ("SHA", 7, EBX, 29, &[0x0F, 0x38, 0xC9, 0xC1]),  // sha1msg1 xmm0, xmm1
+        ("SHA", 7, EBX, 29, &[0x0F, 0x38, 0xC9, 0xC1]),       // sha1msg1 xmm0, xmm1
         ("PREFETCHW", 0x8000_0001, ECX, 8, &[0x0F, 0x0D, 0x0E]), // prefetchw [rsi]
         ("SYSCALL/SYSRET", 0x8000_0001, EDX, 11, &[0x48, 0x0F, 0x07]), // sysretq
         ("RDTSCP", 0x8000_0001, EDX, 27, &[0x0F, 0x01, 0xF9]), // rdtscp
