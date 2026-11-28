@@ -537,6 +537,7 @@ remains unsupported.
 
 ### Fixed
 
+- QA verification now fingerprints tracked and non-ignored checkout inputs, including binary fixtures. A source change detected during the suites makes the evidence stale even if the original files are restored later. Suite exit codes are preserved (#1237).
 - `xenora-pe-session` refuses a DLL selected as the root before guest startup, including sessions without companion modules (#1275).
 - The typed CRT registry regenerates the existing `_locking` and `_commit` imports from its source catalog and checks both generated reports in the normal test suite (#1264). Both services are partial. The guest drive stores writes in memory, and lock conflicts return immediately.
 - `fopen` now allocates the legacy CRT's full 48-byte `_iobuf`, zeroed, instead of 8 bytes: the mingw-w64 CRT real-world binaries link expands `getc`/`putc` as macros that decrement `_cnt` and step `_ptr` inside the object in place, so the first macro use faulted on the unmapped byte past the small allocation and applets reading a file by name (`wc`, `grep`, `sort`, `head`, `od`) died in the CRT exception filter before any read. A zero `_cnt` sends every byte through `_filbuf`/`_flsbuf`, exactly as the unbuffered stream behaves on Windows. Local verification only (public busybox mingw64 binary).
