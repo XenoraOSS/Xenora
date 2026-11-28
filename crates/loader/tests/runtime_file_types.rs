@@ -800,3 +800,56 @@ fn the_nul_device_discards_writes_and_reads_end_of_file() {
         assert_eq!(bad, INVALID_HANDLE_VALUE, "{device}");
     }
 }
+
+/// Dot components resolve lexically before anything is looked up, as the
+/// path resolution eliminates them: `.` is the directory the path is already
+/// in, `..` its parent, and a `..` at the root stays at the root.
+/// https://learn.microsoft.com/windows/win32/fileio/naming-a-file#path-and-file-name-rules
+#[test]
+fn dot_components_resolve_lexically_before_lookup() {
+    const OUT: u64 = SCRATCH + 0x400;
+    const GOT: u64 = SCRATCH + 0x808;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    // `.\x` is exactly `x`: the write through one reads back through the other.
+    let handle = create_file(&mut guest, ".\\dotted.bin", GENERIC_WRITE);
+    assert_ne!(handle, INVALID_HANDLE_VALUE);
+    guest.memory.write_bytes(OUT, b"dot").unwrap();
+    assert_eq!(guest.call("WriteFile", &[handle, OUT, 3, GOT, 0]), 1);
+    assert_eq!(guest.call("CloseHandle", &[handle]), 1);
+    let reader = create_file_disposition(&mut guest, "dotted.bin", GENERIC_READ, 3);
+    assert_ne!(
+        reader, INVALID_HANDLE_VALUE,
+        "the plain name is the same file"
+    );
+    assert_eq!(guest.call("ReadFile", &[reader, OUT, 8, GOT, 0]), 1);
+    assert_eq!(guest.u32_at(GOT), 3);
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    // `a\..\x` is exactly `x`, whether or not `a` ever existed.
+    let handle = create_file_disposition(&mut guest, "missing\\..\\again.bin", GENERIC_WRITE, 2);
+    assert_ne!(handle, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[handle]), 1);
+    let reader = create_file_disposition(&mut guest, "again.bin", GENERIC_READ, 3);
+    assert_ne!(
+        reader, INVALID_HANDLE_VALUE,
+        "the parent-climbing name is the same file"
+    );
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    // A `..` at the root stays at the root: `..\x` is exactly `x`.
+    let reader = create_file_disposition(&mut guest, "..\\again.bin", GENERIC_READ, 3);
+    assert_ne!(
+        reader, INVALID_HANDLE_VALUE,
+        "the root cannot be climbed past"
+    );
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    // Deeply nested dots: `.\.\x` and `a\b\..\..\x` are exactly `x`.
+    let reader = create_file_disposition(&mut guest, ".\\.\\again.bin", GENERIC_READ, 3);
+    assert_ne!(reader, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    let reader = create_file_disposition(&mut guest, "a\\b\\..\\..\\again.bin", GENERIC_READ, 3);
+    assert_ne!(reader, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    // A name that is dots alone is not a file name at all: `...` is a real
+    // name ending with a dot, and stays rejected exactly as before.
+    let bad = create_file_disposition(&mut guest, "...", GENERIC_WRITE, 4);
+    assert_eq!(bad, INVALID_HANDLE_VALUE);
+}
