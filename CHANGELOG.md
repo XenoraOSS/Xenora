@@ -7,6 +7,7 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- Added an original GNU C++ package fixture that throws a typed object in a DLL, catches it by reference in the EXE, and checks stack cleanup and exception-object destruction in order (#1411). Both images use the installed MinGW-w64 shared SEH unwinder. The fixture also checks an ordinary return, refusal before entry without the unwinder, and a fresh package run at two optimization levels.
 - An original C++ guest fixture exercises compiler-generated Itanium ABI guard abort when a function-local constructor throws. A guest worker retries and initializes the object once, and startup controls require the three guard imports. The compiled fixture passes locally at two optimization levels on Apple Silicon (#1277).
 - Added an original Microsoft x64 C++ package fixture that checks compiler-emitted global initialization in dependency order and per-DLL exit callbacks in reverse registration order (#1276). The EXE and two DLLs record their execution order in the synthetic guest drive.
 - Added an original Microsoft x64 C++ ABI package fixture that constructs an object in one DLL, invokes and deletes it through a base pointer in another, and checks destructor order and heap release. A rejected handoff leaves the object live for a retry (#1263).
