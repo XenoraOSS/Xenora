@@ -7,6 +7,8 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- Microsoft x64 `ios_base` state query exports now read guest state bits, including `good`, `eof`, `fail`, `bad` and `rdstate`; constructed C++ stream objects are not yet supplied (#1163).
+- Added an original Microsoft-header iostream fixture and local build script for measuring `std::cout` import and execution gaps; its complete workload is not yet supported (#1163).
 - Microsoft atomic-wait deadline helpers now use the guest monotonic clock, including infinite and capped timeouts. Actual atomic waits and notifications remain unsupported (#1163).
 - The four Microsoft UTF codecvt locale-ID data imports now resolve to distinct writable guest cells initialized to zero; locale allocation and conversion remain unsupported (#1163).
 - `vcruntime140.dll` memory imports now bind to the existing bounded guest memory services for copy, move, fill, compare and search. An original MSVC-ABI executable exercises the aliases locally (#1163).

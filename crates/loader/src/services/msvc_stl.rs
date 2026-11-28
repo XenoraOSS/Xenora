@@ -9,7 +9,7 @@
 
 use crate::cpu::ExitReason;
 use crate::imports::{ImportRegistry, ServiceStatus};
-use crate::memory::{GuestMemory, PROCESS_HEAP};
+use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
 use std::sync::{Arc, Mutex};
 
 const MODULE: &str = "msvcp140.dll";
@@ -36,6 +36,35 @@ fn count_address(slot: &mut Option<u64>, memory: &mut GuestMemory) -> Result<u64
 }
 
 pub(super) fn register(registry: &mut ImportRegistry) {
+    // x64 ios_base stores its iostate after the vptr and _Stdstr. These
+    // accessors inspect only that field; construction remains unsupported.
+    for (symbol, mask, raw) in [
+        ("?rdstate@ios_base@std@@QEBAHXZ", 0_u32, true),
+        ("?good@ios_base@std@@QEBA_NXZ", 0, false),
+        ("?eof@ios_base@std@@QEBA_NXZ", 1, false),
+        ("?fail@ios_base@std@@QEBA_NXZ", 6, false),
+        ("?bad@ios_base@std@@QEBA_NXZ", 4, false),
+    ] {
+        registry.register_with_status(
+            MODULE,
+            symbol,
+            ServiceStatus::Partial,
+            move |args, _, memory| {
+                let address = args
+                    .rcx
+                    .checked_add(16)
+                    .ok_or(ExitReason::MemoryFault(MemoryError::Overflow))?;
+                let state = memory.read_u32(address).map_err(ExitReason::MemoryFault)?;
+                Ok(if raw {
+                    u64::from(state)
+                } else if mask == 0 {
+                    u64::from(state == 0)
+                } else {
+                    u64::from(state & mask != 0)
+                })
+            },
+        );
+    }
     // Microsoft STL ulocale.cpp defines one zero-initialized locale::id per
     // specialization. Each is a distinct pointer-sized guest object.
     for symbol in [

@@ -352,6 +352,33 @@ bounds and fault behavior. The original MSVC-ABI guest fixture exercises
 copying, overlap, filling, comparison, searching and zero-length comparison;
 it is not evidence for the rest of VCRUNTIME or for Xbox execution.
 
+### Microsoft-header iostream workload (#1163)
+
+`fixtures/pe/msvc-iostream.cpp` is an original program that uses the actual
+Microsoft STL headers and calls `std::cout.write`, `flush`, and `good` before
+leaving its `ios_base::Init` scope. `fixtures/pe/build-msvc-iostream.sh` builds
+it using local header paths supplied in `MS_STL_INCLUDE`, `MSVC_INCLUDE` and
+`WINDOWS_SDK_INCLUDE`, and writes the executable under ignored `artifacts/`.
+One local build used Microsoft STL commit `0cabaf3c7e0a73fe3040aabce40cd8833e80392b`,
+VC headers 14.44.35207 and Windows SDK 10.0.22621.0. The Microsoft STL headers
+are copyright Microsoft Corporation and licensed Apache-2.0 WITH LLVM-exception;
+no vendor headers or redistributable binaries are included in this fixture.
+
+In that local build, four of seven imports resolve to standard services; the
+`cout` object and `write` and `flush` methods remain unresolved. A
+separate local run with Microsoft redistributable DLLs supplied as guest
+modules stopped before execution with 77 required imports unresolved. No
+complete C++ stream execution or cleanup is claimed.
+
+### Microsoft stream state queries (#1163)
+
+The x64 `ios_base` exports `rdstate`, `good`, `eof`, `fail` and `bad` read
+the 32-bit state field at offset 16 of the guest `ios_base` subobject. Bit
+meanings follow the public Microsoft STL [xiosbase header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xiosbase);
+its x64 layout was inspected using Clang with Microsoft headers. Synthetic
+guest tests exercise the bits and an overflowing pointer. These accessors do
+not construct streams, validate object type, or provide exception handling.
+
 ### Microsoft STL initialization count (#1163)
 
 `msvcp140.dll` exposes the Microsoft x64 decorated `ios_base::Init` count,
