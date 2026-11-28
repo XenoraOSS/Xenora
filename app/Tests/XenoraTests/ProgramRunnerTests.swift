@@ -162,21 +162,23 @@ struct ProgramRunnerTests {
     }
 
     @Test func environmentOverrideUsesTheLegacyCommandLine() throws {
-        let report = Self.guestReport(256, code: 1)
-        try Self.withWorker(script: """
-            test "$#" = 5
-            test "$3" = --trace
-            test "$4" = --pe
-            printf '%s\\n' 'trace stage=exit entry_steps=1' >&2
-            printf '\\n%s\\n' '\(report)' >&2
-            exit 1
-            """) { _, worker, program, _ in
-            let result = ProgramRunner.run(program, trace: true, environment: ["XENORA_CLI": worker.path])
-            #expect(result.exitStatus == 1)
-            #expect(result.guestExitStatus == nil)
-            #expect(result.summary == "Exited with status 1.")
-            #expect(result.lastStage == "exit")
-            #expect(result.standardError == "trace stage=exit entry_steps=1\n\n\(report)\n")
+        let report = Self.guestReport(125, code: 125)
+        for trace in [false, true] {
+            let optionCheck = trace ? "test \"$3\" = --trace\ntest \"$4\" = --pe" : "test \"$3\" = --pe"
+            try Self.withWorker(script: """
+                test "$#" = \(trace ? 5 : 4)
+                \(optionCheck)
+                printf '%s\\n' 'trace stage=exit entry_steps=1' >&2
+                printf '\\n%s\\n' '\(report)' >&2
+                exit 125
+                """) { _, worker, program, _ in
+                let result = ProgramRunner.run(program, trace: trace, environment: ["XENORA_CLI": worker.path])
+                #expect(result.exitStatus == 125)
+                #expect(result.guestExitStatus == nil)
+                #expect(result.summary == "The run failed (exit 125) after stage exit.")
+                #expect(result.lastStage == "exit")
+                #expect(result.standardError == "trace stage=exit entry_steps=1\n\n\(report)\n")
+            }
         }
     }
 

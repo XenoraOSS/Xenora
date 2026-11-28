@@ -291,7 +291,7 @@ enum ProgramRunner {
         return ProgramRunResult(
             exitStatus: status, guestExitStatus: guestStatus, standardOutput: stdout.text, standardError: stderr.text,
             truncated: stdout.truncated || stderr.truncated,
-            lastStage: trace ? lastStage(in: stderr.text) : nil, launchError: nil,
+            lastStage: trace || !reportStartup ? lastStage(in: stderr.text) : nil, launchError: nil,
             hostMilliseconds: Date().timeIntervalSince(started) * 1000)
     }
 }
