@@ -626,19 +626,16 @@ pub(crate) fn execute_legacy(
             }
         }
         (Op::Pclmulqdq, Encoding::XmmRmImm) => {
-            // imm8[1:0] selects the destination qword and imm8[3:2] the
-            // source qword. Only 0 and 1 are defined for each field; all
-            // other bits are reserved and are refused, not masked.
-            if insn.imm & !0x05 != 0 {
-                return Err(ExitReason::IllegalInstruction(insn.imm as u8));
-            }
+            // SDM Vol. 2, Table 4-13: imm8[0] selects a qword of the first
+            // source (the destination register) and imm8[4] selects one of the
+            // second. Every other immediate bit is ignored.
             let source = read_rm(cpu, memory, insn)?;
             let a = if insn.imm & 0x01 != 0 {
                 (cpu.xmm[reg] >> 64) as u64
             } else {
                 cpu.xmm[reg] as u64
             };
-            let b = if insn.imm & 0x04 != 0 {
+            let b = if insn.imm & 0x10 != 0 {
                 (source >> 64) as u64
             } else {
                 source as u64

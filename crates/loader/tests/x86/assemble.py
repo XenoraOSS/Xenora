@@ -210,7 +210,9 @@ def vector_cases():
         out += [f"{op} xmm10, {wide}, 114", f"{op} xmm2, xmm2, 57"]
     for n in (0, 1, 5, 15, 16, 17, 31, 32, 255):
         out += [f"palignr xmm3, xmm9, {n}", f"palignr xmm10, {wide}, {n}", f"palignr xmm2, xmm2, {n}"]
-    for n in (0, 1, 4, 5):
+    # SDM Table 4-13 selects with imm8[0] and imm8[4]; every other bit is
+    # ignored, so the extra immediates must produce canonical products.
+    for n in (0, 1, 2, 3, 8, 9, 16, 17, 18, 19, 0x22, 0x23, 0x32, 0x33, 0x7A, 0xFF):
         out += [f"pclmulqdq xmm3, xmm9, {n}", f"pclmulqdq xmm10, {wide}, {n}",
                 f"pclmulqdq xmm2, xmm2, {n}"]
     for op in """pmuldq pcmpeqq pcmpgtq packusdw pminsb pminsd pminuw pminud pmaxsb pmaxsd pmaxuw pmaxud pmulld

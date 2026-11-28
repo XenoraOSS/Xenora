@@ -658,12 +658,13 @@ pub fn reference(m: &mut Machine, text: &str) {
             out.copy_from_slice(&joined[imm.unwrap()..imm.unwrap() + 16]);
         }
         "pclmulqdq" => {
-            // imm8[1:0] selects the destination qword and imm8[3:2] the source
-            // qword. XOR every shifted set bit of the first operand where the
-            // second has a set bit, without carries between bits.
+            // SDM Vol. 2, Table 4-13: imm8[0] selects the first source qword
+            // and imm8[4] the second; all other immediate bits are ignored.
+            // XOR every shifted set bit of the first operand where the second
+            // has a set bit, without carries between bits.
             let selector = imm.unwrap();
             let a = qword(&old, selector & 1 != 0);
-            let b = qword(&source, selector >> 2 & 1 != 0);
+            let b = qword(&source, selector >> 4 & 1 != 0);
             out = carryless_product(a, b).to_le_bytes();
         }
         "shufpd" => {

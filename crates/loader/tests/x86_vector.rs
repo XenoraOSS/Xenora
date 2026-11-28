@@ -251,8 +251,12 @@ fn pclmulqdq_known_products_match_selected_qwords() {
         // bit of a qword shifts that product into bit 63 of the low result.
         ("pclmulqdq xmm3, xmm9, 0", 3, 0, 3, 0, 5, 0),
         ("pclmulqdq xmm3, xmm9, 1", 0, 1 << 63, 3, 0, 1 << 63, 1),
-        ("pclmulqdq xmm3, xmm9, 4", 3, 0, 0, 3, 5, 0),
-        ("pclmulqdq xmm3, xmm9, 5", 0, 1 << 63, 0, 3, 1 << 63, 1),
+        ("pclmulqdq xmm3, xmm9, 16", 3, 0, 0, 3, 5, 0),
+        ("pclmulqdq xmm3, xmm9, 17", 0, 1 << 63, 0, 3, 1 << 63, 1),
+        // Ignored bits do not change the selected qwords: 2 maps to 0 and
+        // 255 maps to 17, whose expected products are repeated here.
+        ("pclmulqdq xmm3, xmm9, 2", 3, 0, 3, 0, 5, 0),
+        ("pclmulqdq xmm3, xmm9, 255", 0, 1 << 63, 0, 3, 1 << 63, 1),
     ];
     for &(text, a_low, a_high, b_low, b_high, low, high) in checks {
         let case = all
@@ -281,26 +285,51 @@ fn pclmulqdq_known_products_match_selected_qwords() {
 }
 
 #[test]
-fn reserved_pclmulqdq_immediates_are_refused() {
-    let case = cases()
-        .into_iter()
-        .find(|case| case.text == "pclmulqdq xmm3, xmm9, 0")
-        .expect("fixture");
-    for imm in [0x02, 0x03, 0x06, 0x07, 0x08, 0x10, 0xFF] {
-        let mut code = case.code.clone();
-        *code.last_mut().unwrap() = imm;
-        let machine = Random(37).machine();
-        for native in [false, true] {
-            let (cpu, mut memory) = load(&machine, &code, MemoryPermissions::READ_WRITE);
-            let before = data(&memory);
-            let result = run(native, &cpu, &mut memory, 1);
-            assert!(
-                matches!(result.exit_reason, ExitReason::IllegalInstruction(_)),
-                "imm {imm:#04x}: {:?}",
-                result.exit_reason
-            );
-            assert_eq!(result.final_state, cpu, "imm {imm:#04x}");
-            assert_eq!(data(&memory), before, "imm {imm:#04x}");
+fn ignored_pclmulqdq_immediate_bits_do_not_change_results() {
+    // Each group names the canonical selector, four immediates that differ
+    // only in ignored bits, the two selected qwords, and their hand-derived
+    // carry-less product. The expected values are literals, not executor data.
+    let groups: &[(u8, [u8; 4], u64, u64, u64, u64, u64, u64)] = &[
+        (0, [0x02, 0x08, 0x22, 0x6A], 3, 0, 3, 0, 5, 0),
+        (1, [0x03, 0x09, 0x23, 0x6B], 0, 1 << 63, 3, 0, 1 << 63, 1),
+        (16, [0x12, 0x18, 0x32, 0x7A], 3, 0, 0, 3, 5, 0),
+        (17, [0x13, 0x19, 0x33, 0xFF], 0, 1 << 63, 0, 3, 1 << 63, 1),
+    ];
+    let all = cases();
+    for &(canonical, variants, a_low, a_high, b_low, b_high, low, high) in groups {
+        let text = format!("pclmulqdq xmm3, xmm9, {canonical}");
+        let base = all
+            .iter()
+            .find(|case| case.text == text)
+            .unwrap_or_else(|| panic!("missing fixture {text}"));
+        for imm in variants {
+            let mut code = base.code.clone();
+            *code.last_mut().unwrap() = imm;
+            let mut machine = Random(37).machine();
+            machine.xmm[3][..8].copy_from_slice(&a_low.to_le_bytes());
+            machine.xmm[3][8..].copy_from_slice(&a_high.to_le_bytes());
+            machine.xmm[9][..8].copy_from_slice(&b_low.to_le_bytes());
+            machine.xmm[9][8..].copy_from_slice(&b_high.to_le_bytes());
+            let (cpu, _) = load(&machine, &code, MemoryPermissions::READ_WRITE);
+            let mut expected = cpu.clone();
+            expected.rip += code.len() as u64;
+            let mut product = [0; 16];
+            product[..8].copy_from_slice(&low.to_le_bytes());
+            product[8..].copy_from_slice(&high.to_le_bytes());
+            expected.xmm[3] = u128::from_le_bytes(product);
+            for native in [false, true] {
+                let (_, mut memory) = load(&machine, &code, MemoryPermissions::READ_WRITE);
+                let result = run(native, &cpu, &mut memory, 1);
+                assert_eq!(
+                    result.exit_reason,
+                    ExitReason::StepLimitExceeded,
+                    "imm {imm:#04x}"
+                );
+                assert_eq!(
+                    result.final_state, expected,
+                    "imm {imm:#04x} native={native}"
+                );
+            }
         }
     }
 }
@@ -481,7 +510,7 @@ fn unsupported_vector_encodings_are_rejected() {
         &[0x66, 0x0F, 0x38, 0x13, 0xC1],             // unassigned without VEX
         &[0x66, 0x0F, 0x3A, 0x18, 0xC1, 0x00],       // unassigned without VEX
         &[0x66, 0x0F, 0x38, 0xDC, 0xC1],             // aesenc
-        &[0x66, 0x0F, 0x3A, 0x44, 0xC1, 0x08],       // reserved pclmulqdq imm8
+        &[0xC4, 0xE3, 0x71, 0x44, 0xC2, 0x00],       // vpclmulqdq xmm0, xmm1, xmm2, 0
         &[0x66, 0x0F, 0x3A, 0x00, 0xC1, 0x00],       // unassigned without VEX
         &[0x66, 0x0F, 0x39, 0x00, 0xC1],             // 0F 39 is no escape
         &[0xF2, 0xF3, 0x0F, 0x10, 0xC1],             // both mandatory prefixes
