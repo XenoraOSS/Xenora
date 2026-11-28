@@ -8,10 +8,12 @@ use super::{ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPOR
 use crate::imports::{ImportRegistry, ServiceStatus};
 use crate::memory::GuestMemory;
 use crate::services::ServicesState;
+use std::borrow::Cow;
 use std::ops::Range;
 use std::sync::Arc;
 
 const ICU_ESCAPE: u32 = 0x8000_0000;
+const ICU_DECODE: u32 = 0x1000_0000;
 const ICU_REJECT_USERPWD: u32 = 0x4000;
 const MAX_URL_UNITS: usize = 32_768;
 
@@ -334,6 +336,31 @@ fn read_dword(record: &[u8; STRUCT_SIZE], offset: usize) -> u32 {
     u32::from_le_bytes(record[offset..offset + 4].try_into().unwrap())
 }
 
+/// Each complete escape yields one wide unit in the range U+0000..U+00FF.
+/// A percent sign produced by decoding is already part of the output.
+fn decode_component(mut remaining: &[u16]) -> Vec<u16> {
+    fn hex(unit: u16) -> Option<u16> {
+        char::from_u32(u32::from(unit))?
+            .to_digit(16)
+            .map(|digit| digit as u16)
+    }
+
+    let mut decoded = Vec::with_capacity(remaining.len());
+    while let Some((&unit, tail)) = remaining.split_first() {
+        if unit == u16::from(b'%')
+            && let [high, low, rest @ ..] = tail
+            && let (Some(high), Some(low)) = (hex(*high), hex(*low))
+        {
+            decoded.push((high << 4) | low);
+            remaining = rest;
+        } else {
+            decoded.push(unit);
+            remaining = tail;
+        }
+    }
+    decoded
+}
+
 fn crack(
     memory: &mut GuestMemory,
     url_address: u64,
@@ -341,9 +368,10 @@ fn crack(
     flags: u32,
     output: u64,
 ) -> Result<(), u32> {
-    if flags & !ICU_REJECT_USERPWD != 0 {
+    if flags & !(ICU_DECODE | ICU_REJECT_USERPWD) != 0 {
         return Err(ERROR_NOT_SUPPORTED);
     }
+    let decode = flags & ICU_DECODE != 0;
     if output == 0 {
         return Err(ERROR_INVALID_PARAMETER);
     }
@@ -384,7 +412,16 @@ fn crack(
         if capacity == 0 && (field == EXTRA || pointer == 0) {
             continue;
         }
-        let part = range.as_ref().map_or(&[][..], |range| &url[range.clone()]);
+        let source = range.as_ref().map_or(&[][..], |range| &url[range.clone()]);
+        let part = if decode {
+            if pointer == 0 {
+                // A borrowed output has no storage for the transformed text.
+                return Err(ERROR_INVALID_PARAMETER);
+            }
+            Cow::Owned(decode_component(source))
+        } else {
+            Cow::Borrowed(source)
+        };
         if pointer == 0 {
             let view = range
                 .filter(|range| !range.is_empty())
