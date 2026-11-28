@@ -17,8 +17,8 @@
 //! assembled with `clang -target x86_64-apple-macos` and read with `objdump`.
 
 use xenora_loader::cpu::{
-    CPUID_CMOV, CPUID_CMPXCHG16B, CPUID_CX8, CPUID_LAHF_SAHF, CPUID_LONG_MODE, CPUID_LZCNT,
-    CPUID_POPCNT, CPUID_TSC, CpuState, ExitReason, Interpreter, RFlags, cpuid,
+    CPUID_BMI1, CPUID_CMOV, CPUID_CMPXCHG16B, CPUID_CX8, CPUID_LAHF_SAHF, CPUID_LONG_MODE,
+    CPUID_LZCNT, CPUID_POPCNT, CPUID_TSC, CpuState, ExitReason, Interpreter, RFlags, cpuid,
 };
 use xenora_loader::dbt::DbtEngine;
 use xenora_loader::memory::{GuestMemory, MemoryPermissions};
@@ -76,8 +76,8 @@ const SET: RFlags = RFlags {
 fn every_leaf_returns_its_documented_values() {
     // (leaf, subleaf, [EAX, EBX, ECX, EDX])
     let leaves: &[(u32, u32, [u32; 4])] = &[
-        // Highest basic leaf 1, and "Xeno", "uest", "ra g" as little-endian text.
-        (0, 0, [1, 0x6F6E_6558, 0x7473_6575, 0x6720_6172]),
+        // Highest basic leaf 7, and "Xeno", "uest", "ra g" as little-endian text.
+        (0, 0, [7, 0x6F6E_6558, 0x7473_6575, 0x6720_6172]),
         // CMPXCHG16B is ECX bit 13, POPCNT ECX bit 23, TSC EDX bit 4,
         // CMPXCHG8B (CX8) EDX bit 8 and CMOV EDX bit 15. No signature.
         (1, 0, [0, 0, 0x0080_2000, 0x0000_8110]),
@@ -87,12 +87,16 @@ fn every_leaf_returns_its_documented_values() {
         // LAHF/SAHF is ECX bit 0, LZCNT ECX bit 5 and long mode EDX bit 29.
         (0x8000_0001, 0, [0, 0, 0x0000_0021, 0x2000_0000]),
         (0x8000_0001, 7, [0, 0, 0x0000_0021, 0x2000_0000]),
-        // Everything else, above or between the highest leaves, is zeros.
+        // Intervening leaves describe nothing Xenora models, so they and
+        // subleaves above leaf 7's only subleaf read as zeros.
         (2, 0, [0; 4]),
+        (3, 0, [0; 4]),
         (4, 0, [0; 4]),
+        (5, 0, [0; 4]),
         (6, 0, [0; 4]),
-        (7, 0, [0; 4]),
+        (7, 0, [0, CPUID_BMI1, 0, 0]),
         (7, 1, [0; 4]),
+        (7, 0xFFFF_FFFF, [0; 4]),
         (0xB, 0, [0; 4]),
         (0xD, 1, [0; 4]),
         (0x16, 0, [0; 4]),
@@ -142,7 +146,8 @@ fn every_leaf_returns_its_documented_values() {
             CPUID_CMPXCHG16B,
             CPUID_LAHF_SAHF,
             CPUID_LZCNT,
-            CPUID_LONG_MODE
+            CPUID_LONG_MODE,
+            CPUID_BMI1
         ),
         (
             1 << 23,
@@ -152,7 +157,8 @@ fn every_leaf_returns_its_documented_values() {
             1 << 13,
             1,
             1 << 5,
-            1 << 29
+            1 << 29,
+            1 << 3
         )
     );
 }
@@ -238,6 +244,34 @@ fn reported_features_have_all_their_instructions_in_the_fixtures() {
     assert_ne!(cpuid(0x8000_0001, 0)[EDX] & CPUID_LONG_MODE, 0);
     decodable("add r9, r12");
     decodable("movabs r15, 0x8877665544332211");
+    // BMI1 is complete and is the only leaf-7 feature reported. ANDN, BEXTR,
+    // BLSI, BLSMSK and BLSR have 32- and 64-bit forms; TZCNT also has a 16-bit
+    // form. The SDM places all six in this feature bit.
+    assert_ne!(cpuid(7, 0)[EBX] & CPUID_BMI1, 0);
+    for (bits, low, source, high) in sizes.into_iter().filter(|(bits, ..)| *bits != 16) {
+        for name in ["andn", "bextr", "blsi", "blsmsk", "blsr"] {
+            let operands = if name == "andn" || name == "bextr" {
+                if bits == 32 {
+                    format!("{low}, {source}, ecx")
+                } else {
+                    format!("{low}, {source}, rcx")
+                }
+            } else {
+                format!("{low}, {source}")
+            };
+            decodable(&format!("{name} {operands}"));
+        }
+        let vvvv = if bits == 32 { "r12d" } else { "r12" };
+        decodable(&format!("andn {high}, {vvvv}, {}", memory(bits)));
+        decodable(&format!("bextr {high}, {}, {vvvv}", memory(bits)));
+        for name in ["blsi", "blsmsk", "blsr"] {
+            decodable(&format!("{name} {high}, {}", memory(bits)));
+        }
+    }
+    for (bits, low, source, high) in sizes {
+        decodable(&format!("tzcnt {low}, {source}"));
+        decodable(&format!("tzcnt {high}, {}", memory(bits)));
+    }
 }
 
 #[test]
