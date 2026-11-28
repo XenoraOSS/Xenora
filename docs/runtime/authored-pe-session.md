@@ -57,8 +57,9 @@ The phase deadline defaults to 15 seconds for startup,
 each input-to-frame exchange and shutdown. Use `--phase-seconds <1..=60>` to
 change it. Host stdout writes share the active phase deadline, so a
 consumer must continue draining the output pipe. Waiting at a confirmed
-input boundary has no idle deadline. A disconnected output pipe ends the
-session on macOS.
+input boundary has no idle deadline. On macOS, disconnecting the output pipe
+ends the session with exit code 125, including during startup, a frame, or
+shutdown.
 `--max-steps <1..=10000000>` bounds the guest entry and workers across the
 session, with a default of 2,000,000. Package initialization and detach
 use the loader's callback budgets. The launcher accepts up to 64 inputs
