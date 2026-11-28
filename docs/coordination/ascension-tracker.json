@@ -1797,6 +1797,57 @@
       "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
+    },
+    {
+      "id": "WP-1378",
+      "subsystem": "Runtime",
+      "description": "GNU hosted ordered map node ownership",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "D",
+      "issue": 1378,
+      "pr": 1384,
+      "test_status": "Two independent native ARM64 runs at 0b5a31fd passed the success, duplicate-key rejection and fresh-success sequence at both optimization levels.",
+      "limitations": "Covers one hosted GNU std::map with its C++ runtime linked into the executable. Microsoft STL and other container types remain open.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1379",
+      "subsystem": "Runtime",
+      "description": "CRT escaped percent output limit in both widths",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "D",
+      "issue": 1379,
+      "pr": 1385,
+      "test_status": "The exact-limit control passed on the baseline while the narrow and wide overflow cases returned one extra unit. Two independent native ARM64 runs at 6ffc1d19 passed exact sizing and both refusals.",
+      "limitations": "Covers the literal percent directive at Xenora’s configured limit. The limit and refusal are Xenora policy.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1380",
+      "subsystem": "Runtime",
+      "description": "Microsoft x64 RTTI helper refusal with a virtual-dispatch control",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "E",
+      "issue": 1380,
+      "pr": 1387,
+      "test_status": "Two independent native ARM64 runs at 8f981f33 passed the RTTI-free virtual calls and the three exact pre-entry import refusals at both optimization levels.",
+      "limitations": "The compiler emits three unresolved helpers. The inert type_info vftable is link-only data. RTTI execution and cross-module RTTI remain unsupported.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     }
   ],
   "ownership_states": {
@@ -1814,32 +1865,34 @@
       "id": "R1",
       "status": "PARTIAL",
       "goal": "Original compiled C application with comprehensive supported CRT coverage",
-      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit. Open PR #1330 adds byte-exact narrow time formatting and six documented directives, with two independent native fixture runs.",
+      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit. Open PR #1330 adds byte-exact narrow time formatting and six documented directives, with two independent native fixture runs. Open PR #1385 verifies that escaped percent signs count toward the narrow and wide CRT output limits, with successful sizing at the limit and refusal one unit above it.",
       "remaining": "Consolidate the supported CRT family matrix and obtain independent acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/gate-a.md",
-        "https://github.com/ranveersoni98/Xenora/pull/1330"
+        "https://github.com/ranveersoni98/Xenora/pull/1330",
+        "https://github.com/ranveersoni98/Xenora/pull/1385"
       ]
     },
     {
       "id": "R2",
       "status": "PARTIAL",
       "goal": "Original compiled C++ application with construction, destruction and STL",
-      "evidence": "On c8210aaf, the original GNU C++ suite passed three tests. Merged PR #1269 records a separate Microsoft x64 object-lifetime witness. Merged PR #1256 adds a bounded synthetic standard output stream. Open PR #1328 verifies four synthetic codecvt data cells across two independently compiled DLLs with two independent native fixture runs.",
+      "evidence": "On c8210aaf, the original GNU C++ suite passed three tests. Merged PR #1269 records a separate Microsoft x64 object-lifetime witness. Merged PR #1256 adds a bounded synthetic standard output stream. Open PR #1328 verifies four synthetic codecvt data cells across two independently compiled DLLs with two independent native fixture runs. Open PR #1384 verifies ownership transfer, duplicate-key rejection and exact destruction order in an original hosted GNU std::map guest.",
       "remaining": "Microsoft-header stream startup, output, cleanup, failures and independent acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cpp_path.rs",
         "https://github.com/ranveersoni98/Xenora/pull/1269",
         "https://github.com/ranveersoni98/Xenora/pull/1256",
-        "https://github.com/ranveersoni98/Xenora/pull/1328"
+        "https://github.com/ranveersoni98/Xenora/pull/1328",
+        "https://github.com/ranveersoni98/Xenora/pull/1384"
       ]
     },
     {
       "id": "R3",
       "status": "PARTIAL",
       "goal": "Multi-DLL application with cross-module runtime ownership",
-      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs. Open PR #1328 checks shared runtime data, bidirectional writes and fresh-state zero initialization across the EXE and both DLLs. Open PR #1343 verifies independent static TLS templates and cross-module accesses on the initial guest thread. Draft PR #1360 verifies transactional initial-thread TLS staging and rollback. Open PR #1370 verifies GNU exception propagation through two C DLL frames.",
-      "remaining": "Independently verify the full ownership milestone. Cover dynamic module lifetime and exception ownership across independently compiled C++ modules.",
+      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs. Open PR #1328 checks shared runtime data, bidirectional writes and fresh-state zero initialization across the EXE and both DLLs. Open PR #1343 verifies independent static TLS templates and cross-module accesses on the initial guest thread. Draft PR #1360 verifies transactional initial-thread TLS staging and rollback. Open PR #1370 verifies GNU exception propagation through two C DLL frames. Open PR #1387 verifies pre-entry refusal for Microsoft x64 typeid, pointer downcast and side cast, and cast to the complete object through void*. Its RTTI-free control runs virtual calls.",
+      "remaining": "Independently verify the full ownership milestone. Cover dynamic module lifetime and exception ownership across independently compiled C++ modules. Microsoft x64 RTTI implementation and cross-module type identity remain open.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/package_startup.rs",
         "https://github.com/ranveersoni98/Xenora/pull/1262",
@@ -1848,7 +1901,8 @@
         "https://github.com/ranveersoni98/Xenora/pull/1328",
         "https://github.com/ranveersoni98/Xenora/pull/1343",
         "https://github.com/ranveersoni98/Xenora/pull/1360",
-        "https://github.com/ranveersoni98/Xenora/pull/1370"
+        "https://github.com/ranveersoni98/Xenora/pull/1370",
+        "https://github.com/ranveersoni98/Xenora/pull/1387"
       ]
     },
     {
