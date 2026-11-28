@@ -1728,7 +1728,19 @@ fn test_guest_synthetic_file_io_through_iat() {
     let namespace = |symbol, path| path_call(symbol, path, 0, 0, None);
     let call = |symbol, args: &[u64]| call_service_fixture(&state, "kernel32.dll", symbol, args);
     let output = PROCESS_FIXTURE_OUTPUT;
-    assert_eq!(open("C:/../outside", 0x4000_0000, 2), u64::MAX);
+    // `C:/../outside` escapes nothing: the root cannot be climbed past, so
+    // the path resolves lexically to exactly `outside` at the drive root -
+    // the clamping is the protection - and the open succeeds as it does on
+    // Windows.
+    let clamped = open("C:/../outside", 0x4000_0000, 2);
+    assert_ne!(clamped, u64::MAX);
+    assert_eq!(
+        call("CloseHandle", &[clamped])
+            .execution
+            .final_state
+            .get(Register::Rax),
+        1
+    );
     let writer = open("C:/Sample.dat", 0x4000_0000, 2);
     assert_ne!(writer, u64::MAX);
     assert_eq!(open("sample.dat", 0x8000_0000, 3), u64::MAX);
@@ -1842,7 +1854,11 @@ fn test_guest_synthetic_file_io_through_iat() {
     assert_eq!(open("C:/Data/save.bin", 0x4000_0000, 2), u64::MAX);
     assert_eq!(namespace("CreateDirectoryW", "C:/Data"), 1);
     assert_eq!(namespace("CreateDirectoryW", "C:/Data/Nested"), 1);
-    assert_eq!(namespace("CreateDirectoryW", "C:/Data/../escape"), 0);
+    // `C:/Data/../escape` is no invalid name: the dot components resolve
+    // lexically to exactly `escape` at the drive root, and the creation
+    // succeeds there.
+    assert_eq!(namespace("CreateDirectoryW", "C:/Data/../escape"), 1);
+    assert_eq!(namespace("RemoveDirectoryW", "escape"), 1);
     assert_eq!(namespace("CreateDirectoryW", "data/nested"), 0);
     let nested = open("Data/Nested/save.bin", 0x4000_0000, 2);
     assert_ne!(nested, u64::MAX);
