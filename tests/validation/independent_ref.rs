@@ -103,6 +103,8 @@ enum Insn {
     /// Integer vector compare into `dst`: relation 0 f, 1 lt, 2 eq, 3 le, 4 gt, 5 ne, 6 ge, 7 t.
     /// `bits` is 16, 32 or 64; 64-bit register operands name the low register of a pair.
     /// `float` marks the binary32 compares (#786), whose relation is 0-15.
+    /// `abs` and `neg` carry VOP3 binary32 input modifier bits for SRC0/SRC1
+    /// in bits 0 and 1; every other compare has both masks zero.
     VCmp {
         dst: u8,
         relation: u8,
@@ -111,6 +113,8 @@ enum Insn {
         bits: u32,
         src0: CmpSrc,
         src1: u8,
+        abs: u8,
+        neg: u8,
     },
     VAddNc(u8, u8, u8),
     VAnd(u8, u8, u8),
@@ -254,6 +258,8 @@ fn run_wave(program: &[(usize, Insn)], wave: &[u32], buffer: &[u32]) -> Result<V
                 bits,
                 src0,
                 src1,
+                abs,
+                neg,
             } => {
                 // A compare couples lanes; a failed lane has no defined
                 // contribution, so the wave stops with its error.
@@ -264,7 +270,7 @@ fn run_wave(program: &[(usize, Insn)], wave: &[u32], buffer: &[u32]) -> Result<V
                     &lanes,
                     &sgpr,
                     execution_mask,
-                    (relation, signed, float, bits, src0, src1),
+                    (relation, signed, float, bits, src0, src1, abs, neg),
                     offset,
                 )
                 .map(|mask| {
@@ -998,7 +1004,16 @@ fn compare(
     lanes: &[Lane],
     sgpr: &[Option<u32>; 128],
     execution_mask: u32,
-    (relation, signed, float, bits, src0, src1): (u8, bool, bool, u32, CmpSrc, u8),
+    (relation, signed, float, bits, src0, src1, abs, neg): (
+        u8,
+        bool,
+        bool,
+        u32,
+        CmpSrc,
+        u8,
+        u8,
+        u8,
+    ),
     offset: usize,
 ) -> Result<u32, String> {
     if execution_mask == 0 {
@@ -1062,7 +1077,18 @@ fn compare(
         };
         let b = read_v(lane, src1)?;
         if float {
-            mask |= u32::from(binary32_relation(relation, a as u32, b as u32)) << n;
+            let modify = |value: u32, bit: u8| {
+                let mut value = value;
+                if abs & (1 << bit) != 0 {
+                    value &= 0x7fff_ffff;
+                }
+                if neg & (1 << bit) != 0 {
+                    value ^= 0x8000_0000;
+                }
+                value
+            };
+            let (a, b) = (modify(a as u32, 0), modify(b as u32, 1));
+            mask |= u32::from(binary32_relation(relation, a, b)) << n;
             continue;
         }
         let (a, b) = (a & keep, b & keep);
@@ -1717,6 +1743,8 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
             bits,
             src0,
             src1,
+            abs: 0,
+            neg: 0,
         };
         return Ok((insn, len));
     }
@@ -1747,7 +1775,18 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
         let second = word(code, offset + 4).map_err(|_| fail("truncated VOP3A"))?;
         let src0 = second & 0x1ff;
         let src1 = (second >> 9) & 0x1ff;
-        if first & 0xff00 != 0 || second >> 18 != 128 || src0 < 256 || src1 < 256 {
+        let abs = ((first >> 8) & 7) as u8;
+        let neg = ((second >> 29) & 7) as u8;
+        let float_compare = matches!(opcode, 1..=6);
+        if first & 0xf800 != 0
+            || second & 0x1800_0000 != 0
+            || (second >> 18) & 0x1ff != 128
+            || src0 < 256
+            || src1 < 256
+            || abs & 4 != 0
+            || neg & 4 != 0
+            || (!float_compare && (abs != 0 || neg != 0))
+        {
             return Err(fail("unsupported VOP3A modifiers or sources"));
         }
         // Guide §§3.9, 12.7.1 and 12.9.1: re-encoded VOP2 writes a VGPR,
@@ -1762,6 +1801,19 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
                 bits: 32,
                 src0: CmpSrc::Vgpr(src0),
                 src1,
+                abs,
+                neg,
+            },
+            1..=6 if dst <= 106 => Insn::VCmp {
+                dst,
+                relation: opcode as u8,
+                signed: false,
+                float: true,
+                bits: 32,
+                src0: CmpSrc::Vgpr(src0),
+                src1,
+                abs,
+                neg,
             },
             293 => Insn::VAddNc(dst, src0, src1),
             265..=268 | 273..=276 | 286 | 294..=295 => {

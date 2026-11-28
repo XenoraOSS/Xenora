@@ -57,8 +57,8 @@ impl ImageSampleOp {
     /// The validated registry row.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::ImageSampleLz => 217,
-            Self::ImageSampleL => 218,
+            Self::ImageSampleLz => 223,
+            Self::ImageSampleL => 224,
         }]
     }
 }
@@ -3855,6 +3855,18 @@ impl VectorCompareOp {
 /// VOP3 encodings of registry forms (operand rule `vop3_cmp_vgpr2`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VectorCompareVop3Op {
+    /// `v_cmp_lt_f32_e64` (VOP3 opcode 1).
+    CmpLtF32,
+    /// `v_cmp_eq_f32_e64` (VOP3 opcode 2).
+    CmpEqF32,
+    /// `v_cmp_le_f32_e64` (VOP3 opcode 3).
+    CmpLeF32,
+    /// `v_cmp_gt_f32_e64` (VOP3 opcode 4).
+    CmpGtF32,
+    /// `v_cmp_lg_f32_e64` (VOP3 opcode 5).
+    CmpLgF32,
+    /// `v_cmp_ge_f32_e64` (VOP3 opcode 6).
+    CmpGeF32,
     /// `v_cmp_lt_i32_e64` (VOP3 opcode 129).
     CmpLtI32,
     /// `v_cmp_eq_i32_e64` (VOP3 opcode 130).
@@ -3891,7 +3903,13 @@ pub enum VectorCompareVop3Op {
 
 impl VectorCompareVop3Op {
     /// Every variant, in registry order.
-    pub const ALL: [Self; 16] = [
+    pub const ALL: [Self; 22] = [
+        Self::CmpLtF32,
+        Self::CmpEqF32,
+        Self::CmpLeF32,
+        Self::CmpGtF32,
+        Self::CmpLgF32,
+        Self::CmpGeF32,
         Self::CmpLtI32,
         Self::CmpEqI32,
         Self::CmpLeI32,
@@ -3918,6 +3936,12 @@ impl VectorCompareVop3Op {
             return None;
         }
         match (word >> 16) & 0x3ff {
+            1 => Some(Self::CmpLtF32),
+            2 => Some(Self::CmpEqF32),
+            3 => Some(Self::CmpLeF32),
+            4 => Some(Self::CmpGtF32),
+            5 => Some(Self::CmpLgF32),
+            6 => Some(Self::CmpGeF32),
             128 => Some(Self::CmpFI32),
             129 => Some(Self::CmpLtI32),
             130 => Some(Self::CmpEqI32),
@@ -3941,6 +3965,12 @@ impl VectorCompareVop3Op {
     /// The form this encodes, whose declaration it inherits.
     pub const fn base(self) -> VectorCompareOp {
         match self {
+            Self::CmpLtF32 => VectorCompareOp::CmpLtF32,
+            Self::CmpEqF32 => VectorCompareOp::CmpEqF32,
+            Self::CmpLeF32 => VectorCompareOp::CmpLeF32,
+            Self::CmpGtF32 => VectorCompareOp::CmpGtF32,
+            Self::CmpLgF32 => VectorCompareOp::CmpLgF32,
+            Self::CmpGeF32 => VectorCompareOp::CmpGeF32,
             Self::CmpLtI32 => VectorCompareOp::CmpLtI32,
             Self::CmpEqI32 => VectorCompareOp::CmpEqI32,
             Self::CmpLeI32 => VectorCompareOp::CmpLeI32,
@@ -3963,6 +3993,12 @@ impl VectorCompareVop3Op {
     /// Assembler name of the VOP3 encoding, as LLVM prints it.
     pub const fn assembly_name(self) -> &'static str {
         match self {
+            Self::CmpLtF32 => "v_cmp_lt_f32_e64",
+            Self::CmpEqF32 => "v_cmp_eq_f32_e64",
+            Self::CmpLeF32 => "v_cmp_le_f32_e64",
+            Self::CmpGtF32 => "v_cmp_gt_f32_e64",
+            Self::CmpLgF32 => "v_cmp_lg_f32_e64",
+            Self::CmpGeF32 => "v_cmp_ge_f32_e64",
             Self::CmpLtI32 => "v_cmp_lt_i32_e64",
             Self::CmpEqI32 => "v_cmp_eq_i32_e64",
             Self::CmpLeI32 => "v_cmp_le_i32_e64",
@@ -3985,22 +4021,28 @@ impl VectorCompareVop3Op {
     /// The validated registry row of this encoding.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::CmpLtI32 => 189,
-            Self::CmpEqI32 => 190,
-            Self::CmpLeI32 => 191,
-            Self::CmpGtI32 => 192,
-            Self::CmpNeI32 => 193,
-            Self::CmpGeI32 => 194,
-            Self::CmpLtU32 => 195,
-            Self::CmpEqU32 => 196,
-            Self::CmpLeU32 => 197,
-            Self::CmpGtU32 => 198,
-            Self::CmpNeU32 => 199,
-            Self::CmpGeU32 => 200,
-            Self::CmpFI32 => 201,
-            Self::CmpTI32 => 202,
-            Self::CmpFU32 => 203,
-            Self::CmpTU32 => 204,
+            Self::CmpLtF32 => 189,
+            Self::CmpEqF32 => 190,
+            Self::CmpLeF32 => 191,
+            Self::CmpGtF32 => 192,
+            Self::CmpLgF32 => 193,
+            Self::CmpGeF32 => 194,
+            Self::CmpLtI32 => 195,
+            Self::CmpEqI32 => 196,
+            Self::CmpLeI32 => 197,
+            Self::CmpGtI32 => 198,
+            Self::CmpNeI32 => 199,
+            Self::CmpGeI32 => 200,
+            Self::CmpLtU32 => 201,
+            Self::CmpEqU32 => 202,
+            Self::CmpLeU32 => 203,
+            Self::CmpGtU32 => 204,
+            Self::CmpNeU32 => 205,
+            Self::CmpGeU32 => 206,
+            Self::CmpFI32 => 207,
+            Self::CmpTI32 => 208,
+            Self::CmpFU32 => 209,
+            Self::CmpTU32 => 210,
         }]
     }
 }
@@ -4114,18 +4156,18 @@ impl VectorAluVop3Op {
     /// The validated registry row of this encoding.
     pub fn semantics(self) -> &'static FormSemantics {
         &FORMS[match self {
-            Self::AddNcU32 => 205,
-            Self::MulI32I24 => 206,
-            Self::MulHiI32I24 => 207,
-            Self::MulU32U24 => 208,
-            Self::MulHiU32U24 => 209,
-            Self::MinI32 => 210,
-            Self::MaxI32 => 211,
-            Self::MinU32 => 212,
-            Self::MaxU32 => 213,
-            Self::XnorB32 => 214,
-            Self::SubNcU32 => 215,
-            Self::SubrevNcU32 => 216,
+            Self::AddNcU32 => 211,
+            Self::MulI32I24 => 212,
+            Self::MulHiI32I24 => 213,
+            Self::MulU32U24 => 214,
+            Self::MulHiU32U24 => 215,
+            Self::MinI32 => 216,
+            Self::MaxI32 => 217,
+            Self::MinU32 => 218,
+            Self::MaxU32 => 219,
+            Self::XnorB32 => 220,
+            Self::SubNcU32 => 221,
+            Self::SubrevNcU32 => 222,
         }]
     }
 }
@@ -4133,7 +4175,7 @@ impl VectorAluVop3Op {
 /// Identity of every registry form and encoding variant; a family named in
 /// append_after_variants follows the encoding variants to keep existing
 /// positions stable, and the rest keep registry order.
-pub const FORM_IDS: [(&str, EncodingFamily); 219] = [
+pub const FORM_IDS: [(&str, EncodingFamily); 225] = [
     ("S_ADD_U32", EncodingFamily::Sop2),
     ("S_SUB_U32", EncodingFamily::Sop2),
     ("S_ADD_I32", EncodingFamily::Sop2),
@@ -4323,6 +4365,12 @@ pub const FORM_IDS: [(&str, EncodingFamily); 219] = [
     ("S_CBRANCH_VCCZ", EncodingFamily::Sopp),
     ("S_CBRANCH_EXECZ", EncodingFamily::Sopp),
     ("S_WAITCNT", EncodingFamily::Sopp),
+    ("V_CMP_LT_F32", EncodingFamily::Vop3),
+    ("V_CMP_EQ_F32", EncodingFamily::Vop3),
+    ("V_CMP_LE_F32", EncodingFamily::Vop3),
+    ("V_CMP_GT_F32", EncodingFamily::Vop3),
+    ("V_CMP_LG_F32", EncodingFamily::Vop3),
+    ("V_CMP_GE_F32", EncodingFamily::Vop3),
     ("V_CMP_LT_I32", EncodingFamily::Vop3),
     ("V_CMP_EQ_I32", EncodingFamily::Vop3),
     ("V_CMP_LE_I32", EncodingFamily::Vop3),
@@ -4356,7 +4404,7 @@ pub const FORM_IDS: [(&str, EncodingFamily); 219] = [
 ];
 
 /// One validated row per registry form, in registry order.
-pub static FORMS: [FormSemantics; 219] = [
+pub static FORMS: [FormSemantics; 225] = [
     FormSemantics {
         name: "S_ADD_U32",
         family: EncodingFamily::Sop2,
@@ -8324,6 +8372,132 @@ pub static FORMS: [FormSemantics; 219] = [
         wave: Wave::Wave32,
         operands: OperandRule::SoppWait,
         spec: &[SpecRef { document: Document::Guide, section: "12.5", page: 125 }, SpecRef { document: Document::Guide, section: "13.1.5", page: 245 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "V_CMP_LT_F32",
+        family: EncodingFamily::Vop3,
+        opcode: 1,
+        operation: Operation::Compare,
+        signedness: Signedness::Float,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: Some(CompareRelation::Less),
+        scc: SccEffect::Unchanged,
+        vcc: MaskEffect::SdstLaneMask,
+        exec: MaskEffect::Unchanged,
+        wave: Wave::Wave32,
+        operands: OperandRule::Vop3CmpVgpr2,
+        spec: &[SpecRef { document: Document::Guide, section: "3.9", page: 19 }, SpecRef { document: Document::Guide, section: "13.3.4", page: 257 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "V_CMP_EQ_F32",
+        family: EncodingFamily::Vop3,
+        opcode: 2,
+        operation: Operation::Compare,
+        signedness: Signedness::Float,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: Some(CompareRelation::Equal),
+        scc: SccEffect::Unchanged,
+        vcc: MaskEffect::SdstLaneMask,
+        exec: MaskEffect::Unchanged,
+        wave: Wave::Wave32,
+        operands: OperandRule::Vop3CmpVgpr2,
+        spec: &[SpecRef { document: Document::Guide, section: "3.9", page: 19 }, SpecRef { document: Document::Guide, section: "13.3.4", page: 257 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "V_CMP_LE_F32",
+        family: EncodingFamily::Vop3,
+        opcode: 3,
+        operation: Operation::Compare,
+        signedness: Signedness::Float,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: Some(CompareRelation::LessOrEqual),
+        scc: SccEffect::Unchanged,
+        vcc: MaskEffect::SdstLaneMask,
+        exec: MaskEffect::Unchanged,
+        wave: Wave::Wave32,
+        operands: OperandRule::Vop3CmpVgpr2,
+        spec: &[SpecRef { document: Document::Guide, section: "3.9", page: 19 }, SpecRef { document: Document::Guide, section: "13.3.4", page: 257 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "V_CMP_GT_F32",
+        family: EncodingFamily::Vop3,
+        opcode: 4,
+        operation: Operation::Compare,
+        signedness: Signedness::Float,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: Some(CompareRelation::Greater),
+        scc: SccEffect::Unchanged,
+        vcc: MaskEffect::SdstLaneMask,
+        exec: MaskEffect::Unchanged,
+        wave: Wave::Wave32,
+        operands: OperandRule::Vop3CmpVgpr2,
+        spec: &[SpecRef { document: Document::Guide, section: "3.9", page: 19 }, SpecRef { document: Document::Guide, section: "13.3.4", page: 257 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "V_CMP_LG_F32",
+        family: EncodingFamily::Vop3,
+        opcode: 5,
+        operation: Operation::Compare,
+        signedness: Signedness::Float,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: Some(CompareRelation::NotEqual),
+        scc: SccEffect::Unchanged,
+        vcc: MaskEffect::SdstLaneMask,
+        exec: MaskEffect::Unchanged,
+        wave: Wave::Wave32,
+        operands: OperandRule::Vop3CmpVgpr2,
+        spec: &[SpecRef { document: Document::Guide, section: "3.9", page: 19 }, SpecRef { document: Document::Guide, section: "13.3.4", page: 257 }],
+        verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
+    },
+    FormSemantics {
+        name: "V_CMP_GE_F32",
+        family: EncodingFamily::Vop3,
+        opcode: 6,
+        operation: Operation::Compare,
+        signedness: Signedness::Float,
+        carry_in: CarryIn::None,
+        width: 32,
+        shift_count_bits: 0,
+        shift_amount: 0,
+        swap_sources: false,
+        source_bits: 32,
+        relation: Some(CompareRelation::GreaterOrEqual),
+        scc: SccEffect::Unchanged,
+        vcc: MaskEffect::SdstLaneMask,
+        exec: MaskEffect::Unchanged,
+        wave: Wave::Wave32,
+        operands: OperandRule::Vop3CmpVgpr2,
+        spec: &[SpecRef { document: Document::Guide, section: "3.9", page: 19 }, SpecRef { document: Document::Guide, section: "13.3.4", page: 257 }],
         verify: &[Evidence::Reference, Evidence::Independent, Evidence::Metal, Evidence::LlvmEncoding],
     },
     FormSemantics {

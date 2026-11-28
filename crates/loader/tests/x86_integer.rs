@@ -691,6 +691,95 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
             }
             Outcome::Done(undefined)
         }
+        "andn" => {
+            // Intel SDM Vol. 2A, ANDN: the first source inverted, bitwise
+            // with the second. CF and OF clear; PF and AF are undefined.
+            let a = read(m, places[1], bits);
+            let b = read(m, places[2], bits);
+            let mut value = 0;
+            for index in 0..bits {
+                if !bit(a, index) && bit(b, index) {
+                    value += 1u128 << index;
+                }
+            }
+            write(m, places[0], value);
+            m.flags.cf = false;
+            m.flags.of = false;
+            m.flags.zf = value == 0;
+            m.flags.sf = bit(value, bits - 1);
+            Outcome::Done(Undefined {
+                pf: true,
+                af: true,
+                ..none
+            })
+        }
+        "blsi" | "blsmsk" | "blsr" => {
+            // Intel SDM Vol. 2A: lowest-set-bit forms of the single source.
+            let source = read(m, places[1], bits);
+            let zero = source == 0;
+            let minus_one = truncate(source.wrapping_sub(1), bits);
+            let negative = truncate((!source).wrapping_add(1), bits);
+            let mut value = 0;
+            for index in 0..bits {
+                let set = match name {
+                    "blsi" => bit(negative, index) && bit(source, index),
+                    "blsmsk" => bit(minus_one, index) != bit(source, index),
+                    _ => bit(minus_one, index) && bit(source, index),
+                };
+                if set {
+                    value += 1u128 << index;
+                }
+            }
+            write(m, places[0], value);
+            m.flags.cf = if name == "blsi" { !zero } else { zero };
+            m.flags.of = false;
+            m.flags.zf = name != "blsmsk" && value == 0;
+            m.flags.sf = bit(value, bits - 1);
+            Outcome::Done(Undefined {
+                pf: true,
+                af: true,
+                ..none
+            })
+        }
+        "shlx" | "shrx" | "sarx" => {
+            // Intel SDM Vol. 2B: the count is the second source masked to the
+            // operand width; no flags are written. Bit by bit, one step at a
+            // time, as the operation section describes.
+            let count = (read(m, places[2], bits) % u128::from(bits)) as u32;
+            let mut value = read(m, places[1], bits);
+            for _ in 0..count {
+                value = match name {
+                    "shlx" => truncate(value * 2, bits),
+                    "shrx" => value / 2,
+                    _ => {
+                        // Arithmetic: the sign bit re-enters at the top.
+                        value / 2
+                            + if bit(value, bits - 1) {
+                                1u128 << (bits - 1)
+                            } else {
+                                0
+                            }
+                    }
+                };
+            }
+            write(m, places[0], value);
+            Outcome::Done(none)
+        }
+        "rorx" => {
+            // Intel SDM Vol. 2B: rotate right by the immediate, masked to the
+            // operand width; no flags are written.
+            let count = (read(m, places[2], bits) % u128::from(bits)) as u32;
+            let start = read(m, places[1], bits);
+            let mut value = 0;
+            for index in 0..bits {
+                let from = (index + count) % bits;
+                if bit(start, from) {
+                    value += 1u128 << index;
+                }
+            }
+            write(m, places[0], value);
+            Outcome::Done(none)
+        }
         "bt" | "bts" | "btr" | "btc" => {
             let value = read(m, places[0], bits);
             let index = (read(m, places[1], bits) % u128::from(bits)) as u32;

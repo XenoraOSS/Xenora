@@ -66,8 +66,18 @@ pub enum Op {
     MoveScalar(u8, u8),
     /// VOPC 32-bit integer compare writing the Wave32 mask to `vcc_lo`.
     Compare(Comparison, CompareSource, u8),
-    /// VOP3A integer compare writing a Wave32 mask to SDST.
-    CompareVop3(u8, Comparison, CompareSource, u8),
+    /// VOP3A compare writing a Wave32 mask to SDST. `abs` and `neg` carry the
+    /// binary32 input modifier bits for SRC0/SRC1 in bits 0 and 1; integer
+    /// forms require both masks to be zero.
+    CompareVop3 {
+        dst: u8,
+        comparison: Comparison,
+        width: CompareWidth,
+        src0: CompareSource,
+        src1: u8,
+        abs: u8,
+        neg: u8,
+    },
     /// VOPC 16- or 64-bit integer compare writing the Wave32 mask to
     /// `vcc_lo`. For 64-bit forms a `Vector` or `Scalar` source and VSRC1 name
     /// the low register of a pair.
@@ -1291,32 +1301,68 @@ pub fn decode(code: &[u8]) -> Result<Vec<DecodedInstruction>, ReferenceError> {
             // exceptions, §6.5).
             [
                 dst,
-                0,
+                modifier_byte,
                 op,
                 tag @ (0xd4 | 0xd5),
                 lo,
                 middle,
                 hi @ 2..=3,
-                0x02,
+                flags,
                 ..,
             ] if middle & 1 != 0 => {
                 let src0 = CompareSource::Vector(*lo);
                 let src1 = (middle >> 1) | ((hi & 1) << 7);
+                let abs = modifier_byte & 7;
+                let neg = flags >> 5;
+                let float = matches!(op, 1..=6);
+                // SRC2 is inline zero, OMOD/CLAMP/OP_SEL are clear, and the
+                // unused third input has neither ABS nor NEG. For integer
+                // compares every input modifier is clear as well.
+                let modifiers_valid = flags & 0x9f == 0x02
+                    && modifier_byte & 0xf8 == 0
+                    && abs & 4 == 0
+                    && neg & 4 == 0
+                    && (float || (abs == 0 && neg == 0));
                 match tag {
-                    0xd4 if matches!(op, 128..=135 | 192..=199) && *dst <= 106 => (
-                        Op::CompareVop3(
-                            *dst,
-                            Comparison {
-                                offset: op & 7,
-                                signed: *op < 192,
+                    0xd4 if modifiers_valid
+                        && matches!(op, 128..=135 | 192..=199)
+                        && *dst <= 106 =>
+                    {
+                        (
+                            Op::CompareVop3 {
+                                dst: *dst,
+                                comparison: Comparison {
+                                    offset: op & 7,
+                                    signed: *op < 192,
+                                },
+                                width: CompareWidth::Word,
+                                src0,
+                                src1,
+                                abs,
+                                neg,
                             },
+                            8,
+                        )
+                    }
+                    0xd4 if modifiers_valid && float && *dst <= 106 => (
+                        Op::CompareVop3 {
+                            dst: *dst,
+                            comparison: Comparison {
+                                offset: *op,
+                                signed: false,
+                            },
+                            width: CompareWidth::Binary32,
                             src0,
                             src1,
-                        ),
+                            abs,
+                            neg,
+                        },
                         8,
                     ),
-                    0xd5 if *op == 37 => (Op::Add(*dst, *lo, src1), 8),
-                    0xd5 => (
+                    0xd5 if modifiers_valid && abs == 0 && neg == 0 && *op == 37 => {
+                        (Op::Add(*dst, *lo, src1), 8)
+                    }
+                    0xd5 if modifiers_valid && abs == 0 && neg == 0 => (
                         Op::VectorInteger(
                             VectorInteger::from_opcode(*op)
                                 .ok_or_else(|| error(offset, "unsupported VOP3 opcode"))?,
@@ -2157,14 +2203,19 @@ fn execute_wave(
                 }
             }
             // RDNA 2 ISA section 3.9: VCC[n] = EXEC[n] & test(n), fully written.
-            Op::Compare(..) | Op::WideCompare(..) | Op::CompareVop3(..) => {
+            Op::Compare(..) | Op::WideCompare(..) | Op::CompareVop3 { .. } => {
                 let (dst, comparison, width, src0, src1) = match op {
                     Op::Compare(comparison, src0, src1) => {
                         (VCC_LO, comparison, CompareWidth::Word, src0, src1)
                     }
-                    Op::CompareVop3(dst, comparison, src0, src1) => {
-                        (usize::from(dst), comparison, CompareWidth::Word, src0, src1)
-                    }
+                    Op::CompareVop3 {
+                        dst,
+                        comparison,
+                        width,
+                        src0,
+                        src1,
+                        ..
+                    } => (usize::from(dst), comparison, width, src0, src1),
                     Op::WideCompare(comparison, width, src0, src1) => {
                         (VCC_LO, comparison, width, src0, src1)
                     }
@@ -2222,7 +2273,25 @@ fn execute_wave(
                             // -1..-16 at the operand's width (sign extended).
                             CompareSource::Immediate(bits) => bits as i32 as i64 as u64,
                         };
-                        if comparison.holds_at(width, s0, read_pair(lane, src1)?) {
+                        let mut left = s0;
+                        let mut right = read_pair(lane, src1)?;
+                        if width == CompareWidth::Binary32
+                            && let Op::CompareVop3 { abs, neg, .. } = op
+                        {
+                            let modify = |value: u64, bit: u8| {
+                                let mut value = value as u32;
+                                if abs & (1 << bit) != 0 {
+                                    value &= 0x7fff_ffff;
+                                }
+                                if neg & (1 << bit) != 0 {
+                                    value ^= 0x8000_0000;
+                                }
+                                u64::from(value)
+                            };
+                            left = modify(left, 0);
+                            right = modify(right, 1);
+                        }
+                        if comparison.holds_at(width, left, right) {
                             mask |= 1 << lane;
                         }
                     }
@@ -2380,7 +2449,7 @@ fn scalar_destination(op: Op) -> Option<usize> {
         Op::ScalarMove(dst, _)
         | Op::ScalarUnary(_, dst, _)
         | Op::Scalar(_, dst, ..)
-        | Op::CompareVop3(dst, ..) => Some(usize::from(dst)),
+        | Op::CompareVop3 { dst, .. } => Some(usize::from(dst)),
         Op::ScalarImmediate(kind, dst, _) if !matches!(kind, ScalarImmediate::Compare(_)) => {
             Some(usize::from(dst))
         }

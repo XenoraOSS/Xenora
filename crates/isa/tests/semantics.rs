@@ -272,8 +272,9 @@ fn vop3_variant_dispatch_selects_exactly_the_registry_vop3_rows() {
         let mut variants = VectorCompareVop3Op::ALL
             .into_iter()
             .filter(|op| op.base() == base_op);
-        // The VOP3A encodings of the binary32 compares (#786) are a later batch.
-        if base.width != 32 || base.signedness == Signedness::Float {
+        // The implemented VOP3A compare batch is exactly the ordered binary32
+        // opcodes 1-6 (#976) and the 32-bit integer ranges 128-135/192-199.
+        if !matches!(base.opcode, 1..=6 | 128..=135 | 192..=199) {
             assert_eq!(variants.next(), None, "{}", base.name);
             continue;
         }

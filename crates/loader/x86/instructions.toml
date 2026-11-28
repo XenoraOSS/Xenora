@@ -104,6 +104,17 @@ bsr = { writes = "zf", undefined = "cf sf of pf af", ref = "sdm BSR" }
 popcnt = { writes = "cf zf sf of pf af", ref = "sdm POPCNT" }
 tzcnt = { writes = "cf zf", undefined = "sf of pf af", ref = "sdm TZCNT" }
 lzcnt = { writes = "cf zf", undefined = "sf of pf af", ref = "sdm LZCNT" }
+# BMI1/BMI2: VEX-only scalar bit manipulation. CF and OF are cleared, PF and
+# AF architecturally undefined. BLSI sets CF when the source is nonzero, BLSR
+# and BLSMSK when it is zero; the variable shifts and RORX write no flags.
+andn = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm ANDN" }
+blsi = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSI" }
+blsmsk = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSMSK" }
+blsr = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSR" }
+shlx = { ref = "sdm SHLX/SHRX/SARX" }
+shrx = { ref = "sdm SHLX/SHRX/SARX" }
+sarx = { ref = "sdm SHLX/SHRX/SARX" }
+rorx = { ref = "sdm RORX" }
 push = { ref = "sdm PUSH" }
 pop = { ref = "sdm POP" }
 leave = { ref = "sdm LEAVE" }
@@ -6034,6 +6045,78 @@ opcode = 0x2D
 enc = "reg_xmm"
 length = "any"
 src = "q"
+
+# The scalar BMI1 and BMI2 bit-manipulation forms (#1098). VEX-only, always
+# 32 or 64 general operands by VEX.W; L is clear in every encoding.
+[[vex]]
+op = "andn"
+map = "0f38"
+opcode = 0xF2
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "blsi"
+map = "0f38"
+opcode = 0xF3
+digit = 3
+enc = "vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "blsmsk"
+map = "0f38"
+opcode = 0xF3
+digit = 2
+enc = "vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "blsr"
+map = "0f38"
+opcode = 0xF3
+digit = 1
+enc = "vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "shlx"
+map = "0f38"
+prefix = "66"
+opcode = 0xF7
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "shrx"
+map = "0f38"
+prefix = "f2"
+opcode = 0xF7
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "sarx"
+map = "0f38"
+prefix = "f3"
+opcode = 0xF7
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "rorx"
+map = "0f3a"
+prefix = "f2"
+opcode = 0xF0
+enc = "reg_rm_ub"
+length = "128"
 
 [[vex]]
 op = "fmaddsub132p"

@@ -136,7 +136,9 @@ fn decodes_wave32_vop3_compares_from_llvm_words() {
                     op,
                     sdst,
                     src0: 1,
-                    src1: 2
+                    src1: 2,
+                    abs: 0,
+                    neg: 0,
                 },
             }],
         );
@@ -144,6 +146,127 @@ fn decodes_wave32_vop3_compares_from_llvm_words() {
             decoded[0].instruction.to_string(),
             format!("{} {dst}, v1, v2", op.assembly_name())
         );
+    }
+}
+
+#[test]
+fn decodes_wave32_vop3_binary32_compares_and_input_modifiers() {
+    use VectorCompareVop3Op::*;
+
+    // llvm-mc -triple=amdgcn -mcpu=gfx1030 -mattr=+wavefrontsize32 -show-encoding:
+    // v_cmp_lt_f32_e64 s4, v1, v2            [04,00,01,d4,01,05,02,02]
+    // v_cmp_lt_f32_e64 s4, -v1, v2           [04,00,01,d4,01,05,02,22]
+    // v_cmp_lt_f32_e64 s4, |v1|, v2          [04,01,01,d4,01,05,02,02]
+    // v_cmp_lt_f32_e64 s4, -|v1|, -v2        [04,01,01,d4,01,05,02,62]
+    let base = 0xd401_0004;
+    let second = 0x0202_0501;
+    for (op, opcode) in [
+        (CmpLtF32, 1),
+        (CmpEqF32, 2),
+        (CmpLeF32, 3),
+        (CmpGtF32, 4),
+        (CmpLgF32, 5),
+        (CmpGeF32, 6),
+    ] {
+        let first = (base & !(0x3ff << 16)) | (opcode << 16);
+        let code: Vec<_> = [first, second]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let decoded = decode(Architecture::Gfx1030, &code).unwrap();
+        assert_eq!(
+            decoded[0].instruction,
+            Instruction::VectorCompareVop3 {
+                op,
+                sdst: 4,
+                src0: 1,
+                src1: 2,
+                abs: 0,
+                neg: 0,
+            }
+        );
+    }
+
+    let cases = [
+        (0, 1 << 29, 0, 1, "v_cmp_lt_f32_e64 s4, -v1, v2"),
+        (1, 0, 1, 0, "v_cmp_lt_f32_e64 s4, |v1|, v2"),
+        (1, 0b11 << 29, 1, 0b11, "v_cmp_lt_f32_e64 s4, -|v1|, -v2"),
+    ];
+    for (abs_bits, neg_bits, abs, neg, text) in cases {
+        let first = base | (abs_bits << 8);
+        let second = second | neg_bits;
+        let code: Vec<_> = [first, second]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let decoded = decode(Architecture::Gfx1030, &code).unwrap();
+        assert_eq!(
+            decoded[0].instruction,
+            Instruction::VectorCompareVop3 {
+                op: CmpLtF32,
+                sdst: 4,
+                src0: 1,
+                src1: 2,
+                abs,
+                neg,
+            }
+        );
+        assert_eq!(decoded[0].instruction.to_string(), text);
+    }
+}
+
+#[test]
+fn rejects_unsupported_wave32_vop3_binary32_compare_modifiers() {
+    let first = 0xd401_0004;
+    let second = 0x0202_0501;
+    let rejects = |first, second| {
+        let code: Vec<_> = [first, second]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let error = decode(Architecture::Gfx1030, &code).unwrap_err();
+        assert!(
+            matches!(
+                error.kind,
+                DecodeErrorKind::UnsupportedForm {
+                    mnemonic: "v_cmp_lt_f32_e64",
+                    ..
+                }
+            ),
+            "{first:#010x} {second:#010x}: {error}"
+        );
+    };
+
+    // OP_SEL and CLAMP stay unsupported, as does ABS on the unused SRC2.
+    for bit in 10..=15 {
+        rejects(first | (1 << bit), second);
+    }
+    // OMOD and NEG on the unused SRC2 stay unsupported.
+    for bit in [27, 28, 31] {
+        rejects(first, second | (1 << bit));
+    }
+    // SRC2 must remain inline zero.
+    rejects(first, second ^ (1 << 18));
+    // Integer input modifiers are still rejected.
+    let integer = 0xd482_0004;
+    for bit in [8, 9, 29, 30] {
+        let (first_word, second_word) = if bit < 16 {
+            (integer | (1 << bit), second)
+        } else {
+            (integer, second | (1 << bit))
+        };
+        let code: Vec<_> = [first_word, second_word]
+            .into_iter()
+            .flat_map(u32::to_le_bytes)
+            .collect();
+        let error = decode(Architecture::Gfx1030, &code).unwrap_err();
+        assert!(matches!(
+            error.kind,
+            DecodeErrorKind::UnsupportedForm {
+                mnemonic: "v_cmp_eq_i32_e64",
+                ..
+            }
+        ));
     }
 }
 
@@ -785,12 +908,21 @@ fn reference_op(instruction: Instruction) -> Op {
             sdst,
             src0,
             src1,
-        } => Op::CompareVop3(
-            sdst,
-            reference_comparison(op.base()),
-            CompareSource::Vector(src0),
+            abs,
+            neg,
+        } => Op::CompareVop3 {
+            dst: sdst,
+            comparison: reference_comparison(op.base()),
+            width: if op.base().semantics().signedness == Signedness::Float {
+                CompareWidth::Binary32
+            } else {
+                CompareWidth::Word
+            },
+            src0: CompareSource::Vector(src0),
             src1,
-        ),
+            abs,
+            neg,
+        },
         Instruction::VectorAlu {
             op:
                 op @ (VectorAluOp::AddF32

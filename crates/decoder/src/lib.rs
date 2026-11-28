@@ -357,13 +357,29 @@ fn decode_gfx1030(bytes: &[u8], offset: usize) -> Result<(Instruction, u8), Deco
                 "expected a destination of s0-s105 or vcc_lo",
             ));
         }
-        let (src0, src1) = vop3_vgpr2_sources(op.assembly_name(), first, second)?;
+        let (src0, src1) = vop3_cmp_vgpr2_sources(op.assembly_name(), first, second)?;
+        let abs = ((first >> 8) & 0x7) as u8;
+        let neg = ((second >> 29) & 0x7) as u8;
+        if op.base().semantics().signedness != Signedness::Float && (abs != 0 || neg != 0) {
+            return Err(unsupported(
+                op.assembly_name(),
+                "integer compare input modifiers are unsupported",
+            ));
+        }
+        if abs & 0b100 != 0 || neg & 0b100 != 0 {
+            return Err(unsupported(
+                op.assembly_name(),
+                "the unused SRC2 modifier bit must be clear",
+            ));
+        }
         return Ok((
             Instruction::VectorCompareVop3 {
                 op,
                 sdst,
                 src0,
                 src1,
+                abs,
+                neg,
             },
             8,
         ));
@@ -861,6 +877,31 @@ fn vop3_vgpr2(
         src0,
         src1,
     })
+}
+
+/// VOP3A compare source and modifier checks (RDNA 2 ISA section 13.3.4).
+/// SRC0 and SRC1 are VGPRs, the unused SRC2 is inline zero, and OP_SEL,
+/// CLAMP and OMOD are clear. ABS/NEG are decoded separately so the compare's
+/// operand kind can decide whether they are meaningful.
+fn vop3_cmp_vgpr2_sources(
+    mnemonic: &'static str,
+    first: u32,
+    second: u32,
+) -> Result<(u8, u8), DecodeErrorKind> {
+    let src0 = second & 0x1ff;
+    let src1 = (second >> 9) & 0x1ff;
+    if first & 0xf800 != 0
+        || second & 0x1800_0000 != 0
+        || (second >> 18) & 0x1ff != 128
+        || src0 < 256
+        || src1 < 256
+    {
+        return Err(unsupported(
+            mnemonic,
+            "expected two VGPR sources, SRC2 inline zero, and no output modifiers",
+        ));
+    }
+    Ok((src0 as u8, src1 as u8))
 }
 
 /// Common VOP3A source and modifier checks (RDNA 2 ISA section 13.3.4).

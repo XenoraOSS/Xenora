@@ -171,6 +171,9 @@ enum Op {
         src0: Value,
         src1: Value,
         high: Option<(Value, Value)>,
+        /// VOP3A binary32 input modifier bits for SRC0/SRC1, zero otherwise.
+        abs: u8,
+        neg: u8,
         exec: u32,
     },
     /// A wave-uniform SOPC or SOPK compare with a run-time operand: the SCC bit.
@@ -832,6 +835,8 @@ pub fn compile_with(
                 src0,
                 src1,
                 high,
+                abs,
+                neg,
                 exec,
             } => {
                 let target = match sdst {
@@ -872,6 +877,19 @@ pub fn compile_with(
                         } else {
                             (name(src0), name(src1))
                         };
+                        let modify = |value: String, bit: u8| {
+                            let abs = abs & (1 << bit) != 0;
+                            let neg = neg & (1 << bit) != 0;
+                            match (neg, abs) {
+                                (false, false) => value,
+                                (true, false) => format!("({value} ^ 0x80000000u)"),
+                                (false, true) => format!("({value} & 0x7fffffffu)"),
+                                (true, true) => {
+                                    format!("(({value} & 0x7fffffffu) ^ 0x80000000u)")
+                                }
+                            }
+                        };
+                        let (left, right) = (modify(left, 0), modify(right, 1));
                         format!("({}) ? 1u : 0u", compare_expression(op, &left, &right))
                     },
                 );
@@ -995,7 +1013,7 @@ fn decode_fixture(
 enum ScalarValue {
     Uninitialized,
     Known(u32),
-    RuntimeMask,
+    RuntimeMask(Value),
     /// A wave-uniform value known only at run time.
     Runtime(Value),
     /// The destination of a scalar load without a completed wait.
@@ -1274,7 +1292,7 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
             ScalarSource::Immediate(value) => Ok(value),
             ScalarSource::Register(register) => match scalars.get(usize::from(register)) {
                 Some(ScalarValue::Known(value)) => Ok(*value),
-                Some(ScalarValue::RuntimeMask) => Err(error(
+                Some(ScalarValue::RuntimeMask(_)) => Err(error(
                     "scalar source reads a runtime-only SGPR compare mask",
                 )),
                 Some(ScalarValue::Runtime(_)) => {
@@ -1352,7 +1370,7 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
             let start = usize::from(resource);
             if scalars[start..start + 4]
                 .iter()
-                .any(|value| matches!(value, ScalarValue::RuntimeMask))
+                .any(|value| matches!(value, ScalarValue::RuntimeMask(_)))
             {
                 return Err(error(
                     "resource descriptor reads a runtime-only SGPR compare mask",
@@ -1502,6 +1520,26 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                     offset,
                     exec,
                     mask,
+                    registers[slot],
+                )?);
+                continue;
+            }
+            Instruction::MoveB32 {
+                dst,
+                src: VectorSource::Scalar(register),
+            } if let ScalarValue::RuntimeMask(value) = scalars[usize::from(register)] => {
+                let slot = usize::from(dst);
+                if dst == 0 || pending_load.is_some_and(|(register, _)| register == slot) {
+                    return Err(error(
+                        "move writes the index register or replaces a pending load",
+                    ));
+                }
+                registers[slot] = Some(merge_lanes(
+                    &mut operations,
+                    &mut facts,
+                    offset,
+                    exec,
+                    value,
                     registers[slot],
                 )?);
                 continue;
@@ -1671,7 +1709,7 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                 let old = if op.reads_dst() {
                     match *slot {
                         ScalarValue::Known(value) => value,
-                        ScalarValue::RuntimeMask => {
+                        ScalarValue::RuntimeMask(_) => {
                             return Err(error("SOPK reads a runtime-only SGPR compare mask"));
                         }
                         ScalarValue::Runtime(_) | ScalarValue::Pending(_) => {
@@ -1725,15 +1763,17 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
             // Both encodings share the Wave32 lane mask implementation.
             compare @ (Instruction::VectorCompare { .. }
             | Instruction::VectorCompareVop3 { .. }) => {
-                let (op, name, explicit, sdst, src0, src1) = match compare {
+                let (op, name, explicit, sdst, src0, src1, abs, neg) = match compare {
                     Instruction::VectorCompare { op, src0, src1 } => {
-                        (op, op.assembly_name(), false, VCC_LO, src0, src1)
+                        (op, op.assembly_name(), false, VCC_LO, src0, src1, 0, 0)
                     }
                     Instruction::VectorCompareVop3 {
                         op,
                         sdst,
                         src0,
                         src1,
+                        abs,
+                        neg,
                     } => (
                         op.base(),
                         op.assembly_name(),
@@ -1741,20 +1781,11 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                         usize::from(sdst),
                         VectorSource::Register(src0),
                         src1,
+                        abs,
+                        neg,
                     ),
                     _ => unreachable!("only vector compares reach this arm"),
                 };
-                if exec == 0 {
-                    if sdst == VCC_LO {
-                        scalars[VCC_HI] = ScalarValue::Uninitialized;
-                        scalars[VCC_LO] = ScalarValue::Known(0);
-                        lane_vcc = None;
-                    } else {
-                        scalars[sdst] = ScalarValue::RuntimeMask;
-                        clear_descriptor_origin(&mut descriptor_origin, sdst);
-                    }
-                    continue;
-                }
                 let constant =
                     |operations: &mut Vec<(usize, Op)>, facts: &mut Vec<KnownBits>, bits: u32| {
                         let value = Value(operations.len());
@@ -1762,6 +1793,21 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                         facts.push(KnownBits::constant(bits));
                         value
                     };
+                if exec == 0 {
+                    if sdst == VCC_LO {
+                        scalars[VCC_HI] = ScalarValue::Uninitialized;
+                        scalars[VCC_LO] = ScalarValue::Known(0);
+                        lane_vcc = None;
+                    } else {
+                        // The mask is fully written as zero even when EXEC is
+                        // empty. Keep the conservative runtime-mask boundary:
+                        // vector moves may read it, scalar operations may not.
+                        let zero = constant(&mut operations, &mut facts, 0);
+                        scalars[sdst] = ScalarValue::RuntimeMask(zero);
+                        clear_descriptor_origin(&mut descriptor_origin, sdst);
+                    }
+                    continue;
+                }
                 let high = if op.semantics().width == 64 {
                     // Guide §3.6.3 and contract §2a put the high word at base + 1.
                     let left = match src0 {
@@ -1807,6 +1853,8 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                         src0,
                         src1,
                         high,
+                        abs,
+                        neg,
                         exec,
                     },
                 ));
@@ -1816,7 +1864,7 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                     scalars[VCC_HI] = ScalarValue::Uninitialized;
                     lane_vcc = Some(mask);
                 } else {
-                    scalars[sdst] = ScalarValue::RuntimeMask;
+                    scalars[sdst] = ScalarValue::RuntimeMask(mask);
                     clear_descriptor_origin(&mut descriptor_origin, sdst);
                 }
                 continue;
@@ -2215,6 +2263,8 @@ fn map_uses(operation: Op, map: impl Fn(Value) -> Value) -> Op {
             src0,
             src1,
             high,
+            abs,
+            neg,
             exec,
         } => Op::LaneMask {
             op,
@@ -2223,6 +2273,8 @@ fn map_uses(operation: Op, map: impl Fn(Value) -> Value) -> Op {
             src0: map(src0),
             src1: map(src1),
             high: high.map(|(left, right)| (map(left), map(right))),
+            abs,
+            neg,
             exec,
         },
         Op::RuntimeBranch { test, mask, target } => Op::RuntimeBranch {

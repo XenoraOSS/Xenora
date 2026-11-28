@@ -91,6 +91,22 @@ def cases():
         out += [f"crc32 {reg(3, wide)}, {reg(9, bits)}", f"crc32 {reg(10, wide)}, {reg(1, bits)}",
                 f"crc32 {reg(10, wide)}, {mem(bits)}", f"crc32 {reg(2, wide)}, {reg(2, bits)}"]
     out += ["crc32 ebx, ah", "crc32 ecx, bh", "crc32 ebx, bpl", "crc32 eax, dh"]
+    # BMI1/BMI2: three-operand forms, both widths, memory forms, and edge
+    # counts (0, the operand width and one past it, which the mask folds).
+    for bits in (32, 64):
+        out += [f"andn {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
+                f"andn {reg(10, bits)}, {reg(12, bits)}, {mem(bits)}",
+                f"andn {reg(2, bits)}, {reg(2, bits)}, {reg(2, bits)}"]
+        for op in ("blsi", "blsmsk", "blsr"):
+            out += [f"{op} {reg(3, bits)}, {reg(9, bits)}", f"{op} {reg(10, bits)}, {mem(bits)}",
+                    f"{op} {reg(2, bits)}, {reg(2, bits)}"]
+        for op in ("shlx", "shrx", "sarx"):
+            out += [f"{op} {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
+                    f"{op} {reg(10, bits)}, {mem(bits)}, {reg(12, bits)}",
+                    f"{op} {reg(2, bits)}, {reg(2, bits)}, {reg(2, bits)}"]
+        for count in (0, 1, 7, bits - 1, bits, bits + 5):
+            out += [f"rorx {reg(3, bits)}, {reg(9, bits)}, {count}",
+                    f"rorx {reg(10, bits)}, {mem(bits)}, {count}"]
     for bits in (8, 16, 32, 64):
         out += [f"mov {reg(3, bits)}, {reg(9, bits)}", f"mov {reg(10, bits)}, {mem(bits)}",
                 f"mov {mem(bits)}, {reg(2, bits)}", f"mov {reg(14, bits)}, 0x5a",

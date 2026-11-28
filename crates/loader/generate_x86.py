@@ -80,13 +80,20 @@ ENCS = {
     "gpr_xmm_imm": ("GprXmmImm", True, {"ub"}),
     "reg_xmm": ("RegXmm", True, {""}),
     "reg_xmm_imm": ("RegXmmImm", True, {"ub"}),
+    # BMI: general reg from the VEX.vvvv register and the ModRM operand.
+    "reg_vvvv_rm": ("RegVvvvRm", True, {""}),
+    # BMI: the VEX.vvvv register from the ModRM operand, under a digit.
+    "vvvv_rm": ("VvvvRm", True, {""}),
+    # RORX: general reg from the ModRM operand, with an unsigned byte count.
+    "reg_rm_ub": ("RegRmImm", True, {"ub"}),
 }
 # VEX encodings: the operand size, and whether VEX.vvvv may name a register.
 VEX_ENCS = {"none": ("n", False), "rm": ("n", False), "xmm_rm": ("x", True), "rm_xmm": ("x", True),
             "xmm_rm_imm": ("x", True), "rm_xmm_imm": ("x", False), "xmm_gpr": ("y", True),
             "gpr_xmm": ("y", False), "reg_xmm": ("y", False), "xmm_rm_length": ("y", False),
             "rm_imm_xmm": ("x", True), "xmm_gpr_imm": ("y", True), "gpr_xmm_imm": ("y", False),
-            "reg_xmm_imm": ("y", False)}
+            "reg_xmm_imm": ("y", False), "reg_vvvv_rm": ("y", True), "vvvv_rm": ("y", True),
+            "reg_rm_ub": ("y", False)}
 VEX_MAPS = {"0f": 1, "0f38": 2, "0f3a": 3}
 VEX_PREFIXES = {"": 0, "66": 1, "f3": 2, "f2": 3}
 VEX_LENGTHS = {"128": False, "256": True, "any": None}
@@ -318,7 +325,7 @@ def load_vex(entry, operations):
     lane = form["enc"] in ("xmm_gpr_imm", "gpr_xmm_imm")
     if lane and form["src"] not in ("b", "w", "d", ""):
         fail(f"{where}: a lane is a byte, word, doubleword or the general operand")
-    if not lane and (form["src"] == "") != (form["enc"] in ("none", "xmm_gpr", "gpr_xmm")):
+    if not lane and (form["src"] == "") != (form["enc"] in ("none", "xmm_gpr", "gpr_xmm", "reg_vvvv_rm", "vvvv_rm", "reg_rm_ub")):
         fail(f"{where}: source size does not match the encoding")
     if form["aligned"] and form["src"] not in ("v", "x"):
         fail(f"{where}: alignment applies only to whole vectors")

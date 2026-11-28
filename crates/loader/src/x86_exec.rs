@@ -672,6 +672,88 @@ pub fn execute(
             cpu.flags.cf = value == 0;
             cpu.flags.zf = count == 0;
         }
+        Op::Andn => {
+            // VEX.vvvv names the first source of every BMI form here.
+            let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let a = read_reg(
+                cpu,
+                RegOperand {
+                    index: vvvv,
+                    high: false,
+                },
+                size,
+            );
+            let b = read_rm(cpu, memory, insn)?;
+            let value = !a & b & mask(size);
+            write_reg(cpu, insn.reg, size, value);
+            cpu.flags.cf = false;
+            cpu.flags.of = false;
+            cpu.flags.zf = value == 0;
+            cpu.flags.sf = value & sign_bit(size) != 0;
+        }
+        Op::Blsi | Op::Blsmsk | Op::Blsr => {
+            let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let source = read_rm(cpu, memory, insn)? & mask(size);
+            let zero = source == 0;
+            let value = match insn.op {
+                Op::Blsi => source.isolate_lowest_one(),
+                Op::Blsmsk => source.wrapping_sub(1) ^ source,
+                _ => source.wrapping_sub(1) & source,
+            } & mask(size);
+            write_reg(
+                cpu,
+                RegOperand {
+                    index: vvvv,
+                    high: false,
+                },
+                size,
+                value,
+            );
+            cpu.flags.cf = if insn.op == Op::Blsi { !zero } else { zero };
+            cpu.flags.of = false;
+            // BLSMSK clears ZF; the other two write it from the result.
+            cpu.flags.zf = insn.op != Op::Blsmsk && value == 0;
+            cpu.flags.sf = value & sign_bit(size) != 0;
+        }
+        Op::Shlx | Op::Shrx | Op::Sarx => {
+            let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let value = read_rm(cpu, memory, insn)? & mask(size);
+            let count = read_reg(
+                cpu,
+                RegOperand {
+                    index: vvvv,
+                    high: false,
+                },
+                size,
+            ) & u64::from(8 * size - 1);
+            let bits = 8 * u32::from(size);
+            let result = match insn.op {
+                Op::Shlx => value.wrapping_shl(count as u32),
+                Op::Shrx => value.wrapping_shr(count as u32),
+                _ => {
+                    let signed = (value as i64) << (64 - bits) >> (64 - bits);
+                    (signed.wrapping_shr(count as u32) as u64) & mask(size)
+                }
+            } & mask(size);
+            write_reg(cpu, insn.reg, size, result);
+        }
+        Op::Rorx => {
+            let value = read_rm(cpu, memory, insn)? & mask(size);
+            let bits = 8 * u32::from(size);
+            let count = (insn.imm as u32) & (bits - 1);
+            let result = if count == 0 {
+                value
+            } else {
+                (value >> count) | (value << (bits - count))
+            } & mask(size);
+            write_reg(cpu, insn.reg, size, result);
+        }
         Op::Push => {
             let value = match insn.encoding {
                 Encoding::OpReg => read_reg(cpu, insn.reg, 8),

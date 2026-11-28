@@ -20,6 +20,77 @@ unsupported = [
   "src_float_inline", "src_special", "src_literal", "modifiers", "src2",
 ]
 
+# VOPC binary32 compares in VOP3A (#976). The shared operand rule still
+# describes the integer subset exactly; for these float forms the decoder
+# accepts only the documented ABS/NEG input modifiers on SRC0/SRC1 and refuses
+# CLAMP, OMOD, OP_SEL, SRC2 use and every non-VGPR source.
+
+[[encoding_variant]]
+of = "V_CMP_LT_F32"
+family = "VOP3"
+opcode = 1
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_EQ_F32"
+family = "VOP3"
+opcode = 2
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_LE_F32"
+family = "VOP3"
+opcode = 3
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_GT_F32"
+family = "VOP3"
+opcode = 4
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_LG_F32"
+family = "VOP3"
+opcode = 5
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[encoding_variant]]
+of = "V_CMP_GE_F32"
+family = "VOP3"
+opcode = 6
+operands = "vop3_cmp_vgpr2"
+spec = [
+  { document = "guide", section = "3.9", page = 19 },
+  { document = "guide", section = "13.3.4", page = 257 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
 # Opcodes come from the pinned XML's default ENC_VOP3 records.
 [[encoding_variant]]
 of = "V_CMP_LT_I32"

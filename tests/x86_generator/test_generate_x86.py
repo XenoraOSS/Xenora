@@ -96,9 +96,18 @@ class GenerateX86(unittest.TestCase):
         operations, forms = generate_x86.load(REGISTRY)
         writers = {form["op"] for form in forms
                    if form["map"] in ("0f38", "0f3a") and operations[form["op"]]["writes"]}
-        self.assertEqual(writers, {"ptest", "pcmpestri", "pcmpestrm", "pcmpistri", "pcmpistrm"})
-        for op in writers:
+        # PTEST and the string compares write the complete flag set. The BMI
+        # forms write the partial sets the manuals define — ANDN clears CF and
+        # OF and writes ZF and SF with PF and AF undefined, for example — which
+        # is exact where it matters: every BMI form is VEX-encoded and so runs
+        # on the shared semantics, never under native dead-flag elimination.
+        legacy = {"ptest", "pcmpestri", "pcmpestrm", "pcmpistri", "pcmpistrm"}
+        bmi = {"andn", "blsi", "blsmsk", "blsr"}
+        self.assertEqual(writers, legacy | bmi)
+        for op in legacy:
             self.assertEqual(operations[op]["writes"], set(generate_x86.FLAGS))
+        for op in bmi:
+            self.assertNotEqual(operations[op]["writes"], set(generate_x86.FLAGS))
 
     def test_length_registers_set_the_operand_size_of_a_string_compare(self):
         form = 'op = "pcmpestri"\nmap = "0f3a"\nprefix = "66"\nopcode = 0xF0\nenc = "xmm_rm_length"\nimm = "ub"\n{}'

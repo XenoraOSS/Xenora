@@ -260,13 +260,17 @@ pub enum Instruction {
         src0: VectorSource,
         src1: u8,
     },
-    /// VOP3A 32-bit integer compare writing a Wave32 mask to s0-s105 or `vcc_lo`.
-    /// Both sources are VGPR indices.
+    /// VOP3A 32-bit compare writing a Wave32 mask to s0-s105 or `vcc_lo`.
+    /// Both sources are VGPR indices. `abs` and `neg` carry the input modifier
+    /// bits for SRC0 and SRC1 in bits 0 and 1 respectively; integer encodings
+    /// require both masks to be zero.
     VectorCompareVop3 {
         op: VectorCompareVop3Op,
         sdst: u8,
         src0: u8,
         src1: u8,
+        abs: u8,
+        neg: u8,
     },
     /// VOP2 32-bit per-lane integer operation from the semantic registry.
     /// `src0` is a VGPR, `s0-s105`, `vcc_lo`, an inline integer or a literal;
@@ -473,8 +477,31 @@ impl fmt::Display for Instruction {
                 write!(formatter, " vcc_lo, {src0}, v{src1}")
             }
             Self::VectorCompareVop3 {
-                sdst, src0, src1, ..
-            } => write!(formatter, " {}, v{src0}, v{src1}", ScalarDestination(sdst)),
+                sdst,
+                src0,
+                src1,
+                abs,
+                neg,
+                ..
+            } => {
+                let source = |register: u8, bit: u8| {
+                    let abs = abs & (1 << bit) != 0;
+                    let neg = neg & (1 << bit) != 0;
+                    match (neg, abs) {
+                        (false, false) => format!("v{register}"),
+                        (true, false) => format!("-v{register}"),
+                        (false, true) => format!("|v{register}|"),
+                        (true, true) => format!("-|v{register}|"),
+                    }
+                };
+                write!(
+                    formatter,
+                    " {}, {}, {}",
+                    ScalarDestination(sdst),
+                    source(src0, 0),
+                    source(src1, 1)
+                )
+            }
             Self::VectorAlu {
                 op,
                 dst,

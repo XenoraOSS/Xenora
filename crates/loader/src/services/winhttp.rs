@@ -825,9 +825,321 @@ fn close_result(state: &ServicesState, teb: u64, closed: bool) -> u64 {
     }
 }
 
-/// Register the implemented handle-lifecycle subset. Every function remains
-/// partial because documented proxy, asynchronous and transport-related flag
-/// combinations are intentionally refused rather than silently accepted.
+/// A Windows SYSTEMTIME for the HTTP-date utility functions.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct HttpSystemTime {
+    year: u16,
+    month: u16,
+    day_of_week: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+    milliseconds: u16,
+}
+
+const WEEKDAYS_SHORT: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const WEEKDAYS_LONG: [&str; 7] = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+];
+const MONTHS_SHORT: [&str; 12] = [
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+fn read_http_system_time(memory: &GuestMemory, address: u64) -> Result<HttpSystemTime, u32> {
+    if address == 0 {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    let field = |index: u64| {
+        memory
+            .read_u16(address + 2 * index)
+            .map_err(|_| ERROR_INVALID_PARAMETER)
+    };
+    Ok(HttpSystemTime {
+        year: field(0)?,
+        month: field(1)?,
+        day_of_week: field(2)?,
+        day: field(3)?,
+        hour: field(4)?,
+        minute: field(5)?,
+        second: field(6)?,
+        milliseconds: field(7)?,
+    })
+}
+
+fn write_http_system_time(
+    memory: &mut GuestMemory,
+    address: u64,
+    time: HttpSystemTime,
+) -> Result<(), u32> {
+    if address == 0 {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    for (index, field) in [
+        time.year,
+        time.month,
+        time.day_of_week,
+        time.day,
+        time.hour,
+        time.minute,
+        time.second,
+        time.milliseconds,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        memory
+            .write_u16(address + 2 * index as u64, field)
+            .map_err(|_| ERROR_INVALID_PARAMETER)?;
+    }
+    Ok(())
+}
+
+fn leap_year(year: u16) -> bool {
+    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+}
+
+fn month_length(year: u16, month: u16) -> Option<u16> {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => Some(31),
+        4 | 6 | 9 | 11 => Some(30),
+        2 if leap_year(year) => Some(29),
+        2 => Some(28),
+        _ => None,
+    }
+}
+
+fn valid_http_system_date(time: HttpSystemTime) -> bool {
+    (1..=9999).contains(&time.year)
+        && month_length(time.year, time.month).is_some_and(|days| (1..=days).contains(&time.day))
+        && time.hour < 24
+        && time.minute < 60
+        && time.second < 60
+        && time.milliseconds < 1000
+}
+
+/// Days since 1970-01-01 in the proleptic Gregorian calendar. Howard
+/// Hinnant's public `days_from_civil` algorithm; `month` counts from 1.
+fn http_days_from_civil(year: u16, month: u16, day: u16) -> i64 {
+    let year = i64::from(year) - i64::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let month_index = (i64::from(month) + 9) % 12;
+    let day_of_year = (153 * month_index + 2) / 5 + i64::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    era * 146_097 + day_of_era - 719_468
+}
+
+/// Inverse of `http_days_from_civil`, using Howard Hinnant's public
+/// `civil_from_days` algorithm. The returned month counts from 1.
+fn http_civil_from_days(days: i64) -> (i64, i64, i64) {
+    let shifted = days + 719_468;
+    let era = shifted.div_euclid(146_097);
+    let day_of_era = shifted.rem_euclid(146_097);
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    (year, month, day)
+}
+
+/// The UTC year carried by a Windows FILETIME. The utility parser needs the
+/// current year because RFC 850's two-digit-year rule is intentionally
+/// rolling rather than a fixed 1950/2050 pivot.
+fn http_filetime_year(filetime: u64) -> Option<u16> {
+    const TICKS_PER_DAY: u64 = 10_000 * 86_400_000;
+    const DAYS_1601_TO_1970: i64 = 134_774;
+    let days_since_1601 = i64::try_from(filetime / TICKS_PER_DAY).ok()?;
+    let (year, _, _) = http_civil_from_days(days_since_1601 - DAYS_1601_TO_1970);
+    u16::try_from(year).ok()
+}
+
+/// Select the nearest century for an RFC 850 two-digit year. This is the
+/// bounded year-granularity form of the HTTP rule: a date more than fifty
+/// years in the future belongs to the previous century. The service is
+/// synchronous and deterministic for a fixed input clock.
+fn http_rfc850_year(short_year: u16, current_year: u16) -> Option<u16> {
+    let century = current_year / 100 * 100;
+    let mut year = century.checked_add(short_year)?;
+    if year > current_year.saturating_add(50) {
+        year = year.checked_sub(100)?;
+    } else if year.saturating_add(50) < current_year {
+        year = year.checked_add(100)?;
+    }
+    Some(year)
+}
+
+/// Sunday is zero, as in SYSTEMTIME. 1970-01-01 was a Thursday.
+fn http_day_of_week(year: u16, month: u16, day: u16) -> u16 {
+    (http_days_from_civil(year, month, day) + 4).rem_euclid(7) as u16
+}
+
+fn ascii_digits(text: &str) -> Option<u32> {
+    if text.is_empty() || !text.bytes().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
+fn month_number(text: &str) -> Option<u16> {
+    MONTHS_SHORT
+        .iter()
+        .position(|month| *month == text)
+        .map(|index| index as u16 + 1)
+}
+
+fn finish_http_date(
+    year: u16,
+    month: u16,
+    day: u16,
+    hour: u16,
+    minute: u16,
+    second: u16,
+) -> Option<HttpSystemTime> {
+    let time = HttpSystemTime {
+        year,
+        month,
+        day_of_week: 0,
+        day,
+        hour,
+        minute,
+        second,
+        milliseconds: 0,
+    };
+    if !valid_http_system_date(time) {
+        return None;
+    }
+    Some(HttpSystemTime {
+        day_of_week: http_day_of_week(year, month, day),
+        ..time
+    })
+}
+
+fn parse_time(text: &str) -> Option<(u16, u16, u16)> {
+    let bytes = text.as_bytes();
+    if bytes.len() != 8 || bytes[2] != b':' || bytes[5] != b':' {
+        return None;
+    }
+    let hour = ascii_digits(&text[0..2])? as u16;
+    let minute = ascii_digits(&text[3..5])? as u16;
+    let second = ascii_digits(&text[6..8])? as u16;
+    if hour < 24 && minute < 60 && second < 60 {
+        Some((hour, minute, second))
+    } else {
+        None
+    }
+}
+
+/// Parse the exact three HTTP-date forms of RFC 2616 section 3.3. The
+/// weekday token must have a documented name, but its redundant value is not
+/// trusted: the output day of week is computed from the calendar date.
+fn parse_http_date(text: &str, current_year: u16) -> Option<HttpSystemTime> {
+    if !text.is_ascii() {
+        return None;
+    }
+    // rfc1123-date: `Sun, 06 Nov 1994 08:49:37 GMT`.
+    if text.len() == 29
+        && WEEKDAYS_SHORT.contains(&&text[0..3])
+        && text.as_bytes()[3] == b','
+        && &text[4..5] == " "
+        && &text[7..8] == " "
+        && &text[11..12] == " "
+        && &text[16..17] == " "
+        && &text[25..26] == " "
+        && &text[26..29] == "GMT"
+    {
+        let day = ascii_digits(&text[5..7])? as u16;
+        let month = month_number(&text[8..11])?;
+        let year = ascii_digits(&text[12..16])? as u16;
+        let (hour, minute, second) = parse_time(&text[17..25])?;
+        return finish_http_date(year, month, day, hour, minute, second);
+    }
+
+    // rfc850-date: `Sunday, 06-Nov-94 08:49:37 GMT`. Its two-digit year
+    // uses the rolling fifty-year window required by the HTTP specifications,
+    // evaluated against the service clock rather than a frozen pivot.
+    if let Some((weekday, rest)) = text.split_once(", ")
+        && WEEKDAYS_LONG.contains(&weekday)
+        && rest.len() == 22
+        && rest.as_bytes()[2] == b'-'
+        && rest.as_bytes()[6] == b'-'
+        && &rest[9..10] == " "
+        && &rest[18..19] == " "
+        && &rest[19..22] == "GMT"
+    {
+        let day = ascii_digits(&rest[0..2])? as u16;
+        let month = month_number(&rest[3..6])?;
+        let short_year = ascii_digits(&rest[7..9])? as u16;
+        let year = http_rfc850_year(short_year, current_year)?;
+        let (hour, minute, second) = parse_time(&rest[10..18])?;
+        return finish_http_date(year, month, day, hour, minute, second);
+    }
+
+    // asctime-date: `Sun Nov  6 08:49:37 1994` or a two-digit day.
+    if text.len() == 24
+        && WEEKDAYS_SHORT.contains(&&text[0..3])
+        && text.as_bytes()[3] == b' '
+        && text.as_bytes()[7] == b' '
+        && text.as_bytes()[10] == b' '
+        && text.as_bytes()[19] == b' '
+    {
+        let month = month_number(&text[4..7])?;
+        let day_text = if text.as_bytes()[8] == b' ' {
+            &text[9..10]
+        } else {
+            &text[8..10]
+        };
+        let day = ascii_digits(day_text)? as u16;
+        let (hour, minute, second) = parse_time(&text[11..19])?;
+        let year = ascii_digits(&text[20..24])? as u16;
+        return finish_http_date(year, month, day, hour, minute, second);
+    }
+    None
+}
+
+fn write_http_date_string(
+    memory: &mut GuestMemory,
+    address: u64,
+    time: HttpSystemTime,
+) -> Result<(), u32> {
+    if address == 0 {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    let text = format!(
+        "{}, {:02} {} {:04} {:02}:{:02}:{:02} GMT",
+        WEEKDAYS_SHORT[usize::from(time.day_of_week)],
+        time.day,
+        MONTHS_SHORT[usize::from(time.month - 1)],
+        time.year,
+        time.hour,
+        time.minute,
+        time.second
+    );
+    for (index, byte) in text.bytes().chain([0]).enumerate() {
+        memory
+            .write_u16(address + 2 * index as u64, u16::from(byte))
+            .map_err(|_| ERROR_INVALID_PARAMETER)?;
+    }
+    Ok(())
+}
+
+/// Register the implemented handle-lifecycle and utility subset. Every object
+/// function remains partial because documented proxy, asynchronous and
+/// transport-related flag combinations are intentionally refused rather than
+/// silently accepted.
 pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
     url::register(registry, state);
 
@@ -1555,6 +1867,50 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         },
     );
 
+    let time_to = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WinHttpTimeToSystemTime",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let result = (|| {
+                let text = read_wide_string(memory, args.rcx, MAX_WIDE_UNITS)?;
+                let current_year = http_filetime_year(time_to.clock.now_filetime())
+                    .ok_or(ERROR_INVALID_PARAMETER)?;
+                let time = parse_http_date(&text, current_year).ok_or(ERROR_INVALID_PARAMETER)?;
+                write_http_system_time(memory, args.rdx, time)
+            })();
+            match result {
+                Ok(()) => Ok(1),
+                Err(error) => time_to.fail(cpu.gs_base, error, 0),
+            }
+        },
+    );
+
+    let time_from = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "WinHttpTimeFromSystemTime",
+        ServiceStatus::Partial,
+        move |args, cpu, memory| {
+            let result = (|| {
+                let input = read_http_system_time(memory, args.rcx)?;
+                if !valid_http_system_date(input) {
+                    return Err(ERROR_INVALID_PARAMETER);
+                }
+                let time = HttpSystemTime {
+                    day_of_week: http_day_of_week(input.year, input.month, input.day),
+                    ..input
+                };
+                write_http_date_string(memory, args.rdx, time)
+            })();
+            match result {
+                Ok(()) => Ok(1),
+                Err(error) => time_from.fail(cpu.gs_base, error, 0),
+            }
+        },
+    );
+
     let close = Arc::clone(state);
     registry.register_with_status(
         MODULE,
@@ -1595,6 +1951,20 @@ mod tests {
         String::from_utf16(&units).unwrap()
     }
 
+    fn write_test_system_time(memory: &mut GuestMemory, address: u64, fields: [u16; 8]) {
+        for (index, field) in fields.into_iter().enumerate() {
+            memory.write_u16(address + 2 * index as u64, field).unwrap();
+        }
+    }
+
+    fn read_test_system_time(memory: &GuestMemory, address: u64) -> [u16; 8] {
+        let mut fields = [0; 8];
+        for (index, field) in fields.iter_mut().enumerate() {
+            *field = memory.read_u16(address + 2 * index as u64).unwrap();
+        }
+        fields
+    }
+
     struct Fixture {
         registry: ImportRegistry,
         state: Arc<ServicesState>,
@@ -1604,7 +1974,9 @@ mod tests {
     impl Fixture {
         fn new() -> Self {
             let mut registry = ImportRegistry::new();
-            let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
+            let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(
+                134116992000000000,
+            ))));
             register(&mut registry, &state);
             let mut memory = GuestMemory::new();
             memory
@@ -2750,5 +3122,142 @@ mod tests {
         assert_eq!(state.open_handle_count(), 8);
         let handles = state.winhttp.lock().unwrap();
         assert_eq!(handles.open_count(), 8);
+    }
+
+    #[test]
+    fn http_time_to_system_time_parses_all_three_documented_forms() {
+        let mut fixture = Fixture::new();
+        for (text, expected) in [
+            (
+                "Sun, 06 Nov 1994 08:49:37 GMT",
+                [1994, 11, 0, 6, 8, 49, 37, 0],
+            ),
+            (
+                "Sunday, 06-Nov-94 08:49:37 GMT",
+                [1994, 11, 0, 6, 8, 49, 37, 0],
+            ),
+            ("Sun Nov  6 08:49:37 1994", [1994, 11, 0, 6, 8, 49, 37, 0]),
+            ("Sun Nov 06 08:49:37 1994", [1994, 11, 0, 6, 8, 49, 37, 0]),
+            (
+                "Mon, 06 Nov 1994 08:49:37 GMT",
+                [1994, 11, 0, 6, 8, 49, 37, 0],
+            ),
+            (
+                "Thu, 29 Feb 2024 00:00:00 GMT",
+                [2024, 2, 4, 29, 0, 0, 0, 0],
+            ),
+        ] {
+            write_wide(&mut fixture.memory, 0x5000, text);
+            fixture.memory.write_bytes(0x5100, &[0xaa; 16]).unwrap();
+            assert_eq!(
+                fixture.call("WinHttpTimeToSystemTime", &[0x5000, 0x5100]),
+                1,
+                "{text}"
+            );
+            assert_eq!(read_test_system_time(&fixture.memory, 0x5100), expected);
+        }
+    }
+
+    #[test]
+    fn http_time_to_system_time_rolls_the_rfc850_year_window() {
+        let mut fixture = Fixture::new();
+        for (text, year) in [
+            ("Sunday, 06-Nov-76 08:49:37 GMT", 2076),
+            ("Sunday, 06-Nov-77 08:49:37 GMT", 1977),
+        ] {
+            write_wide(&mut fixture.memory, 0x5000, text);
+            assert_eq!(
+                fixture.call("WinHttpTimeToSystemTime", &[0x5000, 0x5100]),
+                1,
+                "{text}"
+            );
+            assert_eq!(read_test_system_time(&fixture.memory, 0x5100)[0], year);
+        }
+    }
+
+    #[test]
+    fn http_time_to_system_time_rejects_malformed_dates_and_bad_memory() {
+        let mut fixture = Fixture::new();
+        for text in [
+            "Sun, 06 Nov 1994 08:49:37 UTC",
+            "sun, 06 Nov 1994 08:49:37 GMT",
+            "Sun, 29 Feb 2023 08:49:37 GMT",
+            "Sun, 06 Nov 1994 24:00:00 GMT",
+            "Sun Nov 6 08:49:37 1994",
+            "Sunday, 06-Nov-1994 08:49:37 GMT",
+            "",
+        ] {
+            write_wide(&mut fixture.memory, 0x5000, text);
+            fixture.memory.write_bytes(0x5100, &[0xaa; 16]).unwrap();
+            assert_eq!(
+                fixture.call("WinHttpTimeToSystemTime", &[0x5000, 0x5100]),
+                0,
+                "{text}"
+            );
+            assert_eq!(read_test_system_time(&fixture.memory, 0x5100), [0xaaaa; 8]);
+            assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
+        }
+        assert_eq!(fixture.call("WinHttpTimeToSystemTime", &[0, 0x5100]), 0);
+        assert_eq!(fixture.call("WinHttpTimeToSystemTime", &[0x5000, 0]), 0);
+        assert_eq!(
+            fixture.call("WinHttpTimeToSystemTime", &[0x5000, 0x9000]),
+            0
+        );
+    }
+
+    #[test]
+    fn http_time_from_system_time_formats_rfc1123_and_round_trips() {
+        let mut fixture = Fixture::new();
+        // The input weekday is deliberately wrong: the calendar date determines it.
+        write_test_system_time(
+            &mut fixture.memory,
+            0x5100,
+            [1994, 11, 6, 6, 8, 49, 37, 123],
+        );
+        assert_eq!(
+            fixture.call("WinHttpTimeFromSystemTime", &[0x5100, 0x5000]),
+            1
+        );
+        assert_eq!(
+            read_test_wide(&fixture.memory, 0x5000, 58),
+            "Sun, 06 Nov 1994 08:49:37 GMT"
+        );
+        assert_eq!(fixture.memory.read_u16(0x5000 + 58).unwrap(), 0);
+
+        assert_eq!(
+            fixture.call("WinHttpTimeToSystemTime", &[0x5000, 0x5200]),
+            1
+        );
+        assert_eq!(
+            read_test_system_time(&fixture.memory, 0x5200),
+            [1994, 11, 0, 6, 8, 49, 37, 0]
+        );
+    }
+
+    #[test]
+    fn http_time_from_system_time_rejects_invalid_times_and_bad_memory() {
+        let mut fixture = Fixture::new();
+        for fields in [
+            [2023, 2, 0, 29, 8, 49, 37, 0],
+            [1994, 11, 0, 6, 24, 0, 0, 0],
+            [1994, 11, 0, 6, 8, 60, 0, 0],
+            [1994, 11, 0, 6, 8, 0, 60, 0],
+            [1994, 11, 0, 6, 8, 0, 0, 1000],
+            [0, 11, 0, 6, 8, 0, 0, 0],
+        ] {
+            write_test_system_time(&mut fixture.memory, 0x5100, fields);
+            assert_eq!(
+                fixture.call("WinHttpTimeFromSystemTime", &[0x5100, 0x5000]),
+                0,
+                "{fields:?}"
+            );
+            assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
+        }
+        assert_eq!(fixture.call("WinHttpTimeFromSystemTime", &[0, 0x5000]), 0);
+        assert_eq!(fixture.call("WinHttpTimeFromSystemTime", &[0x5100, 0]), 0);
+        assert_eq!(
+            fixture.call("WinHttpTimeFromSystemTime", &[0x5100, 0x9000]),
+            0
+        );
     }
 }

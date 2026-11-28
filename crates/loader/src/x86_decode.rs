@@ -144,6 +144,12 @@ pub enum Encoding {
     /// General `reg` from XMM `rm`.
     RegXmm,
     RegXmmImm,
+    /// General `reg` from the VEX.vvvv register and `rm` (BMI ANDN and the
+    /// BMI2 variable shifts).
+    RegVvvvRm,
+    /// The VEX.vvvv register from `rm`, under a ModRM digit (BLSI, BLSMSK,
+    /// BLSR).
+    VvvvRm,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

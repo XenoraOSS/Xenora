@@ -337,7 +337,7 @@ reference on Apple M5 Pro. There is no RDNA 2 or Xbox hardware evidence.
 
 ## 10. Limitations
 
-- Wave32 only. No `v_cmpx`, SDWA, DPP, or F16 and F64 compares. VOP3 encodings cover the 32-bit integer compares only.
+- Wave32 only. No `v_cmpx`, SDWA, DPP, or F16 and F64 compares. VOP3 encodings cover the 32-bit integer compares and the six ordered binary32 compares LT, EQ, LE, GT, LG and GE.
 - A lane-derived VCC_LO cannot reach EXEC or any scalar instruction, so there
   is no divergent execution. That needs its own contract.
 - The skipped region of a runtime `s_cbranch_vccz` holds only integer vector
@@ -378,6 +378,17 @@ including zero bits for inactive and absent lanes. It leaves SCC and EXEC
 unchanged. VCC is written only when SDST selects `vcc_lo`, which uses the
 same lowering and consumers as the VOPC form, including `s_cbranch_vccz`.
 Every other SDST is tracked as a runtime-only SGPR result, including under
-empty EXEC. Translation rejects later reads of that result, including reads
-through resource descriptors. The runtime branch region rules in section 6
-also apply here.
+empty EXEC. A vector move may copy that wave mask into a VGPR for readback;
+scalar operations and resource-descriptor uses of it remain rejected. The
+runtime branch region rules in section 6 also apply here.
+
+The six ordered binary32 compares `v_cmp_{lt,eq,le,gt,lg,ge}_f32_e64` use
+the same destination and mask rules. Unlike the integer forms, they accept
+the documented ABS and NEG input modifiers on SRC0 and SRC1: ABS clears the
+input sign bit and NEG flips it before comparison. The modifiers on the
+unused SRC2, OP_SEL, CLAMP, OMOD, non-VGPR sources and every use of SRC2
+other than inline zero remain rejected. Quiet and signalling NaNs are
+unordered and make all six relations false; +0 and -0 compare equal. The
+reference, independent interpreter and Metal lowering compare the modified
+binary32 bits without using host or Metal floating-point comparison
+instructions, so the result does not depend on a floating-point math mode.
