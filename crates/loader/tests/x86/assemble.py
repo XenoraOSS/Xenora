@@ -396,6 +396,7 @@ def avx_form_cases():
     for op in "vpshufd vpshufhw vpshuflw".split():
         for n in (0, 27, 78, 177, 255):
             two(op, "xmm", xmm, f", {n}")
+            two(op, "ymm", ymm, f", {n}")
     for op, values in (("vpalignr", (0, 1, 5, 15, 16, 17, 31, 32, 255)), ("vpblendw", (0, 1, 2, 90, 165, 255)),
                        ("vmpsadbw", (*range(8), 129, 255))):
         for n in values:

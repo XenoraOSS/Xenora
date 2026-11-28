@@ -874,48 +874,93 @@ c5 e9 73 da 03 | vpsrldq xmm2, xmm2, 3
 c4 c1 79 70 d9 00 | vpshufd xmm3, xmm9, 0
 c5 79 70 64 be 10 00 | vpshufd xmm12, xmmword ptr [rsi + 4*rdi + 16], 0
 c5 f9 70 d2 00 | vpshufd xmm2, xmm2, 0
+c4 c1 7d 70 d9 00 | vpshufd ymm3, ymm9, 0
+c5 7d 70 64 be 10 00 | vpshufd ymm12, ymmword ptr [rsi + 4*rdi + 16], 0
+c5 fd 70 d2 00 | vpshufd ymm2, ymm2, 0
 c4 c1 79 70 d9 1b | vpshufd xmm3, xmm9, 27
 c5 79 70 64 be 10 1b | vpshufd xmm12, xmmword ptr [rsi + 4*rdi + 16], 27
 c5 f9 70 d2 1b | vpshufd xmm2, xmm2, 27
+c4 c1 7d 70 d9 1b | vpshufd ymm3, ymm9, 27
+c5 7d 70 64 be 10 1b | vpshufd ymm12, ymmword ptr [rsi + 4*rdi + 16], 27
+c5 fd 70 d2 1b | vpshufd ymm2, ymm2, 27
 c4 c1 79 70 d9 4e | vpshufd xmm3, xmm9, 78
 c5 79 70 64 be 10 4e | vpshufd xmm12, xmmword ptr [rsi + 4*rdi + 16], 78
 c5 f9 70 d2 4e | vpshufd xmm2, xmm2, 78
+c4 c1 7d 70 d9 4e | vpshufd ymm3, ymm9, 78
+c5 7d 70 64 be 10 4e | vpshufd ymm12, ymmword ptr [rsi + 4*rdi + 16], 78
+c5 fd 70 d2 4e | vpshufd ymm2, ymm2, 78
 c4 c1 79 70 d9 b1 | vpshufd xmm3, xmm9, 177
 c5 79 70 64 be 10 b1 | vpshufd xmm12, xmmword ptr [rsi + 4*rdi + 16], 177
 c5 f9 70 d2 b1 | vpshufd xmm2, xmm2, 177
+c4 c1 7d 70 d9 b1 | vpshufd ymm3, ymm9, 177
+c5 7d 70 64 be 10 b1 | vpshufd ymm12, ymmword ptr [rsi + 4*rdi + 16], 177
+c5 fd 70 d2 b1 | vpshufd ymm2, ymm2, 177
 c4 c1 79 70 d9 ff | vpshufd xmm3, xmm9, 255
 c5 79 70 64 be 10 ff | vpshufd xmm12, xmmword ptr [rsi + 4*rdi + 16], 255
 c5 f9 70 d2 ff | vpshufd xmm2, xmm2, 255
+c4 c1 7d 70 d9 ff | vpshufd ymm3, ymm9, 255
+c5 7d 70 64 be 10 ff | vpshufd ymm12, ymmword ptr [rsi + 4*rdi + 16], 255
+c5 fd 70 d2 ff | vpshufd ymm2, ymm2, 255
 c4 c1 7a 70 d9 00 | vpshufhw xmm3, xmm9, 0
 c5 7a 70 64 be 10 00 | vpshufhw xmm12, xmmword ptr [rsi + 4*rdi + 16], 0
 c5 fa 70 d2 00 | vpshufhw xmm2, xmm2, 0
+c4 c1 7e 70 d9 00 | vpshufhw ymm3, ymm9, 0
+c5 7e 70 64 be 10 00 | vpshufhw ymm12, ymmword ptr [rsi + 4*rdi + 16], 0
+c5 fe 70 d2 00 | vpshufhw ymm2, ymm2, 0
 c4 c1 7a 70 d9 1b | vpshufhw xmm3, xmm9, 27
 c5 7a 70 64 be 10 1b | vpshufhw xmm12, xmmword ptr [rsi + 4*rdi + 16], 27
 c5 fa 70 d2 1b | vpshufhw xmm2, xmm2, 27
+c4 c1 7e 70 d9 1b | vpshufhw ymm3, ymm9, 27
+c5 7e 70 64 be 10 1b | vpshufhw ymm12, ymmword ptr [rsi + 4*rdi + 16], 27
+c5 fe 70 d2 1b | vpshufhw ymm2, ymm2, 27
 c4 c1 7a 70 d9 4e | vpshufhw xmm3, xmm9, 78
 c5 7a 70 64 be 10 4e | vpshufhw xmm12, xmmword ptr [rsi + 4*rdi + 16], 78
 c5 fa 70 d2 4e | vpshufhw xmm2, xmm2, 78
+c4 c1 7e 70 d9 4e | vpshufhw ymm3, ymm9, 78
+c5 7e 70 64 be 10 4e | vpshufhw ymm12, ymmword ptr [rsi + 4*rdi + 16], 78
+c5 fe 70 d2 4e | vpshufhw ymm2, ymm2, 78
 c4 c1 7a 70 d9 b1 | vpshufhw xmm3, xmm9, 177
 c5 7a 70 64 be 10 b1 | vpshufhw xmm12, xmmword ptr [rsi + 4*rdi + 16], 177
 c5 fa 70 d2 b1 | vpshufhw xmm2, xmm2, 177
+c4 c1 7e 70 d9 b1 | vpshufhw ymm3, ymm9, 177
+c5 7e 70 64 be 10 b1 | vpshufhw ymm12, ymmword ptr [rsi + 4*rdi + 16], 177
+c5 fe 70 d2 b1 | vpshufhw ymm2, ymm2, 177
 c4 c1 7a 70 d9 ff | vpshufhw xmm3, xmm9, 255
 c5 7a 70 64 be 10 ff | vpshufhw xmm12, xmmword ptr [rsi + 4*rdi + 16], 255
 c5 fa 70 d2 ff | vpshufhw xmm2, xmm2, 255
+c4 c1 7e 70 d9 ff | vpshufhw ymm3, ymm9, 255
+c5 7e 70 64 be 10 ff | vpshufhw ymm12, ymmword ptr [rsi + 4*rdi + 16], 255
+c5 fe 70 d2 ff | vpshufhw ymm2, ymm2, 255
 c4 c1 7b 70 d9 00 | vpshuflw xmm3, xmm9, 0
 c5 7b 70 64 be 10 00 | vpshuflw xmm12, xmmword ptr [rsi + 4*rdi + 16], 0
 c5 fb 70 d2 00 | vpshuflw xmm2, xmm2, 0
+c4 c1 7f 70 d9 00 | vpshuflw ymm3, ymm9, 0
+c5 7f 70 64 be 10 00 | vpshuflw ymm12, ymmword ptr [rsi + 4*rdi + 16], 0
+c5 ff 70 d2 00 | vpshuflw ymm2, ymm2, 0
 c4 c1 7b 70 d9 1b | vpshuflw xmm3, xmm9, 27
 c5 7b 70 64 be 10 1b | vpshuflw xmm12, xmmword ptr [rsi + 4*rdi + 16], 27
 c5 fb 70 d2 1b | vpshuflw xmm2, xmm2, 27
+c4 c1 7f 70 d9 1b | vpshuflw ymm3, ymm9, 27
+c5 7f 70 64 be 10 1b | vpshuflw ymm12, ymmword ptr [rsi + 4*rdi + 16], 27
+c5 ff 70 d2 1b | vpshuflw ymm2, ymm2, 27
 c4 c1 7b 70 d9 4e | vpshuflw xmm3, xmm9, 78
 c5 7b 70 64 be 10 4e | vpshuflw xmm12, xmmword ptr [rsi + 4*rdi + 16], 78
 c5 fb 70 d2 4e | vpshuflw xmm2, xmm2, 78
+c4 c1 7f 70 d9 4e | vpshuflw ymm3, ymm9, 78
+c5 7f 70 64 be 10 4e | vpshuflw ymm12, ymmword ptr [rsi + 4*rdi + 16], 78
+c5 ff 70 d2 4e | vpshuflw ymm2, ymm2, 78
 c4 c1 7b 70 d9 b1 | vpshuflw xmm3, xmm9, 177
 c5 7b 70 64 be 10 b1 | vpshuflw xmm12, xmmword ptr [rsi + 4*rdi + 16], 177
 c5 fb 70 d2 b1 | vpshuflw xmm2, xmm2, 177
+c4 c1 7f 70 d9 b1 | vpshuflw ymm3, ymm9, 177
+c5 7f 70 64 be 10 b1 | vpshuflw ymm12, ymmword ptr [rsi + 4*rdi + 16], 177
+c5 ff 70 d2 b1 | vpshuflw ymm2, ymm2, 177
 c4 c1 7b 70 d9 ff | vpshuflw xmm3, xmm9, 255
 c5 7b 70 64 be 10 ff | vpshuflw xmm12, xmmword ptr [rsi + 4*rdi + 16], 255
 c5 fb 70 d2 ff | vpshuflw xmm2, xmm2, 255
+c4 c1 7f 70 d9 ff | vpshuflw ymm3, ymm9, 255
+c5 7f 70 64 be 10 ff | vpshuflw ymm12, ymmword ptr [rsi + 4*rdi + 16], 255
+c5 ff 70 d2 ff | vpshuflw ymm2, ymm2, 255
 c4 c3 31 0f da 00 | vpalignr xmm3, xmm9, xmm10, 0
 c4 63 71 0f 64 be 10 00 | vpalignr xmm12, xmm1, xmmword ptr [rsi + 4*rdi + 16], 0
 c4 e3 69 0f d2 00 | vpalignr xmm2, xmm2, xmm2, 0
