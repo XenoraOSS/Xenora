@@ -41,3 +41,36 @@ with other runs in the same checkout, so do not run them concurrently.
 `compare` returns 1 when a previously passing stage regresses, 0 when no such
 regression occurs, and 2 for invalid or incompatible reports. A status
 comparison is not a performance benchmark or evidence of Xbox execution.
+
+## Compare wanted-import bindings
+
+Capture the live registry snapshot at each revision. Run the following in a
+checkout with its native ARM64 toolchain and save the result as either the
+baseline or candidate snapshot.
+
+```sh
+mkdir -p artifacts/compat
+cargo run --locked --quiet -p xenora-loader --example runtime_inventory \
+  > artifacts/compat/candidate.registry.json
+```
+
+Compare both saved snapshots against the same wanted CSV. The command accepts
+ordinary probe `imports.csv` and `missing_imports.csv`, or an exact list with
+`library,symbol,kind` columns. Use `ordinal` in the `kind` column for numeric
+imports. Symbol names retain their spelling and case. The output groups
+counts by DLL and lists changed statuses, alias routes, canonical targets and
+data-versus-callable bindings. Both snapshot SHA-256 digests appear in each
+report.
+
+```sh
+python3 scripts/audit/compare_import_bindings.py \
+  --baseline artifacts/compat/baseline.registry.json \
+  --candidate artifacts/compat/candidate.registry.json \
+  --wanted artifacts/compat/wanted.csv --format markdown
+```
+
+JSON is the default output for automation. The command reads saved regular
+files. It returns `0` for a completed comparison and `2` for invalid input,
+including duplicate JSON members or binding keys and malformed CSV quoting.
+The counts describe the selected registry bindings.
+Use the fixture runner above to verify guest behavior.
