@@ -1848,6 +1848,23 @@
       "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
+    },
+    {
+      "id": "WP-1388",
+      "subsystem": "Runtime",
+      "description": "Hosted C record processing through environment, scanning, math, calendar and file services",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "D",
+      "issue": 1388,
+      "pr": 1391,
+      "test_status": "Two independent native ARM64 runs at 02fa1758 passed two compiler optimization levels and all three guest modes. The combined CRT candidate also passed 22 focused tests with no failures or skips.",
+      "limitations": "Covers selected CRT contracts and isolated guest state. Full R1 acceptance, aligned CRT allocation and floating-point environment control remain open.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     }
   ],
   "ownership_states": {
@@ -1865,12 +1882,13 @@
       "id": "R1",
       "status": "PARTIAL",
       "goal": "Original compiled C application with comprehensive supported CRT coverage",
-      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit. Open PR #1330 adds byte-exact narrow time formatting and six documented directives, with two independent native fixture runs. Open PR #1385 verifies that escaped percent signs count toward the narrow and wide CRT output limits, with successful sizing at the limit and refusal one unit above it.",
-      "remaining": "Consolidate the supported CRT family matrix and obtain independent acceptance.",
+      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit. Open PR #1330 adds byte-exact narrow time formatting and six documented directives, with two independent native fixture runs. Open PR #1385 verifies that escaped percent signs count toward the narrow and wide CRT output limits, with successful sizing at the limit and refusal one unit above it. Open PR #1391 combines CRT environment variables, file scanning, exact floating arithmetic, leap-day UTC formatting and file output in one original hosted C program. It checks absent initial state, a malformed scan and fresh replay at two compiler optimization levels.",
+      "remaining": "Integrate the hosted workloads, consolidate positive and negative coverage by supported CRT family, and record full R1 acceptance.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/gate-a.md",
         "https://github.com/ranveersoni98/Xenora/pull/1330",
-        "https://github.com/ranveersoni98/Xenora/pull/1385"
+        "https://github.com/ranveersoni98/Xenora/pull/1385",
+        "https://github.com/ranveersoni98/Xenora/pull/1391"
       ]
     },
     {
