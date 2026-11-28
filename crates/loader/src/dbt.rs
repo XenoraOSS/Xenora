@@ -16,6 +16,7 @@ use crate::x86_decode::{Encoding, Insn, MemOperand, RegOperand, RmOperand, Segme
 use crate::x86_exec;
 use crate::x86_table::{FORMS, Op};
 use std::collections::HashMap;
+use std::time::Instant;
 
 const MAX_BLOCK_INSTRUCTIONS: usize = 16;
 
@@ -38,6 +39,65 @@ pub struct DbtMetrics {
     /// Instructions run by the shared Rust semantics instead of ARM64 code.
     pub interpreter_fallbacks: usize,
     pub service_calls: usize,
+}
+
+/// Execution-time counters separated from [`DbtMetrics`] because other tools
+/// construct that public struct field by field.
+///
+/// Collection is opt-in with [`DbtEngine::set_profiling`]: diagnostic timing
+/// must not tax normal guest execution. Times are accumulated with a monotonic
+/// host clock around the dispatcher's own work and the native call. They
+/// describe this process, not guest time, and are not comparable across hosts
+/// or build configurations.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DbtProfile {
+    /// Time selecting a cached or newly translated block, including source
+    /// verification.
+    pub block_selection_ns: u128,
+    /// Time translating a block: decode, lower and emit into the code cache.
+    pub translation_ns: u128,
+    /// Portion of translation spent decoding guest instructions.
+    pub decode_ns: u128,
+    /// Portion of translation spent lowering and assembling ARM64 code.
+    pub codegen_ns: u128,
+    /// Portion of translation spent copying and invalidating the JIT cache.
+    pub jit_publish_ns: u128,
+    /// Time executing translated ARM64 code, including followed links.
+    pub dispatch_ns: u128,
+    /// Successful block translations, matching `DbtMetrics::blocks_compiled`.
+    pub translations: u64,
+    /// Guest instructions decoded by those translations.
+    pub translated_guest_instructions: u64,
+    /// Calls from translated code into the checked guest-memory helpers.
+    pub guest_memory_helper_calls: u64,
+    /// Cached guest source bytes compared to detect self-modifying code.
+    pub verified_cache_bytes: u64,
+}
+
+/// A point-in-time view of [`DbtProfile`] with derived code-cache ratios.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DbtProfileSnapshot {
+    pub block_selection_ns: u128,
+    pub translation_ns: u128,
+    pub decode_ns: u128,
+    pub codegen_ns: u128,
+    pub jit_publish_ns: u128,
+    pub dispatch_ns: u128,
+    pub translations: u64,
+    pub translated_guest_instructions: u64,
+    pub guest_memory_helper_calls: u64,
+    pub verified_cache_bytes: u64,
+    /// Native bytes currently committed in the W^X code cache.
+    pub code_cache_used_bytes: usize,
+    /// Aligned capacity of that code cache.
+    pub code_cache_capacity_bytes: usize,
+    /// `code_cache_used_bytes * 1_000_000 / code_cache_capacity_bytes`, or
+    /// zero when capacity is zero.
+    pub code_cache_utilization_ppm: u64,
+    /// `native_bytes_emitted * 1_000_000 / translated_guest_instructions`,
+    /// or zero before the first translation. Blocks are counted once even
+    /// when the same guest bytes are translated again after a rewrite.
+    pub emitted_native_bytes_per_guest_instruction_ppm: u64,
 }
 
 /// Counters for direct block linking.
@@ -243,6 +303,10 @@ pub struct DbtEngine {
     pub import_registry: Option<crate::imports::ImportRegistry>,
     pub metrics: DbtMetrics,
     pub link_metrics: LinkMetrics,
+    pub profile: DbtProfile,
+    /// Whether the timing counters are collected. Disabled by default: the
+    /// counters are diagnostic and must not tax normal guest execution.
+    profiling: bool,
     /// Exit status of a guest that ended its process on this engine.
     exited: Option<u32>,
 }
@@ -266,6 +330,8 @@ impl DbtEngine {
             import_registry: None,
             metrics: DbtMetrics::default(),
             link_metrics: LinkMetrics::default(),
+            profile: DbtProfile::default(),
+            profiling: false,
             exited: None,
         })
     }
@@ -275,6 +341,45 @@ impl DbtEngine {
     /// existed, and no link is installed or followed.
     pub fn set_block_linking(&mut self, enabled: bool) {
         self.linking = enabled;
+    }
+
+    /// Enable or disable timing collection. Counters already accumulated are
+    /// retained; disabling only stops new timing samples and helper counts.
+    pub fn set_profiling(&mut self, enabled: bool) {
+        self.profiling = enabled;
+    }
+
+    /// Return accumulated profile counters and current code-cache ratios.
+    pub fn profile(&self) -> DbtProfileSnapshot {
+        let p = self.profile;
+        let used = self.jit.used();
+        let capacity = self.jit.capacity();
+        let ratio = |numerator: u128, denominator: u64| -> u64 {
+            if denominator == 0 {
+                0
+            } else {
+                (numerator * 1_000_000 / u128::from(denominator)) as u64
+            }
+        };
+        DbtProfileSnapshot {
+            block_selection_ns: p.block_selection_ns,
+            translation_ns: p.translation_ns,
+            decode_ns: p.decode_ns,
+            codegen_ns: p.codegen_ns,
+            jit_publish_ns: p.jit_publish_ns,
+            dispatch_ns: p.dispatch_ns,
+            translations: p.translations,
+            translated_guest_instructions: p.translated_guest_instructions,
+            guest_memory_helper_calls: p.guest_memory_helper_calls,
+            verified_cache_bytes: p.verified_cache_bytes,
+            code_cache_used_bytes: used,
+            code_cache_capacity_bytes: capacity,
+            code_cache_utilization_ppm: ratio(u128::from(used as u64), capacity as u64),
+            emitted_native_bytes_per_guest_instruction_ppm: ratio(
+                u128::from(self.metrics.native_bytes_emitted as u64),
+                p.translated_guest_instructions,
+            ),
+        }
     }
 
     /// Make every link target unverified until the dispatcher selects and
@@ -481,15 +586,22 @@ impl DbtEngine {
                 code_end: self.code_end,
                 exit_reason: None,
                 helper_instructions: 0,
+                guest_memory_calls: 0,
+                profile_helpers: self.profiling,
             };
 
             self.metrics.dbt_dispatches += 1;
             let cpu_raw_ptr = cpu as *mut CpuState as *mut u64;
+            let dispatch_started = self.profiling.then(Instant::now);
             let insns_in_block = unsafe { block_fn(cpu_raw_ptr, &mut ctx) };
+            if let Some(started) = dispatch_started {
+                self.profile.dispatch_ns += started.elapsed().as_nanos();
+            }
             let executed = (headroom - ctx.headroom) as usize + insns_in_block as usize;
             instructions_count += executed;
             self.metrics.instructions_executed += executed;
             self.metrics.interpreter_fallbacks += ctx.helper_instructions as usize;
+            self.profile.guest_memory_helper_calls += ctx.guest_memory_calls;
             self.link_metrics.links_followed += ctx.links_followed as usize;
             if ctx.epoch != self.epoch || ctx.exit_reason.is_some() {
                 // Guest code may have changed, or a fault dispatch may write
@@ -550,11 +662,27 @@ impl DbtEngine {
         memory: &GuestMemory,
         block_limit: usize,
     ) -> Result<SelectedBlock, ExitReason> {
+        if !self.profiling {
+            return self.select_block(rip, memory, block_limit);
+        }
+        let started = Instant::now();
+        let result = self.select_block(rip, memory, block_limit);
+        self.profile.block_selection_ns += started.elapsed().as_nanos();
+        result
+    }
+
+    fn select_block(
+        &mut self,
+        rip: u64,
+        memory: &GuestMemory,
+        block_limit: usize,
+    ) -> Result<SelectedBlock, ExitReason> {
         if block_limit == MAX_BLOCK_INSTRUCTIONS {
             if let Some(cached) = self.block_cache.get(&rip) {
                 if cached.is_current(memory) {
                     self.metrics.cache_hits += 1;
                     self.link_metrics.bytes_verified += cached.source.len();
+                    self.profile.verified_cache_bytes += cached.source.len() as u64;
                     if !cached.links.is_null() {
                         // SAFETY: owned by `self.links`; no translated code
                         // runs while the dispatcher selects a block.
@@ -593,6 +721,7 @@ impl DbtEngine {
             if cached.is_current(memory) {
                 self.metrics.cache_hits += 1;
                 self.link_metrics.bytes_verified += cached.source.len();
+                self.profile.verified_cache_bytes += cached.source.len() as u64;
                 return Ok(SelectedBlock {
                     code: cached.code,
                     links: std::ptr::null_mut(),
@@ -616,13 +745,37 @@ impl DbtEngine {
         memory: &GuestMemory,
         block_limit: usize,
     ) -> Result<CachedBlock, ExitReason> {
+        if !self.profiling {
+            return self.translate_block(start_rip, memory, block_limit);
+        }
+        let started = Instant::now();
+        let result = self.translate_block(start_rip, memory, block_limit);
+        self.profile.translation_ns += started.elapsed().as_nanos();
+        result
+    }
+
+    fn translate_block(
+        &mut self,
+        start_rip: u64,
+        memory: &GuestMemory,
+        block_limit: usize,
+    ) -> Result<CachedBlock, ExitReason> {
         // Decode the whole block first: lowering needs to know whether a later
         // instruction observes the flags an earlier one produces.
+        let decode_started = self.profiling.then(Instant::now);
         let mut decoded = Vec::with_capacity(block_limit);
+        // Record each byte as the decoder fetches it. Its cursor fetches
+        // exactly the bytes of the instruction in order, so this replaces the
+        // second pass over guest memory that previously rebuilt `source`.
+        let mut fetched = Vec::with_capacity(block_limit * 8);
         let mut rip = start_rip;
         while decoded.len() < block_limit {
-            let insn = decode(rip, |address| memory.fetch_instruction_byte(address))
-                .map_err(ExitReason::from)?;
+            let insn = decode(rip, |address| {
+                let byte = memory.fetch_instruction_byte(address)?;
+                fetched.push(byte);
+                Ok(byte)
+            })
+            .map_err(ExitReason::from)?;
             if !is_translatable(&insn) {
                 return Err(ExitReason::IllegalInstruction(0x05));
             }
@@ -632,6 +785,22 @@ impl DbtEngine {
                 break;
             }
         }
+        if let Some(started) = decode_started {
+            self.profile.decode_ns += started.elapsed().as_nanos();
+        }
+        let expected_source_len = rip.wrapping_sub(start_rip) as usize;
+        let source = if fetched.len() == expected_source_len {
+            fetched.into_boxed_slice()
+        } else {
+            // Keep the contract exact if a decoder form ever consumes bytes
+            // outside its reported length.
+            (0..expected_source_len)
+                .map(|offset| memory.fetch_instruction_byte(start_rip.wrapping_add(offset as u64)))
+                .collect::<Result<Box<[u8]>, _>>()
+                .map_err(ExitReason::MemoryFault)?
+        };
+
+        let codegen_started = self.profiling.then(Instant::now);
         // Emitted code holds pointers to these instructions for helper calls,
         // so the allocation lives as long as the engine's code cache.
         let insns = decoded.into_boxed_slice();
@@ -712,18 +881,22 @@ impl DbtEngine {
         asm.ldr_uoff_64(X21, SP, 32);
         asm.ldp_post_64(X29, X30, SP, 48);
         asm.ret();
+        if let Some(started) = codegen_started {
+            self.profile.codegen_ns += started.elapsed().as_nanos();
+        }
 
+        let publish_started = self.profiling.then(Instant::now);
         let emitted = self
             .jit
             .emit_block(asm.instructions())
             .map_err(|_| ExitReason::JitCacheExhausted)?;
+        if let Some(started) = publish_started {
+            self.profile.jit_publish_ns += started.elapsed().as_nanos();
+        }
         self.metrics.blocks_compiled += 1;
         self.metrics.native_bytes_emitted += asm.instructions().len() * 4;
-        // Decoding just read every one of these bytes, so they are readable.
-        let source = (0..rip.wrapping_sub(start_rip))
-            .map(|offset| memory.fetch_instruction_byte(start_rip.wrapping_add(offset)))
-            .collect::<Result<Box<[u8]>, _>>()
-            .map_err(ExitReason::MemoryFault)?;
+        self.profile.translations += 1;
+        self.profile.translated_guest_instructions += insns.len() as u64;
         self.decoded_blocks.push(insns);
         // Stores into these bytes must end a chain from now on.
         self.code_start = self.code_start.min(start_rip);
@@ -1873,6 +2046,10 @@ struct BlockContext {
     exit_reason: Option<ExitReason>,
     /// Instructions executed through [`execute_helper`].
     helper_instructions: u64,
+    /// Checked guest-memory helper calls made by this native call.
+    guest_memory_calls: u64,
+    /// Whether helper calls are counted for the profile.
+    profile_helpers: bool,
 }
 
 const BLOCK_CTX_FAULTED_OFFSET: u32 = 8;
@@ -1902,8 +2079,18 @@ fn note_store(ctx: *mut BlockContext, address: u64, size: u64) {
     }
 }
 
+/// Count one checked guest-memory access made from translated code.
+fn note_guest_memory_call(ctx: *mut BlockContext) {
+    unsafe {
+        if (*ctx).profile_helpers {
+            (*ctx).guest_memory_calls += 1;
+        }
+    }
+}
+
 extern "C" fn write_u64_helper(ctx: *mut BlockContext, addr: u64, val: u64) {
     unsafe {
+        note_guest_memory_call(ctx);
         if (*ctx).exit_reason.is_some() {
             return;
         }
@@ -1920,6 +2107,7 @@ extern "C" fn write_u64_helper(ctx: *mut BlockContext, addr: u64, val: u64) {
 
 extern "C" fn read_u64_helper(ctx: *mut BlockContext, addr: u64) -> u64 {
     unsafe {
+        note_guest_memory_call(ctx);
         if (*ctx).exit_reason.is_some() {
             return 0;
         }
@@ -1976,6 +2164,7 @@ fn record_exit(ctx: *mut BlockContext, reason: ExitReason) {
 
 /// Read 16 bytes at any alignment; returned in X0 (low) and X1 (high).
 extern "C" fn read_u128_helper(ctx: *mut BlockContext, addr: u64) -> u128 {
+    note_guest_memory_call(ctx);
     if !check_guest_address(ctx, addr, 16) {
         return 0;
     }
@@ -1997,6 +2186,7 @@ extern "C" fn read_aligned_u128_helper(ctx: *mut BlockContext, addr: u64) -> u12
 
 /// Write 16 bytes at any alignment; `value` arrives in X2 (low) and X3 (high).
 extern "C" fn write_u128_helper(ctx: *mut BlockContext, addr: u64, value: u128) {
+    note_guest_memory_call(ctx);
     if !check_guest_address(ctx, addr, 16) {
         return;
     }
@@ -2042,6 +2232,7 @@ extern "C" fn push_helper(ctx: *mut BlockContext, sp: u64, value: u64) -> u64 {
 
 extern "C" fn write_u16_helper(ctx: *mut BlockContext, addr: u64, val: u64) {
     unsafe {
+        note_guest_memory_call(ctx);
         if (*ctx).exit_reason.is_some() {
             return;
         }
@@ -2058,6 +2249,7 @@ extern "C" fn write_u16_helper(ctx: *mut BlockContext, addr: u64, val: u64) {
 
 extern "C" fn write_u32_helper(ctx: *mut BlockContext, addr: u64, val: u64) {
     unsafe {
+        note_guest_memory_call(ctx);
         if (*ctx).exit_reason.is_some() {
             return;
         }
@@ -2074,6 +2266,7 @@ extern "C" fn write_u32_helper(ctx: *mut BlockContext, addr: u64, val: u64) {
 
 extern "C" fn read_u32_helper(ctx: *mut BlockContext, addr: u64) -> u64 {
     unsafe {
+        note_guest_memory_call(ctx);
         if (*ctx).exit_reason.is_some() {
             return 0;
         }
@@ -2093,6 +2286,7 @@ extern "C" fn read_u32_helper(ctx: *mut BlockContext, addr: u64) -> u64 {
 
 extern "C" fn write_u8_helper(ctx: *mut BlockContext, addr: u64, val: u64) {
     unsafe {
+        note_guest_memory_call(ctx);
         if (*ctx).exit_reason.is_some() {
             return;
         }
@@ -2109,6 +2303,7 @@ extern "C" fn write_u8_helper(ctx: *mut BlockContext, addr: u64, val: u64) {
 
 extern "C" fn read_u8_helper(ctx: *mut BlockContext, addr: u64) -> u64 {
     unsafe {
+        note_guest_memory_call(ctx);
         if (*ctx).exit_reason.is_some() {
             return 0;
         }
@@ -2128,6 +2323,7 @@ extern "C" fn read_u8_helper(ctx: *mut BlockContext, addr: u64) -> u64 {
 
 extern "C" fn read_u16_helper(ctx: *mut BlockContext, addr: u64) -> u64 {
     unsafe {
+        note_guest_memory_call(ctx);
         if (*ctx).exit_reason.is_some() {
             return 0;
         }
@@ -2195,6 +2391,85 @@ mod tests {
         let result = engine.run(&mut cpu, memory, limit);
         assert_eq!(result.exit_reason, ExitReason::Halt);
         cpu.get(Register::Rax)
+    }
+
+    #[test]
+    fn profile_reports_translation_cache_and_native_activity() {
+        let (mut engine, mut memory) = writable_fixture(&mov_eax(1));
+        engine.set_profiling(true);
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
+        let profile = engine.profile();
+        assert_eq!(profile.translations, 1);
+        assert_eq!(
+            engine.metrics.blocks_compiled,
+            profile.translations as usize
+        );
+        assert_eq!(profile.translated_guest_instructions, 2);
+        assert_eq!(profile.verified_cache_bytes, mov_eax(1).len() as u64);
+        assert_eq!(profile.guest_memory_helper_calls, 0);
+        assert!(profile.block_selection_ns >= profile.translation_ns);
+        assert!(
+            profile.translation_ns
+                >= profile.decode_ns + profile.codegen_ns + profile.jit_publish_ns
+        );
+        assert!(profile.translation_ns > 0);
+        assert!(profile.dispatch_ns > 0);
+    }
+
+    #[test]
+    fn profile_counts_each_checked_guest_memory_helper_once() {
+        // mov eax, [0x2000]; add eax, 1; mov [0x2000], eax; hlt.
+        let code = [
+            0x8B, 0x05, 0xFA, 0x0F, 0x00, 0x00, 0x83, 0xC0, 0x01, 0x89, 0x05, 0xF1, 0x0F, 0x00,
+            0x00, 0xF4,
+        ];
+        let (mut engine, mut memory) = writable_fixture(&code);
+        engine.set_profiling(true);
+        memory
+            .map_region(0x2000, 4, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        memory.write_u32(0x2000, 0x1122_3344).unwrap();
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 0x1122_3345);
+        assert_eq!(memory.read_u32(0x2000).unwrap(), 0x1122_3345);
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 0x1122_3346);
+        let profile = engine.profile();
+        assert_eq!(profile.guest_memory_helper_calls, 4);
+        assert_eq!(profile.translations, 1);
+        assert_eq!(profile.translated_guest_instructions, 4);
+        assert_eq!(profile.verified_cache_bytes, code.len() as u64);
+    }
+
+    #[test]
+    fn profile_ratios_match_the_code_cache_and_emitted_bytes() {
+        let (mut engine, mut memory) = writable_fixture(&mov_eax(7));
+        engine.set_profiling(true);
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 7);
+        let profile = engine.profile();
+        let used = engine.jit.used();
+        let capacity = engine.jit.capacity();
+        assert_eq!(profile.code_cache_used_bytes, used);
+        assert_eq!(profile.code_cache_capacity_bytes, capacity);
+        assert_eq!(
+            profile.code_cache_utilization_ppm,
+            (u128::from(used as u64) * 1_000_000 / u128::from(capacity as u64)) as u64
+        );
+        assert_eq!(
+            profile.emitted_native_bytes_per_guest_instruction_ppm,
+            (u128::from(engine.metrics.native_bytes_emitted as u64) * 1_000_000 / 2) as u64
+        );
+    }
+
+    #[test]
+    fn timing_collection_is_opt_in() {
+        let (mut engine, mut memory) = writable_fixture(&mov_eax(1));
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
+        let profile = engine.profile();
+        assert_eq!(profile.block_selection_ns, 0);
+        assert_eq!(profile.translation_ns, 0);
+        assert_eq!(profile.dispatch_ns, 0);
+        assert_eq!(profile.guest_memory_helper_calls, 0);
+        assert_eq!(profile.translations, 1);
     }
 
     #[test]
