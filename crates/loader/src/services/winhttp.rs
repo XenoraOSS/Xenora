@@ -54,6 +54,7 @@ const WINHTTP_OPTION_CONNECT_TIMEOUT: u32 = 3;
 const WINHTTP_OPTION_SEND_TIMEOUT: u32 = 5;
 const WINHTTP_OPTION_RECEIVE_TIMEOUT: u32 = 6;
 const ERROR_WINHTTP_HEADER_NOT_FOUND: u32 = 12150;
+const ERROR_WINHTTP_REDIRECT_FAILED: u32 = 12156;
 const MAX_ADDITIONAL_HEADER_UNITS: usize = 4096;
 const MAX_HEADER_LINE_BYTES: usize = 8192;
 const MAX_RESPONSE_HEAD_BYTES: usize = 64 * 1024;
@@ -199,6 +200,21 @@ struct TransportState {
     chunked_upload: bool,
     body: BodyKind,
     chunked: ChunkedState,
+    /// The current redirect target. Initialized from the request snapshot at
+    /// send time and rewritten by each followed redirect.
+    server: String,
+    port: u32,
+    secure: bool,
+    object_name: String,
+    timeouts: TimeoutSettings,
+    /// Content-Length declared at send time; zero means none. A POST-to-GET
+    /// redirect rewrite clears it together with the replay body.
+    total_length: u32,
+    /// All body bytes sent so far, retained so a verb-preserving redirect can
+    /// replay them exactly. Bounded; overflow fails a verb-preserving redirect.
+    replay_body: Vec<u8>,
+    replay_overflow: bool,
+    redirects: u32,
 }
 
 impl TransportState {
@@ -223,8 +239,76 @@ impl TransportState {
             chunked_upload: false,
             body: BodyKind::Empty,
             chunked: ChunkedState::new(),
+            server: String::new(),
+            port: 0,
+            secure: false,
+            object_name: String::new(),
+            timeouts: TimeoutSettings::default(),
+            total_length: 0,
+            replay_body: Vec::new(),
+            replay_overflow: false,
+            redirects: 0,
         }
     }
+}
+
+/// The bounded redirect count Xenora follows inside one receive call. The
+/// public text does not document a default maximum; ten is a Xenora choice.
+const MAX_REDIRECTS: u32 = 10;
+
+/// Resolves a redirect `Location` against the transport target, rewriting the
+/// target fields in place. Absolute URLs crack through the same parser the
+/// public cracking service uses; a location the parser rejects is treated as
+/// relative, matching the public implementation evidence: a `/`-rooted
+/// location replaces the path, anything else resolves against the parent
+/// directory of the current path.
+fn resolve_redirect(transport: &mut TransportState, location: &str) -> Result<(), u32> {
+    let wide: Vec<u16> = location.encode_utf16().collect();
+    if let Ok(parsed) = url::parser::parse(&wide, false) {
+        if parsed.scheme_id != 1 {
+            // HTTPS targets need TLS, which the transport does not implement.
+            return Err(ERROR_WINHTTP_REDIRECT_FAILED);
+        }
+        let text = |range: &std::ops::Range<usize>| -> String {
+            wide[range.clone()]
+                .iter()
+                .map(|&unit| char::from_u32(u32::from(unit)).unwrap_or('\u{fffd}'))
+                .collect()
+        };
+        let host = text(&parsed.host);
+        if host.is_empty() {
+            return Err(ERROR_WINHTTP_REDIRECT_FAILED);
+        }
+        let mut path = text(&parsed.path);
+        path.push_str(&text(&parsed.extra));
+        if path.is_empty() {
+            path = "/".to_owned();
+        }
+        transport.server = host;
+        transport.port = if parsed.port != 0 {
+            u32::from(parsed.port)
+        } else {
+            80
+        };
+        transport.object_name = path;
+        return Ok(());
+    }
+    let object = if let Some(rest) = location.strip_prefix('/') {
+        let _ = rest;
+        location.to_owned()
+    } else {
+        let current = &transport.object_name;
+        let parent = current.rfind('/').map_or(0, |index| index + 1);
+        format!("{}{}", &current[..parent], location)
+    };
+    if !object.starts_with('/')
+        || !object.is_ascii()
+        || object.bytes().any(|byte| byte <= 0x20 || byte == 0x7f)
+    {
+        return Err(ERROR_WINHTTP_REDIRECT_FAILED);
+    }
+    transport.object_name = object;
+    Ok(())
 }
 
 /// The WinHTTP handle table owns all copied strings and request settings.
@@ -1515,6 +1599,15 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     request.phase = TransportPhase::Busy;
                     request.chunked_upload = chunked_upload;
                     request.write_remaining = u64::from(total_length - optional_length);
+                    request.server = snapshot.server.clone();
+                    request.port = u32::from(effective_port(snapshot.port, snapshot.secure));
+                    request.secure = snapshot.secure;
+                    request.object_name = snapshot.object_name.clone();
+                    request.verb = snapshot.verb.clone();
+                    request.timeouts = snapshot.timeouts;
+                    request.total_length = total_length;
+                    request.request_headers.extend(additional.iter().cloned());
+                    request.replay_body = body.clone();
                     wire
                 };
                 (snapshot, transport, wire)
@@ -1597,6 +1690,13 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                             transport_guard.phase = TransportPhase::Sent;
                         }
                     }
+                    if transport_guard.replay_body.len() + bytes.len()
+                        <= MAX_OPTIONAL_BODY_BYTES as usize
+                    {
+                        transport_guard.replay_body.extend_from_slice(&bytes);
+                    } else {
+                        transport_guard.replay_overflow = true;
+                    }
                     memory.write_u32(args.r9, wanted).map_err(memory_fault)?;
                     Ok(1)
                 }
@@ -1631,21 +1731,99 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             if !acceptable {
                 return receive.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
             }
-            let verb = transport_guard.verb.clone();
-            let result = match transport_guard.stream.as_mut() {
-                Some(reader) => parse_response(reader, &verb),
-                None => Err(ERROR_WINHTTP_INCORRECT_HANDLE_STATE),
-            };
-            match result {
-                Ok((head, body)) => {
+            loop {
+                let verb = transport_guard.verb.clone();
+                let result = match transport_guard.stream.as_mut() {
+                    Some(reader) => parse_response(reader, &verb),
+                    None => Err(ERROR_WINHTTP_INCORRECT_HANDLE_STATE),
+                };
+                let (head, body) = match result {
+                    Ok(parts) => parts,
+                    Err(error) => {
+                        transport_guard.phase = TransportPhase::Failed;
+                        return receive.fail(cpu.gs_base, error, 0);
+                    }
+                };
+                if !matches!(head.status, 301 | 302 | 307 | 308) {
                     transport_guard.response = Some(head);
                     transport_guard.body = body;
                     transport_guard.phase = TransportPhase::Ready;
-                    Ok(1)
+                    return Ok(1);
                 }
-                Err(error) => {
+                // Redirect: the connection closes anyway, so the old stream is
+                // simply dropped and the target rewritten before resending.
+                transport_guard.redirects += 1;
+                if transport_guard.redirects > MAX_REDIRECTS {
                     transport_guard.phase = TransportPhase::Failed;
-                    receive.fail(cpu.gs_base, error, 0)
+                    return receive.fail(cpu.gs_base, ERROR_WINHTTP_REDIRECT_FAILED, 0);
+                }
+                let Some((_, location)) = head
+                    .headers
+                    .iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case("location"))
+                else {
+                    transport_guard.phase = TransportPhase::Failed;
+                    return receive.fail(cpu.gs_base, ERROR_WINHTTP_HEADER_NOT_FOUND, 0);
+                };
+                let location = location.clone();
+                transport_guard.stream = None;
+                if let Err(error) = resolve_redirect(&mut transport_guard, &location) {
+                    transport_guard.phase = TransportPhase::Failed;
+                    return receive.fail(cpu.gs_base, error, 0);
+                }
+                // POST rewrites to GET and drops its body for the historical
+                // statuses only; 307 and 308 preserve the verb and body.
+                if !matches!(head.status, 307 | 308)
+                    && transport_guard.verb.eq_ignore_ascii_case("POST")
+                {
+                    transport_guard.verb = "GET".to_owned();
+                    transport_guard.replay_body.clear();
+                    transport_guard.replay_overflow = false;
+                    transport_guard.total_length = 0;
+                }
+                if transport_guard.replay_overflow {
+                    transport_guard.phase = TransportPhase::Failed;
+                    return receive.fail(cpu.gs_base, ERROR_WINHTTP_REDIRECT_FAILED, 0);
+                }
+                let snapshot = RequestSnapshot {
+                    server: transport_guard.server.clone(),
+                    port: transport_guard.port,
+                    verb: transport_guard.verb.clone(),
+                    object_name: transport_guard.object_name.clone(),
+                    version: "HTTP/1.1".to_owned(),
+                    secure: transport_guard.secure,
+                    timeouts: transport_guard.timeouts,
+                };
+                let wire = match build_request_wire(
+                    &snapshot,
+                    &[],
+                    &transport_guard.request_headers,
+                    transport_guard.total_length,
+                ) {
+                    Ok(wire) => wire,
+                    Err(error) => {
+                        transport_guard.phase = TransportPhase::Failed;
+                        return receive.fail(cpu.gs_base, error, 0);
+                    }
+                };
+                let port = effective_port(snapshot.port, snapshot.secure);
+                let result = connect_tcp(&snapshot.server, port, snapshot.timeouts).and_then(
+                    |mut stream| {
+                        stream.write_all(&wire).map_err(io_winhttp_error)?;
+                        stream
+                            .write_all(&transport_guard.replay_body)
+                            .map_err(io_winhttp_error)?;
+                        Ok(stream)
+                    },
+                );
+                match result {
+                    Ok(stream) => {
+                        transport_guard.stream = Some(BufReader::new(stream));
+                    }
+                    Err(error) => {
+                        transport_guard.phase = TransportPhase::Failed;
+                        return receive.fail(cpu.gs_base, error, 0);
+                    }
                 }
             }
         },
@@ -2618,6 +2796,71 @@ mod tests {
         server.join().unwrap();
     }
 
+    type CapturedWires = Arc<Mutex<Vec<Vec<u8>>>>;
+    type ChainServer = (CapturedWires, std::thread::JoinHandle<()>);
+
+    /// Serves `responses` on sequential connections of one listener and
+    /// captures the exact wire bytes of each request.
+    fn serve_chain(
+        responses: &'static [&'static [u8]],
+    ) -> (u16, CapturedWires, std::thread::JoinHandle<()>) {
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (captured, thread) = serve_chain_on(listener, responses);
+        (port, captured, thread)
+    }
+
+    /// The connection-driving half of `serve_chain`, for tests that must know
+    /// the port before formatting their responses.
+    fn serve_chain_on(
+        listener: std::net::TcpListener,
+        responses: &'static [&'static [u8]],
+    ) -> ChainServer {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let captured_thread = Arc::clone(&captured);
+        let thread = std::thread::spawn(move || {
+            for response in responses {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(5)))
+                    .unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0; 1024];
+                loop {
+                    let count = stream.read(&mut buffer).unwrap();
+                    if count == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..count]);
+                    let complete = request
+                        .windows(4)
+                        .position(|window| window == b"\r\n\r\n")
+                        .is_some_and(|header_end| {
+                            let head = String::from_utf8_lossy(&request[..header_end]);
+                            let body_length = head
+                                .split("\r\n")
+                                .find_map(|line| {
+                                    let (name, value) = line.split_once(':')?;
+                                    name.eq_ignore_ascii_case("content-length")
+                                        .then(|| value.trim().parse::<usize>().ok())
+                                        .flatten()
+                                })
+                                .unwrap_or(0);
+                            request.len() >= header_end + 4 + body_length
+                        });
+                    if complete {
+                        break;
+                    }
+                }
+                captured_thread.lock().unwrap().push(request);
+                stream.write_all(response).unwrap();
+            }
+        });
+        (captured, thread)
+    }
+
     fn serve_once(
         response: &'static [u8],
     ) -> (u16, Arc<Mutex<Vec<u8>>>, std::thread::JoinHandle<()>) {
@@ -3234,6 +3477,168 @@ mod tests {
             assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
         }
         server.join().unwrap();
+    }
+
+    #[test]
+    fn absolute_redirects_are_followed_to_the_final_response() {
+        // The absolute location needs the port before the responses exist, so
+        // the listener is bound first and driven explicitly.
+        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let first: &'static [u8] = Box::leak(
+            format!(
+                "HTTP/1.1 301 Moved\r\nContent-Length: 0\r\nLocation: http://127.0.0.1:{port}/final?x=1\r\n\r\n"
+            )
+            .into_bytes()
+            .into_boxed_slice(),
+        );
+        let responses: &'static [&'static [u8]] = Box::leak(Box::new([
+            first,
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi" as &[u8],
+        ]));
+        let (captured, server) = serve_chain_on(listener, responses);
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        fixture.memory.write_u32(0x2908, 4).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    (WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER) as u64,
+                    0,
+                    0x2900,
+                    0x2908,
+                    0,
+                ]
+            ),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x2900).unwrap(), 200);
+        server.join().unwrap();
+        let wires = captured.lock().unwrap().clone();
+        assert_eq!(wires.len(), 2);
+        assert!(String::from_utf8_lossy(&wires[0]).starts_with("GET /fixture HTTP/1.1\r\n"));
+        assert!(String::from_utf8_lossy(&wires[1]).starts_with("GET /final?x=1 HTTP/1.1\r\n"));
+    }
+
+    #[test]
+    fn a_302_redirect_rewrites_post_to_get_and_drops_the_body() {
+        let (port, captured, server) = serve_chain(&[
+            b"HTTP/1.1 302 Redirect\r\nContent-Length: 0\r\nLocation: /target\r\n\r\n",
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",
+        ]);
+        let mut fixture = Fixture::new();
+        write_wide(&mut fixture.memory, 0x2200, "POST");
+        let request = open_loopback_request(&mut fixture, port);
+        fixture.memory.write_bytes(0x2800, b"data").unwrap();
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0x2800, 4, 4, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+        let wires = captured.lock().unwrap().clone();
+        assert_eq!(wires.len(), 2);
+        assert!(String::from_utf8_lossy(&wires[0]).starts_with("POST /fixture HTTP/1.1\r\n"));
+        let second = String::from_utf8_lossy(&wires[1]).into_owned();
+        assert!(
+            second.starts_with("POST /target HTTP/1.1\r\n")
+                || second.starts_with("GET /target HTTP/1.1\r\n")
+        );
+        assert!(
+            second.starts_with("GET /target HTTP/1.1\r\n"),
+            "POST rewrites to GET: {second}"
+        );
+        assert!(!second.contains("Content-Length"));
+        assert!(!second.ends_with("data"));
+    }
+
+    #[test]
+    fn a_307_redirect_preserves_the_verb_and_replays_the_body() {
+        let (port, captured, server) = serve_chain(&[
+            b"HTTP/1.1 307 Keep Verb\r\nContent-Length: 0\r\nLocation: /target\r\n\r\n",
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",
+        ]);
+        let mut fixture = Fixture::new();
+        write_wide(&mut fixture.memory, 0x2200, "POST");
+        let request = open_loopback_request(&mut fixture, port);
+        fixture.memory.write_bytes(0x2800, b"data").unwrap();
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0x2800, 4, 4, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+        let wires = captured.lock().unwrap().clone();
+        assert_eq!(wires.len(), 2);
+        let second = String::from_utf8_lossy(&wires[1]).into_owned();
+        assert!(second.starts_with("POST /target HTTP/1.1\r\n"), "{second}");
+        assert!(second.contains("Content-Length: 4\r\n"));
+        assert!(wires[1].ends_with(b"data"));
+    }
+
+    #[test]
+    fn redirect_loops_https_targets_and_missing_locations_fail_honestly() {
+        // A missing Location header on a redirect status fails the request.
+        let (port, _captured, server) =
+            serve_chain(&[b"HTTP/1.1 301 Moved\r\nContent-Length: 0\r\n\r\n"]);
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 0);
+        assert_eq!(fixture.state.last_error(0), ERROR_WINHTTP_HEADER_NOT_FOUND);
+        server.join().unwrap();
+        // An HTTPS target cannot be followed because TLS is unsupported.
+        let (port, _captured, server) = serve_chain(&[
+            b"HTTP/1.1 301 Moved\r\nContent-Length: 0\r\nLocation: https://example.test/\r\n\r\n",
+        ]);
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 0);
+        assert_eq!(fixture.state.last_error(0), ERROR_WINHTTP_REDIRECT_FAILED);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn parent_relative_redirects_resolve_against_the_current_path() {
+        let (port, captured, server) = serve_chain(&[
+            b"HTTP/1.1 302 Redirect\r\nContent-Length: 0\r\nLocation: sibling?q=2\r\n\r\n",
+            b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n",
+        ]);
+        let mut fixture = Fixture::new();
+        write_loopback_host(&mut fixture);
+        let session = fixture.open_session();
+        let connection = fixture.call("WinHttpConnect", &[session, 0x2100, port as u64, 0]);
+        assert_ne!(connection, 0);
+        write_wide(&mut fixture.memory, 0x2300, "/dir/page");
+        let request = fixture.call("WinHttpOpenRequest", &[connection, 0, 0x2300, 0, 0, 0, 0]);
+        assert_ne!(request, 0);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+        let wires = captured.lock().unwrap().clone();
+        assert_eq!(wires.len(), 2);
+        assert!(
+            String::from_utf8_lossy(&wires[1]).starts_with("GET /dir/sibling?q=2 HTTP/1.1\r\n"),
+            "{}",
+            String::from_utf8_lossy(&wires[1])
+        );
     }
 
     #[test]
