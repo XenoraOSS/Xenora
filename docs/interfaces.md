@@ -104,8 +104,13 @@ All three are partial. `exit` flushes no stream, because there are none, and
 runs no thread-local destructor. It does not walk a module's own `_onexit`
 table; that module's startup code runs it through `_execute_onexit_table`.
 `abort` prints no message and does not call a `SIGABRT` handler, which the
-documentation says it does when one is set. `_Exit`, `quick_exit` and
-`_c_exit` are not provided. None of this has been compared with Windows.
+documentation says it does when one is set. `_Exit` and `quick_exit` are not
+provided.
+
+The Universal CRT `_c_exit()` export and its runtime API set return to the
+caller with exit callbacks still pending and open descriptors usable. The call
+skips stream flushing. An original PE fixture exercises the API-set binding
+locally on Apple Silicon.
 
 A TLS callback may end the process too. Startup then reports the exit as its
 outcome, with the status, and runs neither the remaining callbacks nor the

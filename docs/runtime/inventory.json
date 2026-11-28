@@ -5704,6 +5704,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_c_exit",
+      "kind": "name",
+      "library": "api-ms-win-crt-runtime-l1-1-0.dll",
+      "status": "implemented",
+      "symbol": "_c_exit"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "_cexit",
       "kind": "name",
       "library": "api-ms-win-crt-runtime-l1-1-0.dll",
@@ -9981,6 +9991,13 @@
         "source": "manual",
         "status": "implemented",
         "symbol": "vfprintf"
+      },
+      {
+        "kind": "name",
+        "library": "ucrtbase.dll",
+        "source": "manual",
+        "status": "implemented",
+        "symbol": "_c_exit"
       },
       {
         "kind": "name",
@@ -15051,6 +15068,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "_beginthreadex"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": false,
+      "symbol": "_c_exit"
     },
     {
       "data_import": false,
@@ -20404,17 +20431,17 @@
     }
   ],
   "summary": {
-    "aliases": 968,
-    "api_set_aliases": 760,
-    "canonical_services": 1015,
-    "data_import_services": 12,
+    "aliases": 969,
+    "api_set_aliases": 761,
+    "canonical_services": 1017,
+    "data_import_services": 13,
     "duplicate_registrations": 0,
-    "implemented": 249,
-    "implicit_status_services": 78,
+    "implemented": 250,
+    "implicit_status_services": 79,
     "libraries": 28,
-    "manual_services": 711,
+    "manual_services": 713,
     "ordinal_aliases": 35,
-    "partial": 766,
+    "partial": 767,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 304,
