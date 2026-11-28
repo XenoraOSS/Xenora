@@ -256,7 +256,7 @@
       "dependencies": [],
       "owner": "catminou4",
       "status": "MERGED",
-      "evidence_class": "B",
+      "evidence_class": "D",
       "issue": 1218,
       "pr": 1222,
       "test_status": "Merged at 39a6f4c8; local CRT macro fixture tests passed.",
@@ -494,11 +494,11 @@
       "dependencies": [],
       "owner": "catminou4",
       "status": "MERGED",
-      "evidence_class": "E",
+      "evidence_class": "D",
       "issue": 1236,
       "pr": 1246,
-      "test_status": "Merged at PR #1246; CRT byte-range locking and _commit are implemented by Catminou.",
-      "limitations": "Claimed by catminou4; single-process blocking semantics remain synthetic.",
+      "test_status": "PR #1246 added the handlers. PR #1274 restored typed generation and added original API-set guest calls.",
+      "limitations": "File commits are in-memory. Lock conflicts are immediate; Windows retry and error behavior is partial.",
       "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
@@ -509,14 +509,14 @@
       "description": "Repair busybox od output inside a pipeline.",
       "priority": "P1",
       "dependencies": [],
-      "owner": "catminou4",
-      "status": "CLAIMED",
+      "owner": null,
+      "status": "BLOCKED",
       "evidence_class": "E",
       "issue": 1229,
       "pr": null,
-      "test_status": "Claim recorded; cause not yet isolated.",
-      "limitations": "Claimed by catminou4; do not duplicate.",
-      "ownership_state": "Catminou-owned",
+      "test_status": "The prior claim was released pending shared runtime file coordination.",
+      "limitations": "Coordinate overlapping changes with PRs #312 and #535. https://github.com/ranveersoni98/Xenora/issues/1229#issuecomment-7241802750",
+      "ownership_state": "Awaiting external dependency",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
     },
@@ -527,13 +527,13 @@
       "priority": "P1",
       "dependencies": [],
       "owner": "catminou4",
-      "status": "BLOCKED",
-      "evidence_class": "E",
+      "status": "MERGED",
+      "evidence_class": "D",
       "issue": 946,
-      "pr": null,
-      "test_status": "Two overlapping claims recorded; no implementation evidence in tracker.",
-      "limitations": "Conflicting claims require owner coordination before editing.",
-      "ownership_state": "Catminou-owned",
+      "pr": 966,
+      "test_status": "PR #966 merged explicit guard refusal. On c8210aaf, the four guest_cxx_guard_abi tests passed.",
+      "limitations": "The issue remains open. Compiler-generated concurrent acquisition and real guard waiting remain separate work.",
+      "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
     },
@@ -597,14 +597,14 @@
       "description": "Execute explicit module TLS callbacks and DllMain transactionally.",
       "priority": "P1",
       "dependencies": [],
-      "owner": "catminou4",
-      "status": "CLAIMED",
+      "owner": null,
+      "status": "SUPERSEDED",
       "evidence_class": "D",
       "issue": 918,
       "pr": null,
-      "test_status": "Claim recorded; partial loader layers already merged.",
-      "limitations": "Host services, unloading, thread notifications and reentrancy out of scope.",
-      "ownership_state": "DeepSeek-owned",
+      "test_status": "The explicit-package loader executes original TLS callbacks and DllMain. The separate initializer claim was released.",
+      "limitations": "Dynamic or persistent transactional guarantees require an agreed scope. https://github.com/ranveersoni98/Xenora/issues/918#issuecomment-7220904125",
+      "ownership_state": "Awaiting external dependency",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
     },
@@ -631,14 +631,14 @@
       "description": "Complete the legacy msvcrt.dll startup import list.",
       "priority": "P2",
       "dependencies": [],
-      "owner": "catminou4",
-      "status": "CLAIMED",
+      "owner": null,
+      "status": "SUPERSEDED",
       "evidence_class": "D",
       "issue": 632,
       "pr": null,
-      "test_status": "Narrow _setmode work claimed; broader convenience forms excluded.",
-      "limitations": "Claimed by catminou4; do not duplicate.",
-      "ownership_state": "Catminou-owned",
+      "test_status": "The narrow startup claim was released after the relevant imports were found to bind.",
+      "limitations": "The wider legacy CRT convenience surface overlaps PR #535. https://github.com/ranveersoni98/Xenora/issues/632#issuecomment-7238240344",
+      "ownership_state": "Awaiting external dependency",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
     },
@@ -919,18 +919,18 @@
     {
       "id": "WP-1163",
       "subsystem": "Runtime",
-      "description": "Microsoft STL standard-stream initialization and wider runtime completion.",
+      "description": "Initialize and flush bounded synthetic Microsoft x64 standard output.",
       "priority": "P1",
       "dependencies": [],
       "owner": "catminou4",
-      "status": "PR_OPEN",
+      "status": "MERGED",
       "evidence_class": "C",
-      "ownership_state": "Catminou-owned",
+      "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "issue": 1163,
       "pr": 1256,
-      "test_status": "PR #1256 completes the narrow std::cout slice with 1662 loader tests passing; remaining #1163 scope transferred.",
-      "limitations": "No streambuf vtable, locale, wide streams, cerr/clog, Microsoft DLL or independent acceptance; Catminou owns subsequent work.",
+      "test_status": "PR #1256 merged a bounded synthetic std::cout fixture with write, flush, good and final Init flush.",
+      "limitations": "Full Microsoft-header execution, locale, stderr streams and independent milestone acceptance remain open. Catminou owns follow-ups.",
       "assignment_side": "external"
     },
     {
@@ -1406,6 +1406,193 @@
       "test_status": "Milestone retained under revised ownership; no acceptance evidence recorded here.",
       "limitations": "Synthetic fixture success is not commercial title compatibility.",
       "assignment_side": "personal"
+    },
+    {
+      "id": "WP-1254",
+      "subsystem": "Runtime",
+      "description": "Exercise UCRT ownership across two original compiled DLLs.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "MERGED",
+      "evidence_class": "D",
+      "issue": 1254,
+      "pr": 1262,
+      "test_status": "PR #1262 records 11 passing local tests, including an intentional failure followed by a fresh session.",
+      "limitations": "The explicit package uses one guest thread; dynamic lifetime, exceptions and independent review remain open.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1255",
+      "subsystem": "Runtime",
+      "description": "Track server locks and unload eligibility for the opt-in synthetic COM factory.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "MERGED",
+      "evidence_class": "C",
+      "issue": 1255,
+      "pr": 1261,
+      "test_status": "PR #1261 records six passing tests, including stale-object refusal and recovery after a session fault.",
+      "limitations": "The query does not unload modules or enable general COM activation.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1263",
+      "subsystem": "Runtime",
+      "description": "Verify Microsoft x64 C++ object lifetime across two authored DLLs.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "MERGED",
+      "evidence_class": "D",
+      "issue": 1263,
+      "pr": 1269,
+      "test_status": "PR #1269 records 11 local passes with explicit successful and rejected handoffs.",
+      "limitations": "Single inheritance, virtual calls and destruction are covered. Microsoft STL, RTTI and cross-module exceptions remain open.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1264",
+      "subsystem": "Runtime",
+      "description": "Restore the authoritative typed source and test witnesses for CRT file locking.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "MERGED",
+      "evidence_class": "D",
+      "issue": 1264,
+      "pr": 1274,
+      "test_status": "PR #1274 records 205 tests and successful typed and live regeneration.",
+      "limitations": "Range locking and file commits remain bounded to the synthetic filesystem contract.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1265",
+      "subsystem": "Runtime",
+      "description": "Avoid copying guest qsort data when the final permutation is already the input order.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "C",
+      "issue": 1265,
+      "pr": 1272,
+      "test_status": "PR #1272 records native ARM64 correctness controls and four interleaved release runs per variant.",
+      "limitations": "The measured improvement is specific to one ordered wide-record workload. The host was not verified idle.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1273",
+      "subsystem": "Runtime",
+      "description": "Investigate child-process failure after reading and closing inherited standard input.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "RESEARCHING",
+      "evidence_class": "E",
+      "issue": 1273,
+      "pr": null,
+      "test_status": "An original guest isolates one fclose(stdin) refusal. A separate applet investigation has narrowed the distinct BusyBox exit failure.",
+      "limitations": "A close candidate would invalidate a parent-owned regular Win32 handle in one inherited case. Shared runtime test and catalog coordination remains open.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1277",
+      "subsystem": "Runtime",
+      "description": "Verify compiler-generated Itanium guard abort and retry after a constructor throws.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "MERGED",
+      "evidence_class": "D",
+      "issue": 1277,
+      "pr": 1283,
+      "test_status": "PR #1283 records seven native ARM64 tests, compiler-emitted abort/retry at two optimization levels and missing-import controls.",
+      "limitations": "Separate from blocking guard contention, Microsoft C++ unwinding and XTRE orchestration.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1270",
+      "subsystem": "Runtime",
+      "description": "Normalize trailing directory separators so duplicate mkdir paths report EEXIST.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "MERGED",
+      "evidence_class": "D",
+      "issue": 1270,
+      "pr": 1271,
+      "test_status": "PR #1271 merged the path normalization fix.",
+      "limitations": "Scope is the existing synthetic filesystem and directory handling.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1275",
+      "subsystem": "Integration",
+      "description": "Reject a DLL as the root of a standalone authored PE session.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "MERGED",
+      "evidence_class": "C",
+      "issue": 1275,
+      "pr": 1279,
+      "test_status": "PR #1279 records 14 session tests and a separate native Metal case.",
+      "limitations": "Root admission policy for authored guest sessions.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1276",
+      "subsystem": "Runtime",
+      "description": "Verify CRT startup and teardown across dependent Microsoft x64 C++ DLLs.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "MERGED",
+      "evidence_class": "D",
+      "issue": 1276,
+      "pr": 1280,
+      "test_status": "PR #1280 records 10 loader passes and an exact nine-byte journal through the native package command.",
+      "limitations": "Uses original static package modules and a small authored CRT startup shim.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
+    },
+    {
+      "id": "WP-1282",
+      "subsystem": "Runtime",
+      "description": "Route a distinct bounded synthetic Microsoft STL std::clog object to guest stderr.",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "IMPLEMENTING",
+      "evidence_class": "E",
+      "issue": 1282,
+      "pr": null,
+      "test_status": "Source-built Microsoft x64 fixture and runtime binding in development.",
+      "limitations": "Microsoft-header execution, locale, buffering, and cerr tie and unitbuf are separate.",
+      "ownership_state": "Catminou-owned",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     }
   ],
   "ownership_states": {
@@ -1417,5 +1604,255 @@
     "Ready for integration": "Implementation completed or published and awaiting merge, integration or review.",
     "Verified": "Independently verified completion; no package is promoted here without independent evidence."
   },
-  "workload_policy": "Transferred runtime work remains visible but does not count toward the maintainer’s remaining implementation workload."
+  "workload_policy": "Transferred runtime work remains visible but does not count toward the maintainer’s remaining implementation workload.",
+  "runtime_acceptance": [
+    {
+      "id": "R1",
+      "status": "PARTIAL",
+      "goal": "Original compiled C application with comprehensive supported CRT coverage",
+      "evidence": "On c8210aaf, Gate A1 and A2 passed 13 tests covering startup, allocation, strings, arithmetic, files, stdio, errors and exit.",
+      "remaining": "Consolidate the supported CRT family matrix and obtain independent acceptance.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/gate-a.md"
+      ]
+    },
+    {
+      "id": "R2",
+      "status": "PARTIAL",
+      "goal": "Original compiled C++ application with construction, destruction and STL",
+      "evidence": "On c8210aaf, the original GNU C++ suite passed three tests. Merged PR #1269 records a separate Microsoft x64 object-lifetime witness. Merged PR #1256 adds a bounded synthetic standard output stream.",
+      "remaining": "Microsoft-header stream startup, output, cleanup, failures and independent acceptance.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cpp_path.rs",
+        "https://github.com/ranveersoni98/Xenora/pull/1269",
+        "https://github.com/ranveersoni98/Xenora/pull/1256"
+      ]
+    },
+    {
+      "id": "R3",
+      "status": "PARTIAL",
+      "goal": "Multi-DLL application with cross-module runtime ownership",
+      "evidence": "The package startup suite passed six tests on c8210aaf. PRs #1262 and #1269 record original CRT and C++ ownership witnesses. Merged PR #1280 verifies CRT startup and teardown order across dependent DLLs.",
+      "remaining": "Independently verify cross-DLL ownership. Cover dynamic module lifetime and cross-module exceptions.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/package_startup.rs",
+        "https://github.com/ranveersoni98/Xenora/pull/1262",
+        "https://github.com/ranveersoni98/Xenora/pull/1269",
+        "https://github.com/ranveersoni98/Xenora/pull/1280"
+      ]
+    },
+    {
+      "id": "R4",
+      "status": "PARTIAL",
+      "goal": "Multi-threaded C++ synchronization and thread-local storage",
+      "evidence": "On c8210aaf, the original C++ worker and four Itanium guard regressions passed. The compiled retry after a throw is tracked separately. Merged PR #1283 checks compiler-emitted abort after a throw and a successful retry on a different guest thread.",
+      "remaining": "Cover blocking contention, multiple workers and thread-local destructors.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cxx_guard_abi.rs",
+        "https://github.com/ranveersoni98/Xenora/blob/main/docs/runtime/threads.md",
+        "https://github.com/ranveersoni98/Xenora/issues/1277",
+        "https://github.com/ranveersoni98/Xenora/pull/1283"
+      ]
+    },
+    {
+      "id": "R5",
+      "status": "PARTIAL",
+      "goal": "Original exception-handling and unwinding fixture",
+      "evidence": "On c8210aaf, two compiled GNU C++ unwinding tests and twelve compiled C structured exception tests passed.",
+      "remaining": "Cover the Microsoft C++ personality, cross-module propagation, unsupported records and post-abort cleanup.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/blob/main/docs/research/exception-handling.md",
+        "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/tests/guest_cpp_exceptions.rs"
+      ]
+    },
+    {
+      "id": "R6",
+      "status": "PARTIAL",
+      "goal": "Original COM application with supported object lifecycle",
+      "evidence": "On c8210aaf, five compiled COM tests passed. Merged PR #1261 adds opt-in server locks and unload eligibility.",
+      "remaining": "Independently verify the supported lifecycle and extend thread and module ownership scenarios.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/blob/main/docs/runtime/com.md",
+        "https://github.com/ranveersoni98/Xenora/pull/1261"
+      ]
+    },
+    {
+      "id": "R7",
+      "status": "PARTIAL",
+      "goal": "Repeated runtime sessions with resource and state isolation",
+      "evidence": "The authored-package session harness checks repeated runs and handle cleanup. Merged PR #1262 records a CRT success, failure and fresh-run sequence.",
+      "remaining": "Exercise callbacks, TLS and shutdown across repeated sessions and obtain independent acceptance.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/blob/main/crates/cli/tests/pe_session.rs",
+        "https://github.com/ranveersoni98/Xenora/pull/1262",
+        "https://github.com/ranveersoni98/Xenora/pull/1261",
+        "https://github.com/ranveersoni98/Xenora/pull/1279"
+      ]
+    },
+    {
+      "id": "R8",
+      "status": "PARTIAL",
+      "goal": "Runtime performance baseline and measured bottleneck improvements",
+      "evidence": "PR #1272 records a correctness-gated native qsort improvement for ordered wide records.",
+      "remaining": "Repeat on an idle host with independent measurements and profile a representative compiled workload.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/blob/main/docs/testing/benchmarks.md",
+        "https://github.com/ranveersoni98/Xenora/pull/1272"
+      ]
+    },
+    {
+      "id": "R9",
+      "status": "BLOCKED",
+      "goal": "Runtime integration readiness for the Xenora Title Runtime Environment",
+      "evidence": "The runtime handoff and persistent authored-session API are merged. Runtime and XTRE retain their respective ownership.",
+      "remaining": "Agree the startup, unwind, ownership and shutdown interfaces with the XTRE owner and run integrated acceptance.",
+      "sources": [
+        "https://github.com/ranveersoni98/Xenora/pull/1260",
+        "https://github.com/ranveersoni98/Xenora/pull/1266",
+        "https://github.com/ranveersoni98/Xenora/issues/923"
+      ]
+    }
+  ],
+  "runtime_service_evidence": [
+    {
+      "library": "combase.dll",
+      "kind": "name",
+      "symbol": "StringFromGUID2",
+      "evidence_class": "A",
+      "evidence": "The compiled fixture checks braced text output and the size including the terminator for valid arguments.",
+      "source": "https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-stringfromguid2",
+      "witness": "cargo test --locked -p xenora-loader --test guest_com guest_exercises_com_base_services"
+    },
+    {
+      "library": "combase.dll",
+      "kind": "name",
+      "symbol": "CoInitializeEx",
+      "evidence_class": "D",
+      "evidence": "The compiled fixture exercises per-thread reference counts and mode conflicts. Apartment dispatch is outside the model.",
+      "source": "https://learn.microsoft.com/en-us/windows/win32/api/combaseapi/nf-combaseapi-coinitializeex",
+      "witness": "cargo test --locked -p xenora-loader --test guest_com"
+    },
+    {
+      "library": "kernel32.dll",
+      "kind": "name",
+      "symbol": "GetCurrentProcessorNumber",
+      "evidence_class": "C",
+      "evidence": "Returns virtual processor zero under Xenora’s single-processor guest model.",
+      "source": "https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-getcurrentprocessornumber",
+      "witness": "cargo test --locked -p xenora-loader --test guest_msvc_current_processor"
+    },
+    {
+      "library": "libstdc++-6.dll",
+      "kind": "name",
+      "symbol": "__cxa_guard_acquire",
+      "evidence_class": "D",
+      "evidence": "The compiled fixture verifies acquire and completed outcomes and explicit invalid or recursive refusal. Contended callers cannot wait.",
+      "source": "https://itanium-cxx-abi.github.io/cxx-abi/abi.html#once-ctor",
+      "witness": "cargo test --locked -p xenora-loader --test guest_cxx_guard_abi"
+    },
+    {
+      "library": "libstdc++-6.dll",
+      "kind": "name",
+      "symbol": "__cxa_guard_release",
+      "evidence_class": "D",
+      "evidence": "The compiled fixture verifies that the owner sets the initialized byte. Wakeup of contended callers is absent.",
+      "source": "https://itanium-cxx-abi.github.io/cxx-abi/abi.html#once-ctor",
+      "witness": "cargo test --locked -p xenora-loader --test guest_cxx_guard_abi"
+    },
+    {
+      "library": "libstdc++-6.dll",
+      "kind": "name",
+      "symbol": "__cxa_guard_abort",
+      "evidence_class": "D",
+      "evidence": "The compiled fixture verifies direct abort and retry by the owner. Wakeup of contended callers is absent.",
+      "source": "https://itanium-cxx-abi.github.io/cxx-abi/abi.html#once-ctor",
+      "witness": "cargo test --locked -p xenora-loader --test guest_cxx_guard_abi"
+    },
+    {
+      "library": "msvcp140.dll",
+      "kind": "name",
+      "symbol": "??0Init@ios_base@std@@QEAA@XZ",
+      "evidence_class": "D",
+      "evidence": "The constructor increments the bounded guest initialization count. PR #1256 supplies one synthetic standard output stream.",
+      "source": "https://learn.microsoft.com/en-us/cpp/standard-library/ios-base-class?view=msvc-170#init",
+      "witness": "cargo test --locked -p xenora-loader --test guest_msvc_ios_init"
+    },
+    {
+      "library": "ucrtbase.dll",
+      "kind": "name",
+      "symbol": "_commit",
+      "evidence_class": "D",
+      "evidence": "The original API-set guest verifies that another descriptor reads the written bytes. The drive stores them in memory.",
+      "source": "https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/commit",
+      "witness": "cargo test --locked -p xenora-loader --test runtime_crt_file_locks"
+    },
+    {
+      "library": "ucrtbase.dll",
+      "kind": "name",
+      "symbol": "_locking",
+      "evidence_class": "D",
+      "evidence": "The original API-set guest verifies range conflicts, unlocking and close cleanup. Blocking retry modes are incomplete.",
+      "source": "https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/locking",
+      "witness": "cargo test --locked -p xenora-loader --test runtime_crt_file_locks"
+    },
+    {
+      "library": "ucrtbase.dll",
+      "kind": "name",
+      "symbol": "atexit",
+      "evidence_class": "D",
+      "evidence": "Gate A2 checks cleanup after normal and explicit exit and its absence after abort. Registrations are bounded.",
+      "source": "https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/atexit",
+      "witness": "cargo test --locked -p xenora-loader --test gate_a2"
+    },
+    {
+      "library": "ucrtbase.dll",
+      "kind": "name",
+      "symbol": "strlen",
+      "evidence_class": "D",
+      "evidence": "The original C fixture checks counting bytes before the first terminator. The guest scan is bounded.",
+      "source": "https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/strlen-wcslen-mbslen-mbslen-l-mbstrlen-mbstrlen-l",
+      "witness": "cargo test --locked -p xenora-loader --test gate_a1"
+    },
+    {
+      "library": "libstdc++-6.dll",
+      "kind": "name",
+      "symbol": "_ZSt17__throw_bad_allocv",
+      "evidence_class": "E",
+      "evidence": "The import binds and stops execution with the runtime-limit fault. It does not create or throw a C++ exception.",
+      "source": "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/src/services/cxx.rs"
+    },
+    {
+      "library": "libstdc++-6.dll",
+      "kind": "name",
+      "symbol": "_ZSt19__throw_logic_errorPKc",
+      "evidence_class": "E",
+      "evidence": "The import binds and stops execution with the runtime-limit fault. It does not create or throw a C++ exception.",
+      "source": "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/src/services/cxx.rs"
+    },
+    {
+      "library": "libstdc++-6.dll",
+      "kind": "name",
+      "symbol": "_ZSt20__throw_length_errorPKc",
+      "evidence_class": "E",
+      "evidence": "The import binds and stops execution with the runtime-limit fault. It does not create or throw a C++ exception.",
+      "source": "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/src/services/cxx.rs"
+    },
+    {
+      "library": "libstdc++-6.dll",
+      "kind": "name",
+      "symbol": "_ZSt28__throw_bad_array_new_lengthv",
+      "evidence_class": "E",
+      "evidence": "The import binds and stops execution with the runtime-limit fault. It does not create or throw a C++ exception.",
+      "source": "https://github.com/ranveersoni98/Xenora/blob/main/crates/loader/src/services/cxx.rs"
+    },
+    {
+      "library": "msvcp140.dll",
+      "kind": "name",
+      "symbol": "?cout@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A",
+      "evidence_class": "C",
+      "evidence": "The data import resolves a guest-owned synthetic standard output object used by the bounded write, flush and good fixture.",
+      "source": "https://github.com/ranveersoni98/Xenora/pull/1256",
+      "witness": "cargo test --locked -p xenora-loader --test guest_msvc_standard_stream"
+    }
+  ]
 }
