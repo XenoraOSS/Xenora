@@ -36,6 +36,31 @@ fn count_address(slot: &mut Option<u64>, memory: &mut GuestMemory) -> Result<u64
 }
 
 pub(super) fn register(registry: &mut ImportRegistry) {
+    // Microsoft STL ulocale.cpp defines one zero-initialized locale::id per
+    // specialization. Each is a distinct pointer-sized guest object.
+    for symbol in [
+        "?id@?$codecvt@_SDU_Mbstatet@@@std@@2V0locale@2@A",
+        "?id@?$codecvt@_S_QU_Mbstatet@@@std@@2V0locale@2@A",
+        "?id@?$codecvt@_UDU_Mbstatet@@@std@@2V0locale@2@A",
+        "?id@?$codecvt@_U_QU_Mbstatet@@@std@@2V0locale@2@A",
+    ] {
+        let address = Mutex::new(None);
+        registry.register_data(
+            "msvcp140_codecvt_ids.dll",
+            symbol,
+            ServiceStatus::Partial,
+            move |memory| {
+                let mut slot = address.lock().expect("Microsoft codecvt id");
+                if let Some(existing) = *slot {
+                    return Ok(existing);
+                }
+                let value = memory.map_heap_allocation(PROCESS_HEAP, 8)?;
+                memory.write_u64(value, 0)?;
+                *slot = Some(value);
+                Ok(value)
+            },
+        );
+    }
     let cell = Arc::new(Mutex::new(None));
     let data = Arc::clone(&cell);
     registry.register_data(MODULE, COUNT_DATA, ServiceStatus::Partial, move |memory| {

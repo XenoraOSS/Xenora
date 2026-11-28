@@ -14163,6 +14163,46 @@
       "symbol": "?_Init_dtor@Init@ios_base@std@@CAXPEAV123@@Z"
     },
     {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_codecvt_ids.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?id@?$codecvt@_SDU_Mbstatet@@@std@@2V0locale@2@A"
+    },
+    {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_codecvt_ids.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?id@?$codecvt@_S_QU_Mbstatet@@@std@@2V0locale@2@A"
+    },
+    {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_codecvt_ids.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?id@?$codecvt@_UDU_Mbstatet@@@std@@2V0locale@2@A"
+    },
+    {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_codecvt_ids.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?id@?$codecvt@_U_QU_Mbstatet@@@std@@2V0locale@2@A"
+    },
+    {
       "data_import": false,
       "family": "c-runtime",
       "kind": "name",
@@ -19976,15 +20016,15 @@
   "summary": {
     "aliases": 960,
     "api_set_aliases": 754,
-    "canonical_services": 981,
-    "data_import_services": 8,
+    "canonical_services": 985,
+    "data_import_services": 12,
     "duplicate_registrations": 0,
     "implemented": 246,
     "implicit_status_services": 78,
-    "libraries": 26,
-    "manual_services": 679,
+    "libraries": 27,
+    "manual_services": 683,
     "ordinal_aliases": 35,
-    "partial": 735,
+    "partial": 739,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,

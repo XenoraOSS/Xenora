@@ -7,6 +7,7 @@ exact revision and known limitations.
 ## [Unreleased]
 
 ### Added
+- The four Microsoft UTF codecvt locale-ID data imports now resolve to distinct writable guest cells initialized to zero; locale allocation and conversion remain unsupported (#1163).
 - `vcruntime140.dll` memory imports now bind to the existing bounded guest memory services for copy, move, fill, compare and search. An original MSVC-ABI executable exercises the aliases locally (#1163).
 - Added partial Microsoft STL `ios_base::Init` constructor, destructor and count services and an original MSVC-ABI guest fixture. Nested construction and destruction update the guest count; the final destructor stops because standard stream flushing is not implemented (#1163).
 - The exact COM API-set import `api-ms-win-core-com-l1-1-0.dll!CoCreateInstance` now resolves to the existing typed COM activation handler (#1063). The original COM fixture binds that export through the API-set library; activation behavior, class registration limits and the `ole32.dll` alias are unchanged. Evidence is local guest execution on Apple Silicon only.

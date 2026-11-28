@@ -324,6 +324,17 @@ attribute bit, is truncated, or uses the earlier virtual-address descriptor form
 is reported in `delay_import_error` and in the Markdown report, together with
 the entries read before it.
 
+### Microsoft codecvt locale-ID data (#1163)
+
+The four `msvcp140_codecvt_ids.dll` UTF conversion facet ID exports each
+bind to a distinct, zero-initialized eight-byte guest cell. This supports the
+initial data objects only: lazy locale ID assignment, facet construction and
+character conversion remain unsupported. The layout and initial value come
+from the public Microsoft STL [locale header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xlocale)
+and [codecvt ID definitions](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/src/ulocale.cpp),
+copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception. The
+independently authored PE verifies storage identity and initialization only.
+
 ### Microsoft runtime memory exports (#1163)
 
 `vcruntime140.dll` resolves `memcpy`, `memmove`, `memset`, `memcmp` and
