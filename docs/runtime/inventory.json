@@ -19480,6 +19480,16 @@
       "source": "manual",
       "status": "implemented",
       "status_explicit": true,
+      "symbol": "XNetworkingQueryPreferredLocalUdpMultiplayerPort"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
       "symbol": "XNetworkingQueryStatistics"
     },
     {
@@ -19866,13 +19876,13 @@
   "summary": {
     "aliases": 955,
     "api_set_aliases": 754,
-    "canonical_services": 974,
+    "canonical_services": 976,
     "data_import_services": 7,
     "duplicate_registrations": 0,
-    "implemented": 246,
+    "implemented": 247,
     "implicit_status_services": 78,
     "libraries": 25,
-    "manual_services": 673,
+    "manual_services": 674,
     "ordinal_aliases": 35,
     "partial": 729,
     "structural_consistency_findings": 0,
