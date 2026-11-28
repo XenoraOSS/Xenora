@@ -17,10 +17,10 @@ embedded draw) `framebuffer_verified`. `entry_started` marks the
 transition into guest code, so a timeout during entry can still show
 `tls_completed` as the last completed stage. `entry_returned` says the
 CPU engine returned, including faults or step-limit exhaustion. If a
-thread-local storage callback exits the process, the last completed stage
-is `tls_completed` and the report has no entry events. The record reflects
-this run's observations. Static PE findings are reported
-by the probe.
+thread-local storage callback in a standalone PE exits the process, the last
+completed stage is `tls_completed` and the report omits entry events. The
+record reflects this run's observations. Static PE findings are reported by
+the probe.
 
 Explicit multi-image packages use the same stage names for whole-package
 phases. Package loading has no single-image parse event stream, so the
@@ -29,10 +29,10 @@ proves that those phases completed. If the root executable is entered, the
 entry observer proves that module TLS callbacks and DLL attach completed;
 the report then includes `tls_completed` and `entry_started` before the
 entry result. A DLL that returns false during attach is a `known_failure`
-before TLS completion or entry. A DLL that exits the process during
-initialization is a real `guest_exit` after `imports_bound`, not malformed
-protocol and not root-entry execution. Package detach callbacks run after
-the entry outcome and do not change its exit status.
+before TLS completion or entry. If a TLS callback or `DllMain` exits the
+guest during package initialization, the report carries `guest_exit` with
+`imports_bound` as the last completed stage. Package detach callbacks run
+after the entry outcome and preserve its exit status.
 
 Outcome kinds are `verified` for an embedded fixture with a verified
 frame, `guest_exit` with the full 32-bit `guest_status`,
