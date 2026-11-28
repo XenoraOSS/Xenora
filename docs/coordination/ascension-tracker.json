@@ -1780,6 +1780,23 @@
       "ownership_state": "Ready for integration",
       "counts_toward_personal_workload": false,
       "assignment_side": "external"
+    },
+    {
+      "id": "WP-1372",
+      "subsystem": "Runtime",
+      "description": "Synthetic COM lifecycle in one compiled EXE and two DLLs",
+      "priority": "P1",
+      "dependencies": [],
+      "owner": "catminou4",
+      "status": "PR_OPEN",
+      "evidence_class": "C",
+      "issue": 1372,
+      "pr": 1374,
+      "test_status": "Two independent native ARM64 runs at 36a05552 passed thirteen tests each. Two independent combined runs passed all fifteen COM and package tests and verified the eighteen COM source blobs.",
+      "limitations": "Covers the opt-in synthetic server. Class registration, apartment dispatch, cross-apartment marshaling and actual DLL unloading are outside the witness. Upstream integration is pending.",
+      "ownership_state": "Ready for integration",
+      "counts_toward_personal_workload": false,
+      "assignment_side": "external"
     }
   ],
   "ownership_states": {
@@ -1868,13 +1885,14 @@
       "id": "R6",
       "status": "PARTIAL",
       "goal": "Original COM application with supported object lifecycle",
-      "evidence": "On c8210aaf, five compiled COM tests passed. Merged PR #1261 adds opt-in server locks and unload eligibility. Open PRs #1296 and #1324 add cross-module ownership and simultaneous STA/MTA initialization and lifetime. The latter passed two independent native fixture runs.",
-      "remaining": "Independently verify the supported lifecycle and extend thread and module ownership scenarios.",
+      "evidence": "Merged PR #1261 adds opt-in server locks and unload eligibility. Open PRs #1296 and #1324 cover cross-module ownership and simultaneous STA and MTA initialization and lifetime. Open PR #1374 combines same-apartment DLL ownership, a separate worker apartment and balanced factory locking in one original package, including isolated live-object and lock controls. Two independent ARM64 runs passed the fifteen COM and package tests on the combined source tree.",
+      "remaining": "Integrate the open COM fixtures and record upstream acceptance of the opt-in synthetic lifecycle.",
       "sources": [
         "https://github.com/ranveersoni98/Xenora/blob/main/docs/runtime/com.md",
         "https://github.com/ranveersoni98/Xenora/pull/1261",
         "https://github.com/ranveersoni98/Xenora/pull/1296",
-        "https://github.com/ranveersoni98/Xenora/pull/1324"
+        "https://github.com/ranveersoni98/Xenora/pull/1324",
+        "https://github.com/ranveersoni98/Xenora/pull/1374"
       ]
     },
     {
