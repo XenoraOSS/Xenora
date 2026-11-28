@@ -392,6 +392,14 @@ def avx_form_cases():
         two("v" + op, "xmm", xmm)
         if op in AVX2_PACKED:
             two("v" + op, "ymm", ymm)
+    # The VEX AES forms are 128-bit only: the round forms take the state in
+    # VEX.vvvv, AESIMC and AESKEYGENASSIST have no first source.
+    for op in "vaesenc vaesenclast vaesdec vaesdeclast".split():
+        three(op, "xmm")
+    two("vaesimc", "xmm", xmm)
+    for n in (0, 1, 2, 4, 8, 16, 32, 64, 90, 128, 165, 255):
+        out += [f"vaeskeygenassist xmm3, xmm9, {n}", f"vaeskeygenassist xmm12, {xmm}, {n}",
+                f"vaeskeygenassist xmm2, xmm2, {n}"]
     two("vptest", "ymm", ymm)
     for kind, width in (("bw", quad), ("bd", dword), ("bq", word), ("wd", quad), ("wq", dword), ("dq", quad)):
         for op in ("vpmovsx", "vpmovzx"):
