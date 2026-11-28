@@ -276,6 +276,8 @@ def float_cases():
             out += [f"cmp{kind} xmm3, xmm9, {code}", f"cmp{kind} xmm3, {width}{place}, {code}"]
         for n in (*range(16), 244):
             out += [f"round{kind} xmm3, xmm9, {n}", f"round{kind} xmm3, {width}{place}, {n}"]
+    for op in "haddps haddpd hsubps hsubpd addsubps addsubpd".split():
+        out += [f"{op} xmm3, xmm9", f"{op} xmm3, xmmword{place}", f"{op} xmm3, xmm3"]
     # The tests put every other immediate in the last byte.
     for op in ("dpps", "dppd"):
         out += [f"{op} xmm3, xmm9, 255", f"{op} xmm3, xmmword{place}, 255", f"{op} xmm3, xmm3, 255"]
@@ -393,6 +395,11 @@ def avx_form_cases():
         if op in AVX2_PACKED:
             two("v" + op, "ymm", ymm)
     two("vptest", "ymm", ymm)
+    # The horizontal and add-subtract float forms are lane-local: each 128-bit
+    # half pairs its own lanes, so both vector lengths compose per half.
+    for op in "vhaddps vhaddpd vhsubps vhsubpd vaddsubps vaddsubpd".split():
+        three(op, "xmm")
+        three(op, "ymm")
     for kind, width in (("bw", quad), ("bd", dword), ("bq", word), ("wd", quad), ("wq", dword), ("dq", quad)):
         for op in ("vpmovsx", "vpmovzx"):
             two(op + kind, "xmm", width)

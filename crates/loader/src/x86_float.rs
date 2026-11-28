@@ -357,13 +357,23 @@ fn lanes(
                 } else {
                     (source, (index - lanes_per_half / 2) * 2)
                 };
-                (lane(vector, format.bits, pair), lane(vector, format.bits, pair + 1))
+                (
+                    lane(vector, format.bits, pair),
+                    lane(vector, format.bits, pair + 1),
+                )
             } else {
                 // ADDSUB: lane positions match; even lanes subtract, odd lanes add.
-                (lane(old, format.bits, index), lane(source, format.bits, index))
+                (
+                    lane(old, format.bits, index),
+                    lane(source, format.bits, index),
+                )
             };
             let kind = if pairwise {
-                if subtract { Arithmetic::Sub } else { Arithmetic::Add }
+                if subtract {
+                    Arithmetic::Sub
+                } else {
+                    Arithmetic::Add
+                }
             } else if index % 2 == 0 {
                 Arithmetic::Sub
             } else {
