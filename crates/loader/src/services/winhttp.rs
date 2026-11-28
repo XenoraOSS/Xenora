@@ -2017,9 +2017,11 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             } else {
                 None
             };
-            if index_ptr != 0 {
-                return query_headers.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
-            }
+            let requested_index = if index_ptr != 0 {
+                memory.read_u32(index_ptr).map_err(memory_fault)?
+            } else {
+                0
+            };
             let systemtime_date = info_level & WINHTTP_QUERY_FLAG_SYSTEMTIME != 0;
             let date_header = match info_level & !WINHTTP_QUERY_FLAG_SYSTEMTIME {
                 WINHTTP_QUERY_DATE => Some("date"),
@@ -2085,11 +2087,16 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             } else {
                 None
             };
+            // The index parameter selects the zero-based occurrence of a
+            // duplicate-named header, as the public implementation evidence
+            // counts matches down; an index past the last occurrence is the
+            // same not-found error as a missing header.
             let header_value = named_header.map(|wanted| {
                 response
                     .headers
                     .iter()
-                    .find(|(name, _)| name.eq_ignore_ascii_case(wanted))
+                    .filter(|(name, _)| name.eq_ignore_ascii_case(wanted))
+                    .nth(requested_index as usize)
                     .map(|(_, value)| value.as_str())
             });
             if matches!(header_value, Some(None)) {
@@ -2165,6 +2172,11 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             memory
                 .write_u32(length_ptr, success_length)
                 .map_err(memory_fault)?;
+            if index_ptr != 0 {
+                memory
+                    .write_u32(index_ptr, requested_index.wrapping_add(1))
+                    .map_err(memory_fault)?;
+            }
             Ok(1)
         },
     );
@@ -3398,6 +3410,60 @@ mod tests {
         )
         .unwrap();
         assert_eq!(text, format!("{expected}\0"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn duplicate_headers_enumerate_through_the_index_parameter() {
+        let (port, _captured, server) = serve_once(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nX-Dup: first\r\nX-Other: middle\r\nX-Dup: second\r\n\r\n",
+        );
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        write_wide(&mut fixture.memory, 0x2700, "x-dup");
+        let query = |fixture: &mut Fixture, index: u32| {
+            fixture.memory.write_u32(0x2910, index).unwrap();
+            fixture.memory.write_u32(0x2908, 128).unwrap();
+            let result = fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    WINHTTP_QUERY_CUSTOM as u64,
+                    0x2700,
+                    0x2a00,
+                    0x2908,
+                    0x2910,
+                ],
+            );
+            let mut bytes = [0u8; 64];
+            fixture.memory.read_bytes(0x2a00, &mut bytes).unwrap();
+            let text = String::from_utf16(
+                &bytes
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .copied()
+                    .map(u16::from_le_bytes)
+                    .take_while(|unit| *unit != 0)
+                    .collect::<Vec<_>>(),
+            )
+            .unwrap();
+            (result, text, fixture.memory.read_u32(0x2910).unwrap())
+        };
+        // Index 0 answers the first occurrence and advances the index, so the
+        // enumeration loop the public evidence shows walks the duplicates.
+        assert_eq!(query(&mut fixture, 0), (1, "first".to_owned(), 1));
+        assert_eq!(query(&mut fixture, 1), (1, "second".to_owned(), 2));
+        // An index past the last occurrence is the same not-found error as a
+        // missing header, and the index stays where it was.
+        let (result, _, index) = query(&mut fixture, 2);
+        assert_eq!((result, index), (0, 2));
+        assert_eq!(fixture.state.last_error(0), ERROR_WINHTTP_HEADER_NOT_FOUND);
         server.join().unwrap();
     }
 
