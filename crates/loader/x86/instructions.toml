@@ -279,6 +279,9 @@ pclmulqdq = { ref = "sdm PCLMULQDQ" }
 pblendvb = { ref = "sdm PBLENDVB" }
 ptest = { writes = "cf zf sf of pf af", ref = "sdm PTEST" }
 pmaskmov = { ref = "sdm VPMASKMOVD VPMASKMOVQ" }
+
+maskmovps = { ref = "sdm VMASKMOVPS" }
+maskmovpd = { ref = "sdm VMASKMOVPD" }
 pmuldq = { ref = "sdm PMULDQ" }
 pcmpeqq = { ref = "sdm PCMPEQQ" }
 packusdw = { ref = "sdm PACKUSDW" }
@@ -4448,6 +4451,55 @@ length = "any"
 src = "v"
 nds = true
 memory_only = true
+
+[[vex]]
+
+op = "maskmovps"
+map = "0f38"
+prefix = "66"
+opcode = 0x2C
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+memory_only = true
+w = "0"
+
+[[vex]]
+op = "maskmovps"
+map = "0f38"
+prefix = "66"
+opcode = 0x2E
+enc = "rm_xmm"
+length = "any"
+src = "v"
+nds = true
+memory_only = true
+w = "0"
+
+[[vex]]
+op = "maskmovpd"
+map = "0f38"
+prefix = "66"
+opcode = 0x2D
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+memory_only = true
+w = "0"
+
+[[vex]]
+op = "maskmovpd"
+map = "0f38"
+prefix = "66"
+opcode = 0x2F
+enc = "rm_xmm"
+length = "any"
+src = "v"
+nds = true
+memory_only = true
+w = "0"
 
 [[vex]]
 op = "pmuldq"
