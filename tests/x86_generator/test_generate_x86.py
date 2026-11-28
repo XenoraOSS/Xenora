@@ -102,7 +102,7 @@ class GenerateX86(unittest.TestCase):
         # is exact where it matters: every BMI form is VEX-encoded and so runs
         # on the shared semantics, never under native dead-flag elimination.
         legacy = {"ptest", "pcmpestri", "pcmpestrm", "pcmpistri", "pcmpistrm"}
-        bmi = {"andn", "blsi", "blsmsk", "blsr"}
+        bmi = {"andn", "bextr", "blsi", "blsmsk", "blsr", "bzhi"}
         self.assertEqual(writers, legacy | bmi)
         for op in legacy:
             self.assertEqual(operations[op]["writes"], set(generate_x86.FLAGS))

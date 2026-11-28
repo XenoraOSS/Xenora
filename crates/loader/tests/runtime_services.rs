@@ -3282,7 +3282,6 @@ fn fopen_modes_follow_the_documentation() {
         ("w.txt", "r,ccs=UTF-8"),
         ("w.txt", "R"),
         ("bad*name", "w"),
-        ("a\\..\\b", "w"),
         ("con", "w"),
         (long.as_str(), "w"),
     ] {
@@ -3290,6 +3289,11 @@ fn fopen_modes_follow_the_documentation() {
         assert_eq!(guest.errno(), STDIO_EINVAL, "{name:?} {mode:?}");
         guest.set_errno(0);
     }
+    // `a\..\b` is no invalid name: the dot components resolve lexically
+    // ahead of validation, so the path is exactly `b` whether or not `a`
+    // ever existed, and the open creates it.
+    assert_ne!(open(&mut guest, "a\\..\\b", "w"), 0);
+    assert!(lines(&mut guest, "b", "rb").is_empty());
     // A refused "w" destroyed nothing.
     assert_eq!(lines(&mut guest, "plus.txt", "rb"), [b"XYcdef\n"]);
     // A directory that does not exist.

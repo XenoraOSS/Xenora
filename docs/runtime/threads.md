@@ -48,7 +48,7 @@ All are partial. Without an attached scheduler `CreateThread` fails with `ERROR_
 
 - `LockCount` does not show how many threads wait, and spin counts have no effect. A condition-variable sleep in a section entered more than once stops the guest.
 - Asynchronous one-time initialization and `WaitOnAddress`.
-- `XTaskQueueDispatch` and `WSAPoll` still delay every guest thread. `XTaskQueueDispatch` uses host time, so interleaving is not deterministic across it.
+- `WSAPoll` still delays every guest thread. Scheduler-backed `XTaskQueueDispatch` blocks only its calling guest thread; its timeout and callbacks delayed while the scheduler is attached use the scheduler clock.
 - The budget bounds guest instructions and service calls, not host time: with nothing else to run, a long timeout sleeps the host thread for all of it.
 - The mock clock advances only when nothing can run or a service sleeps, so a guest that spins until a timed wait expires uses up its budget.
 - PE static TLS, DLL thread-attach and detach callbacks, and FLS cleanup on process exit.
