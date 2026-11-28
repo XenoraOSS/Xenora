@@ -2171,9 +2171,11 @@ service ucrtbase.dll nextafterf(x: f32, y: f32) -> f32
     handler nextafterf
     status partial
     alias api-ms-win-crt-math-l1-1-0.dll
-    fails range events do not set errno or floating-point exception flags
-    ref math.h nextafterf (ISO C Annex F)
+    fails finite overflow returns signed infinity and sets errno to ERANGE. Floating-point exception flags remain unsupported
+    ref https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/nextafter-functions
     test crt_math_binary32_nextafterf_steps_to_adjacent_values
+    test runtime_crt_nextafterf::nextafterf_sets_erange_when_finite_inputs_step_to_infinity
+    test runtime_crt_nextafterf::nextafterf_preserves_errno_when_no_overflow_occurs
 
 service ucrtbase.dll pow(x: f64, y: f64) -> f64
     handler pow

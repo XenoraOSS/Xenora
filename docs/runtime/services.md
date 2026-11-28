@@ -266,7 +266,7 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!modf` | `(x: f64, integral: out<8>) -> f64` | implemented | stops the guest with a memory fault when integral is not writable |
 | `ucrtbase.dll!modff` | `(x: f32, integral: out<4>) -> f32` | implemented | stops the guest with a memory fault when integral is not writable |
 | `ucrtbase.dll!nearbyint` | `(x: f64) -> f64` | partial | rounds to nearest, ties to even, whatever the guest MXCSR says; errno is not set |
-| `ucrtbase.dll!nextafterf` | `(x: f32, y: f32) -> f32` | partial | range events do not set errno or floating-point exception flags |
+| `ucrtbase.dll!nextafterf` | `(x: f32, y: f32) -> f32` | partial | finite overflow returns signed infinity and sets errno to ERANGE. Floating-point exception flags remain unsupported |
 | `ucrtbase.dll!pow` | `(x: f64, y: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
 | `ucrtbase.dll!powf` | `(x: f32, y: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
 | `ucrtbase.dll!remainder` | `(x: f64, y: f64) -> f64` | partial | NaN for a domain error; errno is not set |
