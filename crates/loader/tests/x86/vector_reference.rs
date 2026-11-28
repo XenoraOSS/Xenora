@@ -430,6 +430,25 @@ pub fn string_compare(
     };
 }
 
+fn qword(bytes: &Bytes, high: bool) -> u64 {
+    let half = if high { &bytes[8..] } else { &bytes[..8] };
+    u64::from_le_bytes(half.try_into().unwrap())
+}
+
+fn carryless_product(a: u64, b: u64) -> u128 {
+    let mut product = 0u128;
+    for index in 0..64 {
+        if b >> index & 1 != 0 {
+            for bit in 0..64 {
+                if a >> bit & 1 != 0 {
+                    product ^= 1u128 << (bit + index);
+                }
+            }
+        }
+    }
+    product
+}
+
 pub fn reference(m: &mut Machine, text: &str) {
     let (name, rest) = text.split_once(' ').unwrap();
     let parts: Vec<&str> = rest.split(", ").collect();
@@ -637,6 +656,16 @@ pub fn reference(m: &mut Machine, text: &str) {
             // The source, the destination above it, and zeros beyond.
             let joined = [&source[..], &old[..], &[0; 256][..]].concat();
             out.copy_from_slice(&joined[imm.unwrap()..imm.unwrap() + 16]);
+        }
+        "pclmulqdq" => {
+            // SDM Vol. 2, Table 4-13: imm8[0] selects the first source qword
+            // and imm8[4] the second; all other immediate bits are ignored.
+            // XOR every shifted set bit of the first operand where the second
+            // has a set bit, without carries between bits.
+            let selector = imm.unwrap();
+            let a = qword(&old, selector & 1 != 0);
+            let b = qword(&source, selector >> 4 & 1 != 0);
+            out = carryless_product(a, b).to_le_bytes();
         }
         "shufpd" => {
             let low = 8 * (imm.unwrap() % 2);

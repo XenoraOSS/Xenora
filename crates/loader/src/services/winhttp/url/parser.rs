@@ -2,21 +2,21 @@
 
 use std::{net::Ipv6Addr, ops::Range};
 
-pub(super) const ERROR_WINHTTP_INVALID_URL: u32 = 12005;
-pub(super) const ERROR_WINHTTP_UNRECOGNIZED_SCHEME: u32 = 12006;
+pub(crate) const ERROR_WINHTTP_INVALID_URL: u32 = 12005;
+pub(crate) const ERROR_WINHTTP_UNRECOGNIZED_SCHEME: u32 = 12006;
 
-pub(super) struct ParsedUrl {
-    pub(super) scheme: Range<usize>,
-    pub(super) scheme_id: u32,
-    pub(super) host: Range<usize>,
-    pub(super) port: u16,
-    pub(super) username: Option<Range<usize>>,
-    pub(super) password: Option<Range<usize>>,
-    pub(super) path: Range<usize>,
-    pub(super) extra: Range<usize>,
+pub(crate) struct ParsedUrl {
+    pub(crate) scheme: Range<usize>,
+    pub(crate) scheme_id: u32,
+    pub(crate) host: Range<usize>,
+    pub(crate) port: u16,
+    pub(crate) username: Option<Range<usize>>,
+    pub(crate) password: Option<Range<usize>>,
+    pub(crate) path: Range<usize>,
+    pub(crate) extra: Range<usize>,
 }
 
-pub(super) fn parse(url: &[u16], reject_credentials: bool) -> Result<ParsedUrl, u32> {
+pub(crate) fn parse(url: &[u16], reject_credentials: bool) -> Result<ParsedUrl, u32> {
     if url
         .iter()
         .any(|&unit| matches!(unit, 0..=0x20 | 0x5c | 0x7f))
@@ -78,7 +78,7 @@ fn find(units: &[u16], ascii: u8) -> Option<usize> {
     units.iter().position(|&unit| unit == u16::from(ascii))
 }
 
-pub(super) fn parse_scheme(scheme: &[u16]) -> Result<(u32, u16), u32> {
+pub(crate) fn parse_scheme(scheme: &[u16]) -> Result<(u32, u16), u32> {
     let mut ascii = scheme.iter().copied().map(u8::try_from);
     if !ascii
         .next()

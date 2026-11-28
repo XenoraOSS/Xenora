@@ -266,6 +266,7 @@ pabsb = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 pabsw = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 pabsd = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 palignr = { ref = "sdm PALIGNR" }
+pclmulqdq = { ref = "sdm PCLMULQDQ" }
 # SSE4.1, integer. PTEST writes ZF and CF and clears the other four.
 pblendvb = { ref = "sdm PBLENDVB" }
 ptest = { writes = "cf zf sf of pf af", ref = "sdm PTEST" }
@@ -1288,6 +1289,19 @@ op = "palignr"
 map = "0f3a"
 prefix = "66"
 opcode = 0x0F
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+# PCLMULQDQ has no VEX form. imm8[1:0] and imm8[3:2] select the low or high
+# qword of the destination and source; the remaining bits are reserved and are
+# rejected by the executor rather than silently masked.
+[[form]]
+op = "pclmulqdq"
+map = "0f3a"
+prefix = "66"
+opcode = 0x44
 enc = "xmm_rm_imm"
 size = "x"
 src = "x"
@@ -5278,7 +5292,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xD1
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5289,8 +5303,8 @@ prefix = "66"
 opcode = 0x71
 digit = 2
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5300,7 +5314,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xE1
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5311,8 +5325,8 @@ prefix = "66"
 opcode = 0x71
 digit = 4
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5322,7 +5336,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xF1
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5333,8 +5347,8 @@ prefix = "66"
 opcode = 0x71
 digit = 6
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5344,7 +5358,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xD2
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5355,8 +5369,8 @@ prefix = "66"
 opcode = 0x72
 digit = 2
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5366,7 +5380,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xE2
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5377,8 +5391,8 @@ prefix = "66"
 opcode = 0x72
 digit = 4
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5388,7 +5402,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xF2
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5399,8 +5413,8 @@ prefix = "66"
 opcode = 0x72
 digit = 6
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5410,7 +5424,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xD3
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5421,8 +5435,8 @@ prefix = "66"
 opcode = 0x73
 digit = 2
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5432,7 +5446,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xF3
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5443,8 +5457,8 @@ prefix = "66"
 opcode = 0x73
 digit = 6
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5455,8 +5469,8 @@ prefix = "66"
 opcode = 0x73
 digit = 3
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5467,8 +5481,8 @@ prefix = "66"
 opcode = 0x73
 digit = 7
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 

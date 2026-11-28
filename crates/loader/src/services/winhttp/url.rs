@@ -2,7 +2,7 @@
 
 //! WinHTTP's guest-memory URL_COMPONENTS boundary.
 
-mod parser;
+pub(super) mod parser;
 
 use super::{ERROR_INSUFFICIENT_BUFFER, ERROR_INVALID_PARAMETER, ERROR_NOT_SUPPORTED, MODULE};
 use crate::imports::{ImportRegistry, ServiceStatus};
