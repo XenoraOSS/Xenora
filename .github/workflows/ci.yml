@@ -99,6 +99,33 @@ jobs:
           test "$(lipo -archs "$binary")" = arm64
           otool -L "$binary"
 
+  rdna-fixtures:
+    name: Verify RDNA fixtures on ARM64
+    runs-on: macos-26
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install and inspect native LLVM
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: 1
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(sysctl -n sysctl.proc_translated)" = 0
+          brew install llvm
+          llvm_bin="$(brew --prefix llvm)/bin"
+          for tool in llvm-mc llvm-objcopy; do
+            file -L "$llvm_bin/$tool"
+            test "$(lipo -archs "$llvm_bin/$tool")" = arm64
+            otool -L "$llvm_bin/$tool"
+          done
+          "$llvm_bin/llvm-mc" --version
+          printf 'LLVM_BIN=%s\n' "$llvm_bin" >> "$GITHUB_ENV"
+      - name: Check checked-in RDNA fixture bytes
+        run: scripts/assemble-fixture.sh --check
+
   native-app:
     name: Native app build and smoke
     runs-on: macos-26
