@@ -125,15 +125,15 @@ The 67H address-size override is implemented for ModRM memory operands and LEA, 
 - **RIP-relative addressing is not disabled.** The override does not select an absolute form for a ModRM byte that would be RIP-relative; the manual states the prefix does not disable RIP-relative addressing. The RIP-relative total is truncated like any other.
 - **LEA computes the same truncated address** without a memory access.
 - **Register-only instructions without an implicit count ignore the prefix**, and a repeated prefix is idempotent, exactly as the other legacy prefixes.
+- **LOOP, LOOPE, LOOPNE and JCXZ count through ECX under the override**, as the manual's count-register rule states: the count register is RCX with the default 64-bit address size and ECX with the 32-bit one. A LOOP form decrements ECX alone and the bits above it keep their values; the test forms read ECX alone. The instruction is the same opcode either way — what the manual prints as JRCXZ, JECXZ or JCXZ is one encoding distinguished by the attribute.
 
 What is not implemented, and refused at decode rather than answered with wrong width or wrong registers:
 
 - **String instructions** under the override, which would address through ESI, EDI and ECX instead of RSI, RDI and RCX.
 - **Accumulator offset forms** (`A0` to `A3`) under the override, where the offset itself shortens from eight bytes to four.
-- **`E0` through `E3`** (`LOOP`, `LOOPE`, `LOOPNE` and `JRCXZ`), which would count or test ECX instead of RCX.
 - **VEX after the override**, rejected exactly as after the other legacy prefixes the decoder refuses there.
 
-`tests/cpu_addrsize.rs` pins the truncation, the segment ordering with a GS base above 4 GiB, the base-plus-index-plus-displacement total wrapping past 2^32, LEA, the register-only and repeated-prefix cases and the four refusals, in both engines, with expectations derived from the manual text. Nothing has been compared with x86 hardware.
+`tests/cpu_addrsize.rs` pins the truncation, the segment ordering with a GS base above 4 GiB, the base-plus-index-plus-displacement total wrapping past 2^32, LEA, the register-only and repeated-prefix cases and the three refusals, in both engines, with expectations derived from the manual text. The count-register rule is pinned by the `jecxz` and `addr32 loop` known-answer cases in `tests/cpu_known_answers.rs`, whose vectors pre-date or were derived independently of this implementation. Nothing has been compared with x86 hardware.
 
 ## String instructions
 

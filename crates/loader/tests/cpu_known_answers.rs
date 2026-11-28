@@ -1119,6 +1119,12 @@ loopne_stops_on_zero_flag: rax=0 rcx=5 f=Z => rax=1 rcx=4 f=*
 loop_from_zero_wraps_and_branches: rcx=0 => rax=0 rcx=ffffffffffffffff f=*
 loop_at_one_falls_through: rcx=1 => rax=1 rcx=0 f=*
 loop_counts_all_64_bits: rcx=100000000 => rax=0 rcx=ffffffff f=*
+@ mov eax, 0; addr32 loop 1f; mov eax, 1; 1: nop
+  b800000000 67e205 b801000000 90
+  SDM 2A LOOP
+addr32loop_decrements_ecx_preserving_high_bits: rcx=100000000 => rax=0 rcx=1ffffffff f=*
+addr32loop_at_one_falls_through: rcx=1 => rax=1 rcx=0 f=*
+addr32loop_wraps_ecx_at_zero: rcx=0 => rax=0 rcx=ffffffff f=*
 @ mov eax, 0; loope 1f; mov eax, 1; 1: nop
   b800000000 e105 b801000000 90
   SDM 2A LOOP
@@ -3060,7 +3066,6 @@ const UNSUPPORTED: &[(&str, usize)] = &[
     ("bts_memory_negative_offset", 0),
     ("enter_leave_round_trip", 0),
     ("haddps_hsubpd_addsubps", 0),
-    ("jecxz_tests_low_32_bits", 1),
     ("maskmovdqu_selects_bytes", 0),
     ("movddup_movsldup_movshdup", 0),
     ("push16_moves_rsp_by_two", 0),
