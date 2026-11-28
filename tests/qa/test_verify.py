@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 import io
 import json
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +24,81 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class VerifyPipeline(unittest.TestCase):
+    def init_git(self, root):
+        subprocess.run(["git", "init", "--quiet", root], check=True)
+
+    def test_fingerprint_tracks_checkout_inputs_and_honors_git_ignores(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            self.init_git(root)
+            (root / ".gitignore").write_text("*.bin\n/artifacts/\n", encoding="utf-8")
+            tracked = root / "fixture with spaces\nand newline.bin"
+            tracked.write_bytes(b"original")
+            subprocess.run(["git", "add", "-f", "--", tracked.name], cwd=root, check=True)
+            baseline = fingerprint_sources(root)
+
+            ignored = root / "artifacts"
+            ignored.mkdir()
+            (ignored / "report.py").write_bytes(b"local output")
+            self.assertEqual(fingerprint_sources(root), baseline)
+
+            header = root / "new header.h"
+            header.write_bytes(b"new checkout input")
+            self.assertNotEqual(fingerprint_sources(root), baseline)
+            header.unlink()
+            self.assertEqual(fingerprint_sources(root), baseline)
+
+            tracked.write_bytes(b"modified")
+            self.assertNotEqual(fingerprint_sources(root), baseline)
+            tracked.unlink()
+            self.assertNotEqual(fingerprint_sources(root), baseline)
+
+    def test_fingerprint_detects_symlink_retargeted_between_equal_files(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            self.init_git(root)
+            for name in ("first", "second"):
+                (root / name).write_bytes(b"same bytes")
+            link = root / "linked-input"
+            link.symlink_to("first")
+            baseline = fingerprint_sources(root)
+            link.unlink()
+            link.symlink_to("second")
+            self.assertNotEqual(fingerprint_sources(root), baseline)
+
+    def test_mid_run_edit_invalidates_evidence_even_after_revert(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            self.init_git(root)
+            fixture = root / "guest.bin"
+            fixture.write_bytes(b"original")
+
+            for code in (0, 9):
+                with self.subTest(suite_exit=code):
+                    evidence = run_profile(
+                        "quick",
+                        root=root,
+                        revision="testrev",
+                        override_specs=[
+                            SuiteSpec("edit", (
+                                sys.executable, "-c",
+                                "from pathlib import Path; import sys; "
+                                "Path('guest.bin').write_bytes(b'changed'); sys.exit(int(sys.argv[1]))",
+                                str(code),
+                            )),
+                        ],
+                    )
+                    self.assertEqual(evidence.overall_returncode, code)
+                    self.assertEqual(evidence.suites[0]["returncode"], code)
+                    loaded = load_evidence(dumps_evidence(evidence))
+                    self.assertTrue(evidence_is_stale(loaded, root))
+                    fixture.write_bytes(b"original")
+                    self.assertTrue(evidence_is_stale(loaded, root))
+                    assessment = assess_evidence(
+                        loaded, root, requested_profile="quick", actual_revision="testrev"
+                    )
+                    self.assertFalse(assessment["accepted"])
+
     def test_real_unittest_profile_slice(self):
         # Real Xenora command, not a mock: run a tiny existing unittest module.
         evidence = run_profile(
@@ -60,6 +137,7 @@ class VerifyPipeline(unittest.TestCase):
     def test_stale_evidence_when_sources_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            self.init_git(root)
             f = root / "scripts" / "a.py"
             f.parent.mkdir(parents=True)
             f.write_text("print(1)\n", encoding="utf-8")
@@ -77,6 +155,7 @@ class VerifyPipeline(unittest.TestCase):
     def test_profile_suites_run_in_the_selected_root(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
+            self.init_git(root)
             evidence = run_profile(
                 "custom",
                 root=root,
@@ -99,6 +178,7 @@ class VerifyPipeline(unittest.TestCase):
     def test_assessment_separates_staleness_metadata_and_suite_success(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            self.init_git(root)
             source = root / "scripts" / "a.py"
             source.parent.mkdir(parents=True)
             source.write_text("print(1)\n", encoding="utf-8")

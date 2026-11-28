@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
@@ -58,35 +60,43 @@ class Evidence:
     suites: list[dict[str, Any]] = field(default_factory=list)
     overall_returncode: int = 0
     skipped: dict[str, int] = field(default_factory=dict)
+    source_changed: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
 
 
 def fingerprint_sources(root: Path, paths: Sequence[Path] | None = None) -> str:
-    h = hashlib.sha256()
+    """Hash working-tree contents for tracked and non-ignored paths."""
     if paths is None:
-        files = sorted(
-            p for p in root.rglob("*")
-            if p.is_file()
-            and not any(part in {"target", ".git", "__pycache__", "artifacts", "node_modules"} for part in p.parts)
-            and (p.suffix in {".rs", ".py", ".sh", ".swift", ".toml"} or p.name == "Cargo.lock")
-        )[:4000]
-    else:
-        files = list(paths)
-    for path in files:
+        listed = subprocess.check_output(
+            ["git", "ls-files", "-z", "--cached", "--others", "--exclude-standard"],
+            cwd=root,
+        )
+        paths = [root / os.fsdecode(name) for name in sorted(set(listed.split(b"\0")) - {b""})]
+
+    fingerprint = hashlib.sha256(b"xenora-checkout-v2\0")
+    for path in paths:
+        name = path.relative_to(root) if path.is_relative_to(root) else path
+        fingerprint.update(os.fsencode(name))
+        fingerprint.update(b"\0")
         try:
-            rel = str(path.relative_to(root))
-        except ValueError:
-            rel = str(path)
-        h.update(rel.encode())
-        h.update(b"\0")
-        try:
-            h.update(path.read_bytes())
-        except OSError:
-            h.update(b"<missing>")
-        h.update(b"\0")
-    return h.hexdigest()
+            mode = path.lstat().st_mode
+            if stat.S_ISREG(mode):
+                with path.open("rb") as source:
+                    digest = hashlib.file_digest(source, "sha256").digest()
+                contents = b"executable" if mode & stat.S_IXUSR else b"file"
+                contents += digest
+            elif stat.S_ISLNK(mode):
+                contents = b"symlink:" + os.fsencode(os.readlink(path))
+            else:
+                # A tracked file can be replaced by a directory or a special file.
+                contents = f"type:{stat.S_IFMT(mode)}".encode("ascii")
+        except (FileNotFoundError, NotADirectoryError):
+            contents = b"missing"
+        fingerprint.update(contents)
+        fingerprint.update(b"\0")
+    return fingerprint.hexdigest()
 
 
 def run_profile(
@@ -100,10 +110,12 @@ def run_profile(
     if override_specs is None and profile not in PROFILES:
         raise ValueError(f"unknown profile {profile!r}; choose from {sorted(PROFILES)}")
     specs = list(override_specs) if override_specs is not None else list(PROFILES[profile])
+    source_fingerprint = fingerprint_sources(root)
     started = time.time()
     # Suites run sequentially; GPU profiles therefore never overlap.
     report = run_suites(specs, stop_on_fail=stop_on_fail, cwd=str(root))
     finished = time.time()
+    source_changed = source_fingerprint != fingerprint_sources(root)
     skipped = {
         "ignored": report.ignored,
         "unexecuted": report.unexecuted,
@@ -113,15 +125,16 @@ def run_profile(
         revision=revision,
         started_at=started,
         finished_at=finished,
-        source_fingerprint=fingerprint_sources(root),
+        source_fingerprint=source_fingerprint,
         suites=[asdict(s) for s in report.suites],
         overall_returncode=report.overall_returncode(),
         skipped=skipped,
+        source_changed=source_changed,
     )
 
 
 def evidence_is_stale(evidence: Evidence, root: Path) -> bool:
-    return evidence.source_fingerprint != fingerprint_sources(root)
+    return evidence.source_changed or evidence.source_fingerprint != fingerprint_sources(root)
 
 
 def current_revision(root: Path) -> str:
@@ -166,6 +179,7 @@ def load_evidence(text: str) -> Evidence:
         suites=list(data.get("suites", [])),
         overall_returncode=int(data.get("overall_returncode", 0)),
         skipped=dict(data.get("skipped", {})),
+        source_changed=data.get("source_changed", False),
     )
 
 
