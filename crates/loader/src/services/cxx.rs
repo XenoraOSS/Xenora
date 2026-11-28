@@ -4,7 +4,7 @@
 //!
 //! A mingw-w64 C++ program imports a handful of symbols from
 //! `libstdc++-6.dll`. The allocation operators and libstdc++'s length-error
-//! path are provided here. Both the scalar and array allocation operators
+//! path are provided here. The scalar, array and aligned allocation operators
 //! reuse the guest heap the C runtime's `malloc` and `free` already use, so a
 //! C++ guest and a C guest share one allocator instead of running two.
 
@@ -61,6 +61,51 @@ fn cxx_operator_delete(
 ) -> Result<u64, ExitReason> {
     let address = args.rcx;
     if address == 0 || memory.release_heap_allocation(PROCESS_HEAP, address) {
+        return Ok(0);
+    }
+    Err(ExitReason::MemoryFault(MemoryError::UnmappedAddress(
+        address,
+    )))
+}
+
+fn valid_alignment(alignment: u64) -> bool {
+    alignment.is_power_of_two()
+}
+
+fn cxx_operator_new_aligned(
+    args: &Win64Args,
+    cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    let alignment = args.rdx;
+    if !valid_alignment(alignment) {
+        crt::set_errno(memory, cpu.gs_base, crt::EINVAL)?;
+        return Ok(0);
+    }
+    let size = args.rcx.max(1) as usize;
+    match memory.map_heap_allocation_aligned(PROCESS_HEAP, size, alignment) {
+        Ok(address) => Ok(address),
+        Err(_) => {
+            crt::set_errno(memory, cpu.gs_base, ENOMEM)?;
+            Ok(0)
+        }
+    }
+}
+
+fn cxx_operator_delete_aligned(
+    args: &Win64Args,
+    cpu: &mut CpuState,
+    memory: &mut GuestMemory,
+) -> Result<u64, ExitReason> {
+    let address = args.rcx;
+    if address == 0 {
+        return Ok(0);
+    }
+    if !valid_alignment(args.rdx) {
+        crt::set_errno(memory, cpu.gs_base, crt::EINVAL)?;
+        return Err(RUNTIME_LIMIT);
+    }
+    if memory.release_heap_allocation(PROCESS_HEAP, address) {
         return Ok(0);
     }
     Err(ExitReason::MemoryFault(MemoryError::UnmappedAddress(
@@ -261,11 +306,21 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
     // `Pv` is `void*`, so `_Znay` and `_ZdaPv` are the array forms. They share
     // the scalar handlers because Xenora's guest heap has one allocator and
     // the ABI's array cookie, when one is needed, is emitted by the compiler.
-    let handlers: [(&str, ServiceHandler); 5] = [
+    let handlers: [(&str, ServiceHandler); 9] = [
         ("_Znwy", Box::new(cxx_operator_new)),
         ("_Znay", Box::new(cxx_operator_new)),
         ("_ZdlPvy", Box::new(cxx_operator_delete)),
         ("_ZdaPv", Box::new(cxx_operator_delete)),
+        ("_ZnwySt11align_val_t", Box::new(cxx_operator_new_aligned)),
+        ("_ZnaySt11align_val_t", Box::new(cxx_operator_new_aligned)),
+        (
+            "_ZdlPvSt11align_val_t",
+            Box::new(cxx_operator_delete_aligned),
+        ),
+        (
+            "_ZdaPvSt11align_val_t",
+            Box::new(cxx_operator_delete_aligned),
+        ),
         (
             "_ZSt20__throw_length_errorPKc",
             Box::new(cxx_throw_length_error),
@@ -601,6 +656,131 @@ mod tests {
             call(&registry, "_ZdlPvy", &mut cpu, &mut memory).expect("a null delete is harmless"),
             0
         );
+    }
+
+    fn aligned_new_block(
+        registry: &ImportRegistry,
+        memory: &mut GuestMemory,
+        symbol: &str,
+        size: u64,
+        alignment: u64,
+    ) -> u64 {
+        let mut cpu = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        cpu.set(Register::Rcx, size);
+        cpu.set(Register::Rdx, alignment);
+        call(registry, symbol, &mut cpu, memory).expect("aligned operator new succeeds")
+    }
+
+    #[test]
+    fn aligned_operators_return_aligned_distinct_writable_blocks() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+
+        let scalar = aligned_new_block(&registry, &mut memory, "_ZnwySt11align_val_t", 64, 64);
+        let array = aligned_new_block(&registry, &mut memory, "_ZnaySt11align_val_t", 96, 64);
+        assert_eq!(scalar % 64, 0);
+        assert_eq!(array % 64, 0);
+        assert_ne!(scalar, array);
+        memory
+            .write_bytes(scalar, &[0xA5; 64])
+            .expect("scalar block is writable");
+        memory
+            .write_bytes(array, &[0x5A; 96])
+            .expect("array block is writable");
+    }
+
+    #[test]
+    fn aligned_operator_new_honors_alignments_above_the_heap_granularity() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+        let alignment = 0x100000;
+        let block = aligned_new_block(
+            &registry,
+            &mut memory,
+            "_ZnwySt11align_val_t",
+            32,
+            alignment,
+        );
+        assert_eq!(block % alignment, 0);
+    }
+
+    #[test]
+    fn aligned_operator_new_rejects_invalid_alignments() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+        for alignment in [0, 3, 24, 96] {
+            assert_eq!(
+                aligned_new_block(
+                    &registry,
+                    &mut memory,
+                    "_ZnwySt11align_val_t",
+                    32,
+                    alignment
+                ),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn aligned_operator_delete_uses_exact_block_ownership() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+        let block = aligned_new_block(&registry, &mut memory, "_ZnwySt11align_val_t", 48, 64);
+
+        let mut cpu = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        cpu.set(Register::Rcx, block + 8);
+        cpu.set(Register::Rdx, 64);
+        assert!(matches!(
+            call(
+                &registry,
+                "_ZdlPvSt11align_val_t",
+                &mut cpu,
+                &mut memory
+            ),
+            Err(ExitReason::MemoryFault(MemoryError::UnmappedAddress(address)))
+                if address == block + 8
+        ));
+        assert!(memory.check_write(block, 48).is_ok());
+
+        cpu.set(Register::Rcx, block);
+        assert_eq!(
+            call(&registry, "_ZdlPvSt11align_val_t", &mut cpu, &mut memory)
+                .expect("exact aligned delete succeeds"),
+            0
+        );
+        assert!(memory.check_write(block, 48).is_err());
+
+        cpu.set(Register::Rcx, 0);
+        assert_eq!(
+            call(&registry, "_ZdaPvSt11align_val_t", &mut cpu, &mut memory)
+                .expect("null aligned array delete is harmless"),
+            0
+        );
+    }
+
+    #[test]
+    fn aligned_operator_delete_rejects_an_invalid_alignment_without_releasing() {
+        let registry = registry();
+        let mut memory = GuestMemory::new();
+        let block = aligned_new_block(&registry, &mut memory, "_ZnaySt11align_val_t", 48, 64);
+        let mut cpu = CpuState {
+            gs_base: 0x10000,
+            ..CpuState::default()
+        };
+        cpu.set(Register::Rcx, block);
+        cpu.set(Register::Rdx, 24);
+        assert_eq!(
+            call(&registry, "_ZdaPvSt11align_val_t", &mut cpu, &mut memory),
+            Err(RUNTIME_LIMIT)
+        );
+        assert!(memory.check_write(block, 48).is_ok());
     }
 
     #[test]

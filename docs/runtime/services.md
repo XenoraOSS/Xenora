@@ -311,6 +311,10 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `combase.dll!CoGetClassObject` | `(clsid: ptr, class_context: u32, server_info: ptr, iid: ptr, object: ptr) -> i32` | partial | uninitialized threads return CO_E_NOTINITIALIZED; ordinary runtime has no registered classes; remote activation is unsupported |
 | `combase.dll!CoCreateInstanceEx` | `(clsid: ptr, outer: ptr, class_context: u32, server_info: ptr, count: u32, results: ptr) -> i32` | partial | validates up to 64 MULTI_QI records; refuses remote or larger requests; ordinary runtime has no registered classes and output records remain unchanged on class lookup failure |
 | `combase.dll!PropVariantClear` | `(variant: ptr) -> i32` | partial | stops the guest for a null pointer, array, vector and by-reference forms, VT_BSTR, VT_UNKNOWN and VT_DISPATCH; their results or release paths are not modelled |
+| `libstdc++-6.dll!_ZnwySt11align_val_t` | `(size: u64, alignment: u64) -> ptr` | partial | null with EINVAL for a zero or non-power-of-two alignment; null with ENOMEM when allocation fails |
+| `libstdc++-6.dll!_ZnaySt11align_val_t` | `(size: u64, alignment: u64) -> ptr` | partial | same allocation contract as the scalar aligned form |
+| `libstdc++-6.dll!_ZdlPvSt11align_val_t` | `(address: ptr, alignment: u64) -> void` | partial | null is harmless; exact block ownership is required; invalid alignment stops the guest without releasing |
+| `libstdc++-6.dll!_ZdaPvSt11align_val_t` | `(address: ptr, alignment: u64) -> void` | partial | same deletion contract as the scalar aligned form |
 | `libstdc++-6.dll!__cxa_guard_acquire` | `(guard: ptr) -> i32` | partial | -1 with ERROR_INVALID_PARAMETER for a null, unaligned, unmapped or contended guard |
 | `libstdc++-6.dll!__cxa_guard_release` | `(guard: ptr) -> void` | partial | stops the guest for a guard the calling thread did not acquire |
 | `libstdc++-6.dll!__cxa_guard_abort` | `(guard: ptr) -> void` | partial | stops the guest for a guard the calling thread did not acquire |

@@ -13476,6 +13476,26 @@
       "source": "manual",
       "status": "implemented",
       "status_explicit": true,
+      "symbol": "_ZdaPvSt11align_val_t"
+    },
+    {
+      "data_import": false,
+      "family": "c++-support",
+      "kind": "name",
+      "library": "libstdc++-6.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "_ZdlPvSt11align_val_t"
+    },
+    {
+      "data_import": false,
+      "family": "c++-support",
+      "kind": "name",
+      "library": "libstdc++-6.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
       "symbol": "_ZdlPvy"
     },
     {
@@ -13496,7 +13516,27 @@
       "source": "manual",
       "status": "implemented",
       "status_explicit": true,
+      "symbol": "_ZnaySt11align_val_t"
+    },
+    {
+      "data_import": false,
+      "family": "c++-support",
+      "kind": "name",
+      "library": "libstdc++-6.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
       "symbol": "_Znwy"
+    },
+    {
+      "data_import": false,
+      "family": "c++-support",
+      "kind": "name",
+      "library": "libstdc++-6.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
+      "symbol": "_ZnwySt11align_val_t"
     },
     {
       "data_import": false,
@@ -18552,13 +18592,13 @@
   "summary": {
     "aliases": 927,
     "api_set_aliases": 740,
-    "canonical_services": 873,
+    "canonical_services": 877,
     "data_import_services": 7,
     "duplicate_registrations": 0,
-    "implemented": 237,
+    "implemented": 241,
     "implicit_status_services": 76,
     "libraries": 22,
-    "manual_services": 577,
+    "manual_services": 581,
     "ordinal_aliases": 21,
     "partial": 636,
     "structural_consistency_findings": 0,
