@@ -59,6 +59,8 @@ fn program(main: &str) -> Program {
     };
     let listing = if main.starts_with("main_fls_") {
         include_str!("threads/fls.txt")
+    } else if main.starts_with("main_tq_") {
+        include_str!("threads/taskqueue.txt")
     } else {
         include_str!("threads/program.txt")
     };
@@ -154,6 +156,8 @@ fn image(main: &str) -> Vec<u8> {
     for (index, name) in names.iter().enumerate() {
         let module: &[u8] = if *name == "_errno" {
             b"api-ms-win-crt-runtime-l1-1-0.dll"
+        } else if name.starts_with("XTaskQueue") {
+            b"xgameruntime.dll"
         } else {
             b"KERNEL32.dll"
         };
@@ -1331,4 +1335,58 @@ fn a_continued_run_keeps_a_condition_sleep() {
     assert_eq!(guest.clock.performance_count(), 10_000_000);
     let out = |index: u64| guest.memory.read_u64(SHARED + 8 * index).unwrap();
     assert_eq!((out(0), out(1), out(2)), (0, 1460, 1));
+}
+
+#[test]
+fn task_queue_ready_work_survives_long_and_infinite_timeouts() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_ready", quantum, BUDGET).halted();
+        assert_eq!(run.outs(8), [1, 1, 1, 1, 1, 1, 1, 2], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn a_waiting_task_queue_dispatch_does_not_block_other_guest_threads() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_cross_thread_submit", quantum, BUDGET).halted();
+        // Dispatch returned true, the callback ran on the main thread, and the
+        // worker's submit succeeded.
+        assert_eq!(run.outs(4), [1, 1, 1, 1], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn terminating_a_task_queue_wakes_an_infinite_dispatch_as_false() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_infinite_terminated", quantum, BUDGET).halted();
+        assert_eq!(run.outs(4), [0, 1, 0, 1], "quantum {quantum}");
+    }
+}
+
+#[test]
+fn a_task_queue_dispatch_timeout_expires_without_dropping_the_queue() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_timeout", quantum, BUDGET).halted();
+        assert_eq!(run.outs(5), [0, 1, 1, 1, 1], "quantum {quantum}");
+        // The monotonic test clock starts at zero; the waiter sleeps exactly 25 ms.
+        assert_eq!(run.clock.performance_count(), 250_000, "quantum {quantum}");
+    }
+}
+
+#[test]
+fn work_submitted_after_a_task_queue_deadline_stays_queued() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_late_submit", quantum, BUDGET).halted();
+        assert_eq!(run.outs(5), [0, 1, 1, 1, 1], "quantum {quantum}");
+        assert_eq!(run.clock.performance_count(), 500_000, "quantum {quantum}");
+    }
+}
+
+#[test]
+fn delayed_task_queue_work_uses_the_scheduler_clock() {
+    for quantum in [64, 1024, 1_000_000] {
+        let run = run_with("main_tq_delayed_infinite", quantum, BUDGET).halted();
+        assert_eq!(run.outs(4), [1, 1, 1, 1], "quantum {quantum}");
+        assert_eq!(run.clock.performance_count(), 250_000, "quantum {quantum}");
+    }
 }
