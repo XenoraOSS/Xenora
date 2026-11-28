@@ -70,6 +70,8 @@ struct Machine {
     top: u64,
     /// x87 control, status and tag words.
     x87: [u16; 3],
+    /// The guest time-stamp counter: the value the next RDTSC reads.
+    tsc: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -741,6 +743,51 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
                 ..none
             })
         }
+        "bextr" | "bzhi" => {
+            // Intel SDM Vol. 2A: BEXTR takes START from control[7:0] and LEN
+            // from control[15:8] and extracts that window of the source, zero
+            // filled past its width; BZHI clears the bits at and above the
+            // index in control[7:0] and reports an out-of-range index in CF.
+            let source = read(m, places[1], bits);
+            let control = read(m, places[2], bits);
+            let low = control % 256;
+            let mut value = 0;
+            if name == "bextr" {
+                let len = (control / 256) % 256;
+                for index in 0..bits {
+                    let position = u128::from(index);
+                    if position >= low && position - low < len && bit(source, index) {
+                        value += 1u128 << (position - low);
+                    }
+                }
+                m.flags.cf = false;
+                m.flags.of = false;
+                m.flags.zf = value == 0;
+                write(m, places[0], value);
+                Outcome::Done(Undefined {
+                    sf: true,
+                    pf: true,
+                    af: true,
+                    ..none
+                })
+            } else {
+                for index in 0..bits {
+                    if u128::from(index) < low && bit(source, index) {
+                        value += 1u128 << index;
+                    }
+                }
+                m.flags.cf = low >= u128::from(bits);
+                m.flags.of = false;
+                m.flags.zf = value == 0;
+                m.flags.sf = bit(value, bits - 1);
+                write(m, places[0], value);
+                Outcome::Done(Undefined {
+                    pf: true,
+                    af: true,
+                    ..none
+                })
+            }
+        }
         "shlx" | "shrx" | "sarx" => {
             // Intel SDM Vol. 2B: the count is the second source masked to the
             // operand width; no flags are written. Bit by bit, one step at a
@@ -936,14 +983,14 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
         }
         "cpuid" => {
             // Xenora's guest CPUID contract, restated: the vendor "Xenora guest"
-            // and the seven features whose every instruction exists, CX8
-            // (EDX bit 8), CMOV (EDX bit 15), CMPXCHG16B (ECX bit 13) and
-            // POPCNT (ECX bit 23) in leaf 1, LAHF/SAHF, LZCNT and long mode in
-            // leaf 0x8000_0001.
+            // and the eight features whose every instruction exists, TSC (EDX
+            // bit 4), CX8 (EDX bit 8), CMOV (EDX bit 15), CMPXCHG16B (ECX bit
+            // 13) and POPCNT (ECX bit 23) in leaf 1, LAHF/SAHF, LZCNT and long
+            // mode in leaf 0x8000_0001.
             let word = |text: &[u8; 4]| u32::from_le_bytes(*text);
             let values = match m.gpr[RAX] as u32 {
                 0 => [1, word(b"Xeno"), word(b"uest"), word(b"ra g")],
-                1 => [0, 0, 1 << 13 | 1 << 23, 1 << 8 | 1 << 15],
+                1 => [0, 0, 1 << 13 | 1 << 23, 1 << 4 | 1 << 8 | 1 << 15],
                 0x8000_0000 => [0x8000_0001, 0, 0, 0],
                 0x8000_0001 => [0, 0, 1 | 1 << 5, 1 << 29],
                 _ => [0; 4],
@@ -952,6 +999,16 @@ fn reference(m: &mut Machine, text: &str) -> Outcome {
             for (index, value) in [0, 3, 1, 2].into_iter().zip(values) {
                 m.gpr[index] = u64::from(value);
             }
+            Outcome::Done(none)
+        }
+        "rdtsc" => {
+            // Intel SDM Vol. 2B, "RDTSC": EDX takes the high-order 32 bits of
+            // the counter and EAX the low-order 32, and the high-order 32 bits
+            // of RAX and RDX are cleared. Xenora's counter then counts this
+            // read, modulo 2^64.
+            m.gpr[0] = m.tsc % (1 << 32);
+            m.gpr[2] = m.tsc / (1 << 32);
+            m.tsc = m.tsc.wrapping_add(1);
             Outcome::Done(none)
         }
         "push" => {
@@ -1047,6 +1104,7 @@ impl Random {
             top: self.value(),
             // Any bit pattern: nothing interprets these words.
             x87: [self.next() as u16, self.next() as u16, self.next() as u16],
+            tsc: self.value(),
         }
     }
 }
@@ -1064,6 +1122,7 @@ fn load(machine: &Machine, code: &[u8]) -> (CpuState, GuestMemory) {
     memory.write_u64(OPERAND, machine.operand).unwrap();
     memory.write_u64(STACK_TOP - 8, machine.pushed).unwrap();
     memory.write_u64(STACK_TOP, machine.top).unwrap();
+    memory.advance_time_stamp_counter_to(machine.tsc);
     let mut cpu = CpuState::new(ENTRY, 0);
     cpu.gpr = machine.gpr;
     let f = machine.flags;
@@ -1121,6 +1180,17 @@ fn every_fixture_instruction_matches_the_reference_in_both_engines() {
                 "{text} from {cpu:x?}"
             );
             assert_eq!(bytes(&dbt_memory), bytes(&memory), "{text}");
+            // Only RDTSC moves the counter, also when an instruction faults.
+            for (engine, counter) in [
+                ("interpreter", memory.time_stamp_counter()),
+                ("DBT", dbt_memory.time_stamp_counter()),
+            ] {
+                assert_eq!(
+                    counter, expected.tsc,
+                    "{text}: time-stamp counter on the {engine} from {:#x}",
+                    machine.tsc
+                );
+            }
 
             let undefined = match outcome {
                 Outcome::DivideError => {
@@ -1295,6 +1365,11 @@ fn random_sequences_leave_identical_state_in_both_engines() {
             "{round}: {text:#?}"
         );
         assert_eq!(bytes(&dbt_memory), bytes(&memory), "{round}: {text:#?}");
+        assert_eq!(
+            dbt_memory.time_stamp_counter(),
+            memory.time_stamp_counter(),
+            "{round}: {text:#?}"
+        );
     }
 }
 
@@ -1617,6 +1692,11 @@ fn run_both(machine: &Machine, code: &[u8], budget: usize) -> (CpuState, ExitRea
         "{code:02X?}"
     );
     assert_eq!(bytes(&dbt_memory), bytes(&memory), "{code:02X?}");
+    assert_eq!(
+        dbt_memory.time_stamp_counter(),
+        memory.time_stamp_counter(),
+        "{code:02X?}"
+    );
     (interpreted.final_state, interpreted.exit_reason, memory)
 }
 
@@ -1715,6 +1795,7 @@ fn bit_scans_and_bit_tests_follow_the_architecture() {
             pushed: 0,
             top: STACK_TOP,
             x87: [0x037F, 0, 0xFFFF],
+            tsc: 0,
         }
     }
 

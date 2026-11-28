@@ -21,7 +21,7 @@ pub use rdna2::{
 pub use semantics_gen::{
     ImageSampleOp, ScalarAluOp, ScalarCompareOp, ScalarImmediateCompareOp, ScalarImmediateOp,
     ScalarUnaryOp, SoppControlOp, VectorAluOp, VectorAluVop3Op, VectorCompareOp,
-    VectorCompareVop3Op, VectorSwapOp, VectorUnaryOp,
+    VectorCompareVop3Op, VectorFloatAluVop3Op, VectorSwapOp, VectorTernaryVop3Op, VectorUnaryOp,
 };
 
 impl VectorAluOp {
@@ -216,6 +216,27 @@ pub enum Instruction {
         src0: u8,
         src1: u8,
     },
+    /// VOP3 encoding of a binary32 ALU operation with per-source ABS/NEG
+    /// modifiers. Sources use the narrowed float domain: VGPR, s0-s105,
+    /// `vcc_lo` or one literal word.
+    VectorFloatAluVop3 {
+        op: VectorFloatAluVop3Op,
+        dst: u8,
+        src0: VectorSource,
+        src1: VectorSource,
+        abs: u8,
+        neg: u8,
+    },
+    /// VOP3 three-input binary32 operation with per-source ABS/NEG modifiers.
+    VectorTernaryVop3 {
+        op: VectorTernaryVop3Op,
+        dst: u8,
+        src0: VectorSource,
+        src1: VectorSource,
+        src2: VectorSource,
+        abs: u8,
+        neg: u8,
+    },
     /// SOP1 32-bit unary integer operation. The move also allows an explicit
     /// VCC or EXEC half destination. Some unary operations write SCC.
     ScalarUnary {
@@ -366,6 +387,8 @@ impl Instruction {
             Self::VectorUnary { op, .. } => op.assembly_name(),
             Self::VectorSwap { op, .. } => op.assembly_name(),
             Self::VectorAluVop3 { op, .. } => op.assembly_name(),
+            Self::VectorFloatAluVop3 { op, .. } => op.assembly_name(),
+            Self::VectorTernaryVop3 { op, .. } => op.assembly_name(),
             Self::ScalarUnary { op, .. } => op.mnemonic(),
             Self::ScalarAlu { op, .. } => op.mnemonic(),
             Self::ScalarCompare { op, .. } => op.mnemonic(),
@@ -500,6 +523,60 @@ impl fmt::Display for Instruction {
                     ScalarDestination(sdst),
                     source(src0, 0),
                     source(src1, 1)
+                )
+            }
+            Self::VectorFloatAluVop3 {
+                dst,
+                src0,
+                src1,
+                abs,
+                neg,
+                ..
+            } => {
+                let source = |source: VectorSource, bit: u8| {
+                    let base = source.to_string();
+                    let abs = abs & (1 << bit) != 0;
+                    let neg = neg & (1 << bit) != 0;
+                    match (neg, abs) {
+                        (false, false) => base,
+                        (true, false) => format!("-{base}"),
+                        (false, true) => format!("|{base}|"),
+                        (true, true) => format!("-|{base}|"),
+                    }
+                };
+                write!(
+                    formatter,
+                    " v{dst}, {}, {}",
+                    source(src0, 0),
+                    source(src1, 1)
+                )
+            }
+            Self::VectorTernaryVop3 {
+                dst,
+                src0,
+                src1,
+                src2,
+                abs,
+                neg,
+                ..
+            } => {
+                let source = |source: VectorSource, bit: u8| {
+                    let base = source.to_string();
+                    let abs = abs & (1 << bit) != 0;
+                    let neg = neg & (1 << bit) != 0;
+                    match (neg, abs) {
+                        (false, false) => base,
+                        (true, false) => format!("-{base}"),
+                        (false, true) => format!("|{base}|"),
+                        (true, true) => format!("-|{base}|"),
+                    }
+                };
+                write!(
+                    formatter,
+                    " v{dst}, {}, {}, {}",
+                    source(src0, 0),
+                    source(src1, 1),
+                    source(src2, 2)
                 )
             }
             Self::VectorAlu {

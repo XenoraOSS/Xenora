@@ -15,6 +15,9 @@ v_mov_b32_dpp v0, v1 dpp8:[1,0,3,2,5,4,7,6]
 v_mov_b32_dpp v0, v1 dpp8:[1,0,3,2,5,4,7,6] fi:1
 v_add_f32_sdwa v0, v1, v2 dst_sel:DWORD dst_unused:UNUSED_PAD src0_sel:WORD_1 src1_sel:DWORD
 v_add_f32_dpp v0, v1, v2 row_shl:1 row_mask:0xf bank_mask:0xf
+v_mul_legacy_f32_e32 v0, v1, v2
+v_mul_legacy_f32_e64 v0, -v1, |v2|
+v_med3_f32 v0, -v1, |v2|, -|v3|
 v_cmp_eq_u32_e32 vcc_lo, 0x1234, v1
 v_cmp_eq_u32_sdwa s0, v1, v2 src0_sel:DWORD src1_sel:DWORD
 v_fmamk_f32 v0, v1, 0x40000000, v2

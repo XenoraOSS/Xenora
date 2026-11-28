@@ -228,6 +228,11 @@ pub(super) enum Pending {
     Address(AddressWait),
     /// No deadline sleeps until the thread is terminated.
     Sleep(Option<u64>),
+    /// A task-queue dispatch waits for work, queue termination or its timeout.
+    TaskQueue {
+        timeout_deadline: Option<u64>,
+        deadline: Option<u64>,
+    },
 }
 
 impl Pending {
@@ -238,6 +243,7 @@ impl Pending {
             Self::Condition(sleep) if sleep.phase == SleepPhase::Asleep => sleep.deadline,
             Self::Address(wait) if !wait.woken => wait.deadline,
             Self::Sleep(deadline) => *deadline,
+            Self::TaskQueue { deadline, .. } => *deadline,
             Self::Srw { .. } | Self::Condition(_) | Self::Address(_) => None,
         }
     }

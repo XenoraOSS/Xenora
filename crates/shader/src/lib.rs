@@ -12,8 +12,8 @@ pub use xenora_decoder::Architecture;
 use xenora_decoder::{CompareRelation, Signedness, SoppControlOp};
 use xenora_decoder::{
     DecodeError, DecodedInstruction, Instruction, ScalarSource, ScalarUnaryOp, VectorAluOp,
-    VectorAluVop3Op, VectorBinary, VectorCompareOp, VectorLowering, VectorSource, VectorUnary,
-    VectorVcc,
+    VectorAluVop3Op, VectorBinary, VectorCompareOp, VectorLowering, VectorSource, VectorTernary,
+    VectorUnary, VectorVcc,
 };
 
 /// SGPR index of `vcc_lo`.
@@ -138,6 +138,7 @@ enum Op {
     },
     Constant(u32),
     Binary(Binary, Value, Value),
+    Ternary(VectorTernary, Value, Value, Value),
     Unary(VectorUnary, Value),
     MergeLanes {
         mask: u32,
@@ -227,6 +228,7 @@ impl Op {
             Self::Load | Self::Constant(_) | Self::ScalarBranch { .. } => Vec::new(),
             Self::ScalarLoad { old, .. } => vec![old],
             Self::Binary(_, left, right) => vec![left, right],
+            Self::Ternary(_, first, second, third) => vec![first, second, third],
             Self::Unary(_, source) => vec![source],
             Self::MergeLanes {
                 active, inactive, ..
@@ -291,6 +293,14 @@ impl Op {
                 let (left, right) = (name(left), name(right));
                 let Binary::Vector(operation) = operator;
                 vector_expression(operation, &left, &right)
+            }
+            Self::Ternary(operation, first, second, third) => {
+                let (first, second, third) = (name(first), name(second), name(third));
+                match operation {
+                    VectorTernary::Med3F32 => {
+                        format!("xenora_med3_f32({first}, {second}, {third})")
+                    }
+                }
             }
             Self::MergeLanes {
                 mask,
@@ -481,6 +491,7 @@ impl Binary {
             Self::Vector(VectorBinary::AddF32) => ("add.f32", "+"),
             Self::Vector(VectorBinary::SubF32) => ("sub.f32", "-"),
             Self::Vector(VectorBinary::MulF32) => ("mul.f32", "*"),
+            Self::Vector(VectorBinary::MulLegacyF32) => ("mul_legacy.f32", "*"),
             Self::Vector(operation) => (
                 match operation {
                     VectorBinary::Add => "add.u32",
@@ -502,7 +513,10 @@ impl Binary {
                     VectorBinary::ArithmeticShiftRight => "ashr.i32",
                     VectorBinary::MinF32 => "min.f32",
                     VectorBinary::MaxF32 => "max.f32",
-                    VectorBinary::AddF32 | VectorBinary::SubF32 | VectorBinary::MulF32 => {
+                    VectorBinary::AddF32
+                    | VectorBinary::SubF32
+                    | VectorBinary::MulF32
+                    | VectorBinary::MulLegacyF32 => {
                         unreachable!("binary32 arithmetic has a symbol")
                     }
                 },
@@ -555,6 +569,7 @@ fn vector_expression(operation: VectorBinary, left: &str, right: &str) -> String
         VectorBinary::AddF32 => float_arithmetic(left, "+", right),
         VectorBinary::SubF32 => float_arithmetic(left, "-", right),
         VectorBinary::MulF32 => float_arithmetic(left, "*", right),
+        VectorBinary::MulLegacyF32 => legacy_multiply_expression(left, right),
         VectorBinary::MinF32 => float_select_expression(true, left, right),
         VectorBinary::MaxF32 => float_select_expression(false, left, right),
     }
@@ -562,6 +577,17 @@ fn vector_expression(operation: VectorBinary, left: &str, right: &str) -> String
 
 fn float_arithmetic(left: &str, symbol: &str, right: &str) -> String {
     format!("as_type<uint>(as_type<float>({left}) {symbol} as_type<float>({right}))")
+}
+
+/// Guide 12.7 page 131 V_MUL_LEGACY_F32: the DX9 rule makes zero times any
+/// operand zero, so a zero input wins even against NaN or infinity. The guide
+/// does not pin the exact zero sign; the lowering keeps the multiplication
+/// sign bit, and the independent tests do not treat that sign as specified.
+fn legacy_multiply_expression(left: &str, right: &str) -> String {
+    format!(
+        "(({left} & 0x7fffffffu) == 0u || ({right} & 0x7fffffffu) == 0u) ? (({left} ^ {right}) & 0x80000000u) : {}",
+        float_arithmetic(left, "*", right)
+    )
 }
 
 /// Guide 12.7 V_MIN_F32 (page 132) and V_MAX_F32 (page 133) on the register
@@ -686,7 +712,15 @@ pub fn compile_with(
     } else {
         ""
     };
-    let helpers = if samples { SAMPLE_DOMAIN_HELPERS } else { "" };
+    let ternaries = operations
+        .iter()
+        .any(|(_, operation)| matches!(operation, Op::Ternary(_, _, _, _)));
+    let helpers = match (ternaries, samples) {
+        (true, true) => format!("{MED3_F32_HELPERS}{SAMPLE_DOMAIN_HELPERS}"),
+        (true, false) => MED3_F32_HELPERS.to_string(),
+        (false, true) => SAMPLE_DOMAIN_HELPERS.to_string(),
+        (false, false) => String::new(),
+    };
     let mut msl = format!(
         "#include <metal_stdlib>\nusing namespace metal;\n{helpers}kernel void {ENTRY_POINT}(\n    device const uint* input [[buffer(0)]],\n    device uint* output [[buffer(1)]],\n{sampled}    uint index [[thread_position_in_grid]]{grid}) {{\n"
     );
@@ -694,7 +728,12 @@ pub fn compile_with(
         matches!(
             operation,
             Op::Binary(
-                Binary::Vector(VectorBinary::AddF32 | VectorBinary::SubF32 | VectorBinary::MulF32,),
+                Binary::Vector(
+                    VectorBinary::AddF32
+                        | VectorBinary::SubF32
+                        | VectorBinary::MulF32
+                        | VectorBinary::MulLegacyF32,
+                ),
                 _,
                 _
             ) | Op::Sample { .. }
@@ -747,6 +786,10 @@ pub fn compile_with(
             }
             Op::Binary(operator, left, right) => (
                 format!("{dest} = {} {left}, {right}", operator.operator().0),
+                format!("uint {dest} = {};", operation.expression(&thread, "", "")),
+            ),
+            Op::Ternary(kind, first, second, third) => (
+                format!("{dest} = ternary.{kind:?} {first}, {second}, {third}"),
                 format!("uint {dest} = {};", operation.expression(&thread, "", "")),
             ),
             Op::ScalarBranch { target, taken } => {
@@ -1064,6 +1107,39 @@ pub const SAMPLE_FAULT_LOD: u32 = 1;
 /// infinite (the reference's `NonFiniteCoordinates`).
 pub const SAMPLE_FAULT_COORDINATES: u32 = 2;
 
+/// MSL helpers for guide-exact binary32 MED3 selection. All comparisons are
+/// integer tests on the raw bits, so they do not depend on Metal floating-point
+/// modes or NaN behavior. The zero-canonical key also makes +0 equal -0 in the
+/// guide's MAX3 source-position tests.
+const MED3_F32_HELPERS: &str = "static inline bool xenora_f32_nan(uint x) {
+    return (x & 0x7fffffffu) > 0x7f800000u;
+}
+static inline uint xenora_f32_key(uint x) {
+    if ((x << 1u) == 0u) { return 0x80000000u; }
+    return (x & 0x80000000u) != 0u ? ~x : (x | 0x80000000u);
+}
+static inline uint xenora_f32_min(uint a, uint b) {
+    if (xenora_f32_nan(a)) { return b; }
+    if (xenora_f32_nan(b)) { return a; }
+    if (((a | b) & 0x7fffffffu) == 0u) { return a | b; }
+    return xenora_f32_key(a) < xenora_f32_key(b) ? a : b;
+}
+static inline uint xenora_f32_max(uint a, uint b) {
+    if (xenora_f32_nan(a)) { return b; }
+    if (xenora_f32_nan(b)) { return a; }
+    if (((a | b) & 0x7fffffffu) == 0u) { return a & b; }
+    return xenora_f32_key(a) >= xenora_f32_key(b) ? a : b;
+}
+static inline uint xenora_med3_f32(uint a, uint b, uint c) {
+    uint lo = xenora_f32_min(xenora_f32_min(a, b), c);
+    uint hi = xenora_f32_max(xenora_f32_max(a, b), c);
+    if (xenora_f32_nan(a) || xenora_f32_nan(b) || xenora_f32_nan(c)) { return lo; }
+    if (xenora_f32_key(hi) == xenora_f32_key(a)) { return xenora_f32_max(b, c); }
+    if (xenora_f32_key(hi) == xenora_f32_key(b)) { return xenora_f32_max(a, c); }
+    return xenora_f32_max(a, b);
+}
+";
+
 /// MSL helpers for the sample domain check. Both compare raw bits, so the
 /// check does not depend on the compiler's floating-point mode. A whole level
 /// is -0.0 or the exact binary32 value of a level below `levels`, the domain
@@ -1350,6 +1426,8 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                 }
                 Instruction::MoveB32 { .. }
                 | Instruction::VectorAluVop3 { .. }
+                | Instruction::VectorFloatAluVop3 { .. }
+                | Instruction::VectorTernaryVop3 { .. }
                 | Instruction::VectorAlu { .. }
                 | Instruction::VectorUnary { .. }
                 | Instruction::VectorSwap { .. } => continue,
@@ -1588,6 +1666,81 @@ fn lift(decoded: &[DecodedInstruction], code_len: usize) -> Result<Vec<(usize, O
                     return Err(error("VOP3 with a lane condition is unsupported"));
                 };
                 (Some(dst), Op::Binary(Binary::Vector(binary), left, right))
+            }
+            Instruction::VectorFloatAluVop3 {
+                op,
+                dst,
+                src0,
+                src1,
+                abs,
+                neg,
+            } => {
+                let left = read_vector(src0, &mut operations, &mut facts)?;
+                let right = read_vector(src1, &mut operations, &mut facts)?;
+                let left = float_source_modifier(
+                    &mut operations,
+                    &mut facts,
+                    offset,
+                    left,
+                    abs & 1 != 0,
+                    neg & 1 != 0,
+                );
+                let right = float_source_modifier(
+                    &mut operations,
+                    &mut facts,
+                    offset,
+                    right,
+                    abs & 2 != 0,
+                    neg & 2 != 0,
+                );
+                let op = op.base();
+                let (left, right) = if op.swaps_sources() {
+                    (right, left)
+                } else {
+                    (left, right)
+                };
+                let VectorLowering::Binary(binary) = op.lowering() else {
+                    return Err(error("VOP3 float ALU with a lane condition is unsupported"));
+                };
+                (Some(dst), Op::Binary(Binary::Vector(binary), left, right))
+            }
+            Instruction::VectorTernaryVop3 {
+                op,
+                dst,
+                src0,
+                src1,
+                src2,
+                abs,
+                neg,
+            } => {
+                let first = read_vector(src0, &mut operations, &mut facts)?;
+                let second = read_vector(src1, &mut operations, &mut facts)?;
+                let third = read_vector(src2, &mut operations, &mut facts)?;
+                let first = float_source_modifier(
+                    &mut operations,
+                    &mut facts,
+                    offset,
+                    first,
+                    abs & 1 != 0,
+                    neg & 1 != 0,
+                );
+                let second = float_source_modifier(
+                    &mut operations,
+                    &mut facts,
+                    offset,
+                    second,
+                    abs & 2 != 0,
+                    neg & 2 != 0,
+                );
+                let third = float_source_modifier(
+                    &mut operations,
+                    &mut facts,
+                    offset,
+                    third,
+                    abs & 4 != 0,
+                    neg & 4 != 0,
+                );
+                (Some(dst), Op::Ternary(op.lowering(), first, second, third))
             }
             Instruction::ScalarUnary {
                 op: op @ ScalarUnaryOp::MovB32,
@@ -2228,6 +2381,9 @@ fn map_uses(operation: Op, map: impl Fn(Value) -> Value) -> Op {
             old: map(old),
         },
         Op::Binary(operator, left, right) => Op::Binary(operator, map(left), map(right)),
+        Op::Ternary(operator, first, second, third) => {
+            Op::Ternary(operator, map(first), map(second), map(third))
+        }
         Op::Unary(operator, source) => Op::Unary(operator, map(source)),
         Op::MergeLanes {
             mask,
@@ -2486,6 +2642,7 @@ fn eval_vector_binary(operation: VectorBinary, left: u32, right: u32) -> u32 {
         VectorBinary::AddF32
         | VectorBinary::SubF32
         | VectorBinary::MulF32
+        | VectorBinary::MulLegacyF32
         | VectorBinary::MinF32
         | VectorBinary::MaxF32 => unreachable!("binary32 operations are not folded"),
     }
@@ -2501,6 +2658,40 @@ fn constant(
     let value = Value(operations.len());
     operations.push((offset, Op::Constant(bits)));
     facts.push(KnownBits::constant(bits));
+    value
+}
+
+/// Applies the VOP3 ABS then NEG input modifier to one binary32 source. The
+/// bit operations are exact for every encoding, including NaN payloads.
+fn float_source_modifier(
+    operations: &mut Vec<(usize, Op)>,
+    facts: &mut Vec<KnownBits>,
+    offset: usize,
+    source: Value,
+    abs: bool,
+    neg: bool,
+) -> Value {
+    let mut value = source;
+    if abs {
+        let mask = constant(operations, facts, offset, 0x7fff_ffff);
+        let next = Value(operations.len());
+        operations.push((
+            offset,
+            Op::Binary(Binary::Vector(VectorBinary::And), value, mask),
+        ));
+        facts.push(KnownBits::UNKNOWN);
+        value = next;
+    }
+    if neg {
+        let sign = constant(operations, facts, offset, 0x8000_0000);
+        let next = Value(operations.len());
+        operations.push((
+            offset,
+            Op::Binary(Binary::Vector(VectorBinary::Xor), value, sign),
+        ));
+        facts.push(KnownBits::UNKNOWN);
+        value = next;
+    }
     value
 }
 

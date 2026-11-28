@@ -45,6 +45,9 @@ const IMPORTS: &[(&str, &str)] = &[
     ("msvcrt.dll", "_chdir"),
     ("msvcrt.dll", "_fullpath"),
     (KERNEL32, "CreateDirectoryA"),
+    (KERNEL32, "FindFirstFileW"),
+    (KERNEL32, "FindNextFileW"),
+    (KERNEL32, "FindClose"),
     ("msvcrt.dll", "strstr"),
     ("msvcrt.dll", "strtok"),
     ("msvcrt.dll", "strcspn"),
@@ -73,6 +76,7 @@ const FILE_TYPE_UNKNOWN: u64 = 0;
 const GENERIC_READ: u64 = 0x8000_0000;
 const GENERIC_WRITE: u64 = 0x4000_0000;
 const CREATE_ALWAYS: u64 = 2;
+const OPEN_EXISTING: u64 = 3;
 const INVALID_HANDLE_VALUE: u64 = u64::MAX;
 const ERROR_INVALID_HANDLE: u64 = 6;
 const ERROR_ACCESS_DENIED: u64 = 5;
@@ -157,6 +161,124 @@ fn flush_file_buffers_accepts_a_written_file_and_refuses_the_rest() {
     // An unknown handle is refused with ERROR_INVALID_HANDLE.
     assert_eq!(guest.call("FlushFileBuffers", &[0xDEAD]), 0);
     assert_eq!(last_error(&mut guest), ERROR_INVALID_HANDLE);
+}
+
+/// CreateFile opens a directory only through the backup-semantics flag, as
+/// the documentation demands: the flag is no attribute, the open answers a
+/// handle the close accepts, the type stays FILE_TYPE_DISK because a
+/// directory lives on the disk volume, and a read or write through the
+/// handle fails with ERROR_ACCESS_DENIED exactly as it does on Windows.
+/// Without the flag the directory open is refused, and so is any create or
+/// truncate disposition, because CreateFile cannot create directories.
+#[test]
+fn create_file_opens_directories_only_with_backup_semantics() {
+    const BACKUP_SEMANTICS: u64 = 0x0200_0000;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    narrow_at(&mut guest, SCRATCH + 0x40, "C:\\srcdir");
+    assert_eq!(guest.call("CreateDirectoryA", &[SCRATCH + 0x40, 0]), 1);
+    let open_dir = |guest: &mut Guest, flags: u64, disposition: u64| {
+        let name = wide(guest, "C:\\srcdir");
+        guest.call(
+            "CreateFileW",
+            &[name, GENERIC_READ, 3, 0, disposition, flags, 0],
+        )
+    };
+    // Without the flag the directory is refused whatever the disposition.
+    for disposition in [OPEN_EXISTING, CREATE_ALWAYS] {
+        assert_eq!(open_dir(&mut guest, 0, disposition), INVALID_HANDLE_VALUE);
+        assert_eq!(last_error(&mut guest), ERROR_ACCESS_DENIED);
+    }
+    // A create or truncate disposition cannot apply to a directory even
+    // with the flag: CreateFile never creates or truncates directories.
+    for disposition in [CREATE_ALWAYS, 5u64] {
+        assert_eq!(
+            open_dir(&mut guest, BACKUP_SEMANTICS, disposition),
+            INVALID_HANDLE_VALUE
+        );
+    }
+    // OPEN_EXISTING with the flag answers a directory handle.
+    let directory = open_dir(&mut guest, BACKUP_SEMANTICS, OPEN_EXISTING);
+    assert_ne!(directory, INVALID_HANDLE_VALUE);
+    // The type is the disk type: a directory is no pipe or console object.
+    assert_eq!(guest.call("GetFileType", &[directory]), 1);
+    // Reads and writes fail as they do on Windows.
+    const IOOUT: u64 = SCRATCH + 0x200;
+    for symbol in ["ReadFile", "WriteFile"] {
+        assert_eq!(guest.call(symbol, &[directory, IOOUT, 4, IOOUT + 8, 0]), 0);
+        assert_eq!(last_error(&mut guest), ERROR_ACCESS_DENIED, "{symbol}");
+    }
+    // The handle closes.
+    assert_eq!(guest.call("CloseHandle", &[directory]), 1);
+    // A plain file path with the flag opens as it always did: the flag
+    // changes nothing for files.
+    let file = create_file(&mut guest, "plain.bin", GENERIC_WRITE);
+    assert_ne!(file, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[file]), 1);
+    let name = wide(&mut guest, "plain.bin");
+    let reopened = guest.call(
+        "CreateFileW",
+        &[name, GENERIC_READ, 3, 0, OPEN_EXISTING, BACKUP_SEMANTICS, 0],
+    );
+    assert_ne!(reopened, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[reopened]), 1);
+}
+
+/// FindFirstFile enumerates the root through an anchored search pattern,
+/// exactly as a drive-root-relative path is ordinary on Windows, and the
+/// enumeration of any directory begins with the `.` and `..` entries the
+/// real enumeration always returns - so even an empty directory answers
+/// entries for a `*` pattern, while a pattern that matches nothing keeps
+/// its honest ERROR_FILE_NOT_FOUND.
+#[test]
+fn find_first_enumerates_the_root_with_the_dot_entries() {
+    let mut guest = Guest::new(IMPORTS, &[]);
+    // The wide find data stores the name as UTF-16 units at offset 44.
+    let find_name = |guest: &mut Guest, at: u64| -> Vec<u8> {
+        let mut name = Vec::new();
+        for index in 0..12u64 {
+            match guest.memory.read_u16(at + 44 + index * 2).unwrap() {
+                0 => break,
+                unit => name.push(unit as u8),
+            }
+        }
+        name
+    };
+    // The anchored pattern `\*` enumerates the root: it is no invalid name.
+    let pattern = wide(&mut guest, "\\*");
+    let search = guest.call("FindFirstFileW", &[pattern, SCRATCH + 0x600]);
+    assert_ne!(search, INVALID_HANDLE_VALUE);
+    // The first entries are the dot entries, both directories, even though
+    // the root holds nothing yet.
+    assert_eq!(guest.u32_at(SCRATCH + 0x600), 0x10);
+    assert_eq!(find_name(&mut guest, SCRATCH + 0x600), b".");
+    assert_eq!(guest.call("FindNextFileW", &[search, SCRATCH + 0x600]), 1);
+    assert_eq!(find_name(&mut guest, SCRATCH + 0x600), b"..");
+    // The empty root ends after them, with the honest no-more-files answer.
+    assert_eq!(guest.call("FindNextFileW", &[search, SCRATCH + 0x600]), 0);
+    assert_eq!(last_error(&mut guest), 18);
+    assert_eq!(guest.call("FindClose", &[search]), 1);
+    // A pattern that matches nothing keeps ERROR_FILE_NOT_FOUND.
+    let pattern = wide(&mut guest, "\\*.zzz");
+    assert_eq!(
+        guest.call("FindFirstFileW", &[pattern, SCRATCH + 0x600]),
+        INVALID_HANDLE_VALUE
+    );
+    assert_eq!(last_error(&mut guest), 2);
+    // A real entry enumerates after the dots. A directory the filesystem
+    // has at the root appears once the dots are consumed.
+    narrow_at(&mut guest, SCRATCH + 0x40, "c:\\realdir");
+    assert_eq!(guest.call("CreateDirectoryA", &[SCRATCH + 0x40, 0]), 1);
+    let pattern = wide(&mut guest, "\\*");
+    let search = guest.call("FindFirstFileW", &[pattern, SCRATCH + 0x600]);
+    assert_ne!(search, INVALID_HANDLE_VALUE);
+    assert_eq!(find_name(&mut guest, SCRATCH + 0x600), b".");
+    let mut names = Vec::new();
+    while guest.call("FindNextFileW", &[search, SCRATCH + 0x600]) == 1 {
+        names.push(find_name(&mut guest, SCRATCH + 0x600));
+        assert!(names.len() <= 8, "enumeration never ends");
+    }
+    assert_eq!(names, [b"..".to_vec(), b"realdir".to_vec()]);
+    assert_eq!(guest.call("FindClose", &[search]), 1);
 }
 
 /// The hosted machine has one fixed disk, letter C: bit 2 of the drive mask,
@@ -738,4 +860,57 @@ fn the_nul_device_discards_writes_and_reads_end_of_file() {
         let bad = create_file_disposition(&mut guest, device, GENERIC_WRITE, 4);
         assert_eq!(bad, INVALID_HANDLE_VALUE, "{device}");
     }
+}
+
+/// Dot components resolve lexically before anything is looked up, as the
+/// path resolution eliminates them: `.` is the directory the path is already
+/// in, `..` its parent, and a `..` at the root stays at the root.
+/// https://learn.microsoft.com/windows/win32/fileio/naming-a-file#path-and-file-name-rules
+#[test]
+fn dot_components_resolve_lexically_before_lookup() {
+    const OUT: u64 = SCRATCH + 0x400;
+    const GOT: u64 = SCRATCH + 0x808;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    // `.\x` is exactly `x`: the write through one reads back through the other.
+    let handle = create_file(&mut guest, ".\\dotted.bin", GENERIC_WRITE);
+    assert_ne!(handle, INVALID_HANDLE_VALUE);
+    guest.memory.write_bytes(OUT, b"dot").unwrap();
+    assert_eq!(guest.call("WriteFile", &[handle, OUT, 3, GOT, 0]), 1);
+    assert_eq!(guest.call("CloseHandle", &[handle]), 1);
+    let reader = create_file_disposition(&mut guest, "dotted.bin", GENERIC_READ, 3);
+    assert_ne!(
+        reader, INVALID_HANDLE_VALUE,
+        "the plain name is the same file"
+    );
+    assert_eq!(guest.call("ReadFile", &[reader, OUT, 8, GOT, 0]), 1);
+    assert_eq!(guest.u32_at(GOT), 3);
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    // `a\..\x` is exactly `x`, whether or not `a` ever existed.
+    let handle = create_file_disposition(&mut guest, "missing\\..\\again.bin", GENERIC_WRITE, 2);
+    assert_ne!(handle, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[handle]), 1);
+    let reader = create_file_disposition(&mut guest, "again.bin", GENERIC_READ, 3);
+    assert_ne!(
+        reader, INVALID_HANDLE_VALUE,
+        "the parent-climbing name is the same file"
+    );
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    // A `..` at the root stays at the root: `..\x` is exactly `x`.
+    let reader = create_file_disposition(&mut guest, "..\\again.bin", GENERIC_READ, 3);
+    assert_ne!(
+        reader, INVALID_HANDLE_VALUE,
+        "the root cannot be climbed past"
+    );
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    // Deeply nested dots: `.\.\x` and `a\b\..\..\x` are exactly `x`.
+    let reader = create_file_disposition(&mut guest, ".\\.\\again.bin", GENERIC_READ, 3);
+    assert_ne!(reader, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    let reader = create_file_disposition(&mut guest, "a\\b\\..\\..\\again.bin", GENERIC_READ, 3);
+    assert_ne!(reader, INVALID_HANDLE_VALUE);
+    assert_eq!(guest.call("CloseHandle", &[reader]), 1);
+    // A name that is dots alone is not a file name at all: `...` is a real
+    // name ending with a dot, and stays rejected exactly as before.
+    let bad = create_file_disposition(&mut guest, "...", GENERIC_WRITE, 4);
+    assert_eq!(bad, INVALID_HANDLE_VALUE);
 }

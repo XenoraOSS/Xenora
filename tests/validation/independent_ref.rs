@@ -23,7 +23,7 @@
 //! forms TRUNC, CEIL, RNDNE and FLOOR (host binary64 rounding of the exactly
 //! widened input; NaN inputs and integer inline constants are refused) and SWAP_B32 (VGPR SRC0),
 //! VOP2 bitwise, shift and arithmetic-shift, the VOP2 binary32 forms
-//! ADD/SUB/SUBREV/MUL/MIN/MAX_F32 (host binary32 arithmetic; subnormal and
+//! ADD/SUB/SUBREV/MUL/MUL_LEGACY/MIN/MAX_F32 (host binary32 arithmetic; subnormal and
 //! NaN inputs, signalling NaNs to MIN/MAX, NaN results and results below
 //! 2^-126 are refused; integer inline constants are refused), the VOP2 integer forms
 //! MUL_I32_I24, MUL_HI_I32_I24, MUL_U32_U24, MUL_HI_U32_U24, MIN/MAX (I32,
@@ -124,8 +124,13 @@ enum Insn {
     VShiftRightArithmetic(u8, u8, u8),
     VXor(u8, u8, u8),
     /// VOP2 integer opcode 9-12, 17-20, 30 or 37-39, or binary32 opcode 3-5,
-    /// 8, 15 or 16: VDST, SRC0, VSRC1.
+    /// 7, 8, 15 or 16: VDST, SRC0, VSRC1.
     VInt(u32, u8, CmpSrc, u8),
+    /// VOP3 binary32 opcode 7 (legacy multiply): VDST, SRC0, SRC1, ABS and NEG.
+    /// The narrowed sources are VGPR, SGPR/vcc_lo or one literal.
+    VFloatVop3(u32, u8, CmpSrc, CmpSrc, u8, u8),
+    /// VOP3 three-input binary32 form: VDST, SRC0/SRC1/SRC2, ABS and NEG.
+    VTernaryVop3(u8, CmpSrc, CmpSrc, CmpSrc, u8, u8),
     VIntVcc(u32, u8, CmpSrc, u8),
     /// VOP1 integer opcode 55-59 or binary32 rounding opcode 33-36: VDST, SRC0.
     VUnary(u32, u8, CmpSrc),
@@ -1384,12 +1389,57 @@ fn lane_step(
                 CmpSrc::Vgpr(reg) => read_v(reg)?,
             };
             let b = read_v(src1)?;
-            let d = if matches!(opcode, 3..=5 | 8 | 15 | 16) {
+            let d = if matches!(opcode, 3..=5 | 7..=8 | 15 | 16) {
                 vector_float(opcode, a, b, offset)?
             } else {
                 vector_integer(opcode, a, b)
             };
             (dst, d)
+        }
+        Insn::VFloatVop3(opcode, dst, src0, src1, abs, neg) => {
+            check_destination(dst, pending_read, offset)?;
+            let read_source = |source: CmpSrc| match source {
+                CmpSrc::Sgpr(reg) => read_s(reg),
+                CmpSrc::Vcc => read_vcc(),
+                CmpSrc::Imm(value) => Ok(value),
+                CmpSrc::Vgpr(reg) => read_v(reg),
+            };
+            let modify = |value: u32, bit: u8| {
+                let mut value = value;
+                if abs & (1 << bit) != 0 {
+                    value &= 0x7fff_ffff;
+                }
+                if neg & (1 << bit) != 0 {
+                    value ^= 0x8000_0000;
+                }
+                value
+            };
+            let a = modify(read_source(src0)?, 0);
+            let b = modify(read_source(src1)?, 1);
+            (dst, vector_float(opcode, a, b, offset)?)
+        }
+        Insn::VTernaryVop3(dst, src0, src1, src2, abs, neg) => {
+            check_destination(dst, pending_read, offset)?;
+            let read_source = |source: CmpSrc| match source {
+                CmpSrc::Sgpr(reg) => read_s(reg),
+                CmpSrc::Vcc => read_vcc(),
+                CmpSrc::Imm(value) => Ok(value),
+                CmpSrc::Vgpr(reg) => read_v(reg),
+            };
+            let modify = |value: u32, bit: u8| {
+                let mut value = value;
+                if abs & (1 << bit) != 0 {
+                    value &= 0x7fff_ffff;
+                }
+                if neg & (1 << bit) != 0 {
+                    value ^= 0x8000_0000;
+                }
+                value
+            };
+            let first = modify(read_source(src0)?, 0);
+            let second = modify(read_source(src1)?, 1);
+            let third = modify(read_source(src2)?, 2);
+            (dst, binary32_med3(first, second, third, offset)?)
         }
         Insn::VUnary(opcode, dst, src0) => {
             check_destination(dst, pending_read, offset)?;
@@ -1565,6 +1615,48 @@ fn index_of(program: &[(usize, Insn)], target: usize, offset: usize) -> Result<u
 /// results that are NaN or whose exact value is nonzero and below 2^-126.
 /// Binary64 holds the exact product, and the exact sum whenever it is that
 /// small, so the size check is made on the binary64 result.
+fn binary32_nan(x: u32) -> bool {
+    x & 0x7fff_ffff > 0x7f80_0000
+}
+
+fn binary32_minmax(minimum: bool, a: u32, b: u32) -> u32 {
+    if binary32_nan(a) {
+        return b;
+    }
+    if binary32_nan(b) {
+        return a;
+    }
+    if a & 0x7fff_ffff == 0 && b & 0x7fff_ffff == 0 {
+        return if minimum { a | b } else { a & b };
+    }
+    let ordered = f32::from_bits(a) < f32::from_bits(b);
+    if ordered == minimum { a } else { b }
+}
+
+/// Guide 12.12 V_MED3_F32: quiet NaNs take the MIN3 branch; +0/-0 compare
+/// equal in the MAX3 source-position tests. Signalling NaNs are outside the
+/// modeled domain because IEEE_MODE/Quiet() are not pinned by the fixtures.
+fn binary32_med3(a: u32, b: u32, c: u32, offset: usize) -> Result<u32, String> {
+    for x in [a, b, c] {
+        if binary32_nan(x) && x & 0x0040_0000 == 0 {
+            return Err(format!("{offset:#x}: signalling NaN outside median domain"));
+        }
+    }
+    let min3 = binary32_minmax(true, binary32_minmax(true, a, b), c);
+    if binary32_nan(a) || binary32_nan(b) || binary32_nan(c) {
+        return Ok(min3);
+    }
+    let max3 = binary32_minmax(false, binary32_minmax(false, a, b), c);
+    let equal = |x: u32, y: u32| f32::from_bits(x) == f32::from_bits(y);
+    Ok(if equal(max3, a) {
+        binary32_minmax(false, b, c)
+    } else if equal(max3, b) {
+        binary32_minmax(false, a, c)
+    } else {
+        binary32_minmax(false, a, b)
+    })
+}
+
 fn vector_float(opcode: u32, a_bits: u32, b_bits: u32, offset: usize) -> Result<u32, String> {
     let refuse = |what: &str| {
         Err(format!(
@@ -1572,6 +1664,13 @@ fn vector_float(opcode: u32, a_bits: u32, b_bits: u32, offset: usize) -> Result<
         ))
     };
     let (a, b) = (f32::from_bits(a_bits), f32::from_bits(b_bits));
+    if opcode == 7 && (a == 0.0 || b == 0.0) {
+        // The DX9 rule makes zero win over every operand, even a subnormal,
+        // NaN or infinity. Its exact zero sign is not pinned by the guide; the
+        // tests do not treat it as specified. This oracle uses the
+        // multiplication sign bit.
+        return Ok((a_bits ^ b_bits) & 0x8000_0000);
+    }
     if a.is_subnormal() || b.is_subnormal() {
         return refuse("subnormal input");
     }
@@ -1759,12 +1858,12 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
     }
     // Binary32 forms: integer inline constants (128-208) are refused.
     if first >> 31 == 0
-        && matches!(vop2_op, 3..=5 | 8 | 15 | 16)
+        && matches!(vop2_op, 3..=5 | 7..=8 | 15 | 16)
         && (128..=208).contains(&(first & 0x1ff))
     {
         return Err(fail("integer inline constant as a binary32 source"));
     }
-    if first >> 31 == 0 && matches!(vop2_op, 3..=5 | 8..=12 | 15..=20 | 30 | 37..=39) {
+    if first >> 31 == 0 && matches!(vop2_op, 3..=5 | 7..=12 | 15..=20 | 30 | 37..=39) {
         let (src0, len) = vector_src0(code, offset, first, "VOP2")?;
         let insn = Insn::VInt(vop2_op, (first >> 17) as u8, src0, (first >> 9) as u8);
         return Ok((insn, len));
@@ -1778,6 +1877,75 @@ fn decode_one(code: &[u8], offset: usize) -> Result<(Insn, usize), String> {
         let abs = ((first >> 8) & 7) as u8;
         let neg = ((second >> 29) & 7) as u8;
         let float_compare = matches!(opcode, 1..=6);
+        if opcode == 343 {
+            if first & 0xf800 != 0 || second & 0x1800_0000 != 0 {
+                return Err(fail("unsupported VOP3A output modifiers"));
+            }
+            let src2 = (second >> 18) & 0x1ff;
+            let mut literals = 0;
+            let mut sources = [None, None, None];
+            for (index, selector) in [src0, src1, src2].into_iter().enumerate() {
+                sources[index] = match selector {
+                    0..=105 => Some(CmpSrc::Sgpr(selector as u8)),
+                    106 => Some(CmpSrc::Vcc),
+                    256..=511 => Some(CmpSrc::Vgpr(selector as u8)),
+                    255 => {
+                        literals += 1;
+                        Some(CmpSrc::Imm(
+                            word(code, offset + 8).map_err(|_| fail("truncated VOP3A literal"))?,
+                        ))
+                    }
+                    _ => None,
+                };
+            }
+            if literals > 1 || sources.iter().any(Option::is_none) {
+                return Err(fail("unsupported VOP3A float source"));
+            }
+            return Ok((
+                Insn::VTernaryVop3(
+                    dst,
+                    sources[0].unwrap(),
+                    sources[1].unwrap(),
+                    sources[2].unwrap(),
+                    abs,
+                    neg,
+                ),
+                if literals == 0 { 8 } else { 12 },
+            ));
+        }
+        if opcode == 263 {
+            // V_MUL_LEGACY_F32: the scoped float source domain is wider than
+            // the integer encodings, but OP_SEL/CLAMP/OMOD and SRC2 stay refused.
+            if first & 0xf800 != 0 || second & 0x1800_0000 != 0 {
+                return Err(fail("unsupported VOP3A output modifiers"));
+            }
+            if (second >> 18) & 0x1ff != 128 || abs & 4 != 0 || neg & 4 != 0 {
+                return Err(fail("unsupported VOP3A SRC2 or modifier"));
+            }
+            let mut literals = 0;
+            let mut sources = [None, None];
+            for (index, selector) in [src0, src1].into_iter().enumerate() {
+                sources[index] = match selector {
+                    0..=105 => Some(CmpSrc::Sgpr(selector as u8)),
+                    106 => Some(CmpSrc::Vcc),
+                    256..=511 => Some(CmpSrc::Vgpr(selector as u8)),
+                    255 => {
+                        literals += 1;
+                        Some(CmpSrc::Imm(
+                            word(code, offset + 8).map_err(|_| fail("truncated VOP3A literal"))?,
+                        ))
+                    }
+                    _ => None,
+                };
+            }
+            if literals > 1 || sources.iter().any(Option::is_none) {
+                return Err(fail("unsupported VOP3A float source"));
+            }
+            return Ok((
+                Insn::VFloatVop3(7, dst, sources[0].unwrap(), sources[1].unwrap(), abs, neg),
+                if literals == 0 { 8 } else { 12 },
+            ));
+        }
         if first & 0xf800 != 0
             || second & 0x1800_0000 != 0
             || (second >> 18) & 0x1ff != 128

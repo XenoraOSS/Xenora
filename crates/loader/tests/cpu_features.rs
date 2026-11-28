@@ -18,7 +18,7 @@
 
 use xenora_loader::cpu::{
     CPUID_CMOV, CPUID_CMPXCHG16B, CPUID_CX8, CPUID_LAHF_SAHF, CPUID_LONG_MODE, CPUID_LZCNT,
-    CPUID_POPCNT, CpuState, ExitReason, Interpreter, RFlags, cpuid,
+    CPUID_POPCNT, CPUID_TSC, CpuState, ExitReason, Interpreter, RFlags, cpuid,
 };
 use xenora_loader::dbt::DbtEngine;
 use xenora_loader::memory::{GuestMemory, MemoryPermissions};
@@ -78,10 +78,10 @@ fn every_leaf_returns_its_documented_values() {
     let leaves: &[(u32, u32, [u32; 4])] = &[
         // Highest basic leaf 1, and "Xeno", "uest", "ra g" as little-endian text.
         (0, 0, [1, 0x6F6E_6558, 0x7473_6575, 0x6720_6172]),
-        // CMPXCHG16B is ECX bit 13, POPCNT ECX bit 23, CMPXCHG8B (CX8) EDX
-        // bit 8 and CMOV EDX bit 15. No signature.
-        (1, 0, [0, 0, 0x0080_2000, 0x0000_8100]),
-        (1, 0xFFFF_FFFF, [0, 0, 0x0080_2000, 0x0000_8100]),
+        // CMPXCHG16B is ECX bit 13, POPCNT ECX bit 23, TSC EDX bit 4,
+        // CMPXCHG8B (CX8) EDX bit 8 and CMOV EDX bit 15. No signature.
+        (1, 0, [0, 0, 0x0080_2000, 0x0000_8110]),
+        (1, 0xFFFF_FFFF, [0, 0, 0x0080_2000, 0x0000_8110]),
         // Highest extended leaf.
         (0x8000_0000, 0, [0x8000_0001, 0, 0, 0]),
         // LAHF/SAHF is ECX bit 0, LZCNT ECX bit 5 and long mode EDX bit 29.
@@ -137,13 +137,23 @@ fn every_leaf_returns_its_documented_values() {
         (
             CPUID_POPCNT,
             CPUID_CMOV,
+            CPUID_TSC,
             CPUID_CX8,
             CPUID_CMPXCHG16B,
             CPUID_LAHF_SAHF,
             CPUID_LZCNT,
             CPUID_LONG_MODE
         ),
-        (1 << 23, 1 << 15, 1 << 8, 1 << 13, 1, 1 << 5, 1 << 29)
+        (
+            1 << 23,
+            1 << 15,
+            1 << 4,
+            1 << 8,
+            1 << 13,
+            1,
+            1 << 5,
+            1 << 29
+        )
     );
 }
 
@@ -213,6 +223,13 @@ fn reported_features_have_all_their_instructions_in_the_fixtures() {
         })
         .unwrap_or_else(|error| panic!("{code:02X?}: {error:?}"));
     }
+    // The SDM's TSC bit says that RDTSC is supported, including CR4.TSD for
+    // controlling privilege. RDTSC is one form without operands. CR4.TSD
+    // belongs to an operating system and is not modelled; the instruction runs
+    // as it does while that flag is clear. RDTSCP has a bit of its own
+    // (0x8000_0001 EDX bit 27), which stays clear.
+    assert_ne!(cpuid(1, 0)[EDX] & CPUID_TSC, 0);
+    decodable("rdtsc");
     // LAHF and SAHF have one form each and no operands.
     assert_ne!(cpuid(0x8000_0001, 0)[ECX] & CPUID_LAHF_SAHF, 0);
     decodable("lahf");
@@ -228,7 +245,6 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
     // (feature, leaf, result register, bit, an instruction of that feature)
     let witnesses: &[(&str, u32, usize, u32, &[u8])] = &[
         ("FPU", 1, EDX, 0, &[0xD9, 0xE8]),               // fld1
-        ("TSC", 1, EDX, 4, &[0x0F, 0x31]),               // rdtsc
         ("CLFSH", 1, EDX, 19, &[0x0F, 0xAE, 0x3E]),      // clflush [rsi]
         ("MMX", 1, EDX, 23, &[0x0F, 0x77]),              // emms
         ("FXSR", 1, EDX, 24, &[0x0F, 0xAE, 0x06]),       // fxsave [rsi]
@@ -248,9 +264,6 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("XSAVE", 1, ECX, 26, &[0x0F, 0x01, 0xD0]),      // xgetbv
         ("AVX", 1, ECX, 28, &[0xC5, 0xFC, 0x53, 0xC1]),  // vrcpps ymm0, ymm1
         ("RDRAND", 1, ECX, 30, &[0x0F, 0xC7, 0xF0]),     // rdrand eax
-        // ANDN, BLSI, BLSMSK and BLSR are implemented; BEXTR is the BMI1
-        // witness while it stays refused.
-        ("BMI1", 7, EBX, 3, &[0xC4, 0xE2, 0x70, 0xF7, 0xC2]), // bextr eax, edx, ecx
         // AVX2 cross-lane permutes, broadcasts, blends and per-lane shifts are
         // implemented; the 256-bit immediate shuffle is still refused.
         ("AVX2", 7, EBX, 5, &[0xC5, 0xFD, 0x70, 0xC1, 0x1B]), // vpshufd ymm0, ymm1, 27

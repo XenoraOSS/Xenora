@@ -102,6 +102,8 @@ pub(crate) struct QueuedBuffer {
     pub cursor: u32,
     /// How many passes of the loop region the voice already made.
     pub loops_done: u32,
+    /// Whether ExitLoop asked the voice not to loop this buffer again.
+    pub exit_loop: bool,
     /// Whether the voice already reported the start of this buffer.
     pub notified_start: bool,
 }
@@ -109,7 +111,7 @@ pub(crate) struct QueuedBuffer {
 impl QueuedBuffer {
     /// Whether the voice may make another pass of the loop region.
     pub fn loops_remaining(&self) -> bool {
-        if self.loop_end.is_none() {
+        if self.loop_end.is_none() || self.exit_loop {
             return false;
         }
         self.desc.loop_count == XAUDIO2_LOOP_INFINITE || self.loops_done < self.desc.loop_count

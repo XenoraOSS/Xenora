@@ -14,6 +14,8 @@ mod guest_buffer;
 mod indexed;
 #[path = "support/indexed_cases.rs"]
 mod indexed_cases;
+#[path = "native/llvm_xcheck.rs"]
+mod llvm_xcheck;
 #[path = "native/offscreen.rs"]
 mod offscreen;
 #[path = "native/submission.rs"]

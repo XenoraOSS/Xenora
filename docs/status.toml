@@ -149,6 +149,30 @@ decoded = true
 llvm = "three-way passed"
 
 [[instruction]]
+form = "v_mul_legacy_f32_e64"
+encoding = "VOP3A, Wave32; VGPR destination; SRC0 and SRC1 each a VGPR, normal SGPR, vcc_lo or one literal (integer and float inline constants refused), with optional ABS/NEG on each source; SRC2 encoded as inline zero; OP_SEL, CLAMP and OMOD refused; DX9 legacy product where a zero operand wins over NaN or infinity; the forced-zero sign is not pinned by the guide; subnormal inputs, unforced NaN inputs and nonzero results below 2^-126 are outside the verified domain; inactive lanes keep VDST"
+representation = "8 or 12 B"
+lowering = "per-thread DX9 zero bypass around binary32 multiplication, with input sign-bit modifiers and contraction/reassociation off"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_med3_f32"
+encoding = "VOP3A, Wave32; VGPR destination; SRC0, SRC1 and SRC2 each a VGPR, normal SGPR, vcc_lo or one literal (integer and float inline constants refused), with optional ABS/NEG on each source; OP_SEL, CLAMP and OMOD refused; guide MIN3/MAX3 median branch order, including quiet-NaN selection and signed-zero MIN/MAX rules; signalling NaNs outside the verified domain because IEEE_MODE/Quiet() are not pinned; inactive lanes keep VDST"
+representation = "8 or 12 B"
+lowering = "per-thread bit-exact MIN3/MAX3 selection on the binary32 words, with input sign-bit modifiers"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
 form = "v_mul_i32_i24_e64"
 encoding = "VOP3A, Wave32; VGPR destination and two VGPR inputs, modifier fields clear, SRC2 encoded as inline zero; inactive lanes keep VDST; the operation of `v_mul_i32_i24_e32`"
 representation = "8 B"
@@ -2182,6 +2206,18 @@ lowering = "per-thread binary32 arithmetic in Metal, with contraction and reasso
 reference = "implemented"
 cpu = "fixture verified"
 gpu = "fixture verified"
+recognized = true
+decoded = true
+llvm = "three-way passed"
+
+[[instruction]]
+form = "v_mul_legacy_f32_e32"
+encoding = "VOP2, Wave32; VGPR VDST; VGPR, normal SGPR, vcc_lo or literal SRC0 (integer and float inline constants refused); VGPR VSRC1; DX9 legacy product where a zero operand wins over NaN or infinity; the forced-zero sign is not pinned by the guide; subnormal inputs, unforced NaN inputs and nonzero results below 2^-126 are outside the verified domain; inactive lanes keep VDST"
+representation = "4 or 8 B"
+lowering = "per-thread DX9 zero bypass around binary32 multiplication, with contraction and reassociation off"
+reference = "implemented"
+cpu = "local known-answer test passed"
+gpu = "acceptance pending"
 recognized = true
 decoded = true
 llvm = "three-way passed"

@@ -431,3 +431,64 @@ spec = [
   { document = "guide", section = "12.7", page = 134 },
 ]
 verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+# DX9 legacy binary32 multiply: the narrowed VOP3 source domain mirrors the
+# VOP2 float rule, per-source ABS/NEG are decoded, and OP_SEL, CLAMP, OMOD and
+# the unused SRC2 stay refused rather than dropped.
+[operand_rules.vop3_f32_legacy]
+family = "VOP3"
+dst = { field = "VDST", class = "vgpr", min = 0, max = 255 }
+src = [
+  { field = "SRC0", class = "vector_source" },
+  { field = "SRC1", class = "vector_source" },
+]
+max_literals = 1
+variant_only = true
+unsupported = [
+  "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+  "src_float_inline", "src_special", "output_modifiers", "op_sel", "src2",
+]
+
+[[encoding_variant]]
+of = "V_MUL_LEGACY_F32"
+family = "VOP3"
+opcode = 263
+operands = "vop3_f32_legacy"
+spec = [
+  { document = "guide", section = "12.12", page = 167 },
+  { document = "guide", section = "12.7", page = 131 },
+]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+# Three-input binary32 VOP3 form. SRC2 is a real input here; per-source
+# ABS/NEG are decoded, while OP_SEL, CLAMP and OMOD stay refused.
+[operand_rules.vop3_f32_ternary]
+family = "VOP3"
+dst = { field = "VDST", class = "vgpr", min = 0, max = 255 }
+src = [
+  { field = "SRC0", class = "vector_source" },
+  { field = "SRC1", class = "vector_source" },
+  { field = "SRC2", class = "vector_source" },
+]
+max_literals = 1
+unsupported = [
+  "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+  "src_float_inline", "src_special", "output_modifiers", "op_sel",
+]
+
+[[form]]
+name = "V_MED3_F32"
+family = "VOP3"
+opcode = 343
+variant = "Med3F32"
+operation = "med3"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "unchanged"
+exec = "unchanged"
+wave = "any"
+operands = "vop3_f32_ternary"
+spec = [{ document = "guide", section = "12.12", page = 170 }]
+verify = ["reference", "independent", "metal", "llvm_encoding"]

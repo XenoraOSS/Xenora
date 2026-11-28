@@ -114,13 +114,7 @@ fn length(name: &str, operands: &[Operand]) -> usize {
         | "vbroadcasti128" => 32,
         "vextracti128" => 16,
         _ => match operands[0] {
-            Operand::Register(_, wide) => {
-                if wide {
-                    32
-                } else {
-                    16
-                }
-            }
+            Operand::Register(_, wide) if wide => 32,
             _ => 16,
         },
     }

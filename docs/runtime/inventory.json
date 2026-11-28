@@ -24,6 +24,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "combase.dll",
+      "canonical_symbol": "CoCreateInstance",
+      "kind": "name",
+      "library": "api-ms-win-core-com-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CoCreateInstance"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "combase.dll",
       "canonical_symbol": "CoInitializeEx",
       "kind": "name",
       "library": "api-ms-win-core-com-l1-1-0.dll",
@@ -13360,6 +13370,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "SignalObjectAndWait"
+    },
+    {
+      "data_import": false,
+      "family": "windows-system",
+      "kind": "name",
+      "library": "kernel32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "Sleep"
     },
     {
@@ -17774,6 +17794,16 @@
     },
     {
       "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "winhttp.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "WinHttpWriteData"
+    },
+    {
+      "data_import": false,
       "family": "windows-networking",
       "kind": "name",
       "library": "ws2_32.dll",
@@ -19460,6 +19490,16 @@
       "source": "manual",
       "status": "implemented",
       "status_explicit": true,
+      "symbol": "XNetworkingQueryPreferredLocalUdpMultiplayerPort"
+    },
+    {
+      "data_import": false,
+      "family": "xbox-gaming",
+      "kind": "name",
+      "library": "xgameruntime.dll",
+      "source": "manual",
+      "status": "implemented",
+      "status_explicit": true,
       "symbol": "XNetworkingQueryStatistics"
     },
     {
@@ -19844,17 +19884,17 @@
     }
   ],
   "summary": {
-    "aliases": 954,
-    "api_set_aliases": 753,
-    "canonical_services": 974,
+    "aliases": 955,
+    "api_set_aliases": 754,
+    "canonical_services": 977,
     "data_import_services": 7,
     "duplicate_registrations": 0,
-    "implemented": 246,
+    "implemented": 247,
     "implicit_status_services": 78,
     "libraries": 25,
-    "manual_services": 672,
+    "manual_services": 675,
     "ordinal_aliases": 35,
-    "partial": 728,
+    "partial": 730,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,

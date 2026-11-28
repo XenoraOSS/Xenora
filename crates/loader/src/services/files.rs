@@ -45,6 +45,11 @@ pub(super) struct OpenFile {
     open_access: u32,
     pub(super) access: u32,
     share: u32,
+    // A directory opens only through the backup-semantics flag and supports
+    // no read or write: the handle exists so callers can prove the entry is
+    // a directory and close it again, which is all the win32 opendir chain
+    // of a real binary needs before it enumerates by path.
+    pub(super) directory: bool,
 }
 
 impl OpenFile {
@@ -73,6 +78,14 @@ fn read_guest_path(memory: &GuestMemory, address: u64) -> Result<Option<String>,
             let Ok(path) = String::from_utf16(&units) else {
                 return Ok(None);
             };
+            // The empty string is no path at all: every operation on it
+            // fails as invalid. Dot components stay untouched here - the
+            // consumers resolve them at the point the path becomes
+            // root-anchored, because a relative `..` must first join the
+            // working directory before it knows what it climbs.
+            if path.is_empty() {
+                return Ok(None);
+            }
             let path = path.replace('/', "\\").to_ascii_lowercase();
             let name = path.strip_prefix("c:\\").unwrap_or(&path);
             return Ok(Some(name.to_owned()));
@@ -105,9 +118,35 @@ pub(super) fn is_nul_path(path: &str) -> bool {
     final_component.split('.').next().unwrap_or_default() == "nul"
 }
 
+/// The lexical resolution the path rules document: `.` is the directory the
+/// path is already in and drops, `..` is its parent and pops one component,
+/// and a `..` at the root stays at the root because there is nothing to pop.
+/// The resolution is purely lexical - `a\..\b` is exactly `b` whether or
+/// not `a` ever existed - and it runs ahead of validation, so the dot
+/// components are never file names at all while a real name ending with a
+/// dot stays rejected exactly as before.
+fn resolve_dots(path: &str) -> String {
+    let mut components: Vec<&str> = Vec::new();
+    for component in path.split('\\') {
+        match component {
+            "." => {}
+            ".." => {
+                // The leading empty component of an anchored path is no real
+                // component: the root cannot be climbed past, so it stays.
+                if components.last().is_some_and(|last| !last.is_empty()) {
+                    components.pop();
+                }
+            }
+            _ => components.push(component),
+        }
+    }
+    components.join("\\")
+}
+
 fn valid_key(name: &str) -> bool {
+    // The empty key is the root: a path of dot components resolves to it.
     if name.is_empty() {
-        return false;
+        return true;
     }
     if is_nul_path(name) {
         // The device resolves in any directory position; the components
@@ -148,7 +187,7 @@ fn resolve_bare_path(state: &ServicesState, name: &str) -> Option<String> {
 
 fn guest_path(memory: &GuestMemory, address: u64) -> Result<Option<String>, MemoryError> {
     Ok(read_guest_path(memory, address)?
-        .map(|name| strip_root_anchor(&name).to_owned())
+        .map(|name| resolve_dots(strip_root_anchor(&name)))
         .filter(|name| valid_key(name)))
 }
 
@@ -167,6 +206,9 @@ fn read_guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String
             let Ok(path) = String::from_utf8(bytes) else {
                 return Ok(None);
             };
+            if path.is_empty() {
+                return Ok(None);
+            }
             let path = path.replace('/', "\\").to_ascii_lowercase();
             let name = path.strip_prefix("c:\\").unwrap_or(&path);
             return Ok(Some(name.to_owned()));
@@ -178,7 +220,7 @@ fn read_guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String
 
 fn guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String>, MemoryError> {
     Ok(read_guest_path_a(memory, address)?
-        .map(|name| strip_root_anchor(&name).to_owned())
+        .map(|name| resolve_dots(strip_root_anchor(&name)))
         .filter(|name| valid_key(name)))
 }
 
@@ -480,6 +522,20 @@ fn find_first(
             });
         }
     }
+    // The real enumeration of a directory always begins with the dot
+    // entries: `.` is the directory itself and `..` its parent, both
+    // directories, and even an empty directory answers them to a `*`
+    // pattern. They go through the same wildcard match as real names.
+    for dot in [".", ".."] {
+        if wildcard_match(pattern, dot) {
+            entries.push(SearchEntry {
+                name: dot.to_owned(),
+                attributes: 0x10,
+                size: 0,
+                times: EPOCH_FILETIME3,
+            });
+        }
+    }
     entries.sort_by(|a, b| a.name.cmp(&b.name));
     let Some(first) = entries.first() else {
         return Err(FILE_NOT_FOUND);
@@ -639,13 +695,16 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         let disposition = args.get(4, memory).map_err(ExitReason::MemoryFault)? as u32;
         let flags = args.get(5, memory).map_err(ExitReason::MemoryFault)? as u32;
         let template = args.get(6, memory).map_err(ExitReason::MemoryFault)?;
+        // FILE_FLAG_BACKUP_SEMANTICS is a flag, no attribute: it is the only
+        // flag bit the machine models, and it matters only for directories.
+        let backup_semantics = flags & 0x0200_0000 != 0;
         if args.r9 != 0
             // BACKUP_SEMANTICS is accepted beside the zero and normal
             // attribute flags: on a file it is a no-op on Windows itself, the
             // machine models no backup privilege, and directories refuse on
             // their own path below.
             || template != 0
-            || !matches!(flags & !(0x0200_0000), 0 | 0x80)
+            || !matches!(flags & !0x0200_0000, 0 | 0x80)
             || access & !(READ | WRITE | WRITE_ATTRIBUTES) != 0
             || share & !3 != 0
         {
@@ -676,6 +735,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     open_access: access,
                     access,
                     share,
+                    directory: false,
                 }),
             );
             return Ok(handle);
@@ -685,7 +745,28 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             return open.fail(cpu.gs_base, PATH_NOT_FOUND, INVALID_HANDLE);
         }
         if objects.directories.contains(&path) {
-            return open.fail(cpu.gs_base, ERROR_ACCESS_DENIED, INVALID_HANDLE);
+            // CreateFile never creates or truncates a directory, so only the
+            // plain open of an existing one is meaningful, and the
+            // documentation gates even that behind the backup-semantics
+            // flag.
+            if !backup_semantics || disposition != 3 {
+                return open.fail(cpu.gs_base, ERROR_ACCESS_DENIED, INVALID_HANDLE);
+            }
+            let Some(handle) = objects.next_handle() else {
+                return open.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, INVALID_HANDLE);
+            };
+            objects.insert_handle(
+                handle,
+                GuestObject::File(OpenFile {
+                    path,
+                    position: Arc::new(AtomicU64::new(0)),
+                    open_access: access,
+                    access,
+                    share,
+                    directory: true,
+                }),
+            );
+            return Ok(handle);
         }
         let exists = objects.files.contains_key(&path);
         if exists && disposition == 1 {
@@ -727,6 +808,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 open_access: access,
                 access,
                 share,
+                directory: false,
             }),
         );
         Ok(handle)
@@ -739,9 +821,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         let disposition = args.get(4, memory).map_err(ExitReason::MemoryFault)? as u32;
         let flags = args.get(5, memory).map_err(ExitReason::MemoryFault)? as u32;
         let template = args.get(6, memory).map_err(ExitReason::MemoryFault)?;
+        // FILE_FLAG_BACKUP_SEMANTICS is a flag, no attribute: it is the only
+        // flag bit the machine models, and it matters only for directories.
+        let backup_semantics = flags & 0x0200_0000 != 0;
         if args.r9 != 0
             || template != 0
-            || !matches!(flags & !(0x0200_0000), 0 | 0x80)
+            || !matches!(flags & !0x0200_0000, 0 | 0x80)
             || access & !(READ | WRITE | WRITE_ATTRIBUTES) != 0
             || share & !3 != 0
         {
@@ -772,6 +857,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     open_access: access,
                     access,
                     share,
+                    directory: false,
                 }),
             );
             return Ok(handle);
@@ -781,7 +867,24 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             return open_a.fail(cpu.gs_base, PATH_NOT_FOUND, INVALID_HANDLE);
         }
         if objects.directories.contains(&path) {
-            return open_a.fail(cpu.gs_base, ERROR_ACCESS_DENIED, INVALID_HANDLE);
+            if !backup_semantics || disposition != 3 {
+                return open_a.fail(cpu.gs_base, ERROR_ACCESS_DENIED, INVALID_HANDLE);
+            }
+            let Some(handle) = objects.next_handle() else {
+                return open_a.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, INVALID_HANDLE);
+            };
+            objects.insert_handle(
+                handle,
+                GuestObject::File(OpenFile {
+                    path,
+                    position: Arc::new(AtomicU64::new(0)),
+                    open_access: access,
+                    access,
+                    share,
+                    directory: true,
+                }),
+            );
+            return Ok(handle);
         }
         let exists = objects.files.contains_key(&path);
         if exists && disposition == 1 {
@@ -823,6 +926,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 open_access: access,
                 access,
                 share,
+                directory: false,
             }),
         );
         Ok(handle)
@@ -1758,6 +1862,12 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             if file.access & required == 0 {
                 return state.fail(cpu.gs_base, ERROR_ACCESS_DENIED, 0);
             }
+            if file.directory {
+                // A directory handle supports no transfer, exactly as on
+                // Windows: the open exists to prove the entry and to close
+                // again, never to read or write through.
+                return state.fail(cpu.gs_base, ERROR_ACCESS_DENIED, 0);
+            }
             if args.r9 == 0 || memory.check_write(args.r9, 4).is_err() {
                 return state.fail(cpu.gs_base, ERROR_NOACCESS, 0);
             }
@@ -2465,14 +2575,20 @@ impl super::ObjectState {
             .replace('/', "\\")
             .to_ascii_lowercase();
         let path = path.strip_prefix("c:\\").unwrap_or(&path);
-        let path = strip_root_anchor(path).to_owned();
+        // The empty string is no path at all, while a path of dot components
+        // - or the root anchor itself - resolves to the root, which is valid.
+        if path.is_empty() {
+            return None;
+        }
+        let path = resolve_dots(strip_root_anchor(path));
         valid_key(&path).then_some(path)
     }
 
     pub(super) fn drive_entry(&self, path: &str) -> DriveEntry {
         if self.files.contains_key(path) {
             DriveEntry::File
-        } else if self.directories.contains(path) {
+        } else if path.is_empty() || self.directories.contains(path) {
+            // The empty key is the root, which always exists.
             DriveEntry::Directory
         } else {
             let parent = parent(path);

@@ -25,7 +25,9 @@ const AUDIO: u64 = 0x9_0000;
 
 const S_OK: u32 = 0;
 const E_POINTER: u32 = 0x8000_4003;
+const E_NOTIMPL: u32 = 0x8000_4001;
 const E_INVALIDARG: u32 = 0x8007_0057;
+const XAUDIO2_E_INVALID_CALL: u32 = 0x8896_0001;
 
 /// The test environment: a registry, guest memory and a CPU.
 struct Guest {
@@ -224,6 +226,110 @@ fn the_voice_details_and_the_channel_mask_follow_the_voice() {
     assert_eq!(result, S_OK);
     let mask = guest.memory.read_u32(SCRATCH + 160).unwrap();
     assert_eq!(mask, 0x3, "front left and front right");
+}
+
+/// SetSourceSampleRate changes an empty voice and refuses a queued one.
+#[test]
+fn set_source_sample_rate_requires_an_empty_queue() {
+    let mut guest = Guest::new();
+    let engine = guest.engine();
+    let (mastering, voice) = guest.voices(engine);
+
+    let details_rate = |guest: &mut Guest, object: u64| {
+        let result = guest.call(
+            MODULE,
+            "IXAudio2Voice.GetVoiceDetails",
+            Guest::args(object, SCRATCH + 128, 0, 0),
+        );
+        assert_eq!(result, 0);
+        let details = guest.read(SCRATCH + 128, 16);
+        (
+            u32::from_le_bytes(details[8..12].try_into().unwrap()),
+            u32::from_le_bytes(details[12..16].try_into().unwrap()),
+        )
+    };
+
+    assert_eq!(details_rate(&mut guest, voice), (2, 48_000));
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.SetSourceSampleRate",
+        Guest::args(voice, 24_000, 0, 0),
+    );
+    assert_eq!(result, S_OK);
+    assert_eq!(details_rate(&mut guest, voice), (2, 24_000));
+
+    for rate in [0, 999, 200_001] {
+        let result = guest.call(
+            MODULE,
+            "IXAudio2SourceVoice.SetSourceSampleRate",
+            Guest::args(voice, rate, 0, 0),
+        );
+        assert_eq!(result, E_INVALIDARG, "rate {rate}");
+    }
+    assert_eq!(details_rate(&mut guest, voice), (2, 24_000));
+
+    guest.buffer(AUDIO, 64);
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.SubmitSourceBuffer",
+        Guest::args(voice, SCRATCH + 64, 0, 0),
+    );
+    assert_eq!(result, S_OK);
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.SetSourceSampleRate",
+        Guest::args(voice, 48_000, 0, 0),
+    );
+    assert_eq!(result, XAUDIO2_E_INVALID_CALL);
+    assert_eq!(details_rate(&mut guest, voice), (2, 24_000));
+
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.FlushSourceBuffers",
+        Guest::args(voice, 0, 0, 0),
+    );
+    assert_eq!(result, S_OK);
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.SetSourceSampleRate",
+        Guest::args(voice, 48_000, 0, 0),
+    );
+    assert_eq!(result, S_OK);
+    assert_eq!(details_rate(&mut guest, voice), (2, 48_000));
+
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.SetSourceSampleRate",
+        Guest::args(mastering, 48_000, 0, 0),
+    );
+    assert_eq!(result, XAUDIO2_E_INVALID_CALL);
+}
+
+/// ExitLoop is an empty-queue no-op, but deferred sets and wrong voices fail.
+#[test]
+fn exit_loop_reports_noop_and_error_boundaries() {
+    let mut guest = Guest::new();
+    let engine = guest.engine();
+    let (mastering, voice) = guest.voices(engine);
+
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.ExitLoop",
+        Guest::args(voice, 0, 0, 0),
+    );
+    assert_eq!(result, S_OK);
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.ExitLoop",
+        Guest::args(voice, 9, 0, 0),
+    );
+    assert_eq!(result, E_NOTIMPL);
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.ExitLoop",
+        Guest::args(mastering, 0, 0, 0),
+    );
+    assert_eq!(result, XAUDIO2_E_INVALID_CALL);
 }
 
 /// A stopped engine clock leaves the voices where they are.

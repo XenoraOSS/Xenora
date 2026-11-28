@@ -72,7 +72,7 @@ OPERATIONS = {
     "ff0": "FindFirstZero", "ff1": "FindFirstOne", "flbit": "FindLastBit",
     "sext": "SignExtend", "abs": "Absolute",
     "min": "Minimum", "max": "Maximum", "cselect": "Select", "bfm": "BitfieldMask",
-    "mul": "Multiply", "mul_hi": "MultiplyHigh", "bfe": "BitfieldExtract",
+    "mul": "Multiply", "mul_legacy": "MultiplyLegacy", "mul_hi": "MultiplyHigh", "med3": "Median", "bfe": "BitfieldExtract",
     "absdiff": "AbsoluteDifference", "lshl_add": "ShiftLeftAdd",
     "mul24": "Multiply24", "mul_hi24": "MultiplyHigh24",
     "mov": "Move", "cmov": "ConditionalMove", "swap": "Swap",
@@ -96,7 +96,7 @@ FLOAT_ROUNDING = {"trunc", "ceil", "rndne", "floor"}
 # ---- VOP2 binary32 arithmetic (#784) ----
 # V_ADD/SUB/SUBREV/MUL/MIN/MAX_F32 (guide 12.7, pages 131-133) reuse these
 # operation names with signedness float; only the vop2_f32 rule takes them.
-VOP2_FLOAT_ARITHMETIC = {"add", "sub", "mul", "min", "max"}
+VOP2_FLOAT_ARITHMETIC = {"add", "sub", "mul", "mul_legacy", "min", "max"}
 # ---- end VOP2 binary32 arithmetic (#784) ----
 # Sign extension reads only the low source_bits of S0 (required for sext only).
 SOURCE_BITS_KEY = "source_bits"
@@ -140,6 +140,9 @@ VOPC_F32_RULE = "vopc_vcc_f32"
 FLOAT_RULE_OPERATIONS = {
     "vop1_f32": FLOAT_ROUNDING,
     "vop2_f32": VOP2_FLOAT_ARITHMETIC,
+    "vop2_f32_legacy": {"mul_legacy"},
+    "vop3_f32_legacy": {"mul_legacy"},
+    "vop3_f32_ternary": {"med3"},
     VOPC_F32_RULE: {"compare"},
 }
 # (relation, signedness) -> primitive. Equality does not depend on signedness,
@@ -169,7 +172,7 @@ LOGICAL = {
     "not", "brev", "bcnt0", "bcnt1", "ff0", "ff1", "cselect", "bfm", "swap",
 }
 ARITHMETIC = {
-    "add", "sub", "min", "max", "mul", "mul_hi", "bfe", "absdiff", "lshl_add", "mul24", "mul_hi24",
+    "add", "sub", "min", "max", "mul", "mul_legacy", "mul_hi", "med3", "bfe", "absdiff", "lshl_add", "mul24", "mul_hi24",
 }
 SHIFTS = {"lshl", "lshr", "ashr"}
 # Operations whose S1 is an unsigned control word (a shift count or a bit-field
@@ -332,9 +335,15 @@ VECTOR_PRIMITIVES = {
     ("add", "float"): "AddF32",
     ("sub", "float"): "SubF32",
     ("mul", "float"): "MulF32",
+    ("mul_legacy", "float"): "MulLegacyF32",
     ("min", "float"): "MinF32",
     ("max", "float"): "MaxF32",
     # ---- end VOP2 binary32 arithmetic (#784) ----
+}
+
+# VOP3 three-input float forms: (operation, signedness) -> VectorTernary.
+VECTOR_TERNARY_PRIMITIVES = {
+    ("med3", "float"): "Med3F32",
 }
 
 # Operand rules the decoder implements, each exactly once. A registry rule must
@@ -346,7 +355,7 @@ UNSUPPORTED_COMBOS = {
 # Every combo name a rule may list (VOP2 also names vcc_hi and NULL sources,
 # which SOP2 groups under src_vcc and src_special).
 # VOP3 rules also name source classes and encoding fields they refuse.
-VOP3_COMBOS = {"src_sgpr", "src_inline", "src_literal", "modifiers", "src2"}
+VOP3_COMBOS = {"src_sgpr", "src_inline", "src_literal", "modifiers", "output_modifiers", "op_sel", "src2"}
 # src_nan: a NaN value in a float source, whose result depends on MODE.IEEE
 # and MODE.DX10_CLAMP (guide 3.5); the translator does not model it.
 ALL_COMBOS = UNSUPPORTED_COMBOS | {"src_vcc_hi", "src_null", "dst_vcc_hi", "src_nan"} | VOP3_COMBOS
@@ -737,6 +746,72 @@ OPERAND_RULES = {
             "src_float_inline", "src_special", "src_nan",
         },
         "kind": "vector",
+    },
+    # DX9 legacy binary32 multiply: same operand shape as `vop2_f32`, but NaN
+    # sources are not ruled out because a zero operand still wins over NaN.
+    "vop2_f32_legacy": {
+        "rust": "Vop2F32Legacy",
+        "enum": "VectorAluOp",
+        "shape": {
+            "family": "VOP2",
+            "dst": {"field": "VDST", "class": "vgpr", "min": 0, "max": 255},
+            "src": [
+                {"field": "SRC0", "class": "vector_source"},
+                {"field": "VSRC1", "class": "vgpr"},
+            ],
+            "max_literals": 1,
+        },
+        "unsupported": {
+            "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+            "src_float_inline", "src_special",
+        },
+        "kind": "vector",
+    },
+    # VOP3 encoding of a binary32 form: SRC0/SRC1 use the same narrowed source
+    # domain as the VOP2 float rule; ABS/NEG are decoded per source, while
+    # OP_SEL, CLAMP, OMOD and the unused SRC2 stay refused.
+    "vop3_f32_legacy": {
+        "rust": "Vop3F32Legacy",
+        "enum": "VectorAluOp",
+        "shape": {
+            "family": "VOP3",
+            "dst": {"field": "VDST", "class": "vgpr", "min": 0, "max": 255},
+            "src": [
+                {"field": "SRC0", "class": "vector_source"},
+                {"field": "SRC1", "class": "vector_source"},
+            ],
+            "max_literals": 1,
+            "variant_only": True,
+        },
+        "unsupported": {
+            "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+            "src_float_inline", "src_special", "output_modifiers", "op_sel", "src2",
+        },
+        "kind": "vector_vop3",
+        "variant_of": "vector",
+        "variant_enum": "VectorFloatAluVop3Op",
+    },
+    # Three-input binary32 VOP3 form. The source classes are narrowed as for
+    # the legacy multiply, but SRC2 is a real input and all three ABS/NEG bits
+    # are meaningful. OP_SEL, CLAMP and OMOD stay refused.
+    "vop3_f32_ternary": {
+        "rust": "Vop3F32Ternary",
+        "enum": "VectorTernaryVop3Op",
+        "shape": {
+            "family": "VOP3",
+            "dst": {"field": "VDST", "class": "vgpr", "min": 0, "max": 255},
+            "src": [
+                {"field": "SRC0", "class": "vector_source"},
+                {"field": "SRC1", "class": "vector_source"},
+                {"field": "SRC2", "class": "vector_source"},
+            ],
+            "max_literals": 1,
+        },
+        "unsupported": {
+            "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+            "src_float_inline", "src_special", "output_modifiers", "op_sel",
+        },
+        "kind": "vector_ternary",
     },
     # ---- end VOP2 binary32 arithmetic (#784) ----
     # MIMG image sample (IMAGE_SAMPLE_LZ and IMAGE_SAMPLE_L). The image operand
@@ -1276,7 +1351,7 @@ def validate(registry, snapshot):
             if RELATION_KEY in form or form["width"] != 32:
                 errors.append(f"{label}: control operation requires width 32 and no relation")
             primitive = ("unchanged", None, form["operation"] == "branch_scc_zero")
-        elif _rule_kind(form) in ("vector", "vector_unary", "vector_swap"):
+        elif _rule_kind(form) in ("vector", "vector_unary", "vector_swap", "vector_ternary"):
             if RELATION_KEY in form:
                 errors.append(f"{label}: {RELATION_KEY} on a non-compare operation")
             key = (form["operation"], form["signedness"])
@@ -1284,6 +1359,7 @@ def validate(registry, snapshot):
                 "vector": VCC_VECTOR_PRIMITIVES if reads_vcc else VECTOR_PRIMITIVES,
                 "vector_unary": VECTOR_UNARY_PRIMITIVES,
                 "vector_swap": {("swap", "bitwise"): "Swap"},
+                "vector_ternary": VECTOR_TERNARY_PRIMITIVES,
             }[_rule_kind(form)]
             lowering = table.get(key)
             primitive = None if lowering is None else ("unchanged", lowering, False)
@@ -1328,6 +1404,7 @@ def validate(registry, snapshot):
             else "unary" if form["operation"] in UNARY or (
                 form["operation"] == "mov" and form["family"] == "SOP1"
             ) or form["exec"] != "unchanged"
+            else "vector_ternary" if _rule_kind(form) == "vector_ternary"
             else "vector" if _rule_kind(form) == "vector" and form["operation"] not in UNARY
             else "control" if form["operation"] in CONTROL_OPERATIONS
             else "immediate" if _rule_kind(form) == "immediate"
@@ -1537,7 +1614,7 @@ def render(registry, snapshot):
         "use crate::primitive;",
         "use crate::semantics::{",
         "    CarryIn, Document, Evidence, FormSemantics, MaskEffect, Operation, OperandRule, SccEffect,",
-        "    Signedness, SpecRef, VectorBinary, VectorLowering, VectorUnary, VectorVcc, Wave,",
+        "    Signedness, SpecRef, VectorBinary, VectorLowering, VectorTernary, VectorUnary, VectorVcc, Wave,",
         "};",
         "use crate::CompareRelation;",
         "",
@@ -2100,6 +2177,40 @@ def _render_enum(rule_name, forms, snapshot, positions):
                     "                (value, exec, Some(scc))",
                     "            }",
                 ]
+        out += ["        }", "    }", "}"]
+        return out
+    if kind == "vector_ternary":
+        out += [
+            "",
+            "    /// Assembler name of the VOP3 encoding, as LLVM prints it.",
+            "    pub const fn assembly_name(self) -> &'static str {",
+            "        match self {",
+        ]
+        out += [f"            Self::{form['variant']} => \"{form['name'].lower()}\"," for form in forms]
+        out += [
+            "        }",
+            "    }",
+            "",
+            "    /// The per-lane three-input operation its MSL lowering uses.",
+            "    pub const fn lowering(self) -> VectorTernary {",
+            "        match self {",
+        ]
+        out += [
+            f"            Self::{form['variant']} => VectorTernary::{VECTOR_TERNARY_PRIMITIVES[(form['operation'], form['signedness'])]},"
+            for form in forms
+        ]
+        out += [
+            "        }",
+            "    }",
+            "",
+            "    /// The operand rule the decoder applies.",
+            "    pub const fn operand_rule(self) -> OperandRule {",
+            "        match self {",
+        ]
+        out += [
+            f"            Self::{form['variant']} => OperandRule::{OPERAND_RULES[form['operands']]['rust']},"
+            for form in forms
+        ]
         out += ["        }", "    }", "}"]
         return out
     if kind == "vector":

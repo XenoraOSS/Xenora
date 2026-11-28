@@ -29,6 +29,15 @@ fn name(path: &Path) -> &str {
     path.to_str().expect("UTF-8 fixture path")
 }
 
+fn startup_report(stderr: &[u8]) -> String {
+    String::from_utf8(stderr.to_vec())
+        .expect("startup diagnostics are UTF-8")
+        .lines()
+        .find(|line| line.starts_with("xenora-startup "))
+        .expect("startup report line")
+        .to_owned()
+}
+
 #[test]
 fn the_original_multi_dll_package_runs_through_the_normal_runner() {
     let output = run(&[
@@ -103,5 +112,117 @@ fn a_package_module_must_be_a_regular_file() {
     assert!(
         stderr.contains("a program must be a regular file"),
         "{stderr}"
+    );
+}
+
+#[test]
+fn a_normal_package_exit_reports_completed_startup_phases() {
+    let output = run(&[
+        "--experimental",
+        "--startup-report",
+        "--pe",
+        name(&fixture("multidll-consumer.exe")),
+        "--package",
+        name(&fixture("xenora_chain.dll")),
+        "--package",
+        name(&fixture("xenora_math.dll")),
+    ]);
+    assert_eq!(output.status.code(), Some(70));
+    let report = startup_report(&output.stderr);
+    assert!(
+        report.contains(
+            r#""events":[{"stage":"parsed","completed":true},{"stage":"mapped","completed":true},{"stage":"relocated","completed":true},{"stage":"imports_bound","completed":true},{"stage":"tls_completed","completed":true},{"stage":"entry_started","completed":false},{"stage":"entry_returned","completed":true}]"#
+        ),
+        "{report}"
+    );
+    assert!(report.contains(r#""protocol":"complete""#), "{report}");
+    assert!(
+        report.contains(r#""kind":"guest_exit","guest_status":70,"worker_code":70"#),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_dll_refusing_attach_reports_failure_before_tls_completion_or_entry() {
+    let output = run(&[
+        "--experimental",
+        "--startup-report",
+        "--pe",
+        name(&fixture("multidll-consumer.exe")),
+        "--package",
+        name(&fixture("refusing/xenora_chain.dll")),
+        "--package",
+        name(&fixture("xenora_math.dll")),
+    ]);
+    assert_eq!(output.status.code(), Some(125));
+    let report = startup_report(&output.stderr);
+    assert!(
+        report.contains(r#""last_completed_stage":"imports_bound""#),
+        "{report}"
+    );
+    assert!(!report.contains("tls_completed"), "{report}");
+    assert!(!report.contains("entry_started"), "{report}");
+    assert!(
+        report.contains(r#""kind":"known_failure","phase":"startup""#)
+            && report.contains("DllMain of xenora_chain.dll returned FALSE"),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_dll_exiting_before_root_entry_is_a_guest_exit_not_a_protocol_error() {
+    let output = run(&[
+        "--experimental",
+        "--startup-report",
+        "--pe",
+        name(&fixture("multidll-consumer.exe")),
+        "--package",
+        name(&fixture("exiting/xenora_chain.dll")),
+        "--package",
+        name(&fixture("xenora_math.dll")),
+    ]);
+    assert_eq!(output.status.code(), Some(33));
+    let report = startup_report(&output.stderr);
+    assert!(
+        report.contains(r#""last_completed_stage":"imports_bound""#),
+        "{report}"
+    );
+    assert!(!report.contains("tls_completed"), "{report}");
+    assert!(!report.contains("entry_started"), "{report}");
+    assert!(
+        report.contains(r#""protocol":"complete""#)
+            && report.contains(r#""kind":"guest_exit","guest_status":33,"worker_code":33"#),
+        "{report}"
+    );
+}
+
+#[test]
+fn a_post_entry_stop_reports_the_entry_boundary_before_execution_failure() {
+    let output = run(&[
+        "--experimental",
+        "--startup-report",
+        "--max-steps",
+        "1",
+        "--pe",
+        name(&fixture("multidll-consumer.exe")),
+        "--package",
+        name(&fixture("xenora_chain.dll")),
+        "--package",
+        name(&fixture("xenora_math.dll")),
+    ]);
+    assert_eq!(output.status.code(), Some(125));
+    let report = startup_report(&output.stderr);
+    assert!(
+        report.contains(r#""stage":"entry_started","completed":false"#),
+        "{report}"
+    );
+    assert!(
+        report.contains(r#""stage":"entry_returned","completed":true"#),
+        "{report}"
+    );
+    assert!(
+        report.contains(r#""kind":"known_failure","phase":"execution""#)
+            && report.contains("StepLimitExceeded"),
+        "{report}"
     );
 }
