@@ -749,6 +749,8 @@ remains unsupported.
 
 ### Added
 
+- ARM64 CI reassembles the checked-in `gfx1030` shader fixtures with native LLVM and checks that the resulting bytes match the binaries used by Xenora (#1241).
+
 - Added `xenora-import-gen` deterministic code generation crate and `xenora imports generate <--pe <exe> | --csv <file>> [--out <dir>]` CLI command. Automatically extracts imported symbols from PE executables or CSV manifests, classifies them against a built-in offline database of documented public Win32/CRT and ISO C specifications without consuming AI tokens or network resources, maps compatible CRT functions to native macOS libc ABI adapters with guest memory bounds checking, generates logged Win32 service stubs, generates deterministic conformance test suites, and produces coverage reports in both Markdown and CSV format.
 - Added automated metadata ingestion (`ingest_standard_system_headers`) and `xenora imports metadata sync` command capable of parsing real POSIX/C system headers into typed `MetadataCatalog` definitions (188 entries).
 - Added `xenora imports verify` automated behavioral verification runner checking CRT math, string, and memory bounds invariants across 12 independent behavioral test cases.
