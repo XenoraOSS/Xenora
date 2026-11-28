@@ -394,6 +394,40 @@ vpsllv = { ref = "sdm VPSLLVD/VPSLLVQ/VPSRLVD/VPSRLVQ/VPSRAVD" }
 vpsrlv = { ref = "sdm VPSLLVD/VPSLLVQ/VPSRLVD/VPSRLVQ/VPSRAVD" }
 vpsravd = { ref = "sdm VPSLLVD/VPSLLVQ/VPSRLVD/VPSRLVQ/VPSRAVD" }
 
+# FMA3, VEX.66.0F38. VEX.W selects single or double precision from one opcode,
+# so the operation names the packed (`p`) or scalar (`s`) form rather than the
+# format, and VEX.L selects 128 or 256 bits for the packed forms.
+fmaddsub132p = { faults = true, ref = "sdm FMA" }
+fmsubadd132p = { faults = true, ref = "sdm FMA" }
+fmadd132p = { faults = true, ref = "sdm FMA" }
+fmsub132p = { faults = true, ref = "sdm FMA" }
+fnmadd132p = { faults = true, ref = "sdm FMA" }
+fnmsub132p = { faults = true, ref = "sdm FMA" }
+fmaddsub213p = { faults = true, ref = "sdm FMA" }
+fmsubadd213p = { faults = true, ref = "sdm FMA" }
+fmadd213p = { faults = true, ref = "sdm FMA" }
+fmsub213p = { faults = true, ref = "sdm FMA" }
+fnmadd213p = { faults = true, ref = "sdm FMA" }
+fnmsub213p = { faults = true, ref = "sdm FMA" }
+fmaddsub231p = { faults = true, ref = "sdm FMA" }
+fmsubadd231p = { faults = true, ref = "sdm FMA" }
+fmadd231p = { faults = true, ref = "sdm FMA" }
+fmsub231p = { faults = true, ref = "sdm FMA" }
+fnmadd231p = { faults = true, ref = "sdm FMA" }
+fnmsub231p = { faults = true, ref = "sdm FMA" }
+fmadd132s = { faults = true, ref = "sdm FMA" }
+fmsub132s = { faults = true, ref = "sdm FMA" }
+fnmadd132s = { faults = true, ref = "sdm FMA" }
+fnmsub132s = { faults = true, ref = "sdm FMA" }
+fmadd213s = { faults = true, ref = "sdm FMA" }
+fmsub213s = { faults = true, ref = "sdm FMA" }
+fnmadd213s = { faults = true, ref = "sdm FMA" }
+fnmsub213s = { faults = true, ref = "sdm FMA" }
+fmadd231s = { faults = true, ref = "sdm FMA" }
+fmsub231s = { faults = true, ref = "sdm FMA" }
+fnmadd231s = { faults = true, ref = "sdm FMA" }
+fnmsub231s = { faults = true, ref = "sdm FMA" }
+
 # The eight classic ALU operations share six opcodes at index*8 and one digit
 # of the immediate groups 80, 81 and 83.
 [alu]
@@ -6098,6 +6132,666 @@ prefix = "f2"
 opcode = 0xF0
 enc = "reg_rm_ub"
 length = "128"
+
+[[vex]]
+op = "fmaddsub132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x96
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmaddsub132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x96
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsubadd132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x97
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsubadd132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x97
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmadd132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x98
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmadd132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x98
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsub132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x9A
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsub132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x9A
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmadd132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x9C
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmadd132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x9C
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmsub132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x9E
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmsub132p"
+map = "0f38"
+prefix = "66"
+opcode = 0x9E
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmaddsub213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xA6
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmaddsub213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xA6
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsubadd213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xA7
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsubadd213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xA7
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmadd213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xA8
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmadd213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xA8
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsub213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xAA
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsub213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xAA
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmadd213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xAC
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmadd213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xAC
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmsub213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xAE
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmsub213p"
+map = "0f38"
+prefix = "66"
+opcode = 0xAE
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmaddsub231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xB6
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmaddsub231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xB6
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsubadd231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xB7
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsubadd231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xB7
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmadd231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xB8
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmadd231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xB8
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsub231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xBA
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmsub231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xBA
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmadd231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xBC
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmadd231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xBC
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmsub231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xBE
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fnmsub231p"
+map = "0f38"
+prefix = "66"
+opcode = 0xBE
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "v"
+nds = true
+
+[[vex]]
+op = "fmadd132s"
+map = "0f38"
+prefix = "66"
+opcode = 0x99
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fmadd132s"
+map = "0f38"
+prefix = "66"
+opcode = 0x99
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fmsub132s"
+map = "0f38"
+prefix = "66"
+opcode = 0x9B
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fmsub132s"
+map = "0f38"
+prefix = "66"
+opcode = 0x9B
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fnmadd132s"
+map = "0f38"
+prefix = "66"
+opcode = 0x9D
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fnmadd132s"
+map = "0f38"
+prefix = "66"
+opcode = 0x9D
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fnmsub132s"
+map = "0f38"
+prefix = "66"
+opcode = 0x9F
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fnmsub132s"
+map = "0f38"
+prefix = "66"
+opcode = 0x9F
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fmadd213s"
+map = "0f38"
+prefix = "66"
+opcode = 0xA9
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fmadd213s"
+map = "0f38"
+prefix = "66"
+opcode = 0xA9
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fmsub213s"
+map = "0f38"
+prefix = "66"
+opcode = 0xAB
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fmsub213s"
+map = "0f38"
+prefix = "66"
+opcode = 0xAB
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fnmadd213s"
+map = "0f38"
+prefix = "66"
+opcode = 0xAD
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fnmadd213s"
+map = "0f38"
+prefix = "66"
+opcode = 0xAD
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fnmsub213s"
+map = "0f38"
+prefix = "66"
+opcode = 0xAF
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fnmsub213s"
+map = "0f38"
+prefix = "66"
+opcode = 0xAF
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fmadd231s"
+map = "0f38"
+prefix = "66"
+opcode = 0xB9
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fmadd231s"
+map = "0f38"
+prefix = "66"
+opcode = 0xB9
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fmsub231s"
+map = "0f38"
+prefix = "66"
+opcode = 0xBB
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fmsub231s"
+map = "0f38"
+prefix = "66"
+opcode = 0xBB
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fnmadd231s"
+map = "0f38"
+prefix = "66"
+opcode = 0xBD
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fnmadd231s"
+map = "0f38"
+prefix = "66"
+opcode = 0xBD
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
+
+[[vex]]
+op = "fnmsub231s"
+map = "0f38"
+prefix = "66"
+opcode = 0xBF
+enc = "xmm_rm"
+length = "any"
+w = "0"
+src = "d"
+nds = true
+
+[[vex]]
+op = "fnmsub231s"
+map = "0f38"
+prefix = "66"
+opcode = 0xBF
+enc = "xmm_rm"
+length = "any"
+w = "1"
+src = "q"
+nds = true
 
 [[vex]]
 op = "vpermps"

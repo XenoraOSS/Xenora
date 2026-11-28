@@ -44,12 +44,12 @@ pub struct BufferDesc {
 
 impl BufferDesc {
     /// The size of the XAUDIO2_BUFFER structure on x64, in bytes.
-    pub const SIZE: usize = 48;
+    pub const SIZE: usize = 44;
 
     /// Reads an XAUDIO2_BUFFER from the bytes the guest laid out.
     ///
     /// The padding at bytes 36 to 40 is not part of any field and is ignored.
-    pub fn parse(bytes: &[u8; 48]) -> Self {
+    pub fn parse(bytes: &[u8; 44]) -> Self {
         BufferDesc {
             flags: read_u32(bytes, 0),
             audio_bytes: read_u32(bytes, 4),
@@ -59,7 +59,7 @@ impl BufferDesc {
             loop_begin: read_u32(bytes, 24),
             loop_length: read_u32(bytes, 28),
             loop_count: read_u32(bytes, 32),
-            context: read_u64(bytes, 40),
+            context: read_u64(bytes, 36),
         }
     }
 
@@ -200,15 +200,14 @@ pub struct VoiceState {
 
 impl VoiceState {
     /// The size of the XAUDIO2_VOICE_STATE structure on x64, in bytes.
-    pub const SIZE: usize = 24;
+    pub const SIZE: usize = 20;
 
     /// Writes the voice state in the x64 layout, with zeroed padding.
-    pub fn to_bytes(&self) -> [u8; 24] {
-        let mut bytes = [0u8; 24];
+    pub fn to_bytes(&self) -> [u8; 20] {
+        let mut bytes = [0u8; 20];
         bytes[0..8].copy_from_slice(&self.current_buffer_context.to_le_bytes());
         bytes[8..12].copy_from_slice(&self.buffers_queued.to_le_bytes());
-        bytes[12..16].fill(0);
-        bytes[16..24].copy_from_slice(&self.samples_played.to_le_bytes());
+        bytes[12..20].copy_from_slice(&self.samples_played.to_le_bytes());
         bytes
     }
 }

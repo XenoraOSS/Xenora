@@ -33,6 +33,16 @@ impl EngineId {
     fn new(slot: u32, generation: u32) -> Self {
         EngineId { slot, generation }
     }
+
+    /// The slot the engine lives in.
+    pub(crate) fn slot(&self) -> u32 {
+        self.slot
+    }
+
+    /// The generation the engine has in its slot.
+    pub(crate) fn generation(&self) -> u32 {
+        self.generation
+    }
 }
 
 /// The state of one engine.
@@ -40,6 +50,9 @@ pub(crate) struct Engine {
     /// The audio processor the guest asked for.
     #[allow(dead_code)]
     pub processor: u32,
+    /// Whether the engine clock runs. The clock of a real engine runs until
+    /// the guest stops it, so a new engine starts with it running.
+    pub clock_running: bool,
     /// The mastering voice of the engine, if it has one.
     pub mastering: Option<VoiceId>,
     /// The source voices of the engine.
@@ -61,6 +74,7 @@ impl Runtime {
         }
         let engine = Engine {
             processor,
+            clock_running: true,
             mastering: None,
             sources: Vec::new(),
         };
@@ -275,5 +289,22 @@ impl Runtime {
             VoiceKind::Mastering(mastering) => Ok((mastering.channels, mastering.sample_rate)),
             VoiceKind::Source(_) => Err(Error::InvalidCall("the voice is not a mastering voice")),
         }
+    }
+
+    /// The channel count and sample rate of a voice.
+    ///
+    /// A mastering voice reports the format of the engine it mixes to, and a
+    /// source voice the format the guest created it with.
+    pub fn voice_format(&self, voice: VoiceId) -> Result<(u32, u32), Error> {
+        let state = self
+            .voices
+            .get(voice.slot(), voice.generation())
+            .ok_or(Error::InvalidCall("the voice handle is no longer valid"))?;
+        Ok(match &state.kind {
+            VoiceKind::Mastering(mastering) => (mastering.channels, mastering.sample_rate),
+            VoiceKind::Source(source) => {
+                (u32::from(source.format.channels), source.format.sample_rate)
+            }
+        })
     }
 }

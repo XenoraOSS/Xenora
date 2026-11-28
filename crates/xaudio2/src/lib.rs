@@ -22,6 +22,7 @@
 #![deny(missing_docs)]
 
 pub mod buffer;
+pub mod clock;
 pub mod consts;
 pub mod engine;
 pub mod format;

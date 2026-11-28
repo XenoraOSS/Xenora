@@ -2627,3 +2627,16 @@ service libstdc++-6.dll __cxa_guard_abort(guard: ptr) -> void
     fails stops the guest for a guard the calling thread did not acquire
     ref Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)
     test invalid_guard_release_and_abort_fail_closed
+service xaudio2_9.dll XAudio2Create(ppv: ptr, flags: u32, processor: u32) -> i32
+    handler xaudio2_create
+    status partial
+    fails E_POINTER for a null or an unwritable out pointer; E_NOTIMPL for a nonzero flag; the out pointer is set to null before a call that fails
+    ref xaudio2.h XAudio2Create; Microsoft Learn, XAudio2Create function
+    test xaudio2_create_reports_pointer_and_flag_failures
+
+service xaudio2_9.dll XAudio2CreateWithVersionInfo(ppv: ptr, flags: u32, processor: u32, version: u32) -> i32
+    handler xaudio2_create_with_version_info
+    status partial
+    fails E_POINTER for a null or an unwritable out pointer; E_NOTIMPL for a nonzero flag; the version argument is accepted and recorded; the out pointer is set to null before a call that fails
+    ref the export list of xaudio2_9.dll in the Wine xaudio2_9 module specification, dlls/xaudio2_9/xaudio2_9.spec
+    test xaudio2_create_with_version_info_records_the_version_argument

@@ -95,8 +95,29 @@ fn strip_root_anchor(name: &str) -> &str {
     name.strip_prefix('\\').unwrap_or(name)
 }
 
+/// The NUL device, as DOS device names resolve: the final component's base
+/// name - before any extension - is `nul`, in any directory position. The
+/// device needs no directory behind it, and nothing traverses into it: a
+/// component after the device name cannot resolve. The paths the drive
+/// compares here are already lowercase.
+pub(super) fn is_nul_path(path: &str) -> bool {
+    let final_component = path.rsplit('\\').next().unwrap_or_default();
+    final_component.split('.').next().unwrap_or_default() == "nul"
+}
+
 fn valid_key(name: &str) -> bool {
-    !name.is_empty() && name.split('\\').all(valid_component)
+    if name.is_empty() {
+        return false;
+    }
+    if is_nul_path(name) {
+        // The device resolves in any directory position; the components
+        // before its name still have to be valid ones, and a trailing
+        // component after the device name makes the path no device path at
+        // all - it is rejected as a component, exactly as before.
+        let directory = parent(name);
+        return directory.is_empty() || directory.split('\\').all(valid_component);
+    }
+    name.split('\\').all(valid_component)
 }
 
 /// The bare drive key a guest path names, resolved as the drive resolves
@@ -640,6 +661,25 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             return open.fail(cpu.gs_base, INVALID_NAME, INVALID_HANDLE);
         };
         let mut objects = open.objects.lock().expect("guest object state");
+        if is_nul_path(&path) {
+            // The NUL device needs no directory behind it, exists under every
+            // disposition and takes no part in sharing or the drive's space:
+            // the open is the handle alone.
+            let Some(handle) = objects.next_handle() else {
+                return open.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, INVALID_HANDLE);
+            };
+            objects.insert_handle(
+                handle,
+                GuestObject::File(OpenFile {
+                    path,
+                    position: Arc::new(AtomicU64::new(0)),
+                    open_access: access,
+                    access,
+                    share,
+                }),
+            );
+            return Ok(handle);
+        }
         let parent = parent(&path);
         if !parent.is_empty() && !objects.directories.contains(parent) {
             return open.fail(cpu.gs_base, PATH_NOT_FOUND, INVALID_HANDLE);
@@ -717,6 +757,25 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             return open_a.fail(cpu.gs_base, INVALID_NAME, INVALID_HANDLE);
         };
         let mut objects = open_a.objects.lock().expect("guest object state");
+        if is_nul_path(&path) {
+            // The NUL device needs no directory behind it, exists under every
+            // disposition and takes no part in sharing or the drive's space:
+            // the open is the handle alone.
+            let Some(handle) = objects.next_handle() else {
+                return open_a.fail(cpu.gs_base, ERROR_NOT_ENOUGH_MEMORY, INVALID_HANDLE);
+            };
+            objects.insert_handle(
+                handle,
+                GuestObject::File(OpenFile {
+                    path,
+                    position: Arc::new(AtomicU64::new(0)),
+                    open_access: access,
+                    access,
+                    share,
+                }),
+            );
+            return Ok(handle);
+        }
         let parent = parent(&path);
         if !parent.is_empty() && !objects.directories.contains(parent) {
             return open_a.fail(cpu.gs_base, PATH_NOT_FOUND, INVALID_HANDLE);
@@ -1703,6 +1762,16 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 return state.fail(cpu.gs_base, ERROR_NOACCESS, 0);
             }
 
+            if is_nul_path(&file.path) {
+                // The NUL device: a write discards and reports the count, a
+                // read is end of file, and neither touches the drive or even
+                // the guest buffer - the device has no backing store.
+                let transferred = if writing { count } else { 0 };
+                memory
+                    .write_u32(args.r9, transferred as u32)
+                    .map_err(ExitReason::MemoryFault)?;
+                return Ok(1);
+            }
             let used = if writing {
                 files.values().map(Vec::len).sum::<usize>()
             } else {
@@ -2146,8 +2215,9 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         }
         let objects = types.objects.lock().expect("guest object state");
         match objects.handles.get(&args.rcx) {
-            Some(GuestObject::File(_)) => Ok(1),     // FILE_TYPE_DISK
-            Some(GuestObject::Pipe { .. }) => Ok(3), // FILE_TYPE_PIPE
+            Some(GuestObject::File(file)) if is_nul_path(&file.path) => Ok(2), // FILE_TYPE_CHAR
+            Some(GuestObject::File(_)) => Ok(1),                               // FILE_TYPE_DISK
+            Some(GuestObject::Pipe { .. }) => Ok(3),                           // FILE_TYPE_PIPE
             Some(_) => {
                 // A handle that is not a file has no type the file API knows.
                 Ok(0) // FILE_TYPE_UNKNOWN

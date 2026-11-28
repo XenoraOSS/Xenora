@@ -303,6 +303,14 @@ pub(crate) fn execute(
         (op, encoding) => {
             let source = read_source(cpu, memory, insn)?;
             let imm = lane_immediate(insn);
+            if let Some(shape) = x86_float::fused_shape(op) {
+                let destination = read_ymm(cpu, reg);
+                let result =
+                    x86_float::fused(cpu, shape, destination, first, source, length, vex.wide)?;
+                let write = if shape.scalar { 16 } else { length };
+                write_ymm(cpu, reg, result, write);
+                return Ok(());
+            }
             if let Some(result) = x86_float::vector(cpu, op, first, source, length, imm)? {
                 write_ymm(cpu, reg, result, length);
                 return Ok(());

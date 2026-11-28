@@ -12,12 +12,12 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 929 |
-| Typed registry services | 300 |
-| Manual code registrations | 629 |
-| Canonical libraries | 23 |
+| Canonical services | 974 |
+| Typed registry services | 302 |
+| Manual code registrations | 672 |
+| Canonical libraries | 25 |
 | Implemented | 246 |
-| Partial | 683 |
+| Partial | 728 |
 | Stub | 0 |
 | Data-import services | 7 |
 | Aliases of every kind | 954 |
@@ -46,8 +46,10 @@ independent acceptance or compatibility claims.
 | <code>user32.dll</code> | <code>other</code> | 10 | 0 | 10 | 0 | 0 | 10 | 0 | 0 |
 | <code>winhttp.dll</code> | <code>other</code> | 16 | 0 | 16 | 0 | 0 | 16 | 0 | 0 |
 | <code>ws2_32.dll</code> | <code>windows-networking</code> | 65 | 0 | 65 | 0 | 6 | 59 | 0 | 6 |
+| <code>xaudio2_9.dll</code> | <code>other</code> | 2 | 2 | 0 | 0 | 0 | 2 | 0 | 0 |
 | <code>xenora_fixture.dll</code> | <code>xenora-fixture</code> | 22 | 0 | 22 | 0 | 22 | 0 | 0 | 20 |
 | <code>xenora_graphics.dll</code> | <code>xenora-fixture</code> | 34 | 0 | 34 | 0 | 34 | 0 | 0 | 0 |
+| <code>xenora_xaudio2.dll</code> | <code>xenora-fixture</code> | 43 | 0 | 43 | 0 | 0 | 43 | 0 | 0 |
 | <code>xgameruntime.dll</code> | <code>xbox-gaming</code> | 12 | 0 | 12 | 0 | 3 | 9 | 0 | 0 |
 | <code>xinput1_3.dll</code> | <code>other</code> | 8 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
 | <code>xinput1_4.dll</code> | <code>other</code> | 8 | 0 | 8 | 0 | 0 | 8 | 0 | 0 |
