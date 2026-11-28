@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use sha2::{Digest, Sha256};
+use xenora::hosted_graphics as graphics;
 use xenora_loader::scheduler::DEFAULT_QUANTUM;
 use xenora_loader::startup::{
     StartupEvent, StartupLayout, run_synthetic_startup_scheduled_with_budget,
@@ -26,8 +27,6 @@ use xenora_shader::{PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT};
 mod diagnostics;
 #[path = "runner_export.rs"]
 mod export;
-#[path = "runner_graphics.rs"]
-mod graphics;
 use diagnostics::{Collector, FailurePhase, Reporter, Stage, Termination};
 use export::SupervisorExport;
 
