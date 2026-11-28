@@ -2028,7 +2028,14 @@ impl StandardStreams {
                 self.opened.close(memory, drive, file);
                 Ok(Ok(0))
             }
-            _ => Err(RUNTIME_LIMIT),
+            // Closing a standard stream is legal on Windows - the CRT does
+            // not reserve them - and every later operation on the descriptor
+            // fails with EBADF, exactly as `_close` of the descriptor itself
+            // behaves. awk and other filter applets close their input when
+            // it reaches EOF, before exit (#1273).
+            Stream::Input => self.close_descriptor(memory, drive, 0),
+            Stream::Output => self.close_descriptor(memory, drive, 1),
+            Stream::Error => self.close_descriptor(memory, drive, 2),
         }
     }
 
@@ -2927,6 +2934,29 @@ mod tests {
             .expect("write")
             .expect("no errno");
         assert_eq!(streams.output(), b"captured");
+    }
+
+    /// Closing a standard stream is legal: awk and other filter applets
+    /// close their input when it reaches EOF, before exit, and the CRT does
+    /// not reserve the standard streams (#1273). The close marks the
+    /// descriptor closed exactly as `_close` of it does, every later
+    /// operation fails, and a second close has nothing to close.
+    #[test]
+    fn fclose_of_a_standard_stream_closes_the_descriptor_once() {
+        let (mut streams, mut memory, mut drive) = fixture();
+        let stdin = streams.file(&mut memory, 0).expect("stdin object");
+        // The close succeeds rather than stopping the guest.
+        let closed = streams
+            .close(&mut memory, &mut drive, stdin)
+            .expect("no stop");
+        assert!(matches!(closed, Ok(0)));
+        // The descriptor is marked closed exactly as `_close(0)` marks it.
+        assert!(streams.opened.closed[0]);
+        // A second close fails rather than closing again.
+        let twice = streams
+            .close(&mut memory, &mut drive, stdin)
+            .expect("no stop");
+        assert!(matches!(twice, Err(_)));
     }
 
     /// A spawned child inherits a position snapshot of each file-backed
