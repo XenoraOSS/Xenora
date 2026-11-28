@@ -14,9 +14,27 @@ const O_TEXT: u32 = 0x4000;
 /// `_ENABLE_PER_THREAD_LOCALE` and `_DISABLE_PER_THREAD_LOCALE` (locale.h).
 const ENABLE_PER_THREAD_LOCALE: i32 = 1;
 const DISABLE_PER_THREAD_LOCALE: i32 = 2;
+const SIGILL: i32 = 4;
+const SIGFPE: i32 = 8;
+const SIGSEGV: i32 = 11;
+const SIG_DFL: u64 = 0;
+const SIG_IGN: u64 = 1;
 /// The signals the documentation of `signal` lists, by their signal.h values:
 /// SIGINT, SIGILL, SIGFPE, SIGSEGV, SIGTERM and SIGABRT.
-const SIGNALS: [i32; 6] = [2, 4, 8, 11, 15, 22];
+const SIGNALS: [i32; 6] = [2, SIGILL, SIGFPE, SIGSEGV, 15, 22];
+
+const STATUS_ACCESS_VIOLATION: u32 = 0xC000_0005;
+const STATUS_ILLEGAL_INSTRUCTION: u32 = 0xC000_001D;
+const STATUS_PRIVILEGED_INSTRUCTION: u32 = 0xC000_0096;
+const STATUS_FLOAT_DENORMAL_OPERAND: u32 = 0xC000_008D;
+const STATUS_FLOAT_UNDERFLOW: u32 = 0xC000_0093;
+
+pub(super) enum ExceptionAction {
+    Search,
+    Resume,
+    Call { handler: u64, signal: i32 },
+    Unsupported,
+}
 
 #[derive(Default)]
 pub(super) struct CrtStartup {
@@ -86,7 +104,27 @@ impl CrtStartup {
     pub(super) fn signal(&mut self, signal: i32, handler: u64) -> Option<u64> {
         SIGNALS
             .contains(&signal)
-            .then(|| self.signals.insert(signal, handler).unwrap_or(0))
+            .then(|| self.signals.insert(signal, handler).unwrap_or(SIG_DFL))
+    }
+
+    /// Resolve the documented EXE filter mapping and consume a callable
+    /// non-floating-point disposition before guest code can reinstall it.
+    pub(super) fn exception_action(&mut self, code: u32) -> ExceptionAction {
+        let signal = match code {
+            STATUS_ACCESS_VIOLATION => SIGSEGV,
+            STATUS_ILLEGAL_INSTRUCTION | STATUS_PRIVILEGED_INSTRUCTION => SIGILL,
+            STATUS_FLOAT_DENORMAL_OPERAND..=STATUS_FLOAT_UNDERFLOW => SIGFPE,
+            _ => return ExceptionAction::Search,
+        };
+        match self.signals.get(&signal).copied().unwrap_or(SIG_DFL) {
+            SIG_DFL => ExceptionAction::Search,
+            _ if signal == SIGFPE => ExceptionAction::Unsupported,
+            SIG_IGN => ExceptionAction::Resume,
+            handler => {
+                self.signals.remove(&signal);
+                ExceptionAction::Call { handler, signal }
+            }
+        }
     }
 
     /// Guest address of `_fmode` (`index` 0) or `_commode` (`index` 1). Both
