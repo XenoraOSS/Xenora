@@ -327,7 +327,7 @@ the entries read before it.
 ### Microsoft STL initialization count (#1163)
 
 `msvcp140.dll` exposes the Microsoft x64 decorated `ios_base::Init` count,
-count accessor, constructor helper and destructor helper. The data import and
+count accessor, public constructor and destructor, and their helpers. The data import and
 accessor share one guest-memory cell, initialized to -1. Construction changes a
 negative count to 1 and otherwise increments it; destruction decrements it. On
 the final destruction Xenora stops with the runtime-limit fault because the
@@ -340,8 +340,8 @@ The count behavior is independently implemented from the publicly available
 and its [header declarations](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xiosbase).
 These files are copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception;
 no source text was copied. The original freestanding fixture declares just the
-ABI under test, and does not include the Microsoft headers or prove a complete
-MSVC iostream program. Its output uses UCRT `puts`, not a C++ stream.
+ABI under test, imports the public constructor and destructor, and does not include
+the Microsoft headers or prove a complete MSVC iostream program. Its output uses UCRT `puts`, not a C++ stream.
 
 ### Import name diagnostics
 

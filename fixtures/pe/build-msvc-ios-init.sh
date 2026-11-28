@@ -10,7 +10,7 @@ done
 scratch=$(mktemp -d "${TMPDIR:-/tmp}/xenora-msvc-ios.XXXXXX")
 trap 'rm -rf "$scratch"' EXIT
 cd "$scratch"
-printf 'LIBRARY msvcp140.dll\nEXPORTS\n ?_Init_cnt@Init@ios_base@std@@0HA DATA\n ?_Init_ctor@Init@ios_base@std@@CAXPEAV123@@Z\n ?_Init_dtor@Init@ios_base@std@@CAXPEAV123@@Z\n ?_Init_cnt_func@Init@ios_base@std@@CAAEAHXZ\n' > msvcp.def
+printf 'LIBRARY msvcp140.dll\nEXPORTS\n ?_Init_cnt@Init@ios_base@std@@0HA DATA\n ??0Init@ios_base@std@@QEAA@XZ\n ??1Init@ios_base@std@@QEAA@XZ\n ?_Init_cnt_func@Init@ios_base@std@@CAAEAHXZ\n' > msvcp.def
 printf 'LIBRARY ucrtbase.dll\nEXPORTS\n puts\n' > ucrt.def
 printf 'LIBRARY kernel32.dll\nEXPORTS\n ExitProcess\n' > kernel32.def
 for lib in msvcp ucrt kernel32; do

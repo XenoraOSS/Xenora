@@ -6,13 +6,11 @@ class ios_base {
 public:
     class Init {
     public:
-        Init() { _Init_ctor(this); }
-        ~Init() { _Init_dtor(this); }
+        __declspec(dllimport) Init();
+        __declspec(dllimport) ~Init();
         static int &count() { return _Init_cnt_func(); }
         static int &data() { return _Init_cnt; }
     private:
-        __declspec(dllimport) static void _Init_ctor(Init *);
-        __declspec(dllimport) static void _Init_dtor(Init *);
         __declspec(dllimport) static int &_Init_cnt_func();
         __declspec(dllimport) static int _Init_cnt;
     };

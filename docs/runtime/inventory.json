@@ -14053,6 +14053,26 @@
       "symbol": "pthread_setspecific"
     },
     {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "??0Init@ios_base@std@@QEAA@XZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "??1Init@ios_base@std@@QEAA@XZ"
+    },
+    {
       "data_import": true,
       "family": "other",
       "kind": "name",
@@ -19906,15 +19926,15 @@
   "summary": {
     "aliases": 955,
     "api_set_aliases": 754,
-    "canonical_services": 979,
+    "canonical_services": 981,
     "data_import_services": 8,
     "duplicate_registrations": 0,
     "implemented": 246,
     "implicit_status_services": 78,
     "libraries": 26,
-    "manual_services": 677,
+    "manual_services": 679,
     "ordinal_aliases": 35,
-    "partial": 733,
+    "partial": 735,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,
