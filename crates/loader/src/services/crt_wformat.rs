@@ -132,6 +132,7 @@ pub(super) fn wformat(
             continue;
         }
         if parser.take(b'%') {
+            bounded(out.len() + 1)?;
             out.push(u16::from(b'%'));
             continue;
         }
