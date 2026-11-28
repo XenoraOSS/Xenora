@@ -57,6 +57,7 @@ pub(crate) mod threads;
 mod user32;
 mod winhttp;
 mod winsock;
+mod xasync;
 pub mod xaudio2;
 mod xaudio2_engine;
 mod xaudio2_source;
@@ -380,6 +381,8 @@ pub struct ServicesState {
     task_fixture: Mutex<task_fixture::TaskFixture>,
     platform_fixture: Mutex<platform_fixture::PlatformFixture>,
     gdk_queues: Mutex<gdk_queue::QueueHandles>,
+    xasync_ops: Mutex<xasync::AsyncOperations>,
+    xasync_changed: Condvar,
     gdk_queue_changed: Condvar,
     winsock_changed: Condvar,
     pub next_alloc_addr: AtomicU64,
@@ -469,6 +472,8 @@ impl ServicesState {
             task_fixture: Mutex::default(),
             platform_fixture: Mutex::default(),
             gdk_queues: Mutex::default(),
+            xasync_ops: Mutex::default(),
+            xasync_changed: Condvar::new(),
             gdk_queue_changed: Condvar::new(),
             winsock_changed: Condvar::new(),
             next_alloc_addr: AtomicU64::new(0x0000_0002_0000_0000), // 8GB guest heap
@@ -765,6 +770,11 @@ impl ServicesState {
             .expect("GDK queue handle table")
             .close_all();
         self.gdk_queue_changed.notify_all();
+        self.xasync_ops
+            .lock()
+            .expect("XAsync operation table")
+            .clear();
+        self.xasync_changed.notify_all();
         status
     }
 
@@ -1351,6 +1361,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     task_fixture::register(registry, &state);
     platform_fixture::register(registry, &state);
     gdk_queue::register(registry, &state);
+    xasync::register(registry, &state);
     startup_info::register(registry, &state);
     process::register(registry, &state);
     // Last: the module catalog lists every service registered before it.
