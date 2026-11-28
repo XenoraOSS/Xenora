@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! An authored PE exchanges requests and CPU frames with the shipped CLI.
+//! Authored PE programs exchange requests and frames with the shipped CLI.
 
 use sha2::{Digest, Sha256};
 use std::fmt::Write as _;
@@ -17,35 +17,49 @@ const TIMEOUT: Duration = Duration::from_secs(20);
 const PIPE_TIMEOUT: Duration = Duration::from_secs(2);
 
 fn fixture(name: &str) -> PathBuf {
+    fixture_directory().join(format!("{name}.exe"))
+}
+
+fn fixture_directory() -> &'static Path {
     static DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
-    DIRECTORY
-        .get_or_init(|| {
-            let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
-                .join(format!("authored-session-{}", std::process::id()));
-            let script = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../fixtures/pe/authored-session/build-authored-session.sh");
-            let build = Command::new("sh")
-                .arg(script)
-                .arg(&directory)
-                .output()
-                .expect("build the authored PE session fixtures");
-            assert!(build.status.success(), "{build:?}");
-            directory
-        })
-        .join(format!("{name}.exe"))
+    DIRECTORY.get_or_init(|| {
+        let directory = Path::new(env!("CARGO_TARGET_TMPDIR"))
+            .join(format!("authored-session-{}", std::process::id()));
+        let script = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/pe/authored-session/build-authored-session.sh");
+        let build = Command::new("sh")
+            .arg(script)
+            .arg(&directory)
+            .output()
+            .expect("build the authored PE session fixtures");
+        assert!(build.status.success(), "{build:?}");
+        directory
+    })
+}
+
+fn sha256(path: &Path) -> String {
+    format!("{:x}", Sha256::digest(std::fs::read(path).unwrap()))
 }
 
 fn command(path: &Path, digest: Option<&str>) -> Command {
     let mut command = Command::new(EXECUTABLE);
-    let digest = digest.map_or_else(
-        || format!("{:x}", Sha256::digest(std::fs::read(path).unwrap())),
-        str::to_owned,
-    );
+    let digest = digest.map_or_else(|| sha256(path), str::to_owned);
     command
         .arg("--pe")
         .arg(path)
         .args(["--sha256", &digest, "--experimental"]);
     command
+}
+
+fn companion(variant: &str) -> PathBuf {
+    fixture_directory()
+        .join(variant)
+        .join("xenora-authored-companion.dll")
+}
+
+fn add_companion(command: &mut Command, variant: &str) {
+    let path = companion(variant);
+    command.arg("--package").arg(&path).arg(sha256(&path));
 }
 
 struct Session {
@@ -233,6 +247,165 @@ fn expected_frame_with_blue(sequence: u8, input: u32, blue: u8, pixels: bool) ->
         }
     }
     line
+}
+
+fn run_package_session(backend: &str) -> Vec<String> {
+    let mut command = command(&fixture("authored-session-package"), None);
+    add_companion(&mut command, "");
+    command.args(["--graphics-backend", backend, "--pixels"]);
+    let mut session = Session::start(&mut command);
+    assert_eq!(session.next_line(), "ready");
+    let mut transcript = Vec::new();
+    // Attach seeds blue to 0x40. Each frame adds its input to the same DLL state.
+    for (sequence, input, blue) in [(1, 10, 0x4a), (2, 21, 0x5f), (3, 10, 0x69)] {
+        session.send(input);
+        let line = session.next_line();
+        assert_eq!(line, expected_frame_with_blue(sequence, input, blue, true));
+        transcript.push(line);
+    }
+    let completed = session.finish();
+    completed.assert_code(0);
+    assert_eq!(completed.lines, ["done frames=3"]);
+    transcript
+}
+
+#[test]
+fn packaged_session_keeps_companion_state_across_inputs() {
+    assert_eq!(
+        run_package_session("reference"),
+        run_package_session("reference")
+    );
+}
+
+#[test]
+fn packaged_session_rejects_bad_admission_and_lifecycle() {
+    let path = fixture("authored-session-package");
+    let mut missing = command(&path, None);
+    let mut wrong_pin = command(&path, None);
+    wrong_pin
+        .arg("--package")
+        .arg(companion(""))
+        .arg("0".repeat(64));
+    let mut duplicate = command(&path, None);
+    add_companion(&mut duplicate, "");
+    add_companion(&mut duplicate, "refuse-attach");
+    let mut reserved = command(&path, None);
+    let reserved_name = fixture_directory().join("xenora-session-v1.dll");
+    add_companion(&mut reserved, "");
+    reserved
+        .arg("--package")
+        .arg(&reserved_name)
+        .arg(sha256(&reserved_name));
+    let mut refuse = command(&path, None);
+    add_companion(&mut refuse, "refuse-attach");
+    let mut attach_abi = command(&path, None);
+    add_companion(&mut attach_abi, "abi-during-attach");
+
+    let outside_entry = "session imports require the main guest thread after startup";
+    for (case, command, reason) in [
+        ("missing", &mut missing, "xenora-authored-companion.dll"),
+        ("wrong pin", &mut wrong_pin, "SHA-256"),
+        ("duplicate", &mut duplicate, "canonical identity"),
+        (
+            "reserved name",
+            &mut reserved,
+            "reserved for the session ABI",
+        ),
+        ("refuse attach", &mut refuse, "returned FALSE"),
+        ("ABI during attach", &mut attach_abi, outside_entry),
+    ] {
+        let completed = Session::start(command).finish();
+        completed.assert_code(125);
+        assert!(completed.lines.is_empty(), "{case}: {:?}", completed.lines);
+        assert!(
+            completed.diagnostics.contains(reason),
+            "{case}: {}",
+            completed.diagnostics
+        );
+    }
+
+    for (variant, reason) in [
+        ("abi-during-detach", outside_entry),
+        ("fault-during-detach", "guest package shutdown"),
+    ] {
+        let mut command = command(&path, None);
+        add_companion(&mut command, variant);
+        let session = Session::start(&mut command);
+        assert_eq!(session.next_line(), "ready");
+        let completed = session.finish();
+        completed.assert_code(125);
+        assert!(
+            completed.lines.is_empty(),
+            "{variant}: {:?}",
+            completed.lines
+        );
+        assert!(
+            completed.diagnostics.contains(reason),
+            "{variant}: {}",
+            completed.diagnostics
+        );
+    }
+}
+
+#[test]
+fn packaged_session_limits_total_input_bytes_and_requires_dll_companions() {
+    let path = fixture("authored-session-package");
+    let oversized = fixture_directory().join("too-large-companion.dll");
+    std::fs::File::create(&oversized)
+        .unwrap()
+        .set_len(64 * 1024 * 1024)
+        .unwrap();
+
+    let mut command_with_file = command(&path, None);
+    command_with_file
+        .arg("--package")
+        .arg(&oversized)
+        .arg("0".repeat(64));
+    let completed = Session::start(&mut command_with_file).finish();
+    completed.assert_code(125);
+    assert!(completed.lines.is_empty());
+    assert!(completed.diagnostics.contains("combined 64 MiB limit"));
+
+    let executable = fixture("authored-session");
+    let mut command_with_exe = command(&path, None);
+    command_with_exe
+        .arg("--package")
+        .arg(&executable)
+        .arg(sha256(&executable));
+    let completed = Session::start(&mut command_with_exe).finish();
+    completed.assert_code(125);
+    assert!(completed.lines.is_empty());
+    assert!(completed.diagnostics.contains("must be a PE DLL"));
+
+    let dll_as_root = fixture_directory().join("root-is-dll.dll");
+    std::fs::copy(companion("abi-during-attach"), &dll_as_root).unwrap();
+    let mut command_with_dll_root = command(&dll_as_root, None);
+    add_companion(&mut command_with_dll_root, "");
+    let completed = Session::start(&mut command_with_dll_root).finish();
+    completed.assert_code(125);
+    assert!(completed.lines.is_empty());
+    assert!(completed.diagnostics.contains("must be a PE executable"));
+}
+
+#[test]
+fn standalone_dll_is_refused_as_a_session_root() {
+    let completed = Session::start(&mut command(&companion(""), None)).finish();
+    completed.assert_code(125);
+    assert!(completed.lines.is_empty(), "{:?}", completed.lines);
+    assert!(
+        completed.diagnostics.contains("must be a PE executable"),
+        "{}",
+        completed.diagnostics
+    );
+}
+
+#[test]
+#[ignore = "requires native Metal on Apple Silicon"]
+fn packaged_session_matches_reference_on_native_metal() {
+    assert_eq!(
+        run_package_session("metal"),
+        run_package_session("reference")
+    );
 }
 
 #[test]

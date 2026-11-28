@@ -10,7 +10,7 @@
 #       alias   <documented API set that forwards this symbol>
 #       fails   <failure contract>
 #       ref     <public header or document>
-#       test    <test function in crates/loader/tests/runtime_services.rs>
+#       test    <function in runtime_services.rs or suite::function in crates/loader/tests/suite.rs>
 #
 # Types: u32 i32 u64 bool32 handle ptr out<N> f32 f64, and void as a result.
 # A bool32 argument is true when nonzero. out<N> is a guest pointer to N bytes
@@ -502,6 +502,24 @@ service ucrtbase.dll _open(name: ptr, flags: i32, mode: i32) -> i32
     fails -1 with errno ENOENT missing, EACCES for a directory, EEXIST with _O_CREAT|_O_EXCL, EINVAL for a null or rejected name or bad access bits, EMFILE at 8192 descriptors, ENOSPC when the drive is full; stops the guest for the wide text modes
     ref io.h _open
     test descriptors_share_files_with_streams
+
+service ucrtbase.dll _locking(fd: i32, mode: i32, nbytes: i32) -> i32
+    handler _locking
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
+    fails -1 with EBADF for a descriptor that is not file-backed, EINVAL for invalid arguments or a mismatched unlock, and immediate EDEADLOCK for an overlapping range in any lock mode; Windows distinguishes nonblocking conflicts and retries blocking ones
+    ref io.h / sys/locking.h _locking (Microsoft Learn)
+    test runtime_crt_file_locks::guest_crt_file_locking_tracks_ranges_until_close
+
+service ucrtbase.dll _commit(fd: i32) -> i32
+    handler _commit
+    status partial
+    alias api-ms-win-crt-stdio-l1-1-0.dll
+    alias msvcrt.dll
+    fails -1 with EBADF for a descriptor that is not file-backed; synthetic files are already current in memory without a host disk flush
+    ref io.h _commit (Microsoft Learn)
+    test runtime_crt_file_locks::guest_crt_commit_requires_file_backing_and_preserves_bytes
 
 service ucrtbase.dll _close(fd: i32) -> i32
     handler _close

@@ -32,6 +32,7 @@ pub(super) const EILSEQ: u32 = 42;
 pub(super) const ENOMEM: u32 = 12;
 pub(super) const EACCES: u32 = 13;
 pub(super) const EINVAL: u32 = 22;
+pub(super) const EDEADLOCK: u32 = 36;
 pub(super) const EMFILE: u32 = 24;
 pub(super) const ERANGE: u32 = 34;
 pub(super) const ENOSPC: u32 = 28;
@@ -147,6 +148,11 @@ struct FileStream {
     /// Bytes `ungetc` pushed back, in push order: the last byte pushed is
     /// the first one a read hands out again, as the CRT stacks them.
     pushback: Vec<u8>,
+    /// Byte ranges `_locking` holds, as (start, end) pairs with the end
+    /// exclusive. They live in the stream itself: a duplication shares them
+    /// exactly as it shares the position, and closing the last descriptor
+    /// of the stream releases them without any table to sweep.
+    locks: Vec<(u64, u64)>,
 }
 
 /// A file descriptor, as `_open` and `_fileno` hand out. 0, 1 and 2 are
@@ -335,6 +341,7 @@ impl FileStreams {
                 error: false,
                 orientation: 0,
                 pushback: Vec::new(),
+                locks: Vec::new(),
             },
         );
         Ok(file)
@@ -404,6 +411,7 @@ impl FileStreams {
                 error: false,
                 orientation: 0,
                 pushback: Vec::new(),
+                locks: Vec::new(),
             },
         );
         Ok(file)
@@ -783,6 +791,90 @@ impl FileStreams {
             .map_or(0, |data| data.len() as u64))
     }
 
+    /// The terminal descriptor's stream, mutably: the owned state of an
+    /// `_open` descriptor or the shared stream `_fileno` named, as the two
+    /// arrangements the CRT keeps a file's state in.
+    fn stream_of_descriptor_mut(&mut self, fd: u32) -> Result<&mut FileStream, u32> {
+        let fd = self.descriptor_terminal(fd)?;
+        match self.descriptors.get(&fd) {
+            Some(Descriptor::Owned(_)) => {
+                let Some(Descriptor::Owned(stream)) = self.descriptors.get_mut(&fd) else {
+                    return Err(EBADF);
+                };
+                Ok(stream)
+            }
+            Some(Descriptor::Shared(file)) => {
+                let file = *file;
+                self.open.get_mut(&file).ok_or(EBADF)
+            }
+            _ => Err(EBADF),
+        }
+    }
+
+    /// `_locking(fd, mode, nbytes)`: byte-range locks over the stream's
+    /// current position, as Microsoft Learn documents the CRT contract.
+    /// Every lock is exclusive and even the stream's own ranges conflict
+    /// with a new overlapping one, as LockFile refuses the overlap. The
+    /// blocking modes retry ten times over ten seconds on Windows; here a
+    /// conflicting range can only belong to another thread of the one
+    /// guest process, and a service call cannot wait on it without
+    /// deadlocking the table, so the retry window collapses onto the
+    /// non-blocking answer - `EDEADLOCK` at once.
+    pub(super) fn lock_range(&mut self, fd: u32, mode: u32, nbytes: u32) -> Result<(), u32> {
+        if mode > 4 {
+            return Err(EINVAL);
+        }
+        // Resolve first, conflict-scan second, mutate last: the scan reads
+        // every live stream of the same path while the mutation needs the
+        // one stream alone.
+        let (path, position) = {
+            let stream = self.stream_of_descriptor_mut(fd)?;
+            (stream.path.clone(), stream.position)
+        };
+        let start = position;
+        let end = start.saturating_add(u64::from(nbytes));
+        let overlaps = |locked: &(u64, u64)| start < locked.1 && locked.0 < end;
+        if mode == 0 {
+            // _LK_UNLCK: the exact range the stream locked, as the CRT
+            // requires the unlock to match the lock. Anything else is the
+            // caller's error, EINVAL as the CRT answers bad arguments.
+            let stream = self.stream_of_descriptor_mut(fd)?;
+            let Some(index) = stream
+                .locks
+                .iter()
+                .position(|locked| *locked == (start, end))
+            else {
+                return Err(EINVAL);
+            };
+            stream.locks.swap_remove(index);
+            return Ok(());
+        }
+        let conflict = self
+            .open
+            .values()
+            .chain(self.descriptors.values().filter_map(|entry| match entry {
+                Descriptor::Owned(stream) => Some(stream),
+                _ => None,
+            }))
+            .filter(|stream| stream.path == path)
+            .any(|stream| stream.locks.iter().any(overlaps));
+        if conflict {
+            return Err(EDEADLOCK);
+        }
+        let stream = self.stream_of_descriptor_mut(fd)?;
+        stream.locks.push((start, end));
+        Ok(())
+    }
+
+    /// `_commit(fd)`: the CRT flushes the file's buffers to storage. The
+    /// hosted drive is the storage - writes land in it with no cache below
+    /// to flush - so a valid file descriptor has nothing to do and answers
+    /// success, while anything that is not a file-backed descriptor is the
+    /// caller's error, as the CRT answers `EBADF` for one.
+    pub(super) fn commit_descriptor(&mut self, fd: u32) -> Result<(), u32> {
+        self.stream_of_descriptor_mut(fd).map(|_| ())
+    }
+
     /// `_fdopen` wraps a descriptor in a stream: the descriptor's state moves
     /// to the open-stream table and the descriptor becomes the stream's own,
     /// exactly the arrangement `_fileno` starts from. Closing the stream then
@@ -1073,6 +1165,7 @@ impl FileStreams {
             error: false,
             orientation: 0,
             pushback: Vec::new(),
+            locks: Vec::new(),
         };
         if append && let Some(data) = drive.drive_file(&stream.path) {
             stream.position = data.len() as u64;
@@ -1579,7 +1672,7 @@ fn handle_write(drive: &mut super::ObjectState, handle: u64, bytes: &[u8]) -> Re
 #[cfg(test)]
 mod tests {
     use super::super::ObjectState;
-    use super::{FileStreams, parse_mode};
+    use super::{EBADF, EDEADLOCK, EINVAL, FileStreams, parse_mode};
     use crate::memory::GuestMemory;
 
     /// The object `fopen` returns spans the legacy CRT's 48-byte `_iobuf`,
@@ -1612,6 +1705,51 @@ mod tests {
             .write_u32(file + 8, 1)
             .expect("the macro decrement must be writable");
         assert_eq!(memory.read_u32(file + 8).expect("read"), 1);
+    }
+
+    /// `_locking` holds exclusive byte ranges of the stream at its position:
+    /// the exact-range unlock, the conflict across two independent opens of
+    /// one file - even the stream's own ranges conflict, as LockFile refuses
+    /// the overlap - the `EDEADLOCK` of the collapsed retry window, and the
+    /// release that closing the last descriptor of the stream is.
+    #[test]
+    fn locking_round_trips_conflicts_and_dies_with_the_stream() {
+        let mut streams = FileStreams::default();
+        let mut drive = ObjectState::default();
+        // Round trip at the initial position zero: lock ten bytes, then the
+        // exact unlock. A second unlock of the same range is the caller's
+        // error, as an unmatched unlock is.
+        let fd = streams
+            .open_descriptor(&mut drive, b"target", 2 | 0x100)
+            .expect("open");
+        assert_eq!(streams.lock_range(fd, 2, 10), Ok(()));
+        assert_eq!(streams.lock_range(fd, 0, 10), Ok(()));
+        assert_eq!(streams.lock_range(fd, 0, 10), Err(EINVAL));
+        // An invalid mode is the caller's error before anything else.
+        assert_eq!(streams.lock_range(fd, 5, 10), Err(EINVAL));
+        // Conflict: a second independent open of the same file cannot take
+        // an overlapping range - even one byte of overlap - while the
+        // non-overlapping tail is free.
+        assert_eq!(streams.lock_range(fd, 2, 6), Ok(()));
+        let other = streams
+            .open_descriptor(&mut drive, b"target", 2)
+            .expect("open");
+        assert_eq!(streams.lock_range(other, 2, 3), Err(EDEADLOCK));
+        // Even the holder's own ranges conflict with a new overlapping one,
+        // as LockFile refuses the overlap regardless of the handle.
+        assert_eq!(streams.lock_range(fd, 2, 1), Err(EDEADLOCK));
+        // Closing the holder releases its ranges: the second open can then
+        // take what conflicted.
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x1000, 0x4000, crate::memory::MemoryPermissions::READ_WRITE)
+            .unwrap();
+        assert!(streams.descriptor_close(&mut memory, &mut drive, fd));
+        assert_eq!(streams.lock_range(other, 2, 3), Ok(()));
+        // `_commit`: a file-backed descriptor answers success; a number that
+        // is no descriptor is EBADF.
+        assert_eq!(streams.commit_descriptor(other), Ok(()));
+        assert_eq!(streams.commit_descriptor(77), Err(EBADF));
     }
 
     /// The six access types of the `fopen` page, each alone and with `t` or

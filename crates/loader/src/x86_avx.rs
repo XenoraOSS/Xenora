@@ -194,8 +194,12 @@ pub(crate) fn execute(
                 }
             }
         }
-        (Op::Movmskps | Op::Movmskpd, _) => {
-            let bits = if insn.op == Op::Movmskps { 32 } else { 64 };
+        (Op::Movmskps | Op::Movmskpd | Op::Pmovmskb, _) => {
+            let bits = match insn.op {
+                Op::Movmskps => 32,
+                Op::Movmskpd => 64,
+                _ => 8,
+            };
             let value = read_source(cpu, memory, insn)?;
             let lanes = 128 / bits;
             let signs = (0..u32::from(length) / 16 * lanes).fold(0, |out, index| {
@@ -203,6 +207,50 @@ pub(crate) fn execute(
                 out | sign << index
             });
             write_reg(cpu, insn.reg, insn.size, signs);
+        }
+        // VPMASKMOVD and VPMASKMOVQ: a lane is loaded or stored only when the
+        // sign bit of its mask lane is set. Masked lanes are never accessed,
+        // which is exactly the fault suppression the manuals specify: an
+        // enabled lane that faults still raises.
+        (Op::Pmaskmov, Encoding::XmmRm) => {
+            let bits = if vex.wide { 64 } else { 32 };
+            let width = (bits / 8) as u8;
+            let Some(base) = vector_address(cpu, insn)? else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let count = u32::from(length) * 8 / bits;
+            let per_half = 128 / bits;
+            let mut value = [0; 2];
+            for index in 0..count {
+                if element(first, bits, index) >> (bits - 1) & 1 == 0 {
+                    continue;
+                }
+                let lane_value =
+                    read_mem(memory, base + u64::from(index) * u64::from(width), width)?;
+                let half = (index / per_half) as usize;
+                value[half] |= u128::from(lane_value) << (bits * (index % per_half));
+            }
+            write_ymm(cpu, reg, value, length);
+        }
+        (Op::Pmaskmov, Encoding::RmXmm) => {
+            let bits = if vex.wide { 64 } else { 32 };
+            let width = (bits / 8) as u8;
+            let Some(base) = vector_address(cpu, insn)? else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let count = u32::from(length) * 8 / bits;
+            let value = read_ymm(cpu, reg);
+            for index in 0..count {
+                if element(first, bits, index) >> (bits - 1) & 1 == 0 {
+                    continue;
+                }
+                write_mem(
+                    memory,
+                    base + u64::from(index) * u64::from(width),
+                    width,
+                    element(value, bits, index),
+                )?;
+            }
         }
         // The result is a general register, memory or flags, as in the legacy form.
         (_, Encoding::RegXmm | Encoding::GprXmmImm | Encoding::RegXmmImm)

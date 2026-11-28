@@ -288,8 +288,14 @@ fn reference(m: &mut Machine, text: &str) {
         }
         "vmovhlps" => [&sources[1][8..], &sources[0][8..]].concat(),
         "vmovlhps" => [&sources[0][..8], &sources[1][..8]].concat(),
-        "vmovmskps" | "vmovmskpd" => {
-            let size = if name == "vmovmskps" { 4 } else { 8 };
+        "vmovmskps" | "vmovmskpd" | "vpmovmskb" => {
+            let size = if name == "vmovmskps" {
+                4
+            } else if name == "vmovmskpd" {
+                8
+            } else {
+                1
+            };
             let mask: u32 = sources[0]
                 .chunks(size)
                 .enumerate()
@@ -753,8 +759,6 @@ fn undeclared_vex_encodings_are_rejected() {
         &[0xC5, 0xF9, 0xF7, 0xC1],             // vmaskmovdqu (not implemented)
         &[0xC4, 0xE2, 0x71, 0xDC, 0xC2],       // vaesenc
         &[0xC4, 0xE3, 0x71, 0x44, 0xC2, 0],    // vpclmulqdq
-        &[0xC5, 0xFD, 0xD7, 0xC1],             // vpmovmskb ymm (AVX2)
-        &[0xC4, 0xE3, 0x75, 0x4C, 0xC2, 0x30], // vpblendvb ymm (AVX2)
         &[0xC5, 0xF1, 0x71, 0x31, 0x01],       // vpsllw of memory
         &[0xC5, 0xF1, 0x71, 0xC9, 0x01],       // 0F 71 /1
         &[0xC5, 0xF9, 0xC5, 0x01, 0x01],       // vpextrw from memory
@@ -1278,5 +1282,37 @@ fn uniform_count_shifts_use_one_count_for_both_halves() {
                 "high lane {lane} on native={native}"
             );
         }
+    }
+}
+
+/// The byte mask of a 256-bit VPMOVMSKB gathers all 32 sign bits, the low
+/// half's into bits 0-15 and the high half's into bits 16-31 of the general
+/// register.
+#[test]
+fn movmskb_at_256_bits_concatenates_both_halves() {
+    let code = [0xC5, 0xFD, 0xD7, 0xC1]; // vpmovmskb eax, ymm1
+    let mut machine = Machine {
+        gpr: [0; 16],
+        ymm: [[0; 32]; 16],
+        operand: [0; 32],
+        mxcsr: 0x1F80,
+    };
+    // Byte lane k of the low half has its sign bit set exactly when k is
+    // even; byte lane k of the high half exactly when k is odd.
+    for lane in 0..16usize {
+        machine.ymm[1][lane] = if lane % 2 == 0 { 0x80 } else { 1 };
+        machine.ymm[1][16 + lane] = if lane % 2 == 1 { 0x80 } else { 1 };
+    }
+    let low_expect = 0x5555u64; // even lanes of the low half
+    let high_expect = 0xAAAAu64; // odd lanes, shifted into bits 16-31
+    let (cpu, mut memory) = load(&machine, &code, READ_WRITE);
+    for native in [false, true] {
+        let result = run(native, &cpu, &mut memory, 1);
+        let state = result.final_state;
+        assert_eq!(
+            state.gpr[0] & 0xFFFF_FFFF,
+            low_expect | high_expect << 16,
+            "native={native}"
+        );
     }
 }

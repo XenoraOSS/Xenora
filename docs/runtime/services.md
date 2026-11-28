@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 302 |
-| Generated adapters | 302 |
-| Unique handler implementations | 284 |
+| Services with a declared ABI | 304 |
+| Generated adapters | 304 |
+| Unique handler implementations | 286 |
 | Implemented | 101 |
-| Partial | 201 |
+| Partial | 203 |
 | Stub | 0 |
-| Conformance-tested through guest dispatch | 302 |
-| API-set aliases (not services) | 374 |
+| Conformance-tested through guest dispatch | 304 |
+| API-set aliases (not services) | 378 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -73,6 +73,8 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!tmpfile` | `() -> ptr` | implemented | null with errno EMFILE at 64 streams, ENOSPC when the drive is full, ENOMEM when the FILE object cannot be allocated |
 | `ucrtbase.dll!tmpnam` | `(buffer: ptr) -> ptr` | implemented | never; a null buffer uses the static one; stops the guest for a buffer it cannot write |
 | `ucrtbase.dll!_open` | `(name: ptr, flags: i32, mode: i32) -> i32` | partial | -1 with errno ENOENT missing, EACCES for a directory, EEXIST with _O_CREAT|_O_EXCL, EINVAL for a null or rejected name or bad access bits, EMFILE at 8192 descriptors, ENOSPC when the drive is full; stops the guest for the wide text modes |
+| `ucrtbase.dll!_locking` | `(fd: i32, mode: i32, nbytes: i32) -> i32` | partial | -1 with EBADF for a descriptor that is not file-backed, EINVAL for invalid arguments or a mismatched unlock, and immediate EDEADLOCK for an overlapping range in any lock mode; Windows distinguishes nonblocking conflicts and retries blocking ones |
+| `ucrtbase.dll!_commit` | `(fd: i32) -> i32` | partial | -1 with EBADF for a descriptor that is not file-backed; synthetic files are already current in memory without a host disk flush |
 | `ucrtbase.dll!_close` | `(fd: i32) -> i32` | implemented | -1 with errno EBADF for a descriptor that is not open; stops the guest for a standard descriptor |
 | `ucrtbase.dll!_read` | `(fd: i32, buffer: ptr, count: u32) -> i32` | implemented | -1 with errno EBADF for a descriptor that is not open or not readable, EINVAL for a null buffer or a count over the transfer limit; stops the guest for a buffer it cannot write |
 | `ucrtbase.dll!_write` | `(fd: i32, buffer: ptr, count: u32) -> i32` | implemented | -1 with errno EBADF for a descriptor that is not open or not writable, EINVAL for a null buffer or a count over the transfer limit, ENOSPC when the drive is full; stops the guest for a buffer it cannot read |

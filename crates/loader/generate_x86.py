@@ -329,7 +329,9 @@ def load_vex(entry, operations):
         fail(f"{where}: source size does not match the encoding")
     if form["aligned"] and form["src"] not in ("v", "x"):
         fail(f"{where}: alignment applies only to whole vectors")
-    if form["enc"] == "rm_xmm" and form["nds"] and not form["register_only"]:
+    # VPMASKMOVD/Q's store form is the exception that reads VEX.vvvv: the
+    # mask register, with the stored value in the ModRM register.
+    if form["enc"] == "rm_xmm" and form["nds"] and not form["register_only"] and not form["memory_only"]:
         fail(f"{where}: a store takes no source from VEX.vvvv")
     # A shift by an immediate writes VEX.vvvv and has its source in a register.
     if form["enc"] == "rm_imm_xmm" and not (form["nds"] and form["register_only"]):

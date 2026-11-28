@@ -1220,6 +1220,35 @@ impl StandardStreams {
 
     /// `_close`. 0, or -1 with `EBADF` for a descriptor that is not open.
     /// Closing a standard descriptor is not modelled and stops the guest.
+    /// `_locking`: byte-range locks over the descriptor stream's current
+    /// position. See the table's `lock_range` for the contract.
+    pub(super) fn lock_descriptor(&mut self, fd: i32, mode: i32, nbytes: i32) -> Outcome<i32> {
+        if fd < 0 || nbytes < 0 {
+            return Ok(Err(Failed(-1, EBADF)));
+        }
+        Ok(
+            match self
+                .opened
+                .lock_range(fd as u32, mode as u32, nbytes as u32)
+            {
+                Ok(()) => Ok(0),
+                Err(errno) => Err(Failed(-1, errno)),
+            },
+        )
+    }
+
+    /// `_commit`: the hosted drive is the storage, so a valid file-backed
+    /// descriptor has nothing to flush and answers success.
+    pub(super) fn commit_descriptor(&mut self, fd: i32) -> Outcome<i32> {
+        if fd < 0 {
+            return Ok(Err(Failed(-1, EBADF)));
+        }
+        Ok(match self.opened.commit_descriptor(fd as u32) {
+            Ok(()) => Ok(0),
+            Err(errno) => Err(Failed(-1, errno)),
+        })
+    }
+
     pub(super) fn close_descriptor(
         &mut self,
         memory: &mut GuestMemory,

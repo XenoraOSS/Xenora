@@ -22,6 +22,10 @@ LOADER_TARGETS = (
     "shared_resource_lifecycle",
     "threaded_guest_application",
 )
+NATIVE_TARGETS = (
+    ("xenora-metal", "packed_bc_upload"),
+    *(("xenora-loader", target) for target in LOADER_TARGETS),
+)
 VALIDATION_VARIABLES = (
     "MTL_DEBUG_LAYER",
     "MTL_SHADER_VALIDATION",
@@ -100,26 +104,26 @@ class GpuGateTests(unittest.TestCase):
         records = [json.loads(line) for line in self.log.read_text().splitlines()]
         return result, records
 
-    def cargo_args(self, target, *, build=False):
-        args = ["test", "--locked", "-p", "xenora-loader",
+    def cargo_args(self, package, target, *, build=False):
+        args = ["test", "--locked", "-p", package,
                 "--features", "gpu-tests", "--test", target]
         return args + (["--no-run"] if build else
                        ["--", "--nocapture", "--test-threads=1"])
 
-    def test_native_loader_targets_are_built_then_run_serially(self):
+    def test_native_targets_are_built_then_run_serially(self):
         result, records = self.run_gate()
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        for target in LOADER_TARGETS:
-            with self.subTest(target=target):
+        for package, target in NATIVE_TARGETS:
+            with self.subTest(package=package, target=target):
                 invocations = [
                     (index, record) for index, record in enumerate(records)
                     if record["kind"] == "cargo" and target in record["args"]
                 ]
                 self.assertEqual(len(invocations), 2)
                 (build_index, build), (run_index, run) = invocations
-                self.assertEqual(build["args"], self.cargo_args(target, build=True))
-                self.assertEqual(run["args"], self.cargo_args(target))
+                self.assertEqual(build["args"], self.cargo_args(package, target, build=True))
+                self.assertEqual(run["args"], self.cargo_args(package, target))
                 self.assertEqual(run_index, build_index + 2)
                 timeout = records[run_index - 1]
                 self.assertEqual(timeout["kind"], "timeout")
@@ -141,31 +145,35 @@ class GpuGateTests(unittest.TestCase):
         self.assertEqual(records[-2]["args"][0], "75s")
 
     def test_compile_failure_stops_the_gate_before_running_target(self):
-        for target in LOADER_TARGETS:
-            with self.subTest(target=target):
+        for package, target in NATIVE_TARGETS:
+            with self.subTest(package=package, target=target):
                 result, records = self.run_gate(
                     fail_target=target, fail_phase="build", fail_status=37,
                 )
                 self.assertEqual(result.returncode, 37, result.stderr)
                 self.assertEqual(records[-1]["kind"], "cargo")
-                self.assertEqual(records[-1]["args"], self.cargo_args(target, build=True))
+                self.assertEqual(records[-1]["args"], self.cargo_args(package, target, build=True))
 
     def test_native_test_failure_stops_the_gate(self):
-        for target in LOADER_TARGETS:
-            with self.subTest(target=target):
+        for package, target in NATIVE_TARGETS:
+            with self.subTest(package=package, target=target):
                 result, records = self.run_gate(
                     fail_target=target, fail_phase="run", fail_status=42,
                 )
                 self.assertEqual(result.returncode, 42, result.stderr)
                 self.assertEqual(records[-1]["kind"], "cargo")
-                self.assertEqual(records[-1]["args"], self.cargo_args(target))
+                self.assertEqual(records[-1]["args"], self.cargo_args(package, target))
 
     def test_timeout_failure_stops_the_gate(self):
-        target = "shared_resource_lifecycle"
-        result, records = self.run_gate(
-            fail_target=target, fail_phase="timeout", fail_status=124,
-        )
+        for package, target in (
+            ("xenora-metal", "packed_bc_upload"),
+            ("xenora-loader", "shared_resource_lifecycle"),
+        ):
+            with self.subTest(package=package, target=target):
+                result, records = self.run_gate(
+                    fail_target=target, fail_phase="timeout", fail_status=124,
+                )
 
-        self.assertEqual(result.returncode, 124, result.stderr)
-        self.assertEqual(records[-1]["kind"], "timeout")
-        self.assertEqual(records[-1]["args"], ["30s", "cargo"] + self.cargo_args(target))
+                self.assertEqual(result.returncode, 124, result.stderr)
+                self.assertEqual(records[-1]["kind"], "timeout")
+                self.assertEqual(records[-1]["args"], ["30s", "cargo"] + self.cargo_args(package, target))

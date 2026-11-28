@@ -7,7 +7,7 @@ use xenora_loader::services::{MockClock, ServicesState, register_standard_servic
 use xenora_loader::startup::{StartupLayout, run_synthetic_startup};
 
 #[test]
-fn nested_initializers_track_lifetimes_and_final_flush_stops() {
+fn nested_initializers_track_lifetimes_and_final_flush_returns() {
     let state = Arc::new(ServicesState::new(Arc::new(MockClock::new(0))));
     let mut registry = ImportRegistry::new();
     register_standard_services(&mut registry, Arc::clone(&state));
@@ -22,10 +22,7 @@ fn nested_initializers_track_lifetimes_and_final_flush_stops() {
         2_000_000,
     )
     .unwrap();
-    assert_eq!(
-        result.execution.exit_reason,
-        ExitReason::IllegalInstruction(0xFE)
-    );
+    assert_eq!(result.execution.exit_reason, ExitReason::ProcessExit(0));
     assert_eq!(
         state.standard_output(),
         b"nested initialization complete\r\n"

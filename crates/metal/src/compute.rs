@@ -3,7 +3,10 @@ use std::ffi::c_void;
 use std::fmt;
 use std::mem::size_of_val;
 use std::ptr::{NonNull, copy_nonoverlapping};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{
+    Mutex, MutexGuard, PoisonError,
+    atomic::{AtomicUsize, Ordering},
+};
 use std::time::Instant;
 
 use objc2::Message;
@@ -12,8 +15,8 @@ use objc2::runtime::{NSObjectProtocol, ProtocolObject};
 use objc2::sel;
 use objc2_foundation::NSString;
 use objc2_metal::{
-    MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder, MTLCommandQueue,
-    MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
+    MTLBarrierScope, MTLBuffer, MTLCommandBuffer, MTLCommandBufferStatus, MTLCommandEncoder,
+    MTLCommandQueue, MTLCompileOptions, MTLComputeCommandEncoder, MTLComputePipelineState,
     MTLCreateSystemDefaultDevice, MTLDevice, MTLFunction, MTLGPUFamily, MTLLibrary,
     MTLMathFloatingPointFunctions, MTLMathMode, MTLOrigin, MTLPixelFormat, MTLRegion,
     MTLResourceOptions, MTLSamplerState, MTLShaderValidation, MTLSharedEvent, MTLSize,
@@ -38,6 +41,8 @@ const MAX_GROUPS: usize = 64;
 const MAX_GRID_WORDS: usize = MAX_GROUPS * MAX_THREADS_PER_GROUP;
 const MAX_SOURCE_BYTES: usize = 64 * 1024;
 const MAX_IN_FLIGHT: usize = 16;
+/// Upper bound on dispatches packed into one command buffer.
+const MAX_BATCH_COMMANDS: usize = 8;
 const MAX_CACHED_PIPELINES: usize = 16;
 const MAX_POOLED_BUFFERS: usize = MAX_IN_FLIGHT * 2;
 const MAX_POOLED_BUFFER_BYTES: usize = 1024 * 1024;
@@ -283,6 +288,14 @@ pub struct RunProfile {
     pub output: Vec<u32>,
 }
 
+/// Internal view of one `(source, entry, input, output_slot)` batch tuple.
+struct BatchCommandSpec<'a> {
+    source: &'a str,
+    entry: &'a str,
+    input: &'a [u32],
+    output_slot: usize,
+}
+
 /// A native Metal device and its command queue for the fixture ABI.
 pub struct NativeCompute {
     device: Retained<ProtocolObject<dyn MTLDevice>>,
@@ -292,6 +305,8 @@ pub struct NativeCompute {
     buffer_pool: Mutex<BufferPool>,
     // Least recently used first. In-flight submissions retain their own reference.
     compute_pipelines: Mutex<VecDeque<CachedPipeline>>,
+    // Number of buffer barriers encoded by the most recent successful batch.
+    batch_barriers: AtomicUsize,
 }
 
 /// A submitted dispatch whose result can be collected by its issuing context.
@@ -345,6 +360,14 @@ impl SubmissionTable {
             .count()
     }
 
+    fn queued_commands(&self) -> usize {
+        self.entries
+            .values()
+            .filter(|entry| entry.resources.is_some())
+            .map(|entry| entry.command_count)
+            .sum()
+    }
+
     fn check_capacity(&self) -> Result<(), MetalError> {
         if self.in_flight() >= MAX_IN_FLIGHT {
             return Err(MetalError::new(
@@ -354,33 +377,62 @@ impl SubmissionTable {
         }
         Ok(())
     }
+
+    fn check_batch_capacity(&self, commands: usize) -> Result<(), MetalError> {
+        self.check_capacity()?;
+        let limit = MAX_IN_FLIGHT * MAX_BATCH_COMMANDS;
+        if self.queued_commands().saturating_add(commands) > limit {
+            return Err(MetalError::new(
+                "queue depth",
+                format!("at most {limit} queued compute commands are allowed"),
+            ));
+        }
+        Ok(())
+    }
 }
 
 struct SubmissionEntry {
     resources: Option<InFlightResources>,
-    result: Result<RunProfile, MetalError>,
+    result: Result<SubmissionResult, MetalError>,
     host_start: Instant,
+    command_count: usize,
     abandoned: bool,
     waiting: bool,
 }
 
+struct BatchProfile {
+    commands: Vec<RunProfile>,
+    gpu_seconds: f64,
+    host_seconds: f64,
+    encode_seconds: f64,
+    commit_seconds: f64,
+    wait_seconds: f64,
+    readback_seconds: f64,
+}
+
+enum SubmissionResult {
+    Single(RunProfile),
+    Batch(BatchProfile),
+}
+
 struct RetiredBuffers {
-    input: Option<SharedBuffer>,
-    output: SharedBuffer,
+    inputs: Vec<Option<SharedBuffer>>,
+    outputs: Vec<SharedBuffer>,
 }
 
 /// Owns every resource referenced by the unretained command buffer until
 /// Metal reports Completed or Error.
 struct InFlightResources {
     command: Retained<ProtocolObject<dyn MTLCommandBuffer>>,
-    _pipeline: ComputePipeline,
-    _input: Option<SharedBuffer>,
-    output: SharedBuffer,
+    _pipelines: Vec<ComputePipeline>,
+    _inputs: Vec<Option<SharedBuffer>>,
+    outputs: Vec<SharedBuffer>,
     _texture: Option<Retained<ProtocolObject<dyn MTLTexture>>>,
     _sampler: Option<Retained<ProtocolObject<dyn MTLSamplerState>>>,
     _fault: Option<SharedBuffer>,
     gate: Option<Retained<ProtocolObject<dyn MTLSharedEvent>>>,
-    word_count: usize,
+    word_counts: Vec<usize>,
+    output_slots: Vec<usize>,
 }
 
 // SAFETY: Metal permits command buffers to move between threads with exclusive
@@ -398,31 +450,73 @@ impl SubmissionEntry {
         if let Err(error) = check_command_status(&resources.command, status) {
             self.result = Err(error);
             return Some(RetiredBuffers {
-                input: resources._input,
-                output: resources.output,
+                inputs: resources._inputs,
+                outputs: resources.outputs,
             });
         }
-        if let Ok(profile) = &mut self.result {
-            profile.gpu_seconds = resources.command.GPUEndTime() - resources.command.GPUStartTime();
-            profile.host_seconds = self.host_start.elapsed().as_secs_f64();
+        if let Ok(result) = &mut self.result {
+            let gpu_seconds = resources.command.GPUEndTime() - resources.command.GPUStartTime();
+            let host_seconds = self.host_start.elapsed().as_secs_f64();
             let readback_start = Instant::now();
-            let byte_len = resources.word_count * size_of::<u32>();
-            // SAFETY: The initialized shared output is distinct from the host
-            // vector and the GPU has finished writing to it. Both ranges hold
-            // byte_len bytes and all u32 bit patterns are valid.
-            unsafe {
-                copy_nonoverlapping(
-                    resources.output.contents().cast::<u8>().as_ptr(),
-                    profile.output.as_mut_ptr().cast::<u8>(),
-                    byte_len,
-                );
+            match result {
+                SubmissionResult::Single(profile) => {
+                    copy_slot_output(
+                        &resources.outputs,
+                        &resources.word_counts,
+                        0,
+                        &mut profile.output,
+                    );
+                    profile.gpu_seconds = gpu_seconds;
+                    profile.host_seconds = host_seconds;
+                    profile.readback_seconds = readback_start.elapsed().as_secs_f64();
+                }
+                SubmissionResult::Batch(batch) => {
+                    for (command, slot) in batch.commands.iter_mut().zip(&resources.output_slots) {
+                        copy_slot_output(
+                            &resources.outputs,
+                            &resources.word_counts,
+                            *slot,
+                            &mut command.output,
+                        );
+                    }
+                    batch.gpu_seconds = gpu_seconds;
+                    batch.host_seconds = host_seconds;
+                    batch.readback_seconds = readback_start.elapsed().as_secs_f64();
+                }
             }
-            profile.readback_seconds = readback_start.elapsed().as_secs_f64();
         }
         Some(RetiredBuffers {
-            input: resources._input,
-            output: resources.output,
+            inputs: resources._inputs,
+            outputs: resources.outputs,
         })
+    }
+}
+
+/// Copy one completed shared output slot into its already initialized host vector.
+fn copy_slot_output(
+    outputs: &[SharedBuffer],
+    word_counts: &[usize],
+    slot: usize,
+    destination: &mut [u32],
+) {
+    let buffer = outputs
+        .get(slot)
+        .unwrap_or_else(|| panic!("output slot {slot} has no buffer"));
+    let word_count = word_counts
+        .get(slot)
+        .copied()
+        .unwrap_or_else(|| panic!("output slot {slot} has no word count"));
+    debug_assert_eq!(destination.len(), word_count);
+    let byte_len = word_count * size_of::<u32>();
+    // SAFETY: The initialized shared output is distinct from the host vector
+    // and the GPU has finished writing to it. Both ranges hold byte_len bytes
+    // and all u32 bit patterns are valid.
+    unsafe {
+        copy_nonoverlapping(
+            buffer.contents().cast::<u8>().as_ptr(),
+            destination.as_mut_ptr().cast::<u8>(),
+            byte_len,
+        );
     }
 }
 
@@ -482,6 +576,7 @@ impl NativeCompute {
                 submissions: Mutex::default(),
                 buffer_pool: Mutex::default(),
                 compute_pipelines: Mutex::default(),
+                batch_barriers: AtomicUsize::new(0),
             })
         })
     }
@@ -518,10 +613,12 @@ impl NativeCompute {
             .lock()
             .unwrap_or_else(PoisonError::into_inner);
         for buffers in retired {
-            if let Some(input) = buffers.input {
+            for input in buffers.inputs.into_iter().flatten() {
                 pool.release(input);
             }
-            pool.release(buffers.output);
+            for output in buffers.outputs {
+                pool.release(output);
+            }
         }
     }
 
@@ -534,6 +631,16 @@ impl NativeCompute {
     #[doc(hidden)]
     pub fn in_flight(&self) -> usize {
         self.submissions().in_flight()
+    }
+
+    #[doc(hidden)]
+    pub fn queued_commands(&self) -> usize {
+        self.submissions().queued_commands()
+    }
+
+    #[doc(hidden)]
+    pub fn last_batch_barriers(&self) -> usize {
+        self.batch_barriers.load(Ordering::Relaxed)
     }
 
     #[doc(hidden)]
@@ -1113,12 +1220,308 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         })
     }
 
+    /// Submit independent or intentionally ordered compute commands in one command buffer.
+    ///
+    /// Each tuple is `(source, entry, input, output_slot)`. Distinct slots are
+    /// independent and receive their own output buffers; a reused slot shares
+    /// one output buffer. A buffer-scope barrier is encoded between consecutive
+    /// dispatches, including across shared slots, so a later dispatch can read
+    /// an earlier write. Slots must be below the batch length. The trusted-kernel
+    /// requirements of [`Self::submit_words`] apply to every command. Use
+    /// [`Self::wait_batch`] with the returned token to collect every output.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty or oversized batch, an invalid output
+    /// slot, a per-command validation failure, resource or encoding failure, or
+    /// a full in-flight or queued-command table.
+    pub fn submit_words_batch(
+        &self,
+        commands: &[(&str, &str, &[u32], usize)],
+    ) -> Result<Submission<'_>, MetalError> {
+        autoreleasepool(|_| {
+            let specs: Vec<BatchCommandSpec<'_>> = commands
+                .iter()
+                .map(|&(source, entry, input, output_slot)| BatchCommandSpec {
+                    source,
+                    entry,
+                    input,
+                    output_slot,
+                })
+                .collect();
+            self.submit_words_batch_inner(&specs, None)
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn submit_words_batch_gated(
+        &self,
+        commands: &[(&str, &str, &[u32], usize)],
+    ) -> Result<(Submission<'_>, SubmissionGate), MetalError> {
+        autoreleasepool(|_| {
+            let specs: Vec<BatchCommandSpec<'_>> = commands
+                .iter()
+                .map(|&(source, entry, input, output_slot)| BatchCommandSpec {
+                    source,
+                    entry,
+                    input,
+                    output_slot,
+                })
+                .collect();
+            let event = self
+                .device
+                .newSharedEvent()
+                .ok_or_else(|| MetalError::new("newSharedEvent", "gate creation failed"))?;
+            let submission = self.submit_words_batch_inner(&specs, Some(&event))?;
+            Ok((submission, SubmissionGate { event }))
+        })
+    }
+
+    fn submit_words_batch_inner(
+        &self,
+        commands: &[BatchCommandSpec<'_>],
+        gate: Option<&ProtocolObject<dyn MTLSharedEvent>>,
+    ) -> Result<Submission<'_>, MetalError> {
+        let host_start = self.begin_submission();
+        if commands.is_empty() || commands.len() > MAX_BATCH_COMMANDS {
+            return Err(MetalError::new(
+                "batch bounds",
+                format!("expected 1..={MAX_BATCH_COMMANDS} commands"),
+            ));
+        }
+        for (index, command) in commands.iter().enumerate() {
+            validate_words(command.source, command.entry, command.input)?;
+            if command.output_slot >= commands.len() {
+                return Err(MetalError::new(
+                    "batch output slot",
+                    format!(
+                        "command {index} names slot {}, outside 0..{}",
+                        command.output_slot,
+                        commands.len()
+                    ),
+                ));
+            }
+        }
+        self.submissions().check_batch_capacity(commands.len())?;
+
+        let mut pipelines = Vec::with_capacity(commands.len());
+        let mut widths = Vec::with_capacity(commands.len());
+        let mut build_times = Vec::with_capacity(commands.len());
+        for command in commands {
+            let (pipeline, library_seconds, pipeline_seconds) =
+                self.prepare_compute_pipeline(command.source, command.entry)?;
+            let limit = self.pipeline_group_width_limit(&pipeline);
+            let width = MAX_THREADS_PER_GROUP.min(command.input.len()).min(limit);
+            if width == 0 || command.input.len().div_ceil(width) > MAX_GROUPS {
+                return Err(MetalError::new(
+                    "dispatch bounds",
+                    "device or pipeline would require too many groups",
+                ));
+            }
+            pipelines.push(pipeline);
+            widths.push(width);
+            build_times.push((library_seconds, pipeline_seconds));
+        }
+
+        let slot_count = commands
+            .iter()
+            .map(|command| command.output_slot)
+            .max()
+            .expect("a nonempty batch has a maximum slot")
+            + 1;
+        let mut slot_words = vec![0_usize; slot_count];
+        for command in commands {
+            let words = &mut slot_words[command.output_slot];
+            *words = (*words).max(command.input.len());
+        }
+        for &words in &slot_words {
+            let byte_len = words.checked_mul(size_of::<u32>()).ok_or_else(|| {
+                MetalError::new("buffer bounds", "batch output byte count overflowed")
+            })?;
+            if byte_len > self.device.maxBufferLength() {
+                return Err(MetalError::new(
+                    "buffer bounds",
+                    "batch output exceeds device buffer limit",
+                ));
+            }
+        }
+
+        let alloc_start = Instant::now();
+        let mut pool = self
+            .buffer_pool
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let mut inputs = Vec::with_capacity(commands.len());
+        for command in commands {
+            match pool.acquire(&self.device, command.input) {
+                Ok(buffer) => inputs.push(Some(buffer)),
+                Err(error) => {
+                    for input in inputs.into_iter().flatten() {
+                        pool.release(input);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        let poison: Vec<Vec<u32>> = slot_words
+            .iter()
+            .map(|&words| vec![0xA5A5_A5A5; words])
+            .collect();
+        let mut outputs = Vec::with_capacity(slot_count);
+        for words in &poison {
+            match pool.acquire(&self.device, words) {
+                Ok(buffer) => outputs.push(buffer),
+                Err(error) => {
+                    for input in inputs.into_iter().flatten() {
+                        pool.release(input);
+                    }
+                    for output in outputs {
+                        pool.release(output);
+                    }
+                    return Err(error);
+                }
+            }
+        }
+        let alloc_seconds = alloc_start.elapsed().as_secs_f64();
+        drop(pool);
+
+        let mut table = self.submissions();
+        if let Err(error) = table.check_batch_capacity(commands.len()) {
+            drop(table);
+            self.recycle_buffers(vec![RetiredBuffers { inputs, outputs }]);
+            return Err(error);
+        }
+        let id = table.next_id;
+        table.next_id = match id.checked_add(1) {
+            Some(next) => next,
+            None => {
+                drop(table);
+                self.recycle_buffers(vec![RetiredBuffers { inputs, outputs }]);
+                return Err(MetalError::new("submission", "submission ids exhausted"));
+            }
+        };
+        let command = match self.queue.commandBufferWithUnretainedReferences() {
+            Some(command) => command,
+            None => {
+                drop(table);
+                self.recycle_buffers(vec![RetiredBuffers { inputs, outputs }]);
+                return Err(MetalError::new(
+                    "commandBuffer",
+                    "command buffer creation failed",
+                ));
+            }
+        };
+        if let Some(gate) = gate {
+            command.encodeWaitForEvent_value(gate.as_ref(), 1);
+        }
+
+        let encode_start = Instant::now();
+        let encoder = match command.computeCommandEncoder() {
+            Some(encoder) => encoder,
+            None => {
+                drop(table);
+                self.recycle_buffers(vec![RetiredBuffers { inputs, outputs }]);
+                return Err(MetalError::new(
+                    "computeCommandEncoder",
+                    "compute encoder creation failed",
+                ));
+            }
+        };
+        for (index, fixture) in commands.iter().enumerate() {
+            encoder.setComputePipelineState(&pipelines[index]);
+            // SAFETY: Every input and output slot is live, initialized and
+            // allocated by this device. Each kernel reads buffer zero and
+            // writes buffer one at offset zero; the barrier does not release
+            // ownership of either buffer.
+            unsafe {
+                encoder.setBuffer_offset_atIndex(inputs[index].as_deref(), 0, 0);
+                encoder.setBuffer_offset_atIndex(Some(&outputs[fixture.output_slot]), 0, 1);
+            }
+            encoder.dispatchThreads_threadsPerThreadgroup(
+                size(fixture.input.len()),
+                size(widths[index]),
+            );
+            if index + 1 < commands.len() {
+                if !encoder.respondsToSelector(sel!(memoryBarrierWithScope:)) {
+                    drop(table);
+                    self.recycle_buffers(vec![RetiredBuffers { inputs, outputs }]);
+                    return Err(MetalError::new(
+                        "memoryBarrierWithScope",
+                        "this Metal runtime lacks compute buffer barriers",
+                    ));
+                }
+                encoder.memoryBarrierWithScope(MTLBarrierScope::Buffers);
+            }
+        }
+        encoder.endEncoding();
+        let encode_seconds = encode_start.elapsed().as_secs_f64();
+        self.batch_barriers
+            .store(commands.len() - 1, Ordering::Relaxed);
+
+        let resources = InFlightResources {
+            command,
+            _pipelines: pipelines,
+            _inputs: inputs,
+            outputs,
+            _texture: None,
+            _sampler: None,
+            _fault: None,
+            gate: gate.map(Message::retain),
+            word_counts: slot_words,
+            output_slots: commands.iter().map(|c| c.output_slot).collect(),
+        };
+        let profiles = commands
+            .iter()
+            .zip(&resources.output_slots)
+            .zip(&build_times)
+            .map(
+                |((_fixture, slot), (library_seconds, pipeline_seconds))| RunProfile {
+                    library_seconds: *library_seconds,
+                    pipeline_seconds: *pipeline_seconds,
+                    gpu_seconds: 0.0,
+                    host_seconds: 0.0,
+                    alloc_seconds,
+                    encode_seconds: 0.0,
+                    commit_seconds: 0.0,
+                    wait_seconds: 0.0,
+                    readback_seconds: 0.0,
+                    output: vec![0; resources.word_counts[*slot]],
+                },
+            )
+            .collect();
+        let mut batch = BatchProfile {
+            commands: profiles,
+            gpu_seconds: 0.0,
+            host_seconds: 0.0,
+            encode_seconds,
+            commit_seconds: 0.0,
+            wait_seconds: 0.0,
+            readback_seconds: 0.0,
+        };
+        let commit_start = Instant::now();
+        resources.command.commit();
+        let commit_seconds = commit_start.elapsed().as_secs_f64();
+        batch.commit_seconds = commit_seconds;
+        table.entries.insert(
+            id,
+            SubmissionEntry {
+                resources: Some(resources),
+                result: Ok(SubmissionResult::Batch(batch)),
+                host_start,
+                command_count: commands.len(),
+                abandoned: false,
+                waiting: false,
+            },
+        );
+        Ok(Submission { context: self, id })
+    }
+
     /// Wait for this context's submission and return its readback and timings.
     ///
     /// # Errors
     ///
-    /// Returns an error for a token from another context, an unknown submission,
-    /// or a Metal completion failure.
+    /// Returns an error for a token from another context, a batch token, an
+    /// unknown submission, or a Metal completion failure.
     pub fn wait(&self, submission: Submission<'_>) -> Result<RunProfile, MetalError> {
         if !std::ptr::eq(self, submission.context) {
             return Err(MetalError::new(
@@ -1129,13 +1532,73 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         autoreleasepool(|_| {
             let id = submission.id;
             std::mem::forget(submission);
-            let result = self.take_result(id);
+            let (result, host_seconds) = self.take_result(id)?;
             self.retire_completed();
-            result
+            let SubmissionResult::Single(mut profile) = result else {
+                return Err(MetalError::new("submission", "token belongs to a batch"));
+            };
+            if let Some(host_seconds) = host_seconds {
+                profile.host_seconds = host_seconds;
+            }
+            Ok(profile)
         })
     }
 
-    fn take_result(&self, id: u64) -> Result<RunProfile, MetalError> {
+    /// Wait for this context's batch and return one profile per command.
+    ///
+    /// The returned profiles are in submission order. Because one command
+    /// buffer carries the batch, its whole-buffer timings are repeated in each
+    /// profile's `gpu_seconds`, `host_seconds`, `encode_seconds`,
+    /// `commit_seconds`, `wait_seconds` and `readback_seconds` fields. The
+    /// `output` field is read from that command's output slot after the whole
+    /// batch completes, so commands sharing a slot see its final contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a token from another context, a single-submission
+    /// token, an unknown batch, or a Metal completion failure.
+    pub fn wait_batch(&self, submission: Submission<'_>) -> Result<Vec<RunProfile>, MetalError> {
+        if !std::ptr::eq(self, submission.context) {
+            return Err(MetalError::new(
+                "submission",
+                "token belongs to another context",
+            ));
+        }
+        autoreleasepool(|_| {
+            let id = submission.id;
+            std::mem::forget(submission);
+            let (result, host_seconds) = self.take_result(id)?;
+            self.retire_completed();
+            let SubmissionResult::Batch(batch) = result else {
+                return Err(MetalError::new(
+                    "submission",
+                    "token belongs to a single dispatch",
+                ));
+            };
+            let BatchProfile {
+                mut commands,
+                gpu_seconds,
+                host_seconds: batch_host_seconds,
+                encode_seconds,
+                commit_seconds,
+                wait_seconds,
+                readback_seconds,
+                ..
+            } = batch;
+            let host_seconds = host_seconds.unwrap_or(batch_host_seconds);
+            for profile in &mut commands {
+                profile.gpu_seconds = gpu_seconds;
+                profile.host_seconds = host_seconds;
+                profile.encode_seconds = encode_seconds;
+                profile.commit_seconds = commit_seconds;
+                profile.wait_seconds = wait_seconds;
+                profile.readback_seconds = readback_seconds;
+            }
+            Ok(commands)
+        })
+    }
+
+    fn take_result(&self, id: u64) -> Result<(SubmissionResult, Option<f64>), MetalError> {
         let unknown = || MetalError::new("submission", "unknown submission id");
         let command = {
             let mut table = self.submissions();
@@ -1152,7 +1615,7 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
             start.elapsed().as_secs_f64()
         });
 
-        let (result, host_seconds, retired) = {
+        let (mut result, host_seconds, retired) = {
             let mut table = self.submissions();
             let entry = table.entries.get_mut(&id).ok_or_else(unknown)?;
             entry.waiting = false;
@@ -1174,12 +1637,12 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         if let Some(buffers) = retired {
             self.recycle_buffers(vec![buffers]);
         }
-        let mut profile = result?;
-        profile.wait_seconds = wait_seconds;
-        if let Some(host_seconds) = host_seconds {
-            profile.host_seconds = host_seconds;
+        match &mut result {
+            Ok(SubmissionResult::Single(profile)) => profile.wait_seconds = wait_seconds,
+            Ok(SubmissionResult::Batch(batch)) => batch.wait_seconds = wait_seconds,
+            Err(..) => {}
         }
-        Ok(profile)
+        Ok((result?, host_seconds))
     }
 
     /// Run trusted MSL with an explicit one-dimensional threadgroup width.
@@ -1318,8 +1781,8 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         if let Err(error) = table.check_capacity() {
             drop(table);
             self.recycle_buffers(vec![RetiredBuffers {
-                input: input_buffer,
-                output: output_buffer,
+                inputs: vec![input_buffer],
+                outputs: vec![output_buffer],
             }]);
             return Err(error);
         }
@@ -1329,8 +1792,8 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
             None => {
                 drop(table);
                 self.recycle_buffers(vec![RetiredBuffers {
-                    input: input_buffer,
-                    output: output_buffer,
+                    inputs: vec![input_buffer],
+                    outputs: vec![output_buffer],
                 }]);
                 return Err(MetalError::new("submission", "submission ids exhausted"));
             }
@@ -1341,8 +1804,8 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
             None => {
                 drop(table);
                 self.recycle_buffers(vec![RetiredBuffers {
-                    input: input_buffer,
-                    output: output_buffer,
+                    inputs: vec![input_buffer],
+                    outputs: vec![output_buffer],
                 }]);
                 return Err(MetalError::new(
                     "commandBuffer",
@@ -1358,8 +1821,8 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
             None => {
                 drop(table);
                 self.recycle_buffers(vec![RetiredBuffers {
-                    input: input_buffer,
-                    output: output_buffer,
+                    inputs: vec![input_buffer],
+                    outputs: vec![output_buffer],
                 }]);
                 return Err(MetalError::new(
                     "computeCommandEncoder",
@@ -1421,14 +1884,15 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
         };
         let resources = InFlightResources {
             command,
-            _pipeline: pipeline,
-            _input: input_buffer,
-            output: output_buffer,
+            _pipelines: vec![pipeline],
+            _inputs: vec![input_buffer],
+            outputs: vec![output_buffer],
             _texture: texture,
             _sampler: sampler,
             _fault: fault,
             gate: gate.map(Message::retain),
-            word_count: input.len(),
+            word_counts: vec![input.len()],
+            output_slots: Vec::new(),
         };
         let commit_start = Instant::now();
         resources.command.commit();
@@ -1437,7 +1901,7 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
             id,
             SubmissionEntry {
                 resources: Some(resources),
-                result: Ok(RunProfile {
+                result: Ok(SubmissionResult::Single(RunProfile {
                     library_seconds,
                     pipeline_seconds,
                     gpu_seconds: 0.0,
@@ -1448,8 +1912,9 @@ kernel void sample_rgba8(texture2d<float, access::sample> tex [[texture(0)]],
                     wait_seconds: 0.0,
                     readback_seconds: 0.0,
                     output: words,
-                }),
+                })),
                 host_start,
+                command_count: 1,
                 abandoned: false,
                 waiting: false,
             },

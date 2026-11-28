@@ -30,6 +30,10 @@ const E_ABORT: u64 = 0x8000_4004;
 #[derive(Default)]
 pub(super) struct QueueHandles {
     last_id: u64,
+    /// The process-wide queue XTaskQueueSetCurrentProcessTaskQueue names,
+    /// zero until set: the queue an XAsyncBlock with no queue of its own
+    /// schedules on, exactly as the documentation describes the fallback.
+    process_queue: u64,
     queues: BTreeMap<u64, Queue>,
     terminated: BTreeSet<u64>,
     terminations: BTreeMap<u64, QueueTermination>,
@@ -58,6 +62,11 @@ struct ScheduledCallback {
     termination: bool,
     ready_at: Instant,
     ready_ticks: Option<u64>,
+    /// Invoke the callback with these exact arguments instead of the
+    /// standard context-and-cancelled pair: the XAsync provider protocol
+    /// invokes its callbacks with an operation code and a data pointer,
+    /// which the standard pair cannot express.
+    invoke_args: Option<[u64; 4]>,
     callback: GuestCallback,
 }
 
@@ -67,6 +76,7 @@ struct ReadyCallback {
     port: u32,
     termination: bool,
     callback: GuestCallback,
+    invoke_args: Option<[u64; 4]>,
 }
 
 struct PoolWorker {
@@ -150,6 +160,81 @@ impl QueueHandles {
                 }
             }
         }
+    }
+
+    pub(super) fn contains(&self, handle: u64) -> bool {
+        self.queues.contains_key(&handle)
+    }
+
+    pub(super) fn process_queue(&self) -> u64 {
+        self.process_queue
+    }
+
+    pub(super) fn set_process_queue(&mut self, handle: u64) {
+        self.process_queue = handle;
+    }
+
+    /// XAsync schedules a provider invocation: the callback is the provider
+    /// entry invoked with the operation code and the data pointer, which
+    /// the standard context-and-cancelled pair cannot express - the
+    /// arguments travel with the callback itself. Manual ports only: a
+    /// thread-pool worker starts at the entry with the context alone, so
+    /// the provider's contract cannot be honored there yet.
+    pub(super) fn schedule_provider(
+        &mut self,
+        block: u64,
+        handle: u64,
+        entry: u64,
+        data: u64,
+        op: u64,
+        delay_ms: u32,
+    ) -> Result<(), u32> {
+        let _ = block;
+        let Some(queue) = self.queues.get(&handle) else {
+            return Err(ERROR_INVALID_HANDLE);
+        };
+        if queue.modes[0] != MANUAL {
+            return Err(ERROR_NOT_SUPPORTED);
+        }
+        let callback = ScheduledCallback {
+            owner: 0,
+            termination: false,
+            ready_at: Instant::now() + Duration::from_millis(u64::from(delay_ms)),
+            ready_ticks: None,
+            invoke_args: Some([op, data, 0, 0]),
+            callback: GuestCallback {
+                entry,
+                context: 0,
+                cancelled: false,
+            },
+        };
+        self.submit(handle, 0, callback)
+    }
+
+    /// XAsync queues the completion callback on the completion port with
+    /// the async block as its argument, as XAsyncCompletionRoutine takes it.
+    pub(super) fn schedule_completion(
+        &mut self,
+        block: u64,
+        handle: u64,
+        entry: u64,
+    ) -> Result<(), u32> {
+        if !self.queues.contains_key(&handle) {
+            return Err(ERROR_INVALID_HANDLE);
+        }
+        let callback = ScheduledCallback {
+            owner: 0,
+            termination: false,
+            ready_at: Instant::now(),
+            ready_ticks: None,
+            invoke_args: Some([block, 0, 0, 0]),
+            callback: GuestCallback {
+                entry,
+                context: 0,
+                cancelled: false,
+            },
+        };
+        self.submit(handle, 1, callback)
     }
 
     fn submit(
@@ -249,6 +334,7 @@ impl QueueHandles {
                 termination: true,
                 ready_at: now,
                 ready_ticks: now_ticks,
+                invoke_args: None,
                 callback,
             };
             let port = queue.ports[1];
@@ -436,6 +522,7 @@ fn poll_dispatch(
                 port: selector,
                 termination: item.termination,
                 callback: item.callback,
+                invoke_args: item.invoke_args,
             }));
         }
         wake_at = Some(item.ready_at);
@@ -650,6 +737,7 @@ impl CallbackTask for DispatchTask {
                         context: 0,
                         cancelled: false,
                     },
+                    invoke_args: None,
                 },
                 now,
                 now_ticks,
@@ -684,6 +772,12 @@ fn dispatch_start(
     let Some(ready) = ready else {
         return Ok(CallbackStart::Return(0));
     };
+    let args = ready.invoke_args.unwrap_or([
+        ready.callback.context,
+        u64::from(ready.callback.cancelled),
+        0,
+        0,
+    ]);
     Ok(CallbackStart::Call {
         task: Box::new(DispatchTask {
             state: Arc::clone(state),
@@ -692,12 +786,7 @@ fn dispatch_start(
             termination: ready.termination,
         }),
         entry: ready.callback.entry,
-        args: [
-            ready.callback.context,
-            u64::from(ready.callback.cancelled),
-            0,
-            0,
-        ],
+        args,
     })
 }
 
@@ -916,6 +1005,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     termination: false,
                     ready_at: Instant::now() + Duration::from_millis(u64::from(delay)),
                     ready_ticks,
+                    invoke_args: None,
                     callback: GuestCallback {
                         entry,
                         context,
@@ -931,6 +1021,40 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             },
         );
     }
+    // The process queue pair: one machine-wide slot the blockless XAsync
+    // operations fall back to, exactly as the documentation describes the
+    // arrangement. Set validates the handle is a live queue; Get answers
+    // zero when nothing was set, as a null pointer answers there.
+    let get_process = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "XTaskQueueGetCurrentProcessTaskQueue",
+        ServiceStatus::Implemented,
+        move |_args, _cpu, _memory| {
+            let queues = get_process
+                .gdk_queues
+                .lock()
+                .expect("GDK queue handle table");
+            Ok(queues.process_queue())
+        },
+    );
+    let set_process = Arc::clone(state);
+    registry.register_with_status(
+        MODULE,
+        "XTaskQueueSetCurrentProcessTaskQueue",
+        ServiceStatus::Implemented,
+        move |args, _cpu, _memory| {
+            // Void on Windows and validated by nothing: the handle is
+            // stored as given, and a dead one simply fails the operations
+            // that later resolve through it.
+            set_process
+                .gdk_queues
+                .lock()
+                .expect("GDK queue handle table")
+                .set_process_queue(args.rcx);
+            Ok(0)
+        },
+    );
     let terminate = Arc::clone(state);
     registry.register_with_status(
         MODULE,

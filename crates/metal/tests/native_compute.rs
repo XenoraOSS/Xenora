@@ -112,6 +112,17 @@ fn mixing_input(words: u32) -> Vec<u32> {
         .collect()
 }
 
+fn independent_batch<'a>(
+    source: &'a str,
+    inputs: &'a [Vec<u32>],
+) -> Vec<(&'a str, &'a str, &'a [u32], usize)> {
+    inputs
+        .iter()
+        .enumerate()
+        .map(|(slot, input)| (source, "fixture", input.as_slice(), slot))
+        .collect()
+}
+
 #[test]
 fn threadgroup_widths_give_identical_known_answers() {
     const WIDTHS: [usize; 16] = [
@@ -230,6 +241,216 @@ fn threadgroup_width_benchmark() {
             timing_summary(host),
         );
     }
+}
+
+#[test]
+#[ignore = "manual GPU timing comparison"]
+fn submission_batching_benchmark() {
+    const COMMANDS: usize = 8;
+    const WARMUPS: usize = 3;
+    const SAMPLES: usize = 20;
+    const ROUNDS: u32 = 200;
+    let context = context();
+    let device = context.device_name();
+    let source = mixing_fixture(ROUNDS);
+    let inputs: Vec<Vec<u32>> = (0..COMMANDS as u32)
+        .map(|seed| {
+            mixing_input(256)
+                .into_iter()
+                .map(|word| word ^ seed)
+                .collect()
+        })
+        .collect();
+    let expected: Vec<Vec<u32>> = inputs
+        .iter()
+        .map(|input| mixing_expectation(input, ROUNDS))
+        .collect();
+    let commands = independent_batch(&source, &inputs);
+    let mut individual_host = vec![0.0; SAMPLES];
+    let mut individual_gpu = vec![0.0; SAMPLES];
+    let mut batch_host = vec![0.0; SAMPLES];
+    let mut batch_gpu = vec![0.0; SAMPLES];
+    let mut batch_encode = vec![0.0; SAMPLES];
+    let mut batch_commit = vec![0.0; SAMPLES];
+
+    for round in 0..WARMUPS + SAMPLES {
+        let mut round_host = 0.0;
+        let mut round_gpu = 0.0;
+        for (index, input) in inputs.iter().enumerate() {
+            let profile = native(context.run_words_profiled(&source, "fixture", input));
+            assert_eq!(
+                profile.output, expected[index],
+                "individual command {index}"
+            );
+            round_host += profile.host_seconds;
+            round_gpu += profile.gpu_seconds;
+        }
+
+        let token = native(context.submit_words_batch(&commands));
+        let profiles = native(context.wait_batch(token));
+        assert_eq!(profiles.len(), COMMANDS);
+        for (index, command) in profiles.iter().enumerate() {
+            assert_eq!(command.output, expected[index], "batched command {index}");
+        }
+        if round >= WARMUPS {
+            let sample = round - WARMUPS;
+            individual_host[sample] = round_host;
+            individual_gpu[sample] = round_gpu;
+            // One command buffer carries the whole batch, so its timings are
+            // repeated on every returned profile.
+            batch_host[sample] = profiles[0].host_seconds;
+            batch_gpu[sample] = profiles[0].gpu_seconds;
+            batch_encode[sample] = profiles[0].encode_seconds;
+            batch_commit[sample] = profiles[0].commit_seconds;
+        }
+    }
+
+    println!(
+        "device={device} commands={COMMANDS} \
+         individual_host_us[{}] individual_gpu_us[{}] \
+         batch_host_us[{}] batch_gpu_us[{}] batch_encode_us[{}] batch_commit_us[{}]",
+        timing_summary(&mut individual_host),
+        timing_summary(&mut individual_gpu),
+        timing_summary(&mut batch_host),
+        timing_summary(&mut batch_gpu),
+        timing_summary(&mut batch_encode),
+        timing_summary(&mut batch_commit),
+    );
+}
+
+#[test]
+fn batch_submission_matches_individual_word_results() {
+    const COMMANDS: usize = 8;
+    const ROUNDS: u32 = 19;
+    let context = context();
+    let source = mixing_fixture(ROUNDS);
+    let inputs: Vec<Vec<u32>> = (0..COMMANDS as u32)
+        .map(|seed| {
+            mixing_input(64)
+                .into_iter()
+                .map(|word| word ^ seed)
+                .collect()
+        })
+        .collect();
+    let expected: Vec<Vec<u32>> = inputs
+        .iter()
+        .map(|input| mixing_expectation(input, ROUNDS))
+        .collect();
+    let commands = independent_batch(&source, &inputs);
+
+    let token = native(context.submit_words_batch(&commands));
+    assert_eq!(context.in_flight(), 1);
+    assert_eq!(context.queued_commands(), COMMANDS);
+    assert_eq!(context.last_batch_barriers(), COMMANDS - 1);
+    let profiles = native(context.wait_batch(token));
+    assert_eq!(profiles.len(), COMMANDS);
+    for (index, command) in profiles.iter().enumerate() {
+        assert_eq!(command.output, expected[index], "batched command {index}");
+        assert_eq!(
+            command.output,
+            native(context.run_words(&source, "fixture", &inputs[index])),
+            "individual command {index}"
+        );
+    }
+    assert_eq!(context.in_flight(), 0);
+    assert_eq!(context.queued_commands(), 0);
+    assert_eq!(context.tracked(), 0);
+}
+
+#[test]
+fn batch_barrier_orders_shared_output_slot() {
+    let context = context();
+    let write = fixture("output[0] = input[0];");
+    let read = fixture("output[1] = output[0] + 1u;");
+    let seed = [u32::MAX];
+    let unused = [0_u32, 0];
+    let commands = [
+        (write.as_str(), "fixture", seed.as_slice(), 0),
+        (read.as_str(), "fixture", unused.as_slice(), 0),
+    ];
+
+    let profiles = native(context.wait_batch(native(context.submit_words_batch(&commands))));
+    assert_eq!(context.last_batch_barriers(), 1);
+    assert_eq!(profiles.len(), 2);
+    // Both profiles read the shared slot after the whole batch completes.
+    assert_eq!(profiles[0].output, [u32::MAX, 0]);
+    assert_eq!(profiles[1].output, [u32::MAX, 0]);
+    assert_eq!(context.in_flight(), 0);
+    assert_eq!(context.queued_commands(), 0);
+    assert_eq!(context.tracked(), 0);
+}
+
+#[test]
+fn batch_submission_rejects_bounds_without_retaining_resources() {
+    let context = context();
+    let source = fixture("output[id] = input[id];");
+    let input = [1_u32];
+    let no_commands: [(&str, &str, &[u32], usize); 0] = [];
+    let Err(error) = context.submit_words_batch(&no_commands) else {
+        panic!("empty batch must fail");
+    };
+    assert_eq!(error.operation, "batch bounds");
+
+    let too_many: Vec<(&str, &str, &[u32], usize)> = (0..9)
+        .map(|slot| (source.as_str(), "fixture", input.as_slice(), slot))
+        .collect();
+    let Err(error) = context.submit_words_batch(&too_many) else {
+        panic!("batch above the cap must fail");
+    };
+    assert_eq!(error.operation, "batch bounds");
+
+    let bad_slot = [(source.as_str(), "fixture", input.as_slice(), 1)];
+    let Err(error) = context.submit_words_batch(&bad_slot) else {
+        panic!("an out-of-range slot must fail");
+    };
+    assert_eq!(error.operation, "batch output slot");
+    assert_eq!(context.in_flight(), 0);
+    assert_eq!(context.queued_commands(), 0);
+    assert_eq!(context.tracked(), 0);
+}
+
+#[test]
+fn batch_submission_enforces_bounded_queue_depth() {
+    const COMMANDS: usize = 8;
+    const DEPTH: usize = 16;
+    let context = context();
+    let source = mixing_fixture(11);
+    let inputs: Vec<Vec<u32>> = (0..COMMANDS as u32)
+        .map(|seed| {
+            mixing_input(32)
+                .into_iter()
+                .map(|word| word ^ seed)
+                .collect()
+        })
+        .collect();
+    let expected: Vec<Vec<u32>> = inputs
+        .iter()
+        .map(|input| mixing_expectation(input, 11))
+        .collect();
+    let commands = independent_batch(&source, &inputs);
+
+    let (first, gate) = native(context.submit_words_batch_gated(&commands));
+    let mut tokens = vec![first];
+    for _ in 1..DEPTH {
+        tokens.push(native(context.submit_words_batch(&commands)));
+    }
+    assert_eq!(context.in_flight(), DEPTH);
+    assert_eq!(context.queued_commands(), DEPTH * COMMANDS);
+    let Err(error) = context.submit_words_batch(&commands) else {
+        panic!("batch past the in-flight cap must fail");
+    };
+    assert_eq!(error.operation, "in-flight limit");
+
+    gate.open();
+    for token in tokens {
+        let profiles = native(context.wait_batch(token));
+        for (index, command) in profiles.iter().enumerate() {
+            assert_eq!(command.output, expected[index]);
+        }
+    }
+    assert_eq!(context.in_flight(), 0);
+    assert_eq!(context.queued_commands(), 0);
+    assert_eq!(context.tracked(), 0);
 }
 
 #[test]
