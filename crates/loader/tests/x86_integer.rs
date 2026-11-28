@@ -1768,7 +1768,7 @@ fn undeclared_and_ambiguous_encodings_are_rejected() {
         &[0xF3, 0xC3],             // rep ret
         &[0xF2, 0xA4],             // repne movsb
         &[0xF2, 0xAC],             // repne lodsb
-        &[0x67, 0x8B, 0x06],       // address-size override
+        &[0x67, 0xA4],             // movsb under the address-size override
         &[0x67, 0xA1, 0, 0, 0, 0], // mov eax, [moffs32]
         &[0x64, 0x2E, 0x8B, 0x06], // CS after FS
         &[0x66, 0x50],             // push ax

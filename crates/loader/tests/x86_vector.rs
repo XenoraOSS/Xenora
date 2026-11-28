@@ -289,7 +289,8 @@ fn ignored_pclmulqdq_immediate_bits_do_not_change_results() {
     // Each group names the canonical selector, four immediates that differ
     // only in ignored bits, the two selected qwords, and their hand-derived
     // carry-less product. The expected values are literals, not executor data.
-    let groups: &[(u8, [u8; 4], u64, u64, u64, u64, u64, u64)] = &[
+    type ShiftGroup = (u8, [u8; 4], u64, u64, u64, u64, u64, u64);
+    let groups: &[ShiftGroup] = &[
         (0, [0x02, 0x08, 0x22, 0x6A], 3, 0, 3, 0, 5, 0),
         (1, [0x03, 0x09, 0x23, 0x6B], 0, 1 << 63, 3, 0, 1 << 63, 1),
         (16, [0x12, 0x18, 0x32, 0x7A], 3, 0, 0, 3, 5, 0),
