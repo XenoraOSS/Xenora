@@ -43,7 +43,7 @@ IMPORT int XenoraDestroyCommandQueue(u64 queue);
 IMPORT int XenoraDestroyDevice(u64 device);
 
 enum { WIDTH = 4, HEIGHT = 3, MAX_FRAMES = 64, LARGE_SIZE = 64 };
-enum session_mode { NORMAL, MISSING_PRESENT, EXTRA_PRESENT, LEAK_FILE, STALL_FRAME, DETERMINISTIC_CLOCK, LARGE_FRAME };
+enum session_mode { NORMAL, MISSING_PRESENT, EXTRA_PRESENT, LEAK_FILE, STALL_FRAME, DETERMINISTIC_CLOCK, LARGE_FRAME, READONLY_NEXT_INPUT };
 
 struct journal_entry {
     u32 sequence;
@@ -64,6 +64,7 @@ int _fltused;
 static struct journal_entry expected[MAX_FRAMES];
 static struct journal_entry journal[MAX_FRAMES + 1];
 static u32 pixels[WIDTH * HEIGHT];
+static const u32 readonly_next_input = 0xa5a5a5a5u;
 
 struct graphics {
     u64 device;
@@ -154,6 +155,10 @@ static void run_session(enum session_mode mode) {
             ExitProcess(71);
         }
         CHECK(XenoraSessionPresent() == 1, 4);
+        if (mode == READONLY_NEXT_INPUT) {
+            (void)XenoraSessionNextInput((u32 *)&readonly_next_input);
+            ExitProcess(74);
+        }
         if (mode == EXTRA_PRESENT) {
             (void)XenoraSessionPresent();
             ExitProcess(72);
@@ -187,3 +192,25 @@ void leak_entry(void) { run_session(LEAK_FILE); }
 void stall_frame_entry(void) { run_session(STALL_FRAME); }
 void deterministic_clock_entry(void) { run_session(DETERMINISTIC_CLOCK); }
 void large_frame_entry(void) { run_session(LARGE_FRAME); }
+
+void null_next_input_entry(void) {
+    (void)XenoraSessionNextInput(0);
+    ExitProcess(75);
+}
+void readonly_next_input_entry(void) { run_session(READONLY_NEXT_INPUT); }
+
+#ifdef SESSION_CROSS_PAGE_NEXT_INPUT
+IMPORT void *VirtualAlloc(void *address, u64 size, u32 allocation, u32 protection);
+IMPORT int VirtualProtect(void *address, u64 size, u32 protection, u32 *old_protection);
+
+void cross_page_next_input_entry(void) {
+    enum { PAGE_SIZE = 4096, MEM_RESERVE_COMMIT = 0x3000, PAGE_READWRITE = 4, PAGE_READONLY = 2 };
+    unsigned char *pages = VirtualAlloc(0, 2 * PAGE_SIZE, MEM_RESERVE_COMMIT, PAGE_READWRITE);
+    CHECK(pages != 0, 76);
+    u32 old_protection = 0;
+    CHECK(VirtualProtect(pages + PAGE_SIZE, PAGE_SIZE, PAGE_READONLY, &old_protection), 77);
+    CHECK(old_protection == PAGE_READWRITE, 78);
+    (void)XenoraSessionNextInput((u32 *)(pages + PAGE_SIZE - 2));
+    ExitProcess(79);
+}
+#endif

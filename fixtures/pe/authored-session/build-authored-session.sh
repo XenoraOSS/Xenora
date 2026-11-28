@@ -38,6 +38,8 @@ EXPORTS
     GetTickCount64
     GetSystemTimeAsFileTime
     ExitProcess
+    VirtualAlloc
+    VirtualProtect
 DEF
 cat > session.def <<'DEF'
 LIBRARY xenora-session-v1.dll
@@ -79,7 +81,7 @@ compile -c "$here/session.c" -o guest.obj
 
 build() {
     link "/entry:$1" /subsystem:console /nodefaultlib /timestamp:0 /machine:x64 \
-        "/out:$out/$2.exe" guest.obj kernel32.lib session.lib graphics.lib
+        "/out:$out/$2.exe" "${3:-guest.obj}" kernel32.lib session.lib graphics.lib
 }
 
 build entry authored-session
@@ -89,6 +91,10 @@ build leak_entry authored-session-leak
 build stall_frame_entry authored-session-stall-frame
 build deterministic_clock_entry authored-session-deterministic-clock
 build large_frame_entry authored-session-large-frame
+build null_next_input_entry authored-session-null-next-input
+build readonly_next_input_entry authored-session-readonly-next-input
+compile -DSESSION_CROSS_PAGE_NEXT_INPUT -c "$here/session.c" -o cross-page-guest.obj
+build cross_page_next_input_entry authored-session-cross-page-next-input cross-page-guest.obj
 
 build_companion() {
     variant=$1
