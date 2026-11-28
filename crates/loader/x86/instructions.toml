@@ -4899,8 +4899,8 @@ map = "0f"
 prefix = "66"
 opcode = 0xD7
 enc = "reg_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 register_only = true
 
 [[vex]]

@@ -194,8 +194,12 @@ pub(crate) fn execute(
                 }
             }
         }
-        (Op::Movmskps | Op::Movmskpd, _) => {
-            let bits = if insn.op == Op::Movmskps { 32 } else { 64 };
+        (Op::Movmskps | Op::Movmskpd | Op::Pmovmskb, _) => {
+            let bits = match insn.op {
+                Op::Movmskps => 32,
+                Op::Movmskpd => 64,
+                _ => 8,
+            };
             let value = read_source(cpu, memory, insn)?;
             let lanes = 128 / bits;
             let signs = (0..u32::from(length) / 16 * lanes).fold(0, |out, index| {

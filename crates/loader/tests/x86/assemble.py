@@ -313,7 +313,7 @@ def avx_cases():
             out += [f"{op} {v}3, {v}9", f"{op} {v}12, {v}1", f"{op} {v}2, {v}2"]
         for op in ("vmovsldup", "vmovshdup"):
             out.append(f"{op} {v}12, {whole[v]}")
-        for op in ("vmovmskps", "vmovmskpd"):
+        for op in ("vmovmskps", "vmovmskpd", "vpmovmskb"):
             out += [f"{op} ebx, {v}9", f"{op} r10d, {v}3"]
         out.append(f"vbroadcastss {v}12, {dword}")
         for op in ("vpermilps", "vpermilpd"):
@@ -419,7 +419,6 @@ def avx_form_cases():
                        ("vmpsadbw", (*range(8), 129, 255))):
         for n in values:
             three(op, "xmm", f", {n}")
-    out += ["vpmovmskb ebx, xmm9", "vpmovmskb r10d, xmm3"]
     for v, fourth in (("xmm", (0, 3, 7, 9, 12, 15)), ("ymm", (0, 3, 7, 9, 12, 15))):
         for op in ("vblendvps", "vblendvpd") + (("vpblendvb",) if v == "xmm" else ()):
             for n in fourth:

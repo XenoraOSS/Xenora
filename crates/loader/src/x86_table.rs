@@ -4362,7 +4362,7 @@ pub static VEX_FORMS: [VexForm; 360] = [
     VexForm { key: 0x5d4, form: 646, digit: None, length: None, wide: None, memory: 0, nds: true },
     VexForm { key: 0x5d5, form: 647, digit: None, length: None, wide: None, memory: 0, nds: true },
     VexForm { key: 0x5d6, form: 520, digit: None, length: Some(false), wide: None, memory: 8, nds: false },
-    VexForm { key: 0x5d7, form: 628, digit: None, length: Some(false), wide: None, memory: 16, nds: false },
+    VexForm { key: 0x5d7, form: 628, digit: None, length: None, wide: None, memory: 0, nds: false },
     VexForm { key: 0x5d8, form: 648, digit: None, length: None, wide: None, memory: 0, nds: true },
     VexForm { key: 0x5d9, form: 649, digit: None, length: None, wide: None, memory: 0, nds: true },
     VexForm { key: 0x5da, form: 650, digit: None, length: None, wide: None, memory: 0, nds: true },
