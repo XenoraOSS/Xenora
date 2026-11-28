@@ -46,6 +46,7 @@ const WINHTTP_QUERY_DATE: u32 = 9;
 const WINHTTP_QUERY_EXPIRES: u32 = 10;
 const WINHTTP_QUERY_LAST_MODIFIED: u32 = 11;
 const WINHTTP_QUERY_RAW_HEADERS_CRLF: u32 = 22;
+const WINHTTP_QUERY_CUSTOM: u32 = 65535;
 const WINHTTP_QUERY_FLAG_SYSTEMTIME: u32 = 0x4000_0000;
 const WINHTTP_QUERY_FLAG_NUMBER: u32 = 0x2000_0000;
 const WINHTTP_OPTION_RESOLVE_TIMEOUT: u32 = 2;
@@ -1824,9 +1825,19 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let info_level = args.rdx as u32;
             let length_ptr = args.get(4, memory).map_err(memory_fault)?;
             let index_ptr = args.get(5, memory).map_err(memory_fault)?;
-            if args.r8 != 0 || length_ptr == 0 {
+            if length_ptr == 0 || (args.r8 != 0) != (info_level == WINHTTP_QUERY_CUSTOM) {
                 return query_headers.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
+            let custom_name = if info_level == WINHTTP_QUERY_CUSTOM {
+                match read_wide_string(memory, args.r8, MAX_HEADER_LINE_BYTES) {
+                    Ok(name) if !name.is_empty() && name.is_ascii() && valid_header_name(&name) => {
+                        Some(name)
+                    }
+                    _ => return query_headers.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0),
+                }
+            } else {
+                None
+            };
             if index_ptr != 0 {
                 return query_headers.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
             }
@@ -1847,6 +1858,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let textual_content_length = info_level == WINHTTP_QUERY_CONTENT_LENGTH;
             let textual_server = info_level == WINHTTP_QUERY_SERVER;
             let raw_crlf = info_level == WINHTTP_QUERY_RAW_HEADERS_CRLF;
+            let custom = info_level == WINHTTP_QUERY_CUSTOM;
             let textual_date = matches!(
                 info_level,
                 WINHTTP_QUERY_DATE | WINHTTP_QUERY_EXPIRES | WINHTTP_QUERY_LAST_MODIFIED
@@ -1860,7 +1872,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 || textual_content_type
                 || textual_content_length
                 || textual_server
-                || raw_crlf;
+                || raw_crlf
+                || custom;
             if !supported {
                 return query_headers.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
             }
@@ -1878,7 +1891,9 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let Some(response) = &transport_guard.response else {
                 return query_headers.fail(cpu.gs_base, ERROR_WINHTTP_INCORRECT_HANDLE_STATE, 0);
             };
-            let named_header = if systemtime_date || textual_date {
+            let named_header = if custom {
+                custom_name.as_deref()
+            } else if systemtime_date || textual_date {
                 date_header
             } else if textual_content_type {
                 Some("content-type")
@@ -3129,6 +3144,95 @@ mod tests {
         )
         .unwrap();
         assert_eq!(text, format!("{expected}\0"));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn custom_named_header_queries_match_case_insensitively_with_textual_sizing() {
+        let (port, _captured, server) = serve_once(
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nX-Server: fixture\r\nX-MixedCase: Value-Here\r\n\r\n",
+        );
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        write_wide(&mut fixture.memory, 0x2700, "x-mixedcase");
+        // Sizing reports the required byte count including the terminator.
+        fixture.memory.write_u32(0x2908, 0).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[request, WINHTTP_QUERY_CUSTOM as u64, 0x2700, 0, 0x2908, 0]
+            ),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+        assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), 11 * 2);
+        fixture.memory.write_u32(0x2908, 11 * 2).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    WINHTTP_QUERY_CUSTOM as u64,
+                    0x2700,
+                    0x2a00,
+                    0x2908,
+                    0
+                ]
+            ),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), 10 * 2);
+        let mut bytes = vec![0u8; 20];
+        fixture.memory.read_bytes(0x2a00, &mut bytes).unwrap();
+        let (words, _) = bytes.as_chunks::<2>();
+        let text = String::from_utf16(
+            &words
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(text, "Value-Here");
+        // A missing header reports the documented not-found error.
+        write_wide(&mut fixture.memory, 0x2700, "X-Absent");
+        fixture.memory.write_u32(0x2908, 64).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    WINHTTP_QUERY_CUSTOM as u64,
+                    0x2700,
+                    0x2a00,
+                    0x2908,
+                    0
+                ]
+            ),
+            0
+        );
+        assert_eq!(fixture.state.last_error(0), ERROR_WINHTTP_HEADER_NOT_FOUND);
+        // Invalid names and misplaced arguments fail explicitly.
+        for (name, level) in [
+            ("", WINHTTP_QUERY_CUSTOM),
+            ("bad name", WINHTTP_QUERY_CUSTOM),
+            ("X-Ok", WINHTTP_QUERY_STATUS_CODE),
+        ] {
+            write_wide(&mut fixture.memory, 0x2700, name);
+            assert_eq!(
+                fixture.call(
+                    "WinHttpQueryHeaders",
+                    &[request, level as u64, 0x2700, 0x2a00, 0x2908, 0]
+                ),
+                0
+            );
+            assert_eq!(fixture.state.last_error(0), ERROR_INVALID_PARAMETER);
+        }
         server.join().unwrap();
     }
 
