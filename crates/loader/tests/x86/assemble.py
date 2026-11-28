@@ -107,6 +107,13 @@ def cases():
         for count in (0, 1, 7, bits - 1, bits, bits + 5):
             out += [f"rorx {reg(3, bits)}, {reg(9, bits)}, {count}",
                     f"rorx {reg(10, bits)}, {mem(bits)}, {count}"]
+        for op in ("pdep", "pext"):
+            # VEX.vvvv is the bit source and must be a register; the ModRM
+            # mask may be a register or memory.
+            out += [f"{op} {reg(3, bits)}, {reg(9, bits)}, {reg(1, bits)}",
+                    f"{op} {reg(10, bits)}, {reg(12, bits)}, {mem(bits)}",
+                    f"{op} {reg(2, bits)}, {reg(2, bits)}, {reg(2, bits)}",
+                    f"{op} {reg(3, bits)}, {reg(9, bits)}, {reg(15, bits)}"]
     for bits in (8, 16, 32, 64):
         out += [f"mov {reg(3, bits)}, {reg(9, bits)}", f"mov {reg(10, bits)}, {mem(bits)}",
                 f"mov {mem(bits)}, {reg(2, bits)}", f"mov {reg(14, bits)}, 0x5a",

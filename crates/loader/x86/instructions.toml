@@ -115,6 +115,11 @@ shlx = { ref = "sdm SHLX/SHRX/SARX" }
 shrx = { ref = "sdm SHLX/SHRX/SARX" }
 sarx = { ref = "sdm SHLX/SHRX/SARX" }
 rorx = { ref = "sdm RORX" }
+# PDEP deposits low-order source bits into the positions selected by the mask;
+# PEXT compresses the masked source bits into low-order positions. Neither
+# instruction writes a flag.
+pdep = { ref = "sdm PDEP" }
+pext = { ref = "sdm PEXT" }
 push = { ref = "sdm PUSH" }
 pop = { ref = "sdm POP" }
 leave = { ref = "sdm LEAVE" }
@@ -6142,6 +6147,27 @@ prefix = "f2"
 opcode = 0xF0
 enc = "reg_rm_ub"
 length = "128"
+
+# PDEP and PEXT take the bit source from VEX.vvvv and the mask from ModRM.
+# They share opcode F5 with VEX.pp selecting F2 for PDEP and F3 for PEXT;
+# VEX.W selects a 32- or 64-bit operand and VEX.L is clear in both forms.
+[[vex]]
+op = "pdep"
+map = "0f38"
+prefix = "f2"
+opcode = 0xF5
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "pext"
+map = "0f38"
+prefix = "f3"
+opcode = 0xF5
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
 
 [[vex]]
 op = "fmaddsub132p"

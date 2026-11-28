@@ -1134,6 +1134,14 @@ c4 c3 7b f0 d9 20 | rorx ebx, r9d, 32
 c4 63 7b f0 54 be 10 20 | rorx r10d, dword ptr [rsi + 4*rdi + 16], 32
 c4 c3 7b f0 d9 25 | rorx ebx, r9d, 37
 c4 63 7b f0 54 be 10 25 | rorx r10d, dword ptr [rsi + 4*rdi + 16], 37
+c4 e2 33 f5 d9 | pdep ebx, r9d, ecx
+c4 62 1b f5 54 be 10 | pdep r10d, r12d, dword ptr [rsi + 4*rdi + 16]
+c4 e2 6b f5 d2 | pdep edx, edx, edx
+c4 c2 33 f5 df | pdep ebx, r9d, r15d
+c4 e2 32 f5 d9 | pext ebx, r9d, ecx
+c4 62 1a f5 54 be 10 | pext r10d, r12d, dword ptr [rsi + 4*rdi + 16]
+c4 e2 6a f5 d2 | pext edx, edx, edx
+c4 c2 32 f5 df | pext ebx, r9d, r15d
 c4 e2 b0 f2 d9 | andn rbx, r9, rcx
 c4 62 98 f2 54 be 10 | andn r10, r12, qword ptr [rsi + 4*rdi + 16]
 c4 e2 e8 f2 d2 | andn rdx, rdx, rdx
@@ -1167,6 +1175,14 @@ c4 c3 fb f0 d9 40 | rorx rbx, r9, 64
 c4 63 fb f0 54 be 10 40 | rorx r10, qword ptr [rsi + 4*rdi + 16], 64
 c4 c3 fb f0 d9 45 | rorx rbx, r9, 69
 c4 63 fb f0 54 be 10 45 | rorx r10, qword ptr [rsi + 4*rdi + 16], 69
+c4 e2 b3 f5 d9 | pdep rbx, r9, rcx
+c4 62 9b f5 54 be 10 | pdep r10, r12, qword ptr [rsi + 4*rdi + 16]
+c4 e2 eb f5 d2 | pdep rdx, rdx, rdx
+c4 c2 b3 f5 df | pdep rbx, r9, r15
+c4 e2 b2 f5 d9 | pext rbx, r9, rcx
+c4 62 9a f5 54 be 10 | pext r10, r12, qword ptr [rsi + 4*rdi + 16]
+c4 e2 ea f5 d2 | pext rdx, rdx, rdx
+c4 c2 b2 f5 df | pext rbx, r9, r15
 44 88 cb | mov bl, r9b
 44 8a 54 be 10 | mov r10b, byte ptr [rsi + 4*rdi + 16]
 88 54 be 10 | mov byte ptr [rsi + 4*rdi + 16], dl
