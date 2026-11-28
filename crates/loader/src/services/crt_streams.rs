@@ -1673,13 +1673,14 @@ impl StandardStreams {
     }
 
     /// `_get_osfhandle`: the kernel handle a descriptor wraps, as an
-    /// `intptr_t`. -1 with `EBADF` for one that wraps no kernel object —
-    /// the CRT's own files have none behind them.
-    pub(super) fn get_osfhandle(&mut self, fd: i32) -> Outcome<u64> {
+    /// `intptr_t`. A CRT-opened file synthesizes the kernel object the real
+    /// CRT always has behind its descriptors, lazily (#1312); -1 with
+    /// `EBADF` for a descriptor that is no file at all.
+    pub(super) fn get_osfhandle(&mut self, drive: &mut super::ObjectState, fd: i32) -> Outcome<u64> {
         if fd < 0 {
             return Ok(Err(Failed(u64::MAX, EBADF)));
         }
-        Ok(match self.opened.descriptor_handle(fd as u32) {
+        Ok(match self.opened.descriptor_handle(drive, fd as u32) {
             std::result::Result::Ok(handle) => Ok(handle),
             std::result::Result::Err(errno) => Err(Failed(u64::MAX, errno)),
         })

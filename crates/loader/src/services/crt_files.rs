@@ -148,6 +148,14 @@ struct FileStream {
     /// Bytes `ungetc` pushed back, in push order: the last byte pushed is
     /// the first one a read hands out again, as the CRT stacks them.
     pushback: Vec<u8>,
+    /// The kernel file object `_get_osfhandle` synthesized for this stream,
+    /// lazily, the first time a guest asks. Every CRT file descriptor has a
+    /// kernel handle behind it on Windows - the CRT itself opens files on
+    /// top of CreateFile - and win32 layers that implement their `fstat`
+    /// through `_get_osfhandle` and the file-type queries depend on it. The
+    /// object carries its own position cell, exactly as the kernel handle
+    /// of a real CRT stream does next to the stream's buffered position.
+    osfhandle: Option<u64>,
     /// Byte ranges `_locking` holds, as (start, end) pairs with the end
     /// exclusive. They live in the stream itself: a duplication shares them
     /// exactly as it shares the position, and closing the last descriptor
@@ -341,6 +349,7 @@ impl FileStreams {
                 error: false,
                 orientation: 0,
                 pushback: Vec::new(),
+                osfhandle: None,
                 locks: Vec::new(),
             },
         );
@@ -411,6 +420,7 @@ impl FileStreams {
                 error: false,
                 orientation: 0,
                 pushback: Vec::new(),
+                osfhandle: None,
                 locks: Vec::new(),
             },
         );
@@ -1193,6 +1203,7 @@ impl FileStreams {
             error: false,
             orientation: 0,
             pushback: Vec::new(),
+            osfhandle: None,
             locks: Vec::new(),
         };
         if append && let Some(data) = drive.drive_file(&stream.path) {
@@ -1439,15 +1450,63 @@ impl FileStreams {
         self.insert_descriptor(Descriptor::Handle(handle))
     }
 
-    /// `_get_osfhandle`: the kernel handle a descriptor wraps. The CRT owns
-    /// one for the `_open_osfhandle` descriptors only; its own streams and
-    /// files have no kernel object behind them, so the answer is -1 with
-    /// `EBADF` there, as the hosted runtime answers for a bad descriptor.
-    pub(super) fn descriptor_handle(&self, fd: u32) -> Result<u64, u32> {
+    /// `_get_osfhandle`: the kernel handle a descriptor wraps. One made by
+    /// `_open_osfhandle` answers the handle it took ownership of. One the
+    /// CRT opened itself synthesizes the kernel file object the real CRT
+    /// always has behind its descriptors - it opens on top of CreateFile -
+    /// because win32 layers implement their `fstat` and `isatty` through
+    /// the handle and the file-type queries (#1312). The synthesis is lazy
+    /// and cached in the stream, so a guest that never asks pays nothing;
+    /// the object's position cell is its own, exactly as the kernel handle
+    /// of a real CRT stream moves independently of the buffered position.
+    pub(super) fn descriptor_handle(
+        &mut self,
+        drive: &mut ObjectState,
+        fd: u32,
+    ) -> Result<u64, u32> {
+        let fd = self.descriptor_terminal(fd)?;
         match self.descriptors.get(&fd) {
-            Some(Descriptor::Handle(handle)) => Ok(*handle),
-            _ => Err(EBADF),
+            Some(Descriptor::Handle(handle)) => return Ok(*handle),
+            Some(Descriptor::Owned(_) | Descriptor::Shared(_)) => {}
+            _ => return Err(EBADF),
         }
+        // The stream is the owned one's own state or the shared one's
+        // file; what the synthesis needs of it is owned before the object
+        // table and the cache both mutate.
+        let (path, access, position, cached) = {
+            let stream = match self.descriptors.get(&fd) {
+                Some(Descriptor::Shared(file)) => self.open.get(file).ok_or(EBADF)?,
+                Some(Descriptor::Owned(stream)) => stream,
+                _ => return Err(EBADF),
+            };
+            let mut access = 0;
+            if stream.readable {
+                access |= FILE_READ;
+            }
+            if stream.writable {
+                access |= FILE_WRITE;
+            }
+            (stream.path.clone(), access, stream.position, stream.osfhandle)
+        };
+        if let Some(handle) = cached {
+            return Ok(handle);
+        }
+        let object = super::files::OpenFile::for_interop(path, access, position);
+        let Some(handle) = drive.next_handle() else {
+            return Err(EBADF);
+        };
+        drive.insert_handle(handle, GuestObject::File(object));
+        match self.descriptors.get_mut(&fd) {
+            Some(Descriptor::Owned(stream)) => stream.osfhandle = Some(handle),
+            Some(Descriptor::Shared(file)) => {
+                let file = *file;
+                if let Some(stream) = self.open.get_mut(&file) {
+                    stream.osfhandle = Some(handle);
+                }
+            }
+            _ => {}
+        }
+        Ok(handle)
     }
 
     pub(super) fn descriptor_close(

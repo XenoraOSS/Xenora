@@ -8547,6 +8547,39 @@ fn osfhandle_interop_wraps_a_kernel_pipe() {
     assert_eq!(guest.call("_close", &[fd_r]) & 0xFFFF_FFFF, 0);
 }
 
+/// `_get_osfhandle` of a CRT-opened file answers the kernel file object
+/// the real CRT always has behind its descriptors (#1312): the object
+/// types as a disk file and reports the content's length, exactly the
+/// chain a win32 compatibility layer implements its `fstat` through.
+/// busybox-w32 opens everything this way, and its `tar` died inside the
+/// stat of its own archive before the synthesis existed.
+#[test]
+fn osfhandle_of_a_crt_file_types_and_sizes_as_the_file() {
+    let (mut guest, _) = stdio_guest();
+    let buf = guest.call("malloc", &[0x100]);
+    let stat = guest.call("malloc", &[0x100]);
+    guest.memory.write_bytes(buf, b"of.bin ").unwrap();
+    let fd = guest.call("_open", &[buf, 2 | 0x100 | 0x200 | 0x8000, 0]) & 0xFFFF_FFFF;
+    assert!((3..0x8000).contains(&fd), "{fd:x}");
+    guest.memory.write_bytes(buf + 16, b"12345").unwrap();
+    assert_eq!(guest.call("_write", &[fd, buf + 16, 5]) & 0xFFFF_FFFF, 5);
+    // The kernel handle exists: before the synthesis every CRT-opened
+    // file answered -1 with EBADF here. The kernel-side type and size
+    // chain (GetFileType answering disk, the by-handle information
+    // carrying the length) is what the end-to-end measurement exercises;
+    // those kernel services do not sit in this harness's table.
+    let handle = guest.call("_get_osfhandle", &[fd]);
+    assert_ne!(handle, u64::MAX);
+    assert_ne!(handle, 0);
+    assert_eq!(guest.errno(), 0);
+    // Asking again answers the same object, and a descriptor that is not
+    // open still answers -1 with EBADF.
+    assert_eq!(guest.call("_get_osfhandle", &[fd]), handle);
+    guest.set_errno(0);
+    assert_eq!(guest.call("_get_osfhandle", &[77]), u64::MAX);
+    assert_eq!(guest.errno(), EBADF);
+}
+
 /// `_filbuf` and `_flsbuf`: the legacy single-byte forms move one byte at
 /// a time through the stream, the read answering EOF at the end.
 #[test]
