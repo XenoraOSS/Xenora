@@ -60,14 +60,23 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                         .position(|&unit| unit == u16::from(b'%'))
                 {
                     let close = index + 1 + end;
-                    let name: String = input[index + 1..close]
-                        .iter()
-                        .map(|&unit| char::from_u32(u32::from(unit)).unwrap_or('\u{fffd}'))
-                        .collect();
-                    if !name.is_empty()
+                    // Only decode the token name. Literal units stay in their
+                    // original encoding even when a lookup cannot be made.
+                    let name_units = &input[index + 1..close];
+                    let name = if wide {
+                        String::from_utf16(name_units).ok()
+                    } else {
+                        let bytes = name_units.iter().map(|&unit| unit as u8).collect();
+                        String::from_utf8(bytes).ok()
+                    };
+                    if let Some(name) = name.filter(|name| !name.is_empty())
                         && let Some(value) = service_state.environment_variable_value(&name)
                     {
-                        output.extend(value.encode_utf16());
+                        if wide {
+                            output.extend(value.encode_utf16());
+                        } else {
+                            output.extend(value.bytes().map(u16::from));
+                        }
                         index = close + 1;
                         continue;
                     }
@@ -81,7 +90,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 if wide {
                     bytes.extend_from_slice(&unit.to_le_bytes());
                 } else {
-                    bytes.push((*unit).min(0xff) as u8);
+                    bytes.push(*unit as u8);
                 }
             }
 
