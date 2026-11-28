@@ -21,6 +21,10 @@ struct ProgramRunnerTests {
         #expect(ProgramRunner.arguments(for: program, trace: false, programArguments: []) == [
             "run", "--experimental", "--pe", program.path,
         ])
+        #expect(ProgramRunner.arguments(for: program, trace: false, programArguments: ["--startup-report"],
+                                        reportStartup: true) == [
+            "run", "--experimental", "--pe", program.path, "--startup-report", "--", "--startup-report",
+        ])
     }
 
     @Test @MainActor
@@ -51,6 +55,7 @@ struct ProgramRunnerTests {
         let result = ProgramRunner.run(fixture, trace: true, guestFileExport: export, worker: worker)
         #expect(result.launchError == nil)
         #expect(result.exitStatus == 0, "\(result.standardError)")
+        #expect(result.guestExitStatus == 0)
         #expect(!result.truncated)
         #expect(try Data(contentsOf: destination) == Data([0, 0x41, 0x0a, 0x0d, 0, 0xff, 0x80]))
 
@@ -58,6 +63,7 @@ struct ProgramRunnerTests {
         try original.write(to: destination)
         let collision = ProgramRunner.run(fixture, trace: false, guestFileExport: export, worker: worker)
         #expect(collision.exitStatus == 125, "\(collision.standardError)")
+        #expect(collision.guestExitStatus == nil)
         #expect(try Data(contentsOf: destination) == original)
 
         let unpublished = directory.appendingPathComponent("failed guest.bin")
@@ -65,10 +71,117 @@ struct ProgramRunnerTests {
         let failure = ProgramRunner.run(fixture, trace: false, programArguments: ["fail"],
                                         guestFileExport: failureExport, worker: worker)
         #expect(failure.exitStatus == 1, "\(failure.standardError)")
+        #expect(failure.guestExitStatus == 256)
+        #expect(failure.summary == "Exited with status 256.")
+        #expect(!failure.standardError.contains("xenora-startup "))
         #expect(!FileManager.default.fileExists(atPath: unpublished.path))
     }
 
+    private static func guestReport(_ guest: UInt64, code: Int32, protocolState: String = "complete") -> String {
+        let events = ["parsed", "mapped", "relocated", "imports_bound"]
+            .map { #"{"stage":"\#($0)","completed":true}"# }.joined(separator: ",")
+        return #"xenora-startup {"schema_version":1,"events":[\#(events)],"last_completed_stage":"imports_bound","protocol":"\#(protocolState)","outcome":{"kind":"guest_exit","guest_status":\#(guest),"worker_code":\#(code)}}"#
+    }
+
+    @Test func showsExactGuestStatusRegardlessOfTheHostCode() throws {
+        let cases: [(UInt32, Int32)] = [(0, 0), (2, 2), (124, 124), (125, 125), (256, 1), (.max, 255)]
+        for (guest, code) in cases {
+            let report = Self.guestReport(UInt64(guest), code: code)
+            try Self.withWorker(script: """
+                test "$5" = --startup-report
+                printf '%s' 'unterminated diagnostic' >&2
+                printf '\\n%s\\n' '\(report)' >&2
+                exit \(code)
+                """) { _, worker, program, _ in
+                let result = ProgramRunner.run(program, trace: false, worker: worker)
+                #expect(result.exitStatus == code)
+                #expect(result.guestExitStatus == guest)
+                #expect(result.summary == "Exited with status \(guest).")
+                #expect(result.standardError == "unterminated diagnostic")
+                #expect(!result.truncated)
+            }
+        }
+    }
+
+    @Test func parsesTheFinalReportEvenWhenDisplayedStderrIsBounded() throws {
+        let cap = ProgramRunner.outputLimit
+        let report = Self.guestReport(256, code: 1)
+        for byteCount in [cap - 3, cap + 37] {
+            try Self.withWorker(script: """
+                printf '%0\(byteCount)d' 0 >&2
+                printf '\\n%s\\n' '\(report)' >&2
+                exit 1
+                """) { _, worker, program, _ in
+                let result = ProgramRunner.run(program, trace: false, worker: worker)
+                #expect(result.guestExitStatus == 256)
+                #expect(result.standardError == String(repeating: "0", count: min(byteCount, cap)))
+                #expect(result.truncated == (byteCount > cap))
+            }
+        }
+    }
+
+    @Test func fallsBackUnlessTheFinalReportMatchesTheObservedExit() throws {
+        let logs = [
+            "plain runner error",
+            "xenora-startup {",
+            Self.guestReport(125, code: 124),
+            Self.guestReport(124, code: 125),
+            Self.guestReport(125, code: 125, protocolState: "partial"),
+            Self.guestReport(125, code: 125).replacingOccurrences(of: "relocated", with: "skipped_stage"),
+            Self.guestReport(UInt64(UInt32.max) + 1, code: 125),
+            Self.guestReport(125, code: 125) + "\nmore stderr after the report",
+        ]
+        for log in logs {
+            try Self.withWorker(script: """
+                printf '\\n%s\\n' '\(log)' >&2
+                exit 125
+                """) { _, worker, program, _ in
+                let result = ProgramRunner.run(program, trace: false, worker: worker)
+                #expect(result.exitStatus == 125)
+                #expect(result.guestExitStatus == nil)
+                #expect(result.summary == "The run failed (exit 125).")
+                #expect(result.standardError == "\n\(log)\n")
+            }
+        }
+    }
+
+    @Test func hidesOnlyTheValidatedFinalReport() throws {
+        let earlier = Self.guestReport(125, code: 125)
+        let failure = #"xenora-startup {"schema_version":1,"events":[],"last_completed_stage":null,"protocol":"complete","outcome":{"kind":"known_failure","phase":"admission","message":"actual runner error","message_truncated":false,"worker_code":125}}"#
+        try Self.withWorker(script: """
+            printf '\\n%s\\n' '\(earlier)' >&2
+            printf '%s\\n' 'run failed: actual runner error' >&2
+            printf '\\n%s\\n' '\(failure)' >&2
+            exit 125
+            """) { _, worker, program, _ in
+            let result = ProgramRunner.run(program, trace: false, worker: worker)
+            #expect(result.guestExitStatus == nil)
+            #expect(result.summary == "The run failed (exit 125).")
+            #expect(result.standardError == "\n\(earlier)\nrun failed: actual runner error\n")
+        }
+    }
+
+    @Test func environmentOverrideUsesTheLegacyCommandLine() throws {
+        let report = Self.guestReport(256, code: 1)
+        try Self.withWorker(script: """
+            test "$#" = 5
+            test "$3" = --trace
+            test "$4" = --pe
+            printf '%s\\n' 'trace stage=exit entry_steps=1' >&2
+            printf '\\n%s\\n' '\(report)' >&2
+            exit 1
+            """) { _, worker, program, _ in
+            let result = ProgramRunner.run(program, trace: true, environment: ["XENORA_CLI": worker.path])
+            #expect(result.exitStatus == 1)
+            #expect(result.guestExitStatus == nil)
+            #expect(result.summary == "Exited with status 1.")
+            #expect(result.lastStage == "exit")
+            #expect(result.standardError == "trace stage=exit entry_steps=1\n\n\(report)\n")
+        }
+    }
+
     private static func withWorker(
+        script: String? = nil,
         _ body: (_ directory: URL, _ worker: URL, _ program: URL, _ marker: URL) throws -> Void
     ) throws {
         let directory = FileManager.default.temporaryDirectory
@@ -82,14 +195,11 @@ struct ProgramRunnerTests {
         // The production CLI receives the guest path as argument four when
         // tracing is off. Use it only to mark that a process was launched.
         // The independent system tool reads stdin to EOF and displays raw bytes.
-        let script = """
-            #!/bin/sh
-            set -eu
+        let bodyScript = script ?? """
             printf 'started' > "${4}.started"
             exec /usr/bin/od -An -v -t x1
-
             """
-        try Data(script.utf8).write(to: worker)
+        try Data("#!/bin/sh\nset -eu\n\(bodyScript)\n".utf8).write(to: worker)
         try FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: worker.path)
         try Data().write(to: program)
         try body(directory, worker, program, marker)
