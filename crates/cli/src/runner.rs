@@ -18,7 +18,8 @@ use xenora_loader::startup::{
     run_synthetic_startup_with_observer,
 };
 use xenora_loader::{
-    ExitReason, ImportRegistry, Register, ServicesState, SystemClock, register_standard_services,
+    ExitReason, ImportRegistry, ParsedPe, Register, ServicesState, SystemClock,
+    register_standard_services,
 };
 use xenora_metal::NativeCompute;
 use xenora_shader::{PIXEL_ENTRY_POINT, VERTEX_ENTRY_POINT};
@@ -744,6 +745,13 @@ fn run_program(
     )?;
     let bytes = read_program(&options.path, options.digest, options.executable_budget)
         .inspect_err(|error| reporter.failed(FailurePhase::Admission, error))?;
+    // Leave parse errors to startup so they retain their existing failure
+    // phase. A recognized DLL must never reach its initializer.
+    if ParsedPe::parse(&bytes).is_ok_and(|image| image.is_dll()) {
+        let error = "execution denied: program root must be a PE executable";
+        reporter.failed(FailurePhase::Admission, error);
+        return Err(error.into());
+    }
     let name = options
         .path
         .file_name()
