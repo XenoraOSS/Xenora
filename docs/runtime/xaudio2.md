@@ -87,8 +87,8 @@ structure below has padding.
   released, is refused with `InvalidCall` and the result code
   `XAUDIO2_E_INVALID_CALL`.
 - **Xenora.** A source-only operation (submit, start, stop, flush, state,
-  consume, frequency ratio, source sample rate) applied to a mastering voice is
-  refused with `InvalidCall`. The volume applies to every voice.
+  consume, frequency ratio, source sample rate, ExitLoop) applied to a mastering
+  voice is refused with `InvalidCall`. The volume applies to every voice.
 
 ## Engine
 
@@ -239,6 +239,15 @@ in order:
 - When the end of the loop region and the end of the play region are the same
   frame, the loop end is reported first. A voice with an endless loop over
   its whole play region therefore never reports a buffer end.
+
+**Public.** `IXAudio2SourceVoice::ExitLoop` stops looping when the voice
+reaches the end of the current loop region; when the cursor is not inside a
+loop region the call does nothing. **Xenora** models the immediate operation
+set only. Because loop entry is the observable point at which a repeated pass
+starts, an exiting voice does not report another `LoopEnd`: it continues from
+its cursor through the rest of the play region and reports `BufferEnd` there.
+The choice affects only the buffer currently at the voice cursor; later
+buffers keep their own loop counts. No audio samples are processed.
 
 **Xenora.** Stopping a voice keeps the buffer it was playing and the sample
 count it reached, so a later start resumes where the voice stopped.

@@ -182,6 +182,7 @@ impl Runtime {
             loop_end: plan.loop_end,
             cursor: plan.play_begin,
             loops_done: 0,
+            exit_loop: false,
             notified_start: false,
         });
         Ok(())
@@ -361,6 +362,31 @@ impl Runtime {
             return Err(Error::InvalidCall("the voice is not a source voice"));
         };
         Ok(source.frequency_ratio)
+    }
+
+    /// Stops the current loop at the end of its current pass.
+    ///
+    /// The public contract makes the call a no-op when the cursor is not in a
+    /// loop region. Only immediate operation set zero is modelled.
+    pub fn exit_loop(&mut self, voice: VoiceId, operation_set: u32) -> Result<(), Error> {
+        let state = self
+            .voices
+            .get_mut(voice.slot(), voice.generation())
+            .ok_or(Error::InvalidCall("the voice handle is no longer valid"))?;
+        let VoiceKind::Source(source) = &mut state.kind else {
+            return Err(Error::InvalidCall("the voice is not a source voice"));
+        };
+        if operation_set != 0 {
+            return Err(Error::NotImplemented("operation sets are not implemented"));
+        }
+        if let Some(buffer) = source.queue.front_mut()
+            && let Some(loop_end) = buffer.loop_end
+            && buffer.cursor >= buffer.loop_begin
+            && buffer.cursor < loop_end
+        {
+            buffer.exit_loop = true;
+        }
+        Ok(())
     }
 
     /// Reconfigures the input sample rate of a source voice.
