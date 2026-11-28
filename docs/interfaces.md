@@ -1408,10 +1408,16 @@ Sending that request fails with `ERROR_NOT_SUPPORTED` before network use.
 copies a counted or null-terminated UTF-16 header block and accepts CRLF between
 fields, with an optional trailing CRLF. Add, add-if-new, replace, remove and
 comma or semicolon coalescing operate on case-insensitive field names.
-Replacement and coalescing affect the first match. Each update is atomic and
-the configured collection is bounded at 256 fields, 64 KiB serialized and
-8 KiB per field line. Indexed updates, conflicting modifiers and changes to
-transport-managed framing fields fail explicitly.
+Coalescing and unindexed replacement affect the first match. Replacement
+can select a later zero-based occurrence of that name in wire order using
+the low eight modifier bits. An empty value removes the selected
+occurrence. A missing nonzero occurrence fails with
+`ERROR_WINHTTP_HEADER_NOT_FOUND` even with ADD. The index-zero ADD
+fallback still appends a nonempty value when the field is absent.
+Each update is atomic. The configured collection is bounded at 256 fields,
+64 KiB serialized and 8 KiB per field line. Index bits on other operations,
+reserved bits, conflicting modifiers and changes to transport-managed
+framing fields fail explicitly.
 
 `WinHttpSendRequest` performs one synchronous cleartext HTTP/1.1 exchange.
 The request includes configured fields followed by the call's additional
