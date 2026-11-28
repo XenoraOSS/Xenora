@@ -41,8 +41,9 @@ fn buffer_bytes(
     play: (u32, u32),
     looping: (u32, u32, u32),
     context: u64,
-) -> [u8; 48] {
-    let mut b = [0xEEu8; 48]; // the padding at 36..40 is garbage on purpose
+) -> [u8; 44] {
+    // xaudio2.h packs its structures to one byte: no padding before pContext.
+    let mut b = [0u8; 44];
     b[0..4].copy_from_slice(&flags.to_le_bytes());
     b[4..8].copy_from_slice(&audio_bytes.to_le_bytes());
     b[8..16].copy_from_slice(&data.to_le_bytes());
@@ -51,7 +52,7 @@ fn buffer_bytes(
     b[24..28].copy_from_slice(&looping.0.to_le_bytes());
     b[28..32].copy_from_slice(&looping.1.to_le_bytes());
     b[32..36].copy_from_slice(&looping.2.to_le_bytes());
-    b[40..48].copy_from_slice(&context.to_le_bytes());
+    b[36..44].copy_from_slice(&context.to_le_bytes());
     b
 }
 
@@ -123,7 +124,7 @@ fn errors_map_to_their_hresults() {
 }
 
 #[test]
-fn buffer_desc_reads_the_x64_layout_and_ignores_padding() {
+fn buffer_desc_reads_the_packed_x64_layout() {
     let bytes = buffer_bytes(
         XAUDIO2_END_OF_STREAM,
         0x1234,
@@ -132,7 +133,7 @@ fn buffer_desc_reads_the_x64_layout_and_ignores_padding() {
         (7, 8, 9),
         0xAABB_CCDD_EEFF_0011,
     );
-    assert_eq!(BufferDesc::SIZE, 48);
+    assert_eq!(BufferDesc::SIZE, 44);
     let desc = BufferDesc::parse(&bytes);
     assert_eq!(
         desc,
@@ -151,8 +152,8 @@ fn buffer_desc_reads_the_x64_layout_and_ignores_padding() {
 }
 
 #[test]
-fn voice_state_writes_the_x64_layout_with_zero_padding() {
-    assert_eq!(VoiceState::SIZE, 24);
+fn voice_state_writes_the_packed_x64_layout() {
+    assert_eq!(VoiceState::SIZE, 20);
     let state = VoiceState {
         current_buffer_context: 0x0102_0304_0506_0708,
         buffers_queued: 0x0A0B_0C0D,
@@ -161,8 +162,7 @@ fn voice_state_writes_the_x64_layout_with_zero_padding() {
     let b = state.to_bytes();
     assert_eq!(&b[0..8], &0x0102_0304_0506_0708u64.to_le_bytes());
     assert_eq!(&b[8..12], &0x0A0B_0C0Du32.to_le_bytes());
-    assert_eq!(&b[12..16], &[0, 0, 0, 0]);
-    assert_eq!(&b[16..24], &0x1112_1314_1516_1718u64.to_le_bytes());
+    assert_eq!(&b[12..20], &0x1112_1314_1516_1718u64.to_le_bytes());
 }
 
 #[test]

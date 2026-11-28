@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 300] = [
+pub static SERVICES: [ServiceMetadata; 302] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -3309,6 +3309,28 @@ pub static SERVICES: [ServiceMetadata; 300] = [
         reference: "Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)",
         tests: &["invalid_guard_release_and_abort_fail_closed"],
     },
+    ServiceMetadata {
+        library: "xaudio2_9.dll",
+        symbol: "XAudio2Create",
+        parameters: &[Parameter { name: "ppv", kind: "ptr" }, Parameter { name: "flags", kind: "u32" }, Parameter { name: "processor", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "E_POINTER for a null or an unwritable out pointer; E_NOTIMPL for a nonzero flag; the out pointer is set to null before a call that fails",
+        reference: "xaudio2.h XAudio2Create; Microsoft Learn, XAudio2Create function",
+        tests: &["xaudio2_create_reports_pointer_and_flag_failures"],
+    },
+    ServiceMetadata {
+        library: "xaudio2_9.dll",
+        symbol: "XAudio2CreateWithVersionInfo",
+        parameters: &[Parameter { name: "ppv", kind: "ptr" }, Parameter { name: "flags", kind: "u32" }, Parameter { name: "processor", kind: "u32" }, Parameter { name: "version", kind: "u32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &[],
+        failure: "E_POINTER for a null or an unwritable out pointer; E_NOTIMPL for a nonzero flag; the version argument is accepted and recorded; the out pointer is set to null before a call that fails",
+        reference: "the export list of xaudio2_9.dll in the Wine xaudio2_9 module specification, dlls/xaudio2_9/xaudio2_9.spec",
+        tests: &["xaudio2_create_with_version_info_records_the_version_argument"],
+    },
 ];
 
 /// Register every generated service and its API-set aliases.
@@ -5948,6 +5970,27 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let () = handlers::cxx_guard_abort(&mut context, a0)?;
         Ok(0)
+    });
+    let s = state.clone();
+    registry.register_with_status("xaudio2_9.dll", "XAudio2Create", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u32(2)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::xaudio2_create(&mut context, a0, a1, a2)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("xaudio2_9.dll", "XAudio2CreateWithVersionInfo", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.u64(0)?;
+        let a1 = call.u32(1)?;
+        let a2 = call.u32(2)?;
+        let a3 = call.u32(3)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::xaudio2_create_with_version_info(&mut context, a0, a1, a2, a3)?;
+        Ok(result.place(cpu))
     });
     for service in &SERVICES {
         for alias in service.aliases {

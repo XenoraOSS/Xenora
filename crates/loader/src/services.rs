@@ -55,6 +55,10 @@ pub(crate) mod threads;
 mod user32;
 mod winhttp;
 mod winsock;
+pub mod xaudio2;
+mod xaudio2_engine;
+mod xaudio2_source;
+mod xaudio2_voice;
 mod xinput;
 mod xnetworking;
 
@@ -378,6 +382,8 @@ pub struct ServicesState {
     winsock_changed: Condvar,
     pub next_alloc_addr: AtomicU64,
     pub graphics: Arc<Mutex<crate::graphics::GraphicsContext>>,
+    /// The XAudio2 objects of the guest process.
+    xaudio2: Mutex<xaudio2::XAudio2>,
 }
 
 /// The console state: the mode bits round-tripping per handle and the
@@ -465,7 +471,34 @@ impl ServicesState {
             winsock_changed: Condvar::new(),
             next_alloc_addr: AtomicU64::new(0x0000_0002_0000_0000), // 8GB guest heap
             graphics: Arc::new(Mutex::new(crate::graphics::GraphicsContext::new())),
+            xaudio2: Mutex::default(),
         }
+    }
+
+    /// The XAudio2 objects of the guest process.
+    pub(crate) fn xaudio2(&self) -> std::sync::MutexGuard<'_, xaudio2::XAudio2> {
+        self.xaudio2.lock().expect("XAudio2 state")
+    }
+
+    /// The diagnostics of the XAudio2 model.
+    ///
+    /// The counters describe the model only. They say nothing about audio
+    /// that a guest would hear.
+    pub fn xaudio2_diagnostics(&self) -> xenora_xaudio2::Diagnostics {
+        self.xaudio2().runtime.diagnostics()
+    }
+
+    /// The counters of the XAudio2 calls the loader refused.
+    pub fn xaudio2_call_diagnostics(&self) -> xaudio2::Diagnostics {
+        self.xaudio2().diagnostics
+    }
+
+    /// The version argument a guest recorded when it created an engine.
+    pub fn xaudio2_engine_version(&self, address: u64) -> Option<u32> {
+        self.xaudio2()
+            .objects
+            .get(&address)
+            .map(|object| object.version)
     }
     /// Give a hosted C program the arguments its `main` receives in `argv`,
     /// program name first. Call it before running the guest: the C runtime's
@@ -858,6 +891,7 @@ fn cell_memory(result: Result<u64, ExitReason>) -> Result<u64, MemoryError> {
 /// hand-written fixture services.
 pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<ServicesState>) {
     crate::runtime_table::register(registry, &state);
+    xaudio2::register(registry, &state);
     registry.hooks = Some(Arc::clone(&state.hooks));
     threads::register(registry, &state);
     static_cxx::register(registry, &state);
@@ -1320,6 +1354,38 @@ pub(crate) mod handlers {
 
     // The Itanium C++ ABI guard protocol lives in `services/cxx_abi.rs`.
     pub(crate) use super::cxx_abi::{cxx_guard_abort, cxx_guard_acquire, cxx_guard_release};
+
+    /// XAudio2Create: creates the engine a guest mixes through.
+    pub fn xaudio2_create(
+        context: &mut ServiceContext<'_>,
+        ppv: u64,
+        flags: u32,
+        processor: u32,
+    ) -> Outcome<i32> {
+        let result =
+            super::xaudio2::create_engine(context.state, context.memory, ppv, flags, processor, 0);
+        Ok(result as i32)
+    }
+
+    /// XAudio2CreateWithVersionInfo: the same call with the version of the
+    /// operating system the guest built for.
+    pub fn xaudio2_create_with_version_info(
+        context: &mut ServiceContext<'_>,
+        ppv: u64,
+        flags: u32,
+        processor: u32,
+        version: u32,
+    ) -> Outcome<i32> {
+        let result = super::xaudio2::create_engine(
+            context.state,
+            context.memory,
+            ppv,
+            flags,
+            processor,
+            version,
+        );
+        Ok(result as i32)
+    }
 
     pub fn set_process_priority_boost(
         context: &mut ServiceContext<'_>,

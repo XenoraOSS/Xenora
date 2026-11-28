@@ -17,6 +17,7 @@ gpu-tests = []
 libc = "0.2"
 sha2 = "0.10"
 xenora-texture = { path = "../texture" }
+xenora-xaudio2 = { path = "../xaudio2" }
 
 [dev-dependencies]
 xenora-metal = { path = "../metal" }

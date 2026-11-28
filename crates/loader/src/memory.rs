@@ -972,6 +972,11 @@ impl GuestMemory {
         self.resolve(address, len, Some("write")).is_ok()
     }
 
+    /// Return whether the complete span is readable without mutating it.
+    pub(crate) fn can_read(&self, address: u64, len: usize) -> bool {
+        self.resolve(address, len, Some("read")).is_ok()
+    }
+
     /// Read raw bytes from guest memory at the specified address, checking permissions.
     pub fn read_bytes(&self, address: u64, dst: &mut [u8]) -> Result<(), MemoryError> {
         if let Some((index, range)) = self.contiguous_region(address, dst.len())

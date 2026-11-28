@@ -9105,3 +9105,45 @@ fn invalid_guard_release_and_abort_fail_closed() {
     assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
     assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 1);
 }
+
+/// E_POINTER for a null out pointer, E_NOTIMPL for a nonzero flag, and a
+/// null out pointer after a call that failed.
+#[test]
+fn xaudio2_create_reports_pointer_and_flag_failures() {
+    let mut guest = Guest::new();
+    assert_eq!(
+        guest.call("XAudio2Create", &[0, 0, 1]) as u32,
+        0x8000_4003,
+        "a null out pointer"
+    );
+    guest.memory.write_u64(SCRATCH, 0x1234).unwrap();
+    assert_eq!(
+        guest.call("XAudio2Create", &[SCRATCH, 1, 1]) as u32,
+        0x8000_4001,
+        "a nonzero flag"
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH).unwrap(), 0);
+    assert_eq!(guest.call("XAudio2Create", &[SCRATCH, 0, 1]) as u32, 0);
+    assert_ne!(guest.memory.read_u64(SCRATCH).unwrap(), 0);
+}
+
+/// The version argument of XAudio2CreateWithVersionInfo is accepted and
+/// recorded with the engine it created.
+#[test]
+fn xaudio2_create_with_version_info_records_the_version_argument() {
+    let mut guest = Guest::new();
+    guest.memory.write_u64(SCRATCH, 0).unwrap();
+    assert_eq!(
+        guest.call(
+            "XAudio2CreateWithVersionInfo",
+            &[SCRATCH, 0, 1, 0x0A00_0000]
+        ) as u32,
+        0
+    );
+    let engine = guest.memory.read_u64(SCRATCH).unwrap();
+    assert_ne!(engine, 0);
+    assert_eq!(
+        guest.state.xaudio2_engine_version(engine),
+        Some(0x0A00_0000)
+    );
+}
