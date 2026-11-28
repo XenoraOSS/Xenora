@@ -1144,7 +1144,12 @@ fn raise_exception(
     cpu: &mut CpuState,
     memory: &mut GuestMemory,
 ) -> Result<(), ExitReason> {
-    let count = args.r8 & 0xFFFF_FFFF;
+    // The documented argument count is ignored when the array is null.
+    let count = if args.r9 == 0 {
+        0
+    } else {
+        args.r8 & 0xFFFF_FFFF
+    };
     if count > EXCEPTION_MAXIMUM_PARAMETERS {
         return Err(ExitReason::InvalidUnwind);
     }
