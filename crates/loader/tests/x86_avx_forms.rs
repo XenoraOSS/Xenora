@@ -235,7 +235,7 @@ fn integer(state: &State, text: &str) -> State {
         .collect();
     let imm = parts.last().unwrap().parse::<u32>().ok();
     // Forms that compare the first operand write no vector register themselves.
-    let compares = is_string || legacy == "ptest";
+    let compares = is_string || legacy == "ptest" || legacy == "testps" || legacy == "testpd";
     let (first, second) = match registers.len() {
         2 if compares => (parts[0], parts[1]),
         2 => ("", parts[1]),

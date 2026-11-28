@@ -710,6 +710,26 @@ pub fn reference(m: &mut Machine, text: &str) {
         };
         return;
     }
+    if name == "testps" || name == "testpd" {
+        // The sign bit of each 4- or 8-byte lane decides: ZF when no lane has
+        // both signs set, CF when every set sign of the source meets a set
+        // sign of the target.
+        let width = if name == "testps" { 4 } else { 8 };
+        let lanes = |bytes: &Bytes| {
+            bytes
+                .chunks(width)
+                .map(|lane| lane[width - 1] >= 128)
+                .collect::<Vec<bool>>()
+        };
+        let target = lanes(&old);
+        let mask = lanes(&source);
+        m.flags = RFlags {
+            zf: target.iter().zip(&mask).all(|(a, b)| !(*a & b)),
+            cf: target.iter().zip(&mask).all(|(a, b)| !b | a),
+            ..RFlags::default()
+        };
+        return;
+    }
     if name.starts_with("pcmpestr") || name.starts_with("pcmpistr") {
         string_compare(m, name, old, source, imm.unwrap(), false);
         return;

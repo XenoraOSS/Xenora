@@ -271,6 +271,26 @@ pub(crate) fn execute(
                 ..RFlags::default()
             };
         }
+        // VTESTPS and VTESTPD: like PTEST, but only the sign bit of each
+        // 32- or 64-bit lane participates in the AND and ANDN reductions.
+        (Op::Testps | Op::Testpd, _) => {
+            let bits = if insn.op == Op::Testps { 32 } else { 64 };
+            let lanes = 128 / bits;
+            let source = read_source(cpu, memory, insn)?;
+            let value = read_ymm(cpu, reg);
+            let sign = |half: usize, index: u32| lane(value[half], bits, index) >> (bits - 1) & 1;
+            let sign_source =
+                |half: usize, index: u32| lane(source[half], bits, index) >> (bits - 1) & 1;
+            cpu.flags = RFlags {
+                zf: (0..halves).all(|half| {
+                    (0..lanes).all(|index| sign(half, index) & sign_source(half, index) == 0)
+                }),
+                cf: (0..halves).all(|half| {
+                    (0..lanes).all(|index| (1 - sign(half, index)) & sign_source(half, index) == 0)
+                }),
+                ..RFlags::default()
+            };
+        }
         (Op::Cvtsi2ss | Op::Cvtsi2sd, _) => {
             let result = x86_float::from_general(cpu, memory, insn, first[0])?;
             write_ymm(cpu, reg, [result, 0], 16);

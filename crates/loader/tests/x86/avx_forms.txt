@@ -765,6 +765,18 @@ c4 e2 79 17 d2 | vptest xmm2, xmm2
 c4 c2 7d 17 d9 | vptest ymm3, ymm9
 c4 62 7d 17 64 be 10 | vptest ymm12, ymmword ptr [rsi + 4*rdi + 16]
 c4 e2 7d 17 d2 | vptest ymm2, ymm2
+c4 c2 79 0e d9 | vtestps xmm3, xmm9
+c4 62 79 0e 64 be 10 | vtestps xmm12, xmmword ptr [rsi + 4*rdi + 16]
+c4 e2 79 0e d2 | vtestps xmm2, xmm2
+c4 c2 7d 0e d9 | vtestps ymm3, ymm9
+c4 62 7d 0e 64 be 10 | vtestps ymm12, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 7d 0e d2 | vtestps ymm2, ymm2
+c4 c2 79 0f d9 | vtestpd xmm3, xmm9
+c4 62 79 0f 64 be 10 | vtestpd xmm12, xmmword ptr [rsi + 4*rdi + 16]
+c4 e2 79 0f d2 | vtestpd xmm2, xmm2
+c4 c2 7d 0f d9 | vtestpd ymm3, ymm9
+c4 62 7d 0f 64 be 10 | vtestpd ymm12, ymmword ptr [rsi + 4*rdi + 16]
+c4 e2 7d 0f d2 | vtestpd ymm2, ymm2
 c4 c2 79 20 d9 | vpmovsxbw xmm3, xmm9
 c4 62 79 20 64 be 10 | vpmovsxbw xmm12, qword ptr [rsi + 4*rdi + 16]
 c4 e2 79 20 d2 | vpmovsxbw xmm2, xmm2
