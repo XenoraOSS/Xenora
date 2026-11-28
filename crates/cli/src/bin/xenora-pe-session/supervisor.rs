@@ -32,19 +32,22 @@ struct WorkerProcess {
 
 impl WorkerProcess {
     fn start(options: &Options) -> io::Result<Self> {
-        let digest: String = options
-            .digest
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect();
         let mut command = Command::new(std::env::current_exe()?);
         command
             .args(["--experimental", "--worker", "--pe"])
-            .arg(&options.path)
-            .args(["--sha256", &digest, "--max-steps"])
+            .arg(&options.executable.path)
+            .arg("--sha256")
+            .arg(options.executable.digest_hex())
+            .args(["--graphics-backend", options.backend.name(), "--max-steps"])
             .arg(options.steps.to_string())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped());
+        for companion in &options.companions {
+            command
+                .arg("--package")
+                .arg(&companion.path)
+                .arg(companion.digest_hex());
+        }
         if options.deterministic_clock {
             command.arg("--deterministic-clock");
         }
