@@ -150,24 +150,44 @@ pub(super) unsafe fn from_inherited(fd: RawFd) -> io::Result<File> {
     Ok(file)
 }
 
+fn guest_file_key(path: &str) -> Option<String> {
+    let separators = ['\\', '/'];
+    let relative = match path.split_once(':') {
+        Some((drive, tail)) if drive.eq_ignore_ascii_case("c") => tail.strip_prefix(separators)?,
+        Some(_) => return None,
+        None => path.strip_prefix(separators).unwrap_or(path),
+    };
+
+    // Export paths are anchored at the synthetic drive root. Reject extra
+    // separators and drive syntax before a later dot component can erase them.
+    let mut components = Vec::new();
+    for component in relative.split(separators) {
+        match component {
+            "" => return None,
+            "." => {}
+            ".." => {
+                components.pop();
+            }
+            name if name.contains(':') => return None,
+            name => components.push(name),
+        }
+    }
+    (!components.is_empty()).then(|| components.join("\\"))
+}
+
 pub(super) fn stage_copy(
     mut file: File,
     state: &ServicesState,
     guest_path: &str,
 ) -> io::Result<()> {
-    // One leading separator anchors a guest path at the synthetic C: root.
-    // Preserve two leading separators so the lookup cannot treat UNC paths as local files.
-    let anchored = guest_path
-        .strip_prefix(['\\', '/'])
-        .filter(|rest| !rest.starts_with(['\\', '/']))
-        .map(|_| format!("C:{guest_path}"));
-    let lookup_path = anchored.as_deref().unwrap_or(guest_path);
-    let contents = state.file_contents(lookup_path).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("guest file {guest_path:?} does not exist"),
-        )
-    })?;
+    let contents = guest_file_key(guest_path)
+        .and_then(|name| state.file_contents(&name))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("guest file {guest_path:?} does not exist"),
+            )
+        })?;
     if contents.len() as u64 > MAX_BYTES {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,

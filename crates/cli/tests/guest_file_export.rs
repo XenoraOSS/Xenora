@@ -121,6 +121,12 @@ fn exports_exact_binary_and_empty_files() {
         ("GUEST-EXPORT.BIN", PAYLOAD),
         (r"\GUEST-EXPORT.BIN", PAYLOAD),
         ("/GUEST-EXPORT.BIN", PAYLOAD),
+        (r"C:\.\guest-export.bin", PAYLOAD),
+        (r"C:\unused\..\guest-export.bin", PAYLOAD),
+        (r"unused\..\guest-export.bin", PAYLOAD),
+        (r"\.\guest-export.bin", PAYLOAD),
+        (r"c:/unused\.././GUEST-EXPORT.BIN", PAYLOAD),
+        (r"C:\unused\..\..\guest-export.bin", PAYLOAD),
         (EMPTY, &[][..]),
     ] {
         let scratch = Scratch::new();
@@ -167,6 +173,15 @@ fn missing_guest_file_reports_a_verification_failure_without_an_export() {
         r"\/guest-export.bin",
         r"/\guest-export.bin",
         r"\C:\guest-export.bin",
+        r"\\unused\..\guest-export.bin",
+        r"\/unused\..\guest-export.bin",
+        r"C:\\unused\..\guest-export.bin",
+        r"D:\..\guest-export.bin",
+        r"C:unused\..\guest-export.bin",
+        r"C:\unused:stream\..\guest-export.bin",
+        r".\C:\guest-export.bin",
+        r"C:\unused\\..\guest-export.bin",
+        r"C:\guest-export.bin\",
     ] {
         let scratch = Scratch::new();
         let destination = scratch.0.join("missing.bin");
