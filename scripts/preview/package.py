@@ -12,7 +12,8 @@ from zipfile import BadZipFile, ZipFile
 from release.macho import check_archs, check_otool_linkage
 
 APP_NAME = "Xenora.app"
-EXECUTABLES = ("Xenora", "xenora-cli")
+HELPERS = ("xenora-cli", "xenora-pe-session")
+EXECUTABLES = ("Xenora", *HELPERS)
 CONTENTS = f"{APP_NAME}/Contents"
 DIRECTORIES = {
     APP_NAME,
@@ -172,7 +173,7 @@ def _dependencies(description: str, name: str) -> list[str]:
 
 
 def inspect_app(app: Path, *, run) -> dict:
-    """Inspect the expected app and worker without launching either binary."""
+    """Inspect the app and its helpers without launching them."""
     _check_bundle_tree(app)
     with (app / "Contents/Info.plist").open("rb") as source:
         plist = plistlib.load(source)
