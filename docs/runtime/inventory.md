@@ -12,16 +12,16 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 978 |
+| Canonical services | 998 |
 | Typed registry services | 302 |
-| Manual code registrations | 676 |
-| Canonical libraries | 25 |
-| Implemented | 247 |
-| Partial | 731 |
+| Manual code registrations | 696 |
+| Canonical libraries | 28 |
+| Implemented | 246 |
+| Partial | 752 |
 | Stub | 0 |
-| Data-import services | 7 |
-| Aliases of every kind | 955 |
-| API-set aliases | 754 |
+| Data-import services | 12 |
+| Aliases of every kind | 961 |
+| API-set aliases | 755 |
 | Ordinal aliases | 35 |
 | Statuses never explicitly set | 78 |
 | Duplicate canonical registrations | 0 |
@@ -40,9 +40,12 @@ independent acceptance or compatibility claims.
 | <code>libgcc_s_seh-1.dll</code> | <code>c++-support</code> | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
 | <code>libstdc++-6.dll</code> | <code>c++-support</code> | 18 | 3 | 15 | 0 | 15 | 3 | 0 | 0 |
 | <code>libwinpthread-1.dll</code> | <code>c++-support</code> | 8 | 0 | 8 | 0 | 4 | 4 | 0 | 0 |
+| <code>msvcp140.dll</code> | <code>other</code> | 16 | 0 | 16 | 1 | 0 | 16 | 0 | 0 |
+| <code>msvcp140_atomic_wait.dll</code> | <code>other</code> | 2 | 0 | 2 | 0 | 0 | 2 | 0 | 0 |
+| <code>msvcp140_codecvt_ids.dll</code> | <code>other</code> | 4 | 0 | 4 | 4 | 0 | 4 | 0 | 0 |
 | <code>msvcrt.dll</code> | <code>c-runtime</code> | 41 | 13 | 28 | 7 | 14 | 27 | 0 | 14 |
 | <code>psapi.dll</code> | <code>windows-system</code> | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
-| <code>ucrtbase.dll</code> | <code>c-runtime</code> | 306 | 211 | 95 | 0 | 104 | 202 | 0 | 10 |
+| <code>ucrtbase.dll</code> | <code>c-runtime</code> | 307 | 211 | 96 | 0 | 104 | 203 | 0 | 10 |
 | <code>user32.dll</code> | <code>other</code> | 10 | 0 | 10 | 0 | 0 | 10 | 0 | 0 |
 | <code>winhttp.dll</code> | <code>other</code> | 18 | 0 | 18 | 0 | 0 | 18 | 0 | 0 |
 | <code>ws2_32.dll</code> | <code>windows-networking</code> | 65 | 0 | 65 | 0 | 6 | 59 | 0 | 6 |
@@ -64,9 +67,9 @@ metadata, are in `inventory.json`.
 
 | Alias kind | Count |
 | --- | --- |
-| API-set | 754 |
+| API-set | 755 |
 | Ordinal | 35 |
-| Other module | 166 |
+| Other module | 171 |
 
 Every API-set, module and ordinal alias is listed in `inventory.json`.
 
