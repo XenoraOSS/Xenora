@@ -665,6 +665,7 @@ pub(super) fn format(
             continue;
         }
         if parser.take(b'%') {
+            bounded(out.len() + 1)?;
             out.push(b'%');
             continue;
         }
