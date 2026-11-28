@@ -12,14 +12,14 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 1015 |
+| Canonical services | 1018 |
 | Typed registry services | 304 |
-| Manual code registrations | 711 |
+| Manual code registrations | 714 |
 | Canonical libraries | 28 |
 | Implemented | 249 |
-| Partial | 766 |
+| Partial | 769 |
 | Stub | 0 |
-| Data-import services | 12 |
+| Data-import services | 13 |
 | Aliases of every kind | 968 |
 | API-set aliases | 760 |
 | Ordinal aliases | 35 |
@@ -31,7 +31,7 @@ independent acceptance or compatibility claims.
 
 | Library | Family | Total | Typed | Manual | Data | Implemented | Partial | Stub | Implicit status |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| <code>advapi32.dll</code> | <code>windows-system</code> | 22 | 0 | 22 | 0 | 1 | 21 | 0 | 0 |
+| <code>advapi32.dll</code> | <code>windows-system</code> | 24 | 0 | 24 | 0 | 1 | 23 | 0 | 0 |
 | <code>api-ms-win-core-synch-l1-2-0.dll</code> | <code>windows-system</code> | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 |
 | <code>api-ms-win-crt-process-l1-1-0.dll</code> | <code>c-runtime</code> | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 |
 | <code>bcrypt.dll</code> | <code>other</code> | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 |
