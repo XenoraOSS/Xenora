@@ -619,22 +619,22 @@ pub static SERVICES: [ServiceMetadata; 304] = [
         symbol: "_locking",
         parameters: &[Parameter { name: "fd", kind: "i32" }, Parameter { name: "mode", kind: "i32" }, Parameter { name: "nbytes", kind: "i32" }],
         result: "i32",
-        status: ServiceStatus::Implemented,
+        status: ServiceStatus::Partial,
         aliases: &["api-ms-win-crt-stdio-l1-1-0.dll", "msvcrt.dll"],
-        failure: "-1 with errno EBADF for a descriptor that is not file-backed, EINVAL for an invalid mode or an unlock that does not match a lock exactly, EDEADLOCK for a range overlapping any lock of the file",
-        reference: "io.h _locking",
-        tests: &["locking_round_trips_conflicts_and_dies_with_the_stream"],
+        failure: "-1 with EBADF for a descriptor that is not file-backed, EINVAL for invalid arguments or a mismatched unlock, and immediate EDEADLOCK for an overlapping range in any lock mode; Windows distinguishes nonblocking conflicts and retries blocking ones",
+        reference: "io.h / sys/locking.h _locking (Microsoft Learn)",
+        tests: &["runtime_crt_file_locks::guest_crt_file_locking_tracks_ranges_until_close"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
         symbol: "_commit",
         parameters: &[Parameter { name: "fd", kind: "i32" }],
         result: "i32",
-        status: ServiceStatus::Implemented,
+        status: ServiceStatus::Partial,
         aliases: &["api-ms-win-crt-stdio-l1-1-0.dll", "msvcrt.dll"],
-        failure: "-1 with errno EBADF for a descriptor that is not file-backed",
-        reference: "io.h _commit",
-        tests: &["locking_round_trips_conflicts_and_dies_with_the_stream"],
+        failure: "-1 with EBADF for a descriptor that is not file-backed; synthetic files are already current in memory without a host disk flush",
+        reference: "io.h _commit (Microsoft Learn)",
+        tests: &["runtime_crt_file_locks::guest_crt_commit_requires_file_backing_and_preserves_bytes"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -3860,7 +3860,7 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
-    registry.register_with_status("ucrtbase.dll", "_locking", ServiceStatus::Implemented, move |args, cpu, memory| {
+    registry.register_with_status("ucrtbase.dll", "_locking", ServiceStatus::Partial, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.i32(0)?;
         let a1 = call.i32(1)?;
@@ -3870,7 +3870,7 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
-    registry.register_with_status("ucrtbase.dll", "_commit", ServiceStatus::Implemented, move |args, cpu, memory| {
+    registry.register_with_status("ucrtbase.dll", "_commit", ServiceStatus::Partial, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.i32(0)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };

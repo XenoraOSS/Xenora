@@ -68,9 +68,21 @@ const RESULTS: [&str; 9] = [
     "void", "u32", "i32", "u64", "bool32", "handle", "ptr", "f32", "f64",
 ];
 
-/// Parse and validate the registry. `test_source` is the text of the test file
-/// that must define every named test.
+/// Parse and validate a registry that uses unqualified witnesses in `test_source`.
 pub fn parse(text: &str, test_source: &str) -> Result<Vec<Service>, String> {
+    parse_with_test_suites(text, test_source, |suite| {
+        Err(format!("test suite {suite} was not supplied"))
+    })
+}
+
+/// Parse and validate the registry with an optional source for each named test
+/// suite. `test_source` defines unqualified witnesses. `read_suite` receives
+/// only a validated suite identifier from a `suite::test` witness.
+pub fn parse_with_test_suites(
+    text: &str,
+    test_source: &str,
+    mut read_suite: impl FnMut(&str) -> Result<String, String>,
+) -> Result<Vec<Service>, String> {
     let mut services: Vec<Service> = Vec::new();
     let mut seen_fields = BTreeSet::new();
     for (number, raw) in text.lines().enumerate() {
@@ -114,7 +126,7 @@ pub fn parse(text: &str, test_source: &str) -> Result<Vec<Service>, String> {
             other => return Err(at(&format!("unknown field {other}"))),
         }
     }
-    validate(&services, test_source)?;
+    validate(&services, test_source, &mut read_suite)?;
     Ok(services)
 }
 
@@ -147,7 +159,11 @@ fn parse_signature(text: &str) -> Result<Service, String> {
     })
 }
 
-fn validate(services: &[Service], test_source: &str) -> Result<(), String> {
+fn validate(
+    services: &[Service],
+    test_source: &str,
+    read_suite: &mut impl FnMut(&str) -> Result<String, String>,
+) -> Result<(), String> {
     // Every key a guest could import, with the service it resolves to.
     let mut keys: BTreeMap<(String, &str), usize> = BTreeMap::new();
     let mut ordinals = BTreeSet::new();
@@ -199,7 +215,23 @@ fn validate(services: &[Service], test_source: &str) -> Result<(), String> {
             return fail("needs a test before it may claim behaviour".into());
         }
         for test in &service.tests {
-            if !is_identifier(test) || !test_source.contains(&format!("fn {test}()")) {
+            let (suite, function) = test
+                .split_once("::")
+                .map_or((None, test.as_str()), |(suite, function)| {
+                    (Some(suite), function)
+                });
+            if !is_identifier(function) || suite.is_some_and(|suite| !is_identifier(suite)) {
+                return fail(format!("invalid test witness {test:?}"));
+            }
+            let declaration = format!("fn {function}()");
+            let declared = match suite {
+                Some(suite) => read_suite(suite)
+                    .map_err(|error| format!("{name}: {error}"))?
+                    .lines()
+                    .any(|line| line.trim_start().starts_with(&declaration)),
+                None => test_source.contains(&declaration),
+            };
+            if !declared {
                 return fail(format!("test {test} does not exist"));
             }
         }
@@ -508,5 +540,74 @@ mod tests {
             "needs a failure contract",
         );
         rejects("handler h\n", "outside a service");
+    }
+
+    #[test]
+    fn qualified_witness_reads_only_its_suite() {
+        let text = entry(
+            "kernel32.dll F() -> void",
+            "test runtime_crt_file_locks::locks",
+        );
+        let services = parse_with_test_suites(&text, TESTS, |suite| {
+            assert_eq!(suite, "runtime_crt_file_locks");
+            Ok("fn locks() {}".to_owned())
+        })
+        .unwrap();
+        let witness = "runtime_crt_file_locks::locks";
+        assert_eq!(services[0].tests, ["works", witness]);
+        assert!(generate_rust(&services).contains(witness));
+
+        let wrong_suite = entry("kernel32.dll F() -> void", "test another_suite::works");
+        let error = parse_with_test_suites(&wrong_suite, TESTS, |suite| {
+            assert_eq!(suite, "another_suite");
+            Ok("// fn works() {}\nfn different() {}".to_owned())
+        })
+        .unwrap_err();
+        assert!(
+            error.contains("another_suite::works does not exist"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn missing_sources_are_reported_without_falling_back() {
+        let qualified = entry("kernel32.dll F() -> void", "test absent::works");
+        let error = parse_with_test_suites(&qualified, TESTS, |suite| {
+            Err(format!("could not read test suite {suite}"))
+        })
+        .unwrap_err();
+        assert!(
+            error.contains("could not read test suite absent"),
+            "{error}"
+        );
+        rejects(&qualified, "test suite absent was not supplied");
+
+        let unqualified = entry("kernel32.dll F() -> void", "test absent");
+        let error = parse_with_test_suites(&unqualified, TESTS, |_| {
+            panic!("an unqualified witness must not load a separate suite")
+        })
+        .unwrap_err();
+        assert!(error.contains("test absent does not exist"), "{error}");
+    }
+
+    #[test]
+    fn invalid_test_witnesses_never_reach_the_source_loader() {
+        for witness in [
+            "../outside::works",
+            "suite/path::works",
+            "suite::../outside",
+            "suite::nested::works",
+            "suite::",
+            "::works",
+            "1suite::works",
+            "suite::9works",
+        ] {
+            let text = entry("kernel32.dll F() -> void", &format!("test {witness}"));
+            let error = parse_with_test_suites(&text, TESTS, |_| {
+                panic!("malformed witness reached the source loader: {witness}")
+            })
+            .unwrap_err();
+            assert!(error.contains("invalid test witness"), "{error}");
+        }
     }
 }
