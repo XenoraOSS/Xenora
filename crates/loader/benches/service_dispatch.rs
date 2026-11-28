@@ -4,7 +4,7 @@
 //! that call standard services through a bound import table under the DBT.
 //!
 //! Every workload checks its result before timing. Each reported figure is
-//! the per-iteration time of a loop of `ITERATIONS` calls: one warm-up batch,
+//! the per-iteration time of a guest loop: one warm-up batch,
 //! then `BATCHES` measured batches. The empty loop is reported separately so
 //! readers can subtract the loop and translation overhead themselves.
 //!
@@ -16,6 +16,7 @@ mod support;
 use std::time::Instant;
 use support::*;
 use xenora_loader::cpu::{ExitReason, Register};
+use xenora_loader::memory::MemoryPermissions;
 use xenora_loader::services::sysinfo::HostCapabilities;
 
 const IMPORTS: &[(&str, &str)] = &[
@@ -36,6 +37,11 @@ const CELL_HEAP: u64 = SCRATCH + 0x18;
 const STRING: u64 = SCRATCH + 0x100;
 const ARRAY: u64 = SCRATCH + 0x200;
 const ARRAY_LEN: u32 = 16;
+const WIDE_REGION: u64 = 0x10_0000;
+const WIDE_GUARD: usize = 8;
+const WIDE_ARRAY: u64 = WIDE_REGION + WIDE_GUARD as u64;
+const WIDE_RECORD_BYTES: u32 = 512 * 1024;
+const WIDE_ITERATIONS: u32 = 128;
 
 const EMPTY: usize = 0;
 const LAST_ERROR: usize = 1;
@@ -44,6 +50,7 @@ const STRLEN: usize = 3;
 const HEAP: usize = 4;
 const QSORT: usize = 5;
 const COMPARE: usize = 6;
+const QSORT_WIDE: usize = 7;
 
 /// A tiny x86-64 assembler for the routines below.
 struct Asm {
@@ -83,10 +90,10 @@ impl Asm {
         self.imm32(&[0xFF, 0x15], displacement)
     }
 
-    /// `mov ebx, ITERATIONS`, the loop body, `dec ebx; jnz body; hlt`.
-    fn counted(routine_index: usize, body: impl FnOnce(&mut Self)) -> Vec<u8> {
+    /// `mov ebx, iterations`, the loop body, `dec ebx; jnz body; hlt`.
+    fn counted(routine_index: usize, iterations: u32, body: impl FnOnce(&mut Self)) -> Vec<u8> {
         let mut asm = Self::new(routine_index);
-        asm.imm32(&[0xBB], ITERATIONS);
+        asm.imm32(&[0xBB], iterations);
         let start = asm.code.len();
         body(&mut asm);
         asm.bytes(&[0xFF, 0xCB]); // dec ebx
@@ -97,21 +104,21 @@ impl Asm {
 }
 
 fn routines() -> Vec<Vec<u8>> {
-    let mut routines = vec![Vec::new(); 7];
-    routines[EMPTY] = Asm::counted(EMPTY, |_| {});
-    routines[LAST_ERROR] = Asm::counted(LAST_ERROR, |asm| {
+    let mut routines = vec![Vec::new(); QSORT_WIDE + 1];
+    routines[EMPTY] = Asm::counted(EMPTY, ITERATIONS, |_| {});
+    routines[LAST_ERROR] = Asm::counted(LAST_ERROR, ITERATIONS, |asm| {
         asm.call_import("GetLastError");
     });
-    routines[WAIT] = Asm::counted(WAIT, |asm| {
+    routines[WAIT] = Asm::counted(WAIT, ITERATIONS, |asm| {
         asm.imm64(&[0x48, 0xB8], CELL_EVENT) // mov rax, cell
             .bytes(&[0x48, 0x8B, 0x08]) // mov rcx, [rax]
             .bytes(&[0x31, 0xD2]) // xor edx, edx
             .call_import("WaitForSingleObject");
     });
-    routines[STRLEN] = Asm::counted(STRLEN, |asm| {
+    routines[STRLEN] = Asm::counted(STRLEN, ITERATIONS, |asm| {
         asm.imm64(&[0x48, 0xB9], STRING).call_import("strlen");
     });
-    routines[HEAP] = Asm::counted(HEAP, |asm| {
+    routines[HEAP] = Asm::counted(HEAP, ITERATIONS, |asm| {
         asm.imm64(&[0x48, 0xB8], CELL_HEAP)
             .bytes(&[0x48, 0x8B, 0x08]) // mov rcx, [rax]
             .bytes(&[0x31, 0xD2])
@@ -123,10 +130,17 @@ fn routines() -> Vec<Vec<u8>> {
             .bytes(&[0x31, 0xD2])
             .call_import("HeapFree");
     });
-    routines[QSORT] = Asm::counted(QSORT, |asm| {
+    routines[QSORT] = Asm::counted(QSORT, ITERATIONS, |asm| {
         asm.imm64(&[0x48, 0xB9], ARRAY)
             .imm32(&[0xBA], ARRAY_LEN) // mov edx, count
             .imm32(&[0x41, 0xB8], 4) // mov r8d, width
+            .imm64(&[0x49, 0xB9], routine(COMPARE))
+            .call_import("qsort");
+    });
+    routines[QSORT_WIDE] = Asm::counted(QSORT_WIDE, WIDE_ITERATIONS, |asm| {
+        asm.imm64(&[0x48, 0xB9], WIDE_ARRAY)
+            .imm32(&[0xBA], 2)
+            .imm32(&[0x41, 0xB8], WIDE_RECORD_BYTES)
             .imm64(&[0x49, 0xB9], routine(COMPARE))
             .call_import("qsort");
     });
@@ -162,6 +176,26 @@ fn main() {
         }
     };
 
+    // Both records are already ordered by their first dword. The rest of
+    // each record and the adjacent guards are part of the expected result.
+    let width = WIDE_RECORD_BYTES as usize;
+    let mut expected_wide = vec![0xc7; 2 * (width + WIDE_GUARD)];
+    for (record, (key, fill)) in [(7i32, 0x23), (19, 0x91)].into_iter().enumerate() {
+        let start = WIDE_GUARD + record * width;
+        expected_wide[start..start + width].fill(fill);
+        expected_wide[start..start + 4].copy_from_slice(&key.to_le_bytes());
+    }
+    guest
+        .memory
+        .map_region_with_data(
+            WIDE_REGION,
+            expected_wide.len(),
+            MemoryPermissions::READ_WRITE,
+            &expected_wide,
+        )
+        .unwrap();
+    let mut actual_wide = vec![0; expected_wide.len()];
+
     let host = HostCapabilities::detect();
     let brand = std::process::Command::new("sysctl")
         .args(["-n", "machdep.cpu.brand_string"])
@@ -177,7 +211,9 @@ fn main() {
             "release"
         },
     );
-    println!("{ITERATIONS} iterations per batch, 1 warm-up and {BATCHES} measured batches");
+    println!(
+        "{ITERATIONS} iterations per batch ({WIDE_ITERATIONS} for wide qsort), 1 warm-up and {BATCHES} measured batches"
+    );
     println!("workload,median_ns_per_iteration,min_ns,max_ns");
 
     for (name, index, check) in [
@@ -191,7 +227,13 @@ fn main() {
         ("strlen (63 bytes)", STRLEN, Some(63)),
         ("HeapAlloc + HeapFree (64 bytes)", HEAP, Some(1)),
         ("qsort (16 ints, guest comparator)", QSORT, Some(0)),
+        ("qsort (2 ordered 512 KiB records)", QSORT_WIDE, Some(0)),
     ] {
+        let iterations = if index == QSORT_WIDE {
+            WIDE_ITERATIONS
+        } else {
+            ITERATIONS
+        };
         let mut samples = Vec::with_capacity(BATCHES);
         for batch in 0..=BATCHES {
             if index == QSORT {
@@ -213,8 +255,15 @@ fn main() {
                     .collect();
                 assert_eq!(sorted, expected, "{name} ordering");
             }
+            if index == QSORT_WIDE {
+                guest
+                    .memory
+                    .read_bytes(WIDE_REGION, &mut actual_wide)
+                    .unwrap();
+                assert_eq!(actual_wide, expected_wide, "{name} contents and bounds");
+            }
             if batch > 0 {
-                samples.push(elapsed.as_nanos() as f64 / f64::from(ITERATIONS));
+                samples.push(elapsed.as_nanos() as f64 / f64::from(iterations));
             }
         }
         let (min, max) = samples.iter().fold((f64::MAX, 0f64), |(low, high), &s| {

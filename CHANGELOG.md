@@ -674,6 +674,7 @@ remains unsupported.
   for genuinely unsupported DBT instructions.
 
 ### Changed
+- Guest `qsort` and `qsort_s` skip copying the array when its final order matches the input and the full array is readable and writable (#1265). Comparator calls and memory faults are preserved. The service-dispatch benchmark now checks and times an ordered pair of 512 KiB records.
 
 - The agent checks gather every open pull request's head commit date and changed files in one batched GraphQL request instead of three `gh` calls per pull request, and a focused pull request reuses the row already gathered. At 54 open pull requests the gather costs 3 calls instead of 163; a pull request whose file list the API truncates still falls back to the paginated call so the file sets stay complete.
 - Package startup tests rebuild the original multi-DLL guest with native Clang and verify module initialization, teardown and the missing-export control. The fixture builder uses Xcode Clang when Homebrew LLVM is unavailable (#1066).
