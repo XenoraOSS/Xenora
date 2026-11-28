@@ -53,6 +53,22 @@ pub(super) struct OpenFile {
 }
 
 impl OpenFile {
+    /// The CRT interop synthesizes the kernel file object every real CRT
+    /// descriptor has behind it, for a stream that was opened through the
+    /// CRT alone (#1312): the object's position starts where the stream's
+    /// is now, and the two move independently afterward exactly as a real
+    /// CRT stream's buffered position and its kernel handle do.
+    pub(super) fn for_interop(path: String, access: u32, position: u64) -> Self {
+        OpenFile {
+            path,
+            position: Arc::new(AtomicU64::new(position)),
+            open_access: access,
+            access,
+            share: 0,
+            directory: false,
+        }
+    }
+
     /// The CRT interop reads and writes the object through these, under the
     /// same serialization the object table gives the kernel calls.
     pub(super) fn path(&self) -> &str {
@@ -165,11 +181,7 @@ fn valid_key(name: &str) -> bool {
 /// is the volume root. `None` when any component is not a name the drive
 /// accepts.
 fn resolve_bare_path(state: &ServicesState, name: &str) -> Option<String> {
-    let cwd = state
-        .crt_directory
-        .lock()
-        .expect("CRT working directory")
-        .clone();
+    let cwd = state.crt_streams().working_directory();
     // A drive prefix (`c:`) anchors at the volume; what remains resolves
     // against the working directory, dot segments included.
     let stripped = name.replace('/', "\\");
@@ -458,11 +470,7 @@ fn find_first(
         return Err(INVALID_NAME);
     }
     let pattern = if pattern == "*.*" { "*" } else { pattern };
-    let cwd = state
-        .crt_directory
-        .lock()
-        .expect("CRT working directory")
-        .clone();
+    let cwd = state.crt_streams().working_directory();
     // A bare drive root (`c:` as the whole directory portion) anchors at the
     // volume root: the wildcard split consumed the separating backslash.
     let resolved = if root.len() == 2 && root.as_bytes()[1] == b':' {
@@ -1587,11 +1595,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let Some(name) = reader(memory, args.rcx).map_err(ExitReason::MemoryFault)? else {
                 return full.fail(cpu.gs_base, INVALID_NAME, 0);
             };
-            let cwd = full
-                .crt_directory
-                .lock()
-                .expect("CRT working directory")
-                .clone();
+            let cwd = full.crt_streams().working_directory();
             let Some(full_path) = full_name(&cwd, &name) else {
                 return full.fail(cpu.gs_base, INVALID_NAME, 0);
             };
@@ -2022,11 +2026,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         else {
             return fail(memory, super::crt_files::EINVAL);
         };
-        let cwd = fullpath_state
-            .crt_directory
-            .lock()
-            .expect("CRT working directory")
-            .clone();
+        let cwd = fullpath_state.crt_streams().working_directory();
         let Some(resolved) = full_name(&cwd, &name) else {
             return fail(memory, super::crt_files::EINVAL);
         };
