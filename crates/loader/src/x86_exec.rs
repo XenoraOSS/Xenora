@@ -69,13 +69,21 @@ pub(crate) fn canonical_access(address: u64, size: u8) -> bool {
         .is_none_or(is_canonical)
 }
 
-/// Effective address without a segment base, as LEA computes it.
+/// Effective address without a segment base, as LEA computes it. A 67H
+/// address-size override truncates the computed address to 32 bits and
+/// zero-extends it, before any segment base is added (Intel SDM Vol. 1,
+/// section 3.3.7.1 and Vol. 2A, 2.2.1.6).
 fn offset(cpu: &CpuState, operand: &MemOperand) -> u64 {
     let base = operand.base.map_or(0, |index| cpu.gpr[usize::from(index)]);
     let index = operand
         .index
         .map_or(0, |(index, scale)| cpu.gpr[usize::from(index)] << scale);
-    base.wrapping_add(index).wrapping_add_signed(operand.disp)
+    let address = base.wrapping_add(index).wrapping_add_signed(operand.disp);
+    if operand.addr32 {
+        address & 0xFFFF_FFFF
+    } else {
+        address
+    }
 }
 
 pub(crate) fn read_reg(cpu: &CpuState, reg: RegOperand, size: u8) -> u64 {

@@ -100,12 +100,6 @@ pub(super) struct StandardStreams {
     /// streams: 0 unoriented, 1 byte, 2 wide.
     output_orientation: u8,
     error_orientation: u8,
-    /// The standard descriptors a `_dup2` rewired and the guest then closed:
-    /// the CRT slot stays dead, the console stream does not come back. An
-    /// entry only ever sets when a table-carrying standard descriptor is
-    /// closed, because closing the unduplicated standard stream itself is
-    /// still refused outright.
-    closed: [bool; 3],
 }
 
 /// The standard input: bytes the host supplied before the run, after the
@@ -601,7 +595,6 @@ impl StandardStreams {
                 orientation: self.input.orientation,
                 eof: self.input.eof,
             },
-            closed: self.closed,
             ..StandardStreams::default()
         }
     }
@@ -737,7 +730,7 @@ impl StandardStreams {
             Stream::Error => Some(2),
             _ => None,
         };
-        if mark.is_some_and(|fd| self.closed[fd]) {
+        if mark.is_some_and(|fd| self.opened.closed[fd]) {
             return Ok(Err(EBADF));
         }
         let orientation = match stream {
@@ -971,7 +964,7 @@ impl StandardStreams {
         }
         let bytes = match stream {
             Stream::Input => {
-                if self.closed[0] || !self.input.orient(false) {
+                if self.opened.closed[0] || !self.input.orient(false) {
                     return Ok(Err(Failed(0, EBADF)));
                 }
                 match self.input_bytes(drive, length as usize) {
@@ -1011,7 +1004,7 @@ impl StandardStreams {
         }
         match self.stream(file)? {
             Stream::Input => {
-                if self.closed[0] {
+                if self.opened.closed[0] {
                     return Ok(Err(Failed(-1, EBADF)));
                 }
                 if self.opened.has_descriptor(0) {
@@ -1060,7 +1053,7 @@ impl StandardStreams {
         let request = Request::read(memory, options, format, locale)?;
         let scanned = match stream {
             Stream::Input => {
-                if self.closed[0] || !self.input.orient(false) {
+                if self.opened.closed[0] || !self.input.orient(false) {
                     return Ok(Err(Failed(EOF, EBADF)));
                 }
                 // The hosted input has already had its CRLFs translated.
@@ -1170,7 +1163,7 @@ impl StandardStreams {
     /// end. Text mode is applied when the input is supplied, so a character
     /// here is already after the replacement.
     pub(super) fn character_stdin(&mut self) -> i32 {
-        if self.closed[0] || !self.input.orient(false) {
+        if self.opened.closed[0] || !self.input.orient(false) {
             return -1;
         }
         match self.input.character() {
@@ -1225,7 +1218,7 @@ impl StandardStreams {
         // not reserve them - and every later operation on it fails with
         // EBADF. A second close has nothing to close and fails.
         if fd < 3 && !self.opened.has_descriptor(fd as u32) {
-            let mark = &mut self.closed[fd as usize];
+            let mark = &mut self.opened.closed[fd as usize];
             if *mark {
                 return Ok(Err(Failed(-1, EBADF)));
             }
@@ -1234,7 +1227,7 @@ impl StandardStreams {
         }
         let closed = self.opened.descriptor_close(memory, drive, fd as u32);
         if closed && fd < 3 {
-            self.closed[fd as usize] = true;
+            self.opened.closed[fd as usize] = true;
         }
         Ok(if closed {
             Ok(0)
@@ -1275,7 +1268,7 @@ impl StandardStreams {
         }
         let rewired = (0..3).contains(&fd) && self.opened.has_descriptor(fd as u32);
         let bytes = match fd {
-            0 if !rewired && self.closed[0] => return Ok(Err(Failed(-1, EBADF))),
+            0 if !rewired && self.opened.closed[0] => return Ok(Err(Failed(-1, EBADF))),
             0 if !rewired => self.input.take((count as usize).min(1 << 20)),
             1 | 2 if !rewired => return Ok(Err(Failed(-1, EBADF))),
             // Pipe ends are wrapped kernel handles: the drain in
@@ -1335,8 +1328,8 @@ impl StandardStreams {
         let rewired = (0..3).contains(&fd) && self.opened.has_descriptor(fd as u32);
         let result = match fd {
             0 if !rewired => Err(EBADF),
-            1 if !rewired && self.closed[1] => Err(EBADF),
-            2 if !rewired && self.closed[2] => Err(EBADF),
+            1 if !rewired && self.opened.closed[1] => Err(EBADF),
+            2 if !rewired && self.opened.closed[2] => Err(EBADF),
             1 if !rewired => self.write(drive, Stream::Output, &bytes)?,
             2 if !rewired => self.write(drive, Stream::Error, &bytes)?,
             _ => match self.opened.descriptor_write(drive, fd as u32, &bytes) {
@@ -1596,7 +1589,7 @@ impl StandardStreams {
             return Ok(Err(Failed(0, EBADF)));
         }
         if fd < 3 {
-            if self.closed[fd as usize] && !self.opened.has_descriptor(fd as u32) {
+            if self.opened.closed[fd as usize] && !self.opened.has_descriptor(fd as u32) {
                 return Ok(Err(Failed(0, EBADF)));
             }
             return Ok(Ok(0));
@@ -1662,7 +1655,7 @@ impl StandardStreams {
         };
         match stream {
             Stream::Input => {
-                if self.closed[0] || !self.input.orient(false) {
+                if self.opened.closed[0] || !self.input.orient(false) {
                     return Ok(Err(Failed(-1, EBADF)));
                 }
                 if self.opened.has_descriptor(0) {

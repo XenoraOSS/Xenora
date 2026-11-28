@@ -480,6 +480,23 @@ pub(crate) fn execute(
                         controlled(op, first[half], source[half], imm)
                     })
                 }
+                // Uniform-count shifts: the count is the low 64 bits of the
+                // second source, an xmm operand even in the 256-bit forms, so
+                // both halves shift by the same count.
+                (
+                    Op::Psllw
+                    | Op::Pslld
+                    | Op::Psllq
+                    | Op::Psrlw
+                    | Op::Psrld
+                    | Op::Psrlq
+                    | Op::Psraw
+                    | Op::Psrad,
+                    Encoding::XmmRm,
+                ) => {
+                    let count = source[0] as u64;
+                    [0, 1].map(|half| shift_by(op, first[half], count))
+                }
                 (_, Encoding::XmmRm) => [0, 1].map(|half| packed(op, first[half], source[half])),
                 _ => return Err(ExitReason::IllegalInstruction(0)),
             };

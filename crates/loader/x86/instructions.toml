@@ -5359,7 +5359,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xD1
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5370,8 +5370,8 @@ prefix = "66"
 opcode = 0x71
 digit = 2
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5381,7 +5381,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xE1
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5392,8 +5392,8 @@ prefix = "66"
 opcode = 0x71
 digit = 4
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5403,7 +5403,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xF1
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5414,8 +5414,8 @@ prefix = "66"
 opcode = 0x71
 digit = 6
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5425,7 +5425,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xD2
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5436,8 +5436,8 @@ prefix = "66"
 opcode = 0x72
 digit = 2
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5447,7 +5447,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xE2
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5458,8 +5458,8 @@ prefix = "66"
 opcode = 0x72
 digit = 4
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5469,7 +5469,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xF2
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5480,8 +5480,8 @@ prefix = "66"
 opcode = 0x72
 digit = 6
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5491,7 +5491,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xD3
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5502,8 +5502,8 @@ prefix = "66"
 opcode = 0x73
 digit = 2
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5513,7 +5513,7 @@ map = "0f"
 prefix = "66"
 opcode = 0xF3
 enc = "xmm_rm"
-length = "128"
+length = "any"
 src = "x"
 nds = true
 
@@ -5524,8 +5524,8 @@ prefix = "66"
 opcode = 0x73
 digit = 6
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5536,8 +5536,8 @@ prefix = "66"
 opcode = 0x73
 digit = 3
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 
@@ -5548,8 +5548,8 @@ prefix = "66"
 opcode = 0x73
 digit = 7
 enc = "rm_imm_xmm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 nds = true
 register_only = true
 

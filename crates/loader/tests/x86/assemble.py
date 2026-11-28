@@ -401,8 +401,16 @@ def avx_form_cases():
             if name + op != "vpsraq":
                 out += [f"{name}{op} xmm{3 + 9 * (n % 2)}, xmm9, {n}" for n in (0, 1, 7, bits - 1, bits, 255)]
                 out.append(f"{name}{op} xmm2, xmm2, 3")
+                out += [f"{name}{op} ymm{3 + 9 * (n % 2)}, ymm9, {n}" for n in (0, 1, 7, bits - 1, bits, 255)]
+                out.append(f"{name}{op} ymm2, ymm2, 3")
+                # The uniform count of the register and memory forms is an xmm
+                # operand even when the data is 256-bit.
+                out.append(f"{name}{op} ymm3, ymm9, xmm10")
+                out.append(f"{name}{op} ymm12, ymm1, {xmm}")
+                out.append(f"{name}{op} ymm2, ymm2, xmm2")
     for op in ("vpslldq", "vpsrldq"):
         out += [f"{op} xmm12, xmm9, {n}" for n in (0, 1, 5, 15, 16, 255)] + [f"{op} xmm2, xmm2, 3"]
+        out += [f"{op} ymm12, ymm9, {n}" for n in (0, 1, 5, 15, 16, 255)] + [f"{op} ymm2, ymm2, 3"]
     for op in "vpshufd vpshufhw vpshuflw".split():
         for n in (0, 27, 78, 177, 255):
             two(op, "xmm", xmm, f", {n}")

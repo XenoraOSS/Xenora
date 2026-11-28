@@ -199,6 +199,10 @@ pub struct MemOperand {
     pub index: Option<(u8, u8)>,
     pub disp: i64,
     pub segment: Option<Segment>,
+    /// The instruction carried a 67H address-size override: the effective
+    /// address is truncated and zero-extended to 32 bits before any segment
+    /// base is added (Intel SDM Vol. 2A, 2.2.1.6).
+    pub addr32: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -327,6 +331,7 @@ fn memory_operand<E, F: FnMut(u64) -> Result<u8, E>>(
     rex_x: u8,
     rex_b: u8,
     segment: Option<Segment>,
+    addr32: bool,
 ) -> Result<(MemOperand, bool), DecodeError<E>> {
     let mode = modrm >> 6;
     let mut rip_relative = false;
@@ -335,6 +340,7 @@ fn memory_operand<E, F: FnMut(u64) -> Result<u8, E>>(
         index: None,
         disp: 0,
         segment,
+        addr32,
     };
     let mut low_base = modrm & 7;
     if low_base == 4 {
@@ -451,7 +457,8 @@ fn decode_vex<E, F: FnMut(u64) -> Result<u8, E>>(
             }));
         } else {
             let operand;
-            (operand, rip_relative) = memory_operand(&mut cursor, modrm, rex_x, rex_b, segment)?;
+            (operand, rip_relative) =
+                memory_operand(&mut cursor, modrm, rex_x, rex_b, segment, false)?;
             rm = Some(RmOperand::Mem(operand));
         }
     }
@@ -498,6 +505,7 @@ pub fn decode<E>(
 ) -> Result<Insn, DecodeError<E>> {
     let mut cursor = Cursor { fetch, rip, len: 0 };
     let mut operand_size = false;
+    let mut address_size = false;
     let mut rep = false;
     let mut repne = false;
     let mut lock = false;
@@ -524,6 +532,11 @@ pub fn decode<E>(
             0x65 => Segment::Gs,
             0x66 => {
                 operand_size = true;
+                byte = cursor.u8()?;
+                continue;
+            }
+            0x67 => {
+                address_size = true;
                 byte = cursor.u8()?;
                 continue;
             }
@@ -561,7 +574,7 @@ pub fn decode<E>(
     // C4 and C5 are always VEX prefixes in 64-bit mode. After 66, F2, F3, LOCK or
     // REX they are an invalid opcode (Intel SDM Vol. 2A, 2.3.2 to 2.3.4).
     if matches!(byte, 0xC4 | 0xC5) {
-        if operand_size || rep || repne || lock || any_rex {
+        if operand_size || address_size || rep || repne || lock || any_rex {
             return Err(DecodeError::Unsupported(byte));
         }
         return decode_vex(cursor, byte, segment);
@@ -710,29 +723,42 @@ pub fn decode<E>(
                 return Err(DecodeError::Unsupported(opcode));
             }
             let operand;
-            (operand, rip_relative) = memory_operand(&mut cursor, modrm, rex_x, rex_b, segment)?;
+            (operand, rip_relative) =
+                memory_operand(&mut cursor, modrm, rex_x, rex_b, segment, address_size)?;
             rm = Some(RmOperand::Mem(operand));
         }
     } else if form.immediate == Immediate::Offset {
         // The accumulator and the memory at an absolute address. With the
         // default 64-bit address size the offset is eight bytes; FS or GS may
-        // override the segment as for any memory operand.
+        // override the segment as for any memory operand. A 67H override
+        // would shorten the offset itself to four bytes, which is not yet
+        // decoded, so it is refused rather than mis-read.
+        if address_size {
+            return Err(DecodeError::Unsupported(0x67));
+        }
         rm = Some(RmOperand::Mem(MemOperand {
             base: None,
             index: None,
             disp: cursor.bytes(8)? as i64,
             segment,
+            addr32: false,
         }));
     } else if matches!(form.encoding, Encoding::OpReg | Encoding::OpRegImm) {
         reg = register(opcode & 7, rex_b, size);
     } else if form.encoding == Encoding::String {
         // The source is DS:[RSI], which FS or GS may override. The destination
-        // ES:[RDI] takes no override.
+        // ES:[RDI] takes no override. A 67H override would address through
+        // ESI, EDI and ECX instead, which is not yet implemented, so it is
+        // refused rather than silently answered with the wide registers.
+        if address_size {
+            return Err(DecodeError::Unsupported(0x67));
+        }
         rm = Some(RmOperand::Mem(MemOperand {
             base: Some(6),
             index: None,
             disp: 0,
             segment,
+            addr32: false,
         }));
     }
     // LOCK is an invalid opcode unless the instruction is lockable and its

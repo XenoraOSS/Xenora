@@ -12,12 +12,12 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 1001 |
+| Canonical services | 1002 |
 | Typed registry services | 302 |
-| Manual code registrations | 699 |
+| Manual code registrations | 700 |
 | Canonical libraries | 28 |
 | Implemented | 247 |
-| Partial | 754 |
+| Partial | 755 |
 | Stub | 0 |
 | Data-import services | 12 |
 | Aliases of every kind | 961 |
@@ -36,7 +36,7 @@ independent acceptance or compatibility claims.
 | <code>api-ms-win-crt-process-l1-1-0.dll</code> | <code>c-runtime</code> | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 |
 | <code>bcrypt.dll</code> | <code>other</code> | 3 | 0 | 3 | 0 | 0 | 3 | 0 | 0 |
 | <code>combase.dll</code> | <code>other</code> | 14 | 14 | 0 | 0 | 0 | 14 | 0 | 0 |
-| <code>kernel32.dll</code> | <code>windows-system</code> | 322 | 59 | 263 | 0 | 42 | 280 | 0 | 28 |
+| <code>kernel32.dll</code> | <code>windows-system</code> | 323 | 59 | 264 | 0 | 42 | 281 | 0 | 28 |
 | <code>libgcc_s_seh-1.dll</code> | <code>c++-support</code> | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
 | <code>libstdc++-6.dll</code> | <code>c++-support</code> | 18 | 3 | 15 | 0 | 15 | 3 | 0 | 0 |
 | <code>libwinpthread-1.dll</code> | <code>c++-support</code> | 8 | 0 | 8 | 0 | 4 | 4 | 0 | 0 |
