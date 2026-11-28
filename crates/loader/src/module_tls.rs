@@ -9,10 +9,8 @@
 //! callbacks or `DllMain`, choose thread-creation policy, implement unloading
 //! or claim dynamic TLS APIs.
 //!
-//! Rollback uses the same deliberately expensive whole-memory snapshot as the
-//! surrounding explicit-module batch seams. Validation of every image happens
-//! before mutation; an allocation or copy failure restores even earlier
-//! successful index writes, array mappings and data blocks exactly.
+//! Allocate and validate storage before publishing indexes and pointers. A
+//! preparation failure releases only newly allocated thread regions.
 
 use std::fmt;
 
@@ -512,29 +510,75 @@ pub fn prepare_module_tls(
             .collect());
     }
 
-    let before = memory.clone();
-    if !memory.can_write(thread_tls_base, TLS_ARRAY_SIZE)
-        && let Err(source) = memory.map_thread_region(
-            thread_tls_base,
-            TLS_ARRAY_SIZE,
-            MemoryPermissions::READ_WRITE,
-        )
-    {
-        *memory = before;
-        return Err(ModuleTlsError::PreparationFailed {
-            image_index: None,
-            source,
-        });
-    }
-
-    let available_indexes = match find_free_tls_slots(memory, thread_tls_base, tls_count) {
-        Ok(indexes) => indexes,
+    let mut allocations = Vec::with_capacity(tls_count + 1);
+    let staged = stage_module_tls(
+        validated,
+        memory,
+        thread_tls_base,
+        tls_count,
+        &mut allocations,
+    );
+    let reports = match staged {
+        Ok(reports) => reports,
         Err(error) => {
-            *memory = before;
+            for base in allocations.into_iter().rev() {
+                memory.release_thread_region(base);
+            }
             return Err(error);
         }
     };
-    let mut reports = Vec::with_capacity(images.len());
+
+    // All ranges are now committed and no mapping or permissions change here.
+    // Preserve the original order if an index shares bytes with a template.
+    for report in &reports {
+        if let Some(prepared) = &report.prepared {
+            memory
+                .write_u32_bypass(prepared.index_address, prepared.tls_index)
+                .expect("preflight checked the complete TLS index");
+            let value = if let Some(storage) = &prepared.storage {
+                copy_template(
+                    memory,
+                    prepared.template_start,
+                    storage.base,
+                    storage.template_bytes as usize,
+                )
+                .expect("preflight checked the TLS template and allocated writable storage");
+                storage.base
+            } else {
+                EMPTY_TLS_RESERVATION
+            };
+            let slot = thread_tls_base + u64::from(prepared.tls_index) * 8;
+            memory
+                .write_u64(slot, value)
+                .expect("preflight checked the complete TLS pointer array");
+        }
+    }
+    Ok(reports)
+}
+
+fn stage_module_tls(
+    validated: Vec<Option<ValidatedTls>>,
+    memory: &mut GuestMemory,
+    thread_tls_base: u64,
+    tls_count: usize,
+    allocations: &mut Vec<u64>,
+) -> Result<Vec<ModuleTlsReport>, ModuleTlsError> {
+    if !memory.can_write(thread_tls_base, TLS_ARRAY_SIZE) {
+        let base = memory
+            .map_thread_region(
+                thread_tls_base,
+                TLS_ARRAY_SIZE,
+                MemoryPermissions::READ_WRITE,
+            )
+            .map_err(|source| ModuleTlsError::PreparationFailed {
+                image_index: None,
+                source,
+            })?;
+        allocations.push(base);
+    }
+
+    let available_indexes = find_free_tls_slots(memory, thread_tls_base, tls_count)?;
+    let mut reports = Vec::with_capacity(validated.len());
     let mut available_indexes = available_indexes.into_iter();
     for (image_index, prepared) in validated.into_iter().enumerate() {
         let Some(prepared) = prepared else {
@@ -547,16 +591,11 @@ pub fn prepare_module_tls(
         let tls_index = available_indexes
             .next()
             .expect("one free index was reserved for each TLS directory");
-        let storage = match prepare_one(memory, thread_tls_base, tls_index, &prepared) {
-            Ok(storage) => storage,
-            Err(source) => {
-                *memory = before;
-                return Err(ModuleTlsError::PreparationFailed {
-                    image_index: Some(image_index),
-                    source,
-                });
-            }
-        };
+        let storage = stage_one(memory, thread_tls_base, tls_index, &prepared, allocations)
+            .map_err(|source| ModuleTlsError::PreparationFailed {
+                image_index: Some(image_index),
+                source,
+            })?;
         reports.push(ModuleTlsReport {
             image_index,
             prepared: Some(PreparedModuleTls {
@@ -605,29 +644,45 @@ fn find_free_tls_slots(
     })
 }
 
-fn prepare_one(
+fn stage_one(
     memory: &mut GuestMemory,
     thread_tls_base: u64,
     tls_index: u32,
     prepared: &ValidatedTls,
+    allocations: &mut Vec<u64>,
 ) -> Result<Option<ModuleTlsStorage>, MemoryError> {
-    memory.write_u32_bypass(prepared.index_address, tls_index)?;
-    let slot = thread_tls_base
+    let index_end = prepared
+        .index_address
+        .checked_add(4)
+        .ok_or(MemoryError::Overflow)?;
+    // The loader writes the index with permissions bypassed, including when
+    // its four bytes span two adjacent mappings.
+    for address in prepared.index_address..index_end {
+        if memory.committed_region_info(address).is_none() {
+            return Err(MemoryError::UnmappedAddress(address));
+        }
+    }
+    thread_tls_base
         .checked_add(u64::from(tls_index) * 8)
         .ok_or(MemoryError::Overflow)?;
     if prepared.total_size == 0 {
-        memory.write_u64(slot, EMPTY_TLS_RESERVATION)?;
         return Ok(None);
     }
+
     let storage_base =
         memory.map_thread_region(0, prepared.total_size, MemoryPermissions::READ_WRITE)?;
-    copy_template(
-        memory,
-        prepared.template_start,
-        storage_base,
-        prepared.template_len,
-    )?;
-    memory.write_u64(slot, storage_base)?;
+    allocations.push(storage_base);
+    if prepared.template_len > 0 && !memory.can_read(prepared.template_start, prepared.template_len)
+    {
+        // Recover the exact failure from the same chunked reads as the copy.
+        let mut chunk = [0u8; TLS_COPY_CHUNK];
+        let mut copied = 0;
+        while copied < prepared.template_len {
+            let count = (prepared.template_len - copied).min(chunk.len());
+            memory.read_bytes(prepared.template_start + copied as u64, &mut chunk[..count])?;
+            copied += count;
+        }
+    }
     let end = storage_base
         .checked_add(prepared.total_size as u64)
         .ok_or(MemoryError::Overflow)?;
@@ -1070,5 +1125,133 @@ mod tests {
             77
         );
         assert!(memory.read_u64(THREAD_TLS).is_err());
+    }
+    #[test]
+    fn late_failure_leaves_existing_slots_and_allows_retry() {
+        let first = TlsSpec::valid(4, 4);
+        let mut second = TlsSpec::valid(4, 0);
+        second.zero_fill = 64 * 1024 * 1024;
+        let (mut fixture, mut memory) = fixture(&[Some(first), Some(second.clone())]);
+        memory
+            .map_region(THREAD_TLS, TLS_ARRAY_SIZE, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        let occupied = 0x1234_u64;
+        memory.write_u64(THREAD_TLS, occupied).unwrap();
+        let indexes: Vec<_> = fixture
+            .bases
+            .iter()
+            .map(|base| base + u64::from(INDEX_RVA))
+            .collect();
+        for (address, marker) in indexes.iter().zip([77, 91]) {
+            memory.write_u32_bypass(*address, marker).unwrap();
+        }
+        let first_available = memory
+            .map_thread_region(0, 8, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        assert!(memory.release_thread_region(first_available));
+        let previous_write_fault = Some(0x1234_5678);
+        memory.write_fault = previous_write_fault;
+
+        let reservations = fixture.reservations();
+        assert!(matches!(
+            prepare_module_tls(&fixture.images(), &reservations, &mut memory, THREAD_TLS),
+            Err(ModuleTlsError::PreparationFailed {
+                image_index: Some(1),
+                source: MemoryError::AllocationFailed,
+            })
+        ));
+        assert!(memory.committed_region_info(first_available).is_none());
+        assert_eq!(memory.read_u64(THREAD_TLS), Ok(occupied));
+        assert_eq!(memory.read_u64(THREAD_TLS + 8), Ok(0));
+        assert_eq!(memory.read_u64(THREAD_TLS + 16), Ok(0));
+        assert_eq!(memory.read_u32(indexes[0]), Ok(77));
+        assert_eq!(memory.read_u32(indexes[1]), Ok(91));
+        assert_eq!(memory.write_fault, previous_write_fault);
+
+        second.zero_fill = 0;
+        fixture.bytes[1] = image_bytes(true, &second);
+        let reports =
+            prepare_module_tls(&fixture.images(), &reservations, &mut memory, THREAD_TLS).unwrap();
+        let first = reports[0].prepared.as_ref().unwrap();
+        assert_eq!(first.tls_index, 1);
+        assert_eq!(first.storage.unwrap().base, first_available);
+        assert_eq!(memory.read_u64(first_available), Ok(0x0403_0201));
+        assert_eq!(memory.read_u64(THREAD_TLS), Ok(occupied));
+        assert_eq!(memory.read_u64(THREAD_TLS + 8), Ok(first_available));
+        assert_eq!(memory.read_u32(indexes[0]), Ok(1));
+        assert_eq!(memory.read_u32(indexes[1]), Ok(2));
+    }
+
+    #[test]
+    fn index_write_precedes_copy_of_its_split_template() {
+        let mut spec = TlsSpec::valid(4, 0);
+        spec.index_rva = spec.start_rva;
+        let (fixture, _) = fixture(&[Some(spec)]);
+        let template = fixture.bases[0] + u64::from(TEMPLATE_RVA);
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region_with_data(template, 2, MemoryPermissions::READ_ONLY, &[1, 2])
+            .unwrap();
+        memory
+            .map_region_with_data(template + 2, 2, MemoryPermissions::READ_ONLY, &[3, 4])
+            .unwrap();
+
+        let reports = prepare_module_tls(
+            &fixture.images(),
+            &fixture.reservations(),
+            &mut memory,
+            THREAD_TLS,
+        )
+        .unwrap();
+        let prepared = reports[0].prepared.as_ref().unwrap();
+        assert_eq!(prepared.tls_index, 0);
+        assert_eq!(memory.read_u32(template), Ok(0));
+        assert_eq!(memory.read_u32(prepared.storage.unwrap().base), Ok(0));
+    }
+    #[test]
+    fn protected_template_keeps_prior_failure_order_and_rolls_back_storage() {
+        for (zero_fill, allocation_fails) in [(0, false), (64 * 1024 * 1024, true)] {
+            let (fixture, _) = fixture(&[Some(TlsSpec::valid(4, zero_fill))]);
+            let index = fixture.bases[0] + u64::from(INDEX_RVA);
+            let template = fixture.bases[0] + u64::from(TEMPLATE_RVA);
+            let mut memory = GuestMemory::new();
+            memory
+                .map_region_with_data(index, 4, MemoryPermissions::NO_ACCESS, &77u32.to_le_bytes())
+                .unwrap();
+            memory
+                .map_region(template, 2, MemoryPermissions::READ_ONLY)
+                .unwrap();
+            memory
+                .map_region(template + 2, 2, MemoryPermissions::NO_ACCESS)
+                .unwrap();
+            let first_available = memory
+                .map_thread_region(0, 4, MemoryPermissions::READ_WRITE)
+                .unwrap();
+            assert!(memory.release_thread_region(first_available));
+
+            let result = prepare_module_tls(
+                &fixture.images(),
+                &fixture.reservations(),
+                &mut memory,
+                THREAD_TLS,
+            );
+            let expected = if allocation_fails {
+                MemoryError::AllocationFailed
+            } else {
+                MemoryError::PermissionViolation {
+                    address: template + 2,
+                    required: "read",
+                }
+            };
+            match result {
+                Err(ModuleTlsError::PreparationFailed {
+                    image_index: Some(0),
+                    source,
+                }) => assert_eq!(source, expected),
+                other => panic!("unexpected TLS preparation result: {other:?}"),
+            }
+            assert!(memory.committed_region_info(THREAD_TLS).is_none());
+            assert!(memory.committed_region_info(first_available).is_none());
+        }
     }
 }
