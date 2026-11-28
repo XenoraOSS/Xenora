@@ -22,6 +22,18 @@ is `tls_completed` and the report has no entry events. The record reflects
 this run's observations. Static PE findings are reported
 by the probe.
 
+Explicit multi-image packages use the same stage names for whole-package
+phases. Package loading has no single-image parse event stream, so the
+runner emits `parsed` through `imports_bound` only after the package loader
+proves that those phases completed. If the root executable is entered, the
+entry observer proves that module TLS callbacks and DLL attach completed;
+the report then includes `tls_completed` and `entry_started` before the
+entry result. A DLL that returns false during attach is a `known_failure`
+before TLS completion or entry. A DLL that exits the process during
+initialization is a real `guest_exit` after `imports_bound`, not malformed
+protocol and not root-entry execution. Package detach callbacks run after
+the entry outcome and do not change its exit status.
+
 Outcome kinds are `verified` for an embedded fixture with a verified
 frame, `guest_exit` with the full 32-bit `guest_status`,
 `known_failure` with the reporting `phase` and `message`,

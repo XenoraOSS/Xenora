@@ -783,6 +783,40 @@ fn volume_and_frequency_ratio_are_bounded() {
 }
 
 #[test]
+fn source_sample_rate_requires_an_empty_queue_and_stays_in_range() {
+    let (mut rt, voice) = started_voice();
+    assert_eq!(rt.voice_format(voice).unwrap(), (2, 48_000));
+
+    for rate in [1_000, 22_050, 44_100, 200_000] {
+        rt.set_source_sample_rate(voice, rate).unwrap();
+        assert_eq!(rt.voice_format(voice).unwrap(), (2, rate));
+    }
+    for rate in [0, 999, 200_001] {
+        assert!(
+            matches!(
+                rt.set_source_sample_rate(voice, rate),
+                Err(Error::InvalidArg(_))
+            ),
+            "rate {rate}"
+        );
+        assert_eq!(rt.voice_format(voice).unwrap(), (2, 200_000));
+    }
+
+    rt.submit_source_buffer(voice, &buffer(4, (0, 0), (0, 0, 0), 1), 0)
+        .unwrap();
+    assert!(matches!(
+        rt.set_source_sample_rate(voice, 48_000),
+        Err(Error::InvalidCall(_))
+    ));
+    assert_eq!(rt.voice_format(voice).unwrap(), (2, 200_000));
+
+    rt.stop(voice, 0, 0).unwrap();
+    rt.flush_source_buffers(voice).unwrap();
+    rt.set_source_sample_rate(voice, 48_000).unwrap();
+    assert_eq!(rt.voice_format(voice).unwrap(), (2, 48_000));
+}
+
+#[test]
 fn releasing_the_engine_invalidates_its_voices() {
     let (mut rt, voice) = started_voice();
     let engine = rt.engine_of(voice).unwrap();
