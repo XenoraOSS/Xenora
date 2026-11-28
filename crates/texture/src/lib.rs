@@ -26,7 +26,7 @@ pub use footprint::{
 pub use sampler::{AddressMode, FilterMode, SamplerDesc, SamplerError, TextureMetadata};
 pub use upload::{
     Bc1Subresource, Bc1Upload, Bc1UploadDesc, BcAlphaFormat, BcAlphaUpload, BcAlphaUploadDesc,
-    BcChannelFormat, BcChannelUpload, BcChannelUploadDesc,
+    BcChannelFormat, BcChannelUpload, BcChannelUploadDesc, BptcFormat, BptcUpload, BptcUploadDesc,
 };
 
 const BLOCK_BYTES: usize = 8;

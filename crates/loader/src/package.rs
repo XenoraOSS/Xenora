@@ -82,6 +82,19 @@ pub struct PackageStartupLayout {
     pub thread_tls_base: u64,
 }
 
+/// Boundary of the root executable's entry attempt in a package run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageEntryEvent {
+    /// Initialization succeeded and the loader is about to enter the root EXE.
+    Entering {
+        image_index: usize,
+        address: u64,
+        main_teb: u64,
+    },
+    /// The attempt ended. Package detach callbacks have yet to run.
+    Leaving,
+}
+
 /// What happened to one imported symbol.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ImportDisposition {
@@ -414,9 +427,36 @@ pub fn run_package_startup(
     package: &[PackageModule<'_>],
     layout: PackageStartupLayout,
     entry_image: usize,
+    imports: ImportRegistry,
+    entry_budget: usize,
+    scheduler: Option<(Arc<ServicesState>, usize)>,
+) -> Result<PackageStartupResult, PackageStartupError> {
+    run_package_startup_with_entry_observer(
+        package,
+        layout,
+        entry_image,
+        imports,
+        entry_budget,
+        scheduler,
+        |_| {},
+    )
+}
+
+/// Run a package while observing only the root executable's entry phase.
+///
+/// TLS callbacks and DLL attach complete before `Entering`. Refusal or exit
+/// during initialization produces no entry events. Every entry attempt emits
+/// `Leaving`, including a scheduler refusal, before any normal detach
+/// callbacks. The actual main TEB is available in `Entering` because package
+/// initializers and detach callbacks can use the same TEB as the executable.
+pub fn run_package_startup_with_entry_observer(
+    package: &[PackageModule<'_>],
+    layout: PackageStartupLayout,
+    entry_image: usize,
     mut imports: ImportRegistry,
     entry_budget: usize,
     scheduler: Option<(Arc<ServicesState>, usize)>,
+    mut observe: impl FnMut(PackageEntryEvent),
 ) -> Result<PackageStartupResult, PackageStartupError> {
     if package.is_empty() {
         return Err(PackageStartupError::InvalidLayout(
@@ -859,18 +899,25 @@ pub fn run_package_startup(
             .map_err(PackageStartupError::Memory)?;
         let mut entry_cpu = CpuState::new(address, layout.stack_top - CALL_FRAME);
         entry_cpu.gs_base = teb_base;
+        observe(PackageEntryEvent::Entering {
+            image_index: entry.package_index,
+            address,
+            main_teb: entry_cpu.gs_base,
+        });
         let result = if let Some((state, quantum)) = scheduler {
-            let report = crate::scheduler::Scheduler::new(state, quantum)
+            crate::scheduler::Scheduler::new(state, quantum)
                 .run(&mut engine, &mut memory, &entry_cpu, entry_budget)
-                .map_err(|reason| PackageStartupError::Entry(format!("{reason:?}")))?;
-            ExecutionResult {
-                instructions_executed: report.instructions,
-                final_state: report.main,
-                exit_reason: scheduler_exit_reason(report.outcome),
-            }
+                .map(|report| ExecutionResult {
+                    instructions_executed: report.instructions,
+                    final_state: report.main,
+                    exit_reason: scheduler_exit_reason(report.outcome),
+                })
+                .map_err(|reason| PackageStartupError::Entry(format!("{reason:?}")))
         } else {
-            engine.run(&mut entry_cpu, &mut memory, entry_budget)
+            Ok(engine.run(&mut entry_cpu, &mut memory, entry_budget))
         };
+        observe(PackageEntryEvent::Leaving);
+        let result = result?;
         diagnostics.initialization.push(InitializationRecord {
             image_index: entry.package_index,
             file_name: entry.file_name.clone(),

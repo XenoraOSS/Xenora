@@ -962,6 +962,54 @@ fn hexadecimal_float_rounding_follows_the_rounding_mode() {
 }
 
 #[test]
+fn closing_a_standard_descriptor_succeeds_and_fails_everything_after() {
+    let (mut guest, [input, out, err]) = stdio_guest();
+    guest.state.set_standard_input(b"abc");
+    let fd = guest.call("_fileno", &[input]) & 0xFFFF_FFFF;
+    assert_eq!(fd, 0);
+    // Closing descriptor 0 succeeds, as the CRT allows it.
+    assert_eq!(guest.call("_close", &[0]) & 0xFFFF_FFFF, 0);
+    // Every later operation on it fails with EBADF: the descriptor read,
+    // the stream reads and the terminal query. A second close has nothing.
+    guest.set_errno(0);
+    let buf = TEXT + 0x4000;
+    assert_eq!(guest.call("_read", &[0, buf, 4]) & 0xFFFF_FFFF, 0xFFFF_FFFF);
+    assert_eq!(guest.errno(), EBADF);
+    guest.set_errno(0);
+    assert_eq!(guest.call("_filbuf", &[input]) & 0xFFFF_FFFF, 0xFFFF_FFFF);
+    assert_eq!(guest.errno(), EBADF);
+    guest.set_errno(0);
+    assert_eq!(guest.call("fgetc", &[input]) & 0xFFFF_FFFF, 0xFFFF_FFFF);
+    assert_eq!(guest.errno(), EBADF);
+    guest.set_errno(0);
+    assert_eq!(guest.call("_isatty", &[0]) & 0xFFFF_FFFF, 0);
+    assert_eq!(guest.errno(), EBADF);
+    assert_eq!(guest.call("_close", &[0]) & 0xFFFF_FFFF, 0xFFFF_FFFF);
+
+    // The same for the output side: closing descriptor 1 succeeds, writes
+    // through the descriptor and the stream fail, and nothing is captured.
+    assert_eq!(guest.call("_close", &[1]) & 0xFFFF_FFFF, 0);
+    guest.memory.write_bytes(buf, b"xy").unwrap();
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_write", &[1, buf, 2]) & 0xFFFF_FFFF,
+        0xFFFF_FFFF
+    );
+    assert_eq!(guest.errno(), EBADF);
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_flsbuf", &[b'x' as u64, out]) & 0xFFFF_FFFF,
+        0xFFFF_FFFF
+    );
+    assert_eq!(guest.errno(), EBADF);
+    assert!(guest.state.standard_output().is_empty());
+    // stderr is untouched: its descriptor still writes and captures.
+    assert_eq!(guest.call("_write", &[2, buf, 2]) & 0xFFFF_FFFF, 2);
+    assert_eq!(guest.state.standard_error(), b"xy");
+    let _ = err;
+}
+
+#[test]
 fn snprintf_writes_inside_the_buffer_and_returns_the_would_be_length() {
     let one_slot = &[42];
     // A fit: the text, its terminator, and the result is the length. The
@@ -2200,7 +2248,9 @@ fn descriptors_share_files_with_streams() {
         guest.call("_close", &[77]) & 0xFFFF_FFFF,
         (-1i32) as u32 as u64
     );
-    assert_eq!(guest.run("_close", &[0]).1, LIMIT);
+    // Closing standard input succeeds, as the CRT allows it: the slot is
+    // dead from then on, which the dedicated close test covers exhaustively.
+    assert_eq!(guest.call("_close", &[0]) & 0xFFFF_FFFF, 0);
     assert_eq!(
         guest.run("_open", &[NAME, 0x1_0000, 0]).1,
         LIMIT,

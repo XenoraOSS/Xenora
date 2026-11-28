@@ -15,6 +15,13 @@ def ndjson(out):
     return [json.loads(l) for l in out.splitlines() if l.strip()]
 
 
+# Fields both the list and the single-pull-request query need. The commit date
+# and the changed files are not in it: `gh pr list --json commits` exceeds
+# GitHub's node limit with a handful of open pull requests, so `_pr_meta`
+# gathers those two in one batched GraphQL request instead.
+PR_FIELDS = "number,author,body,headRefOid,state"
+
+
 def issue(repo, n):
     try:
         return json.loads(gh("issue", "view", str(n), "-R", repo, "--json", "number,title,body,state,labels"))
@@ -40,18 +47,71 @@ def open_issues(repo):
                          "--json", "number,title,body,state,labels"))
 
 
-def pr_data(repo, n):
-    p = json.loads(gh("pr", "view", str(n), "-R", repo, "--json", "number,author,body,headRefOid,state"))
-    sha = p["headRefOid"]
-    when = gh("api", "repos/%s/commits/%s" % (repo, sha), "--jq", ".commit.committer.date").strip()
-    files = gh("api", "repos/%s/pulls/%d/files" % (repo, n), "--paginate", "--jq", ".[].filename").split()
+def pr_data(repo, n, rows=None):
+    """One pull request. `rows` reuses an already gathered `open_prs` result."""
+    if rows:
+        for row in rows:
+            if row["number"] == n:
+                return row
+    p = json.loads(gh("pr", "view", str(n), "-R", repo, "--json", PR_FIELDS))
+    meta = _pr_meta(repo, [n]).get(n, {"head_pushed_at": "", "files": []})
     return {"number": p["number"], "author": p["author"]["login"], "body": p["body"] or "",
-            "head_sha": sha, "head_pushed_at": when, "files": files, "state": p["state"]}
+            "head_sha": p["headRefOid"], "head_pushed_at": meta["head_pushed_at"],
+            "files": meta["files"], "state": p["state"]}
+
+
+def _pr_meta(repo, numbers):
+    """Head commit date and changed files for `numbers`, in one GraphQL request.
+
+    `gh pr list --json commits` asks for every commit author of every open pull
+    request and trips GitHub's node limit once a handful are open, and one
+    `gh api` call per pull request for the commit date and the changed files
+    costs three requests each. Both fields are gathered for the whole list
+    here instead. A pull request whose file list the API truncates falls back
+    to the paginated REST call, so the returned lists stay complete.
+    """
+    if not numbers:
+        return {}
+    owner, name = repo.split("/", 1)
+    parts = []
+    for index, number in enumerate(numbers):
+        parts.append(
+            'p%d: repository(owner: %s, name: %s) { pullRequest(number: %d) { '
+            'files(first: 100) { pageInfo { hasNextPage } nodes { path } } '
+            'commits(last: 1) { nodes { commit { committedDate } } } } }' % (
+                index, json.dumps(owner), json.dumps(name), number))
+    data = json.loads(gh("api", "graphql", "-f", "query=query { %s }" % " ".join(parts)))["data"]
+    meta = {}
+    for index, number in enumerate(numbers):
+        pr = (data.get("p%d" % index) or {}).get("pullRequest")
+        if not pr:
+            continue
+        files = [node["path"] for node in pr["files"]["nodes"]]
+        if pr["files"]["pageInfo"]["hasNextPage"]:
+            files = gh("api", "repos/%s/pulls/%d/files" % (repo, number),
+                       "--paginate", "--jq", ".[].filename").split()
+        commits = pr["commits"]["nodes"]
+        meta[number] = {"head_pushed_at": commits[0]["commit"]["committedDate"] if commits else "",
+                        "files": files}
+    return meta
 
 
 def open_prs(repo):
-    nums = [p["number"] for p in json.loads(gh("pr", "list", "-R", repo, "--state", "open", "--limit", "100", "--json", "number"))]
-    return [pr_data(repo, n) for n in nums]
+    rows = json.loads(gh("pr", "list", "-R", repo, "--state", "open", "--limit", "100",
+                         "--json", PR_FIELDS))
+    meta = _pr_meta(repo, [p["number"] for p in rows])
+    prs = []
+    for p in rows:
+        added = meta.get(p["number"])
+        if added is None:
+            # The batch refused or dropped this pull request: ask for its two
+            # expensive fields alone rather than re-reading the cheap ones.
+            added = _pr_meta(repo, [p["number"]]).get(
+                p["number"], {"head_pushed_at": "", "files": []})
+        prs.append({"number": p["number"], "author": p["author"]["login"], "body": p["body"] or "",
+                    "head_sha": p["headRefOid"], "head_pushed_at": added["head_pushed_at"],
+                    "files": added["files"], "state": p["state"]})
+    return prs
 
 
 def gather(repo, with_prs=True, with_comments=True, recent_since=""):

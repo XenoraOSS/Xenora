@@ -752,31 +752,75 @@ pub fn execute(
                 cpu.gpr[register] = u64::from(value);
             }
         }
-        Op::Movs | Op::Stos => {
-            // One element per execution. A REP form with elements left keeps
-            // RIP on itself, so every element is a step of its own: it counts
-            // against the step budget, and a fault keeps the elements already
-            // done, with RSI, RDI and RCX at the element that faulted.
+        Op::Movs | Op::Stos | Op::Lods | Op::Scas | Op::Cmps => {
+            // One element per execution. A repeated form with elements left
+            // keeps RIP on itself, so every element is a step of its own: it
+            // counts against the step budget, and a fault keeps the elements
+            // already done, with RSI, RDI and RCX at the element that faulted.
+            // A repeated CMPS or SCAS that faults gets back the flags it began
+            // with. A zero count touches nothing.
             if !(insn.rep && cpu.gpr[RCX] == 0) {
-                let value = if insn.op == Op::Movs {
-                    read_rm(cpu, memory, insn)?
-                } else {
-                    cpu.gpr[RAX] & mask(size)
+                // The source [RSI] may carry FS or GS; [RDI] takes no
+                // override. Every access precedes every register write.
+                let destination = cpu.gpr[RDI];
+                let began = match cpu.repeat_flags {
+                    Some((rip, flags)) if rip == insn.rip => flags,
+                    _ => cpu.flags,
                 };
-                write_mem(memory, cpu.gpr[RDI], size, value)?;
+                match insn.op {
+                    Op::Movs => {
+                        let value = read_rm(cpu, memory, insn)?;
+                        write_mem(memory, destination, size, value)?;
+                    }
+                    Op::Stos => write_mem(memory, destination, size, cpu.gpr[RAX] & mask(size))?,
+                    Op::Lods => {
+                        let value = read_rm(cpu, memory, insn)?;
+                        write_reg(cpu, accumulator(RAX), size, value);
+                    }
+                    // SCAS compares the accumulator with [RDI] and CMPS
+                    // compares [RSI] with [RDI], each as CMP would.
+                    _ => {
+                        let source = if insn.op == Op::Scas {
+                            Ok(cpu.gpr[RAX] & mask(size))
+                        } else {
+                            read_rm(cpu, memory, insn)
+                        };
+                        match source.and_then(|a| Ok((a, read_mem(memory, destination, size)?))) {
+                            Ok((a, b)) => cpu.flags = sub(a, b, false, size).1,
+                            // A fault restores the flags the repeat began with;
+                            // the elements already done stay done.
+                            Err(fault) => {
+                                if insn.rep {
+                                    cpu.flags = began;
+                                    cpu.repeat_flags = None;
+                                }
+                                return Err(fault);
+                            }
+                        }
+                    }
+                }
                 let step = if cpu.df {
                     u64::from(size).wrapping_neg()
                 } else {
                     u64::from(size)
                 };
-                if insn.op == Op::Movs {
+                if matches!(insn.op, Op::Movs | Op::Lods | Op::Cmps) {
                     cpu.gpr[RSI] = cpu.gpr[RSI].wrapping_add(step);
                 }
-                cpu.gpr[RDI] = cpu.gpr[RDI].wrapping_add(step);
+                if insn.op != Op::Lods {
+                    cpu.gpr[RDI] = cpu.gpr[RDI].wrapping_add(step);
+                }
                 if insn.rep {
                     cpu.gpr[RCX] -= 1;
-                    if cpu.gpr[RCX] != 0 {
+                    // REPE stops once an element clears ZF and REPNE once one
+                    // sets it (Intel SDM Vol. 2B, "REP/REPE/REPZ/REPNE/REPNZ").
+                    let stopped =
+                        matches!(insn.op, Op::Scas | Op::Cmps) && cpu.flags.zf == insn.repne;
+                    if cpu.gpr[RCX] != 0 && !stopped {
                         next = insn.rip;
+                    }
+                    if matches!(insn.op, Op::Scas | Op::Cmps) {
+                        cpu.repeat_flags = (next == insn.rip).then_some((insn.rip, began));
                     }
                 }
             }

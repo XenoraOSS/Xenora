@@ -13,6 +13,9 @@ case "$outdir" in
 esac
 mkdir -p "$outdir"
 clang=${CLANG:-/opt/homebrew/opt/llvm/bin/clang}
+if [ -z "${CLANG:-}" ] && [ ! -x "$clang" ]; then
+    clang=$(xcrun --find clang)
+fi
 linker=${LLD_LINK:-/opt/homebrew/opt/lld/bin/lld-link}
 if [ ! -x "$linker" ]; then
     linker="$(rustc --print sysroot)/lib/rustlib/aarch64-apple-darwin/bin/rust-lld"

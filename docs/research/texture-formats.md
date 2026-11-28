@@ -23,8 +23,8 @@ A format can be handled at one stage and missing at the next. The columns below 
 | BC1 | — | `decode_bc1` (`crates/texture/src/lib.rs`) | synthetic tiled layout and pitched uploads (`TiledBc1`, `Bc1Upload`) | `read_tiled_bc1`, `read_bc1_upload` (`crates/metal/tests/native/texture.rs`) | sampled by the translated `image_sample_lz` pixel stage (`render_rgba8_sampled_bc1`, `crates/metal/tests/native/translated_bc1.rs`) | one-level 2D SRV, `DXGI_FORMAT_BC1_UNORM` (same files as RGBA8) |
 | BC2, BC3 | — | `decode_bc2`, `decode_bc3` (`crates/texture/src/bc.rs`, `crates/texture/tests/bc_formats.rs`) | pitched upload (`BcAlphaUpload`) | `read_bc_alpha_upload` (`crates/metal/tests/native/texture_bc_alpha.rs`) | — | — |
 | BC4, BC5 (unorm, snorm) | — | `decode_bc4_*`, `decode_bc5_*` (`crates/texture/src/bc.rs`, `crates/texture/tests/bc_formats.rs`) | pitched upload (`BcChannelUpload`) | `read_bc_channel_upload` (`crates/metal/tests/native/texture_bc_channel.rs`) | — | — |
-| BC6H (ufloat, sfloat) | — | single-subset modes only; two-subset modes rejected (`crates/texture/src/bc6h.rs`, `crates/texture/tests/bc6h.rs`) | — | — | — | — |
-| BC7 unorm | — | all eight modes (`crates/texture/src/bc7.rs`, `crates/texture/tests/bc7.rs`) | — | — | — | — |
+| BC6H (ufloat, sfloat) | — | single-subset modes only; two-subset modes rejected (`crates/texture/src/bc6h.rs`, `crates/texture/tests/bc6h.rs`) | pitched upload (`BptcUpload`) | `read_bptc_upload`, compared for single-subset and reserved modes only (`crates/metal/tests/native/texture_bptc.rs`) | — | — |
+| BC7 unorm | — | all eight modes (`crates/texture/src/bc7.rs`, `crates/texture/tests/bc7.rs`) | pitched upload (`BptcUpload`) | `read_bptc_upload` (`crates/metal/tests/native/texture_bptc.rs`) | — | — |
 | BC7 sRGB | — | same bytes as BC7; the sRGB transfer function is outside the decoder | — | — | — | — |
 | Depth32Float | — | not needed | render attachment | `render_depth` with depth readback (`crates/metal/tests/native/depth.rs`) | — | — |
 
@@ -34,7 +34,8 @@ Native BC paths require `supportsBCTextureCompression`. A device without it fail
 
 Known source differences, recorded where they are implemented:
 
-- **BC6H:** the Khronos text and Microsoft's sample code disagree on whether a negative value that rounds to zero keeps its sign (`-0.0` against `0.0`). `bc6h.rs` follows Khronos.
+- **BC6H:** the Khronos text and Microsoft's sample code disagree on whether a negative value that rounds to zero keeps its sign (`-0.0` against `0.0`). `bc6h.rs` follows Khronos. On an Apple M1 Max the native decoder returned `+0.0`, Microsoft's reading; `texture_bptc.rs` accepts that one alternative and reports each texel where it occurs.
+- **BC7 reserved mode:** Khronos and Microsoft both decode a block whose low byte is zero to zero in every channel, as `bc7.rs` does. On an Apple M1 Max the native decoder returned opaque black (alpha 1.0); `texture_bptc.rs` accepts that one alternative and reports it. A conforming encoder never writes such a block.
 - **BC1:** Apple's hardware rounds BC1's interpolated palette entries differently from the spec-exact decoder (171/84 against 170/85, see `CHANGELOG.md`). The sampled BC1 fixtures therefore use only endpoint colours.
 
 ## Layouts
@@ -42,7 +43,7 @@ Known source differences, recorded where they are implemented:
 | Layout | State | Where |
 | --- | --- | --- |
 | Row-major RGBA8 mips | implemented | `crates/metal/src/texture_pipeline.rs` |
-| Pitched, layer-major BC uploads (one pitch for every mip, padded slices) | implemented for BC1–BC5 | `crates/texture/src/upload.rs` |
+| Pitched, layer-major BC uploads (one pitch for every mip, padded slices) | implemented for BC1–BC7 | `crates/texture/src/upload.rs` |
 | Xenora's synthetic 2×2-tile BC1 layout | implemented; defined by Xenora's fixtures, not by any console | `crates/texture/src/lib.rs` |
 | Per-subresource mip footprints for block-compressed chains | in progress: #391, PR #394 | — |
 | Desktop RDNA 2 surface tiling (swizzle modes) | unknown; not researched in this repository | — |
@@ -69,7 +70,7 @@ These are research questions, not missing features:
 
 Ranked by how close each is to existing tested paths. The first item is already tracked; the others are proposals, so do not start them without an issue and a claim.
 
-1. **BC6H two-subset modes and native BC6H/BC7.** Tracked in #236 (CPU decode, claimed) and #237 (native upload and readback, waiting for maintainer approval). Do not duplicate them.
+1. **BC6H two-subset modes.** Tracked in #236 (CPU decode, claimed). Native upload and readback (#237) already accept these blocks; once the decoder lands, add them to the comparison in `texture_bptc.rs`.
 2. **Translated sampling of BC2–BC5.**
    - Fixture: original blocks with hand-chosen endpoints and indices, sampled by the existing `image_sample_lz` pixel stage.
    - Expected values: derived by hand from the Khronos tables. The `bc.rs` decoders must not produce them, so that the decoder and the reference stay independent.

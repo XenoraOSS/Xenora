@@ -12,6 +12,7 @@
 #
 # enc = "string" is a string instruction: its source is [RSI], which FS or GS
 # may override, its destination is [RDI], and it accepts the REP prefix (F3).
+# CMPS and SCAS also accept REPNE (F2); on them F3 is REPE.
 #
 # lock = true accepts the LOCK prefix (F0) when the ModRM operand is memory. A
 # group names the operations it accepts LOCK on, and the generator accepts it on
@@ -132,6 +133,11 @@ fninit = { ref = "sdm FINIT/FNINIT" }
 # A REP form repeats by leaving RIP on itself, so these end a translated block.
 movs = { terminator = true, ref = "sdm MOVS/MOVSB/MOVSW/MOVSD/MOVSQ" }
 stos = { terminator = true, ref = "sdm STOS/STOSB/STOSW/STOSD/STOSQ" }
+lods = { terminator = true, ref = "sdm LODS/LODSB/LODSW/LODSD/LODSQ" }
+# SCAS and CMPS set the flags as CMP would. A repeat with a zero count sets
+# none, and REPE or REPNE stops on the ZF the element itself produced.
+scas = { writes = "cf zf sf of pf af", conditional = true, terminator = true, ref = "sdm SCAS/SCASB/SCASW/SCASD" }
+cmps = { writes = "cf zf sf of pf af", conditional = true, terminator = true, ref = "sdm CMPS/CMPSB/CMPSW/CMPSD/CMPSQ" }
 
 # SSE and SSE2 moves and packed integer operations. None reads or writes RFLAGS.
 movaps = { ref = "sdm MOVAPS" }
@@ -840,6 +846,42 @@ size = "b"
 [[form]]
 op = "stos"
 opcode = 0xAB
+enc = "string"
+size = "v"
+
+[[form]]
+op = "lods"
+opcode = 0xAC
+enc = "string"
+size = "b"
+
+[[form]]
+op = "lods"
+opcode = 0xAD
+enc = "string"
+size = "v"
+
+[[form]]
+op = "scas"
+opcode = 0xAE
+enc = "string"
+size = "b"
+
+[[form]]
+op = "scas"
+opcode = 0xAF
+enc = "string"
+size = "v"
+
+[[form]]
+op = "cmps"
+opcode = 0xA6
+enc = "string"
+size = "b"
+
+[[form]]
+op = "cmps"
+opcode = 0xA7
 enc = "string"
 size = "v"
 

@@ -252,7 +252,7 @@ Implemented and tested functionality includes:
 
 - Validated mip levels and array layers.
 - Pitched texture uploads.
-- Block-compressed texture handling, including BC4/BC5 upload and readback and a CPU BC7 decoder for the eight modes.
+- Block-compressed texture handling, including native BC1–BC5, BC6H and BC7 upload and readback, a CPU BC7 decoder for the eight modes and a CPU BC6H decoder for the single-subset modes.
 - Native Metal texture readback.
 - Edge-block and transparency tests.
 - Invalid descriptor and bounds rejection.

@@ -228,9 +228,10 @@ class GenerateX86(unittest.TestCase):
         self.rejects(REGISTRY.replace('lock = ["inc", "dec"]', 'lock = ["inc", "mul"]'), "not in the group")
         self.rejects(REGISTRY.replace('lock = ["bts", "btr", "btc"]', 'lock = ["bts", "shl"]'), "not in the group")
 
-    def test_string_forms_are_movs_and_stos_without_operands(self):
+    def test_string_forms_are_the_five_string_operations_without_operands(self):
         _, forms = generate_x86.load(REGISTRY)
-        self.assertEqual({form["op"] for form in forms if form["enc"] == "string"}, {"movs", "stos"})
+        self.assertEqual({form["op"] for form in forms if form["enc"] == "string"},
+                         {"movs", "stos", "lods", "scas", "cmps"})
         self.rejects(self.form('op = "movs"\nopcode = 0xD7\nenc = "string"\nsize = "b"\nimm = "ib"'), "not valid for string")
         self.rejects(self.form('op = "movs"\nopcode = 0xD7\nenc = "string"\nsize = "b"\nlock = true'), "LOCK needs a memory destination")
 
