@@ -23,6 +23,7 @@ const USER: u64 = 40;
 const PASSWORD: u64 = 56;
 const PATH: u64 = 72;
 const EXTRA: u64 = 88;
+const ICU_DECODE: u64 = 0x1000_0000;
 
 fn setup() -> Guest {
     let mut guest = Guest::new(IMPORTS, &[]);
@@ -131,6 +132,52 @@ fn copied_fields_terminate_and_the_path_can_include_query_and_fragment() {
         assert_eq!(contents(&guest, address - 1, 1), [0x7d]);
         assert_eq!(contents(&guest, address + bytes.len() as u64, 1), [0x7d]);
     }
+}
+
+#[test]
+fn decode_copies_each_component_once_after_finding_url_boundaries() {
+    let mut guest = setup();
+    let count = put_url(
+        &mut guest,
+        "https://example.test/a%20b/%2520/%23mark?q=%4a%",
+    );
+    output(&mut guest, PATH, BUFFER, 15);
+    output(&mut guest, EXTRA, BUFFER + 64, 6);
+
+    assert_eq!(
+        guest.call("WinHttpCrackUrl", &[URL, count, ICU_DECODE, OUTPUT]),
+        1
+    );
+    for (field, address, decoded) in [
+        (PATH, BUFFER, "/a b/%20/#mark"),
+        (EXTRA, BUFFER + 64, "?q=J%"),
+    ] {
+        let bytes: Vec<_> = decoded
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert_eq!(guest.u32_at(OUTPUT + field + 8), decoded.len() as u32);
+        assert_eq!(contents(&guest, address, bytes.len()), bytes);
+    }
+}
+
+#[test]
+fn requested_view_with_decode_is_rejected_before_any_copied_output() {
+    let mut guest = setup();
+    put_url(&mut guest, "https://example.test/a%20b?q=%42");
+    output(&mut guest, PATH, BUFFER, 8);
+    output(&mut guest, EXTRA, 0, 1);
+    guest.memory.write_bytes(BUFFER, &[0x7d; 16]).unwrap();
+    let fields = contents(&guest, OUTPUT, STRUCT_SIZE);
+
+    assert_eq!(
+        guest.call("WinHttpCrackUrl", &[URL, 0, ICU_DECODE, OUTPUT]),
+        0
+    );
+    assert_eq!(guest.error(), 87);
+    assert_eq!(contents(&guest, OUTPUT, STRUCT_SIZE), fields);
+    assert_eq!(contents(&guest, BUFFER, 16), [0x7d; 16]);
 }
 
 #[test]
