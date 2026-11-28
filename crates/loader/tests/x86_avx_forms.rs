@@ -47,7 +47,7 @@ fn fixture() -> BTreeMap<&'static str, Vec<u8>> {
 fn is_float(name: &str) -> bool {
     [
         "vadd", "vsub", "vmul", "vdiv", "vmin", "vmax", "vsqrt", "vcmp", "vround", "vcvt", "vcomi",
-        "vucomi", "vdp",
+        "vucomi", "vdp", "vhadd", "vhsub",
     ]
     .iter()
     .any(|stem| name.starts_with(stem))
