@@ -53,6 +53,22 @@ pub(super) struct OpenFile {
 }
 
 impl OpenFile {
+    /// The CRT interop synthesizes the kernel file object every real CRT
+    /// descriptor has behind it, for a stream that was opened through the
+    /// CRT alone (#1312): the object's position starts where the stream's
+    /// is now, and the two move independently afterward exactly as a real
+    /// CRT stream's buffered position and its kernel handle do.
+    pub(super) fn for_interop(path: String, access: u32, position: u64) -> Self {
+        OpenFile {
+            path,
+            position: Arc::new(AtomicU64::new(position)),
+            open_access: access,
+            access,
+            share: 0,
+            directory: false,
+        }
+    }
+
     /// The CRT interop reads and writes the object through these, under the
     /// same serialization the object table gives the kernel calls.
     pub(super) fn path(&self) -> &str {
