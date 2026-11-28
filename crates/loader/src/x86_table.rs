@@ -315,10 +315,12 @@ pub enum Op {
     Cvtsi2sd,
     Cvttsd2si,
     Cvtsd2si,
+    Vcvtph2ps,
+    Vcvtps2ph,
 }
 
 impl Op {
-    pub const ALL: &[Op] = &[Op::Add, Op::Or, Op::Adc, Op::Sbb, Op::And, Op::Sub, Op::Xor, Op::Cmp, Op::Test, Op::Inc, Op::Dec, Op::Neg, Op::Not, Op::Mov, Op::Movzx, Op::Movsx, Op::Movsxd, Op::Lea, Op::Xchg, Op::Xadd, Op::Cmpxchg, Op::Cmpxchg8b, Op::Bswap, Op::Cwde, Op::Cdq, Op::Rol, Op::Ror, Op::Rcl, Op::Rcr, Op::Shl, Op::Shr, Op::Sar, Op::Shld, Op::Shrd, Op::Mul, Op::Imul, Op::Imul2, Op::Div, Op::Idiv, Op::Cmov, Op::Setcc, Op::Bt, Op::Bts, Op::Btr, Op::Btc, Op::Bsf, Op::Bsr, Op::Popcnt, Op::Tzcnt, Op::Lzcnt, Op::Andn, Op::Blsi, Op::Blsmsk, Op::Blsr, Op::Shlx, Op::Shrx, Op::Sarx, Op::Rorx, Op::Push, Op::Pop, Op::Leave, Op::Call, Op::Jmp, Op::Jcc, Op::Loopne, Op::Loope, Op::Loop, Op::Jrcxz, Op::Ret, Op::Nop, Op::Hlt, Op::Syscall, Op::Clc, Op::Stc, Op::Cmc, Op::Lahf, Op::Sahf, Op::Cpuid, Op::Cld, Op::Std, Op::Fninit, Op::Movs, Op::Stos, Op::Lods, Op::Scas, Op::Cmps, Op::Movaps, Op::Movups, Op::Movdqa, Op::Movdqu, Op::Movntdq, Op::Movnti, Op::Movntps, Op::Movss, Op::Movsd, Op::Movq, Op::Movd, Op::Movlps, Op::Movhps, Op::Movmskps, Op::Movmskpd, Op::Pmovmskb, Op::Pand, Op::Pandn, Op::Por, Op::Pxor, Op::Punpcklbw, Op::Punpcklwd, Op::Punpckldq, Op::Packsswb, Op::Pcmpgtb, Op::Pcmpgtw, Op::Pcmpgtd, Op::Packuswb, Op::Punpckhbw, Op::Punpckhwd, Op::Punpckhdq, Op::Packssdw, Op::Punpcklqdq, Op::Punpckhqdq, Op::Pcmpeqb, Op::Pcmpeqw, Op::Pcmpeqd, Op::Paddq, Op::Pmullw, Op::Psubusb, Op::Psubusw, Op::Pminub, Op::Paddusb, Op::Paddusw, Op::Pmaxub, Op::Pavgb, Op::Pavgw, Op::Pmulhuw, Op::Pmulhw, Op::Psubsb, Op::Psubsw, Op::Pminsw, Op::Paddsb, Op::Paddsw, Op::Pmaxsw, Op::Pmuludq, Op::Pmaddwd, Op::Psadbw, Op::Psubb, Op::Psubw, Op::Psubd, Op::Psubq, Op::Paddb, Op::Paddw, Op::Paddd, Op::Psrlw, Op::Psraw, Op::Psllw, Op::Psrld, Op::Psrad, Op::Pslld, Op::Psrlq, Op::Psllq, Op::Psrldq, Op::Pslldq, Op::Pshufd, Op::Pshufhw, Op::Pshuflw, Op::Shufps, Op::Shufpd, Op::Pinsrw, Op::Pextrw, Op::Ldmxcsr, Op::Lfence, Op::Mfence, Op::Sfence, Op::Stmxcsr, Op::Pshufb, Op::Phaddw, Op::Phaddd, Op::Phaddsw, Op::Pmaddubsw, Op::Phsubw, Op::Phsubd, Op::Phsubsw, Op::Psignb, Op::Psignw, Op::Psignd, Op::Pmulhrsw, Op::Pabsb, Op::Pabsw, Op::Pabsd, Op::Palignr, Op::Pblendvb, Op::Ptest, Op::Pmuldq, Op::Pcmpeqq, Op::Packusdw, Op::Pminsb, Op::Pminsd, Op::Pminuw, Op::Pminud, Op::Pmaxsb, Op::Pmaxsd, Op::Pmaxuw, Op::Pmaxud, Op::Pmulld, Op::Phminposuw, Op::Pmovsxbw, Op::Pmovzxbw, Op::Pmovsxbd, Op::Pmovzxbd, Op::Pmovsxbq, Op::Pmovzxbq, Op::Pmovsxwd, Op::Pmovzxwd, Op::Pmovsxwq, Op::Pmovzxwq, Op::Pmovsxdq, Op::Pmovzxdq, Op::Movntdqa, Op::Pblendw, Op::Mpsadbw, Op::Pextrb, Op::Pextrd, Op::Pinsrb, Op::Pinsrd, Op::Blendps, Op::Blendpd, Op::Blendvps, Op::Blendvpd, Op::Insertps, Op::Extractps, Op::Roundps, Op::Roundpd, Op::Roundss, Op::Roundsd, Op::Dpps, Op::Dppd, Op::Pcmpgtq, Op::Pcmpestrm, Op::Pcmpestri, Op::Pcmpistrm, Op::Pcmpistri, Op::Crc32, Op::Lddqu, Op::Movddup, Op::Movsldup, Op::Movshdup, Op::Vzeroupper, Op::Vzeroall, Op::Vbroadcastss, Op::Vbroadcastsd, Op::Vbroadcastf128, Op::Vinsertf128, Op::Vextractf128, Op::Vpermilps, Op::Vpermilpd, Op::Vperm2f128, Op::Sqrtps, Op::Sqrtpd, Op::Sqrtss, Op::Sqrtsd, Op::Addps, Op::Addpd, Op::Addss, Op::Addsd, Op::Mulps, Op::Mulpd, Op::Mulss, Op::Mulsd, Op::Subps, Op::Subpd, Op::Subss, Op::Subsd, Op::Minps, Op::Minpd, Op::Minss, Op::Minsd, Op::Divps, Op::Divpd, Op::Divss, Op::Divsd, Op::Maxps, Op::Maxpd, Op::Maxss, Op::Maxsd, Op::Cmpps, Op::Cmppd, Op::Cmpss, Op::Cmpsd, Op::Ucomiss, Op::Comiss, Op::Ucomisd, Op::Comisd, Op::Cvtps2pd, Op::Cvtpd2ps, Op::Cvtss2sd, Op::Cvtsd2ss, Op::Cvtdq2ps, Op::Cvtps2dq, Op::Cvttps2dq, Op::Cvttpd2dq, Op::Cvtdq2pd, Op::Cvtpd2dq, Op::Cvtsi2ss, Op::Cvttss2si, Op::Cvtss2si, Op::Cvtsi2sd, Op::Cvttsd2si, Op::Cvtsd2si];
+    pub const ALL: &[Op] = &[Op::Add, Op::Or, Op::Adc, Op::Sbb, Op::And, Op::Sub, Op::Xor, Op::Cmp, Op::Test, Op::Inc, Op::Dec, Op::Neg, Op::Not, Op::Mov, Op::Movzx, Op::Movsx, Op::Movsxd, Op::Lea, Op::Xchg, Op::Xadd, Op::Cmpxchg, Op::Cmpxchg8b, Op::Bswap, Op::Cwde, Op::Cdq, Op::Rol, Op::Ror, Op::Rcl, Op::Rcr, Op::Shl, Op::Shr, Op::Sar, Op::Shld, Op::Shrd, Op::Mul, Op::Imul, Op::Imul2, Op::Div, Op::Idiv, Op::Cmov, Op::Setcc, Op::Bt, Op::Bts, Op::Btr, Op::Btc, Op::Bsf, Op::Bsr, Op::Popcnt, Op::Tzcnt, Op::Lzcnt, Op::Andn, Op::Blsi, Op::Blsmsk, Op::Blsr, Op::Shlx, Op::Shrx, Op::Sarx, Op::Rorx, Op::Push, Op::Pop, Op::Leave, Op::Call, Op::Jmp, Op::Jcc, Op::Loopne, Op::Loope, Op::Loop, Op::Jrcxz, Op::Ret, Op::Nop, Op::Hlt, Op::Syscall, Op::Clc, Op::Stc, Op::Cmc, Op::Lahf, Op::Sahf, Op::Cpuid, Op::Cld, Op::Std, Op::Fninit, Op::Movs, Op::Stos, Op::Lods, Op::Scas, Op::Cmps, Op::Movaps, Op::Movups, Op::Movdqa, Op::Movdqu, Op::Movntdq, Op::Movnti, Op::Movntps, Op::Movss, Op::Movsd, Op::Movq, Op::Movd, Op::Movlps, Op::Movhps, Op::Movmskps, Op::Movmskpd, Op::Pmovmskb, Op::Pand, Op::Pandn, Op::Por, Op::Pxor, Op::Punpcklbw, Op::Punpcklwd, Op::Punpckldq, Op::Packsswb, Op::Pcmpgtb, Op::Pcmpgtw, Op::Pcmpgtd, Op::Packuswb, Op::Punpckhbw, Op::Punpckhwd, Op::Punpckhdq, Op::Packssdw, Op::Punpcklqdq, Op::Punpckhqdq, Op::Pcmpeqb, Op::Pcmpeqw, Op::Pcmpeqd, Op::Paddq, Op::Pmullw, Op::Psubusb, Op::Psubusw, Op::Pminub, Op::Paddusb, Op::Paddusw, Op::Pmaxub, Op::Pavgb, Op::Pavgw, Op::Pmulhuw, Op::Pmulhw, Op::Psubsb, Op::Psubsw, Op::Pminsw, Op::Paddsb, Op::Paddsw, Op::Pmaxsw, Op::Pmuludq, Op::Pmaddwd, Op::Psadbw, Op::Psubb, Op::Psubw, Op::Psubd, Op::Psubq, Op::Paddb, Op::Paddw, Op::Paddd, Op::Psrlw, Op::Psraw, Op::Psllw, Op::Psrld, Op::Psrad, Op::Pslld, Op::Psrlq, Op::Psllq, Op::Psrldq, Op::Pslldq, Op::Pshufd, Op::Pshufhw, Op::Pshuflw, Op::Shufps, Op::Shufpd, Op::Pinsrw, Op::Pextrw, Op::Ldmxcsr, Op::Lfence, Op::Mfence, Op::Sfence, Op::Stmxcsr, Op::Pshufb, Op::Phaddw, Op::Phaddd, Op::Phaddsw, Op::Pmaddubsw, Op::Phsubw, Op::Phsubd, Op::Phsubsw, Op::Psignb, Op::Psignw, Op::Psignd, Op::Pmulhrsw, Op::Pabsb, Op::Pabsw, Op::Pabsd, Op::Palignr, Op::Pblendvb, Op::Ptest, Op::Pmuldq, Op::Pcmpeqq, Op::Packusdw, Op::Pminsb, Op::Pminsd, Op::Pminuw, Op::Pminud, Op::Pmaxsb, Op::Pmaxsd, Op::Pmaxuw, Op::Pmaxud, Op::Pmulld, Op::Phminposuw, Op::Pmovsxbw, Op::Pmovzxbw, Op::Pmovsxbd, Op::Pmovzxbd, Op::Pmovsxbq, Op::Pmovzxbq, Op::Pmovsxwd, Op::Pmovzxwd, Op::Pmovsxwq, Op::Pmovzxwq, Op::Pmovsxdq, Op::Pmovzxdq, Op::Movntdqa, Op::Pblendw, Op::Mpsadbw, Op::Pextrb, Op::Pextrd, Op::Pinsrb, Op::Pinsrd, Op::Blendps, Op::Blendpd, Op::Blendvps, Op::Blendvpd, Op::Insertps, Op::Extractps, Op::Roundps, Op::Roundpd, Op::Roundss, Op::Roundsd, Op::Dpps, Op::Dppd, Op::Pcmpgtq, Op::Pcmpestrm, Op::Pcmpestri, Op::Pcmpistrm, Op::Pcmpistri, Op::Crc32, Op::Lddqu, Op::Movddup, Op::Movsldup, Op::Movshdup, Op::Vzeroupper, Op::Vzeroall, Op::Vbroadcastss, Op::Vbroadcastsd, Op::Vbroadcastf128, Op::Vinsertf128, Op::Vextractf128, Op::Vpermilps, Op::Vpermilpd, Op::Vperm2f128, Op::Sqrtps, Op::Sqrtpd, Op::Sqrtss, Op::Sqrtsd, Op::Addps, Op::Addpd, Op::Addss, Op::Addsd, Op::Mulps, Op::Mulpd, Op::Mulss, Op::Mulsd, Op::Subps, Op::Subpd, Op::Subss, Op::Subsd, Op::Minps, Op::Minpd, Op::Minss, Op::Minsd, Op::Divps, Op::Divpd, Op::Divss, Op::Divsd, Op::Maxps, Op::Maxpd, Op::Maxss, Op::Maxsd, Op::Cmpps, Op::Cmppd, Op::Cmpss, Op::Cmpsd, Op::Ucomiss, Op::Comiss, Op::Ucomisd, Op::Comisd, Op::Cvtps2pd, Op::Cvtpd2ps, Op::Cvtss2sd, Op::Cvtsd2ss, Op::Cvtdq2ps, Op::Cvtps2dq, Op::Cvttps2dq, Op::Cvttpd2dq, Op::Cvtdq2pd, Op::Cvtpd2dq, Op::Cvtsi2ss, Op::Cvttss2si, Op::Cvtss2si, Op::Cvtsi2sd, Op::Cvttsd2si, Op::Cvtsd2si, Op::Vcvtph2ps, Op::Vcvtps2ph];
 
     /// Lower-case mnemonic stem.
     pub const fn name(self) -> &'static str {
@@ -630,6 +632,8 @@ impl Op {
             Op::Cvtsi2sd => "cvtsi2sd",
             Op::Cvttsd2si => "cvttsd2si",
             Op::Cvtsd2si => "cvtsd2si",
+            Op::Vcvtph2ps => "vcvtph2ps",
+            Op::Vcvtps2ph => "vcvtps2ph",
         }
     }
 
@@ -943,6 +947,8 @@ impl Op {
             Op::Cvtsi2sd => 0,
             Op::Cvttsd2si => 0,
             Op::Cvtsd2si => 0,
+            Op::Vcvtph2ps => 0,
+            Op::Vcvtps2ph => 0,
         }
     }
 
@@ -1256,6 +1262,8 @@ impl Op {
             Op::Cvtsi2sd => 0,
             Op::Cvttsd2si => 0,
             Op::Cvtsd2si => 0,
+            Op::Vcvtph2ps => 0,
+            Op::Vcvtps2ph => 0,
         }
     }
 
@@ -1569,6 +1577,8 @@ impl Op {
             Op::Cvtsi2sd => 0,
             Op::Cvttsd2si => 0,
             Op::Cvtsd2si => 0,
+            Op::Vcvtph2ps => 0,
+            Op::Vcvtps2ph => 0,
         }
     }
 
@@ -1882,6 +1892,8 @@ impl Op {
             Op::Cvtsi2sd => 0,
             Op::Cvttsd2si => 0,
             Op::Cvtsd2si => 0,
+            Op::Vcvtph2ps => 0,
+            Op::Vcvtps2ph => 0,
         }
     }
 
@@ -2195,6 +2207,8 @@ impl Op {
             Op::Cvtsi2sd => false,
             Op::Cvttsd2si => false,
             Op::Cvtsd2si => false,
+            Op::Vcvtph2ps => false,
+            Op::Vcvtps2ph => false,
         }
     }
 
@@ -2508,6 +2522,8 @@ impl Op {
             Op::Cvtsi2sd => true,
             Op::Cvttsd2si => true,
             Op::Cvtsd2si => true,
+            Op::Vcvtph2ps => true,
+            Op::Vcvtps2ph => true,
         }
     }
 
@@ -2821,11 +2837,13 @@ impl Op {
             Op::Cvtsi2sd => true,
             Op::Cvttsd2si => true,
             Op::Cvtsd2si => true,
+            Op::Vcvtph2ps => true,
+            Op::Vcvtps2ph => true,
         }
     }
 }
 
-pub static FORMS: [Form; 757] = [
+pub static FORMS: [Form; 761] = [
     Form { op: Op::Movsxd, encoding: Encoding::RegRm, size: OperandSize::Wide, immediate: Immediate::None, source: 4, has_modrm: true, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: false, lockable: false },
     Form { op: Op::Push, encoding: Encoding::OpReg, size: OperandSize::Quad, immediate: Immediate::None, source: 0, has_modrm: false, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: false, lockable: false },
     Form { op: Op::Pop, encoding: Encoding::OpReg, size: OperandSize::Quad, immediate: Immediate::None, source: 0, has_modrm: false, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: false, lockable: false },
@@ -3583,6 +3601,10 @@ pub static FORMS: [Form; 757] = [
     Form { op: Op::Shrx, encoding: Encoding::RegVvvvRm, size: OperandSize::Wide, immediate: Immediate::None, source: 0, has_modrm: true, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: true, lockable: false },
     Form { op: Op::Sarx, encoding: Encoding::RegVvvvRm, size: OperandSize::Wide, immediate: Immediate::None, source: 0, has_modrm: true, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: true, lockable: false },
     Form { op: Op::Rorx, encoding: Encoding::RegRmImm, size: OperandSize::Wide, immediate: Immediate::Byte, source: 0, has_modrm: true, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: true, lockable: false },
+    Form { op: Op::Vcvtph2ps, encoding: Encoding::XmmRm, size: OperandSize::Xmm, immediate: Immediate::None, source: 0, has_modrm: true, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: true, lockable: false },
+    Form { op: Op::Vcvtph2ps, encoding: Encoding::XmmRm, size: OperandSize::Xmm, immediate: Immediate::None, source: 0, has_modrm: true, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: true, lockable: false },
+    Form { op: Op::Vcvtps2ph, encoding: Encoding::RmXmmImm, size: OperandSize::Xmm, immediate: Immediate::Byte, source: 0, has_modrm: true, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: true, lockable: false },
+    Form { op: Op::Vcvtps2ph, encoding: Encoding::RmXmmImm, size: OperandSize::Xmm, immediate: Immediate::Byte, source: 0, has_modrm: true, memory_only: false, register_only: false, fixed_rm: None, no_rex_b: false, unaligned: true, lockable: false },
 ];
 
 /// Form per ModRM digit; 65535 marks an unsupported digit.
@@ -3614,7 +3636,7 @@ pub static GROUPS: [[u16; 8]; 24] = [
 ];
 
 /// VEX-encoded forms by opcode map, mandatory prefix and opcode.
-pub static VEX_FORMS: [VexForm; 273] = [
+pub static VEX_FORMS: [VexForm; 277] = [
     VexForm { key: 0x410, form: 488, digit: None, length: None, wide: None, memory: 0, nds: false },
     VexForm { key: 0x411, form: 489, digit: None, length: None, wide: None, memory: 0, nds: false },
     VexForm { key: 0x412, form: 513, digit: None, length: Some(false), wide: None, memory: 8, nds: true },
@@ -3820,6 +3842,8 @@ pub static VEX_FORMS: [VexForm; 273] = [
     VexForm { key: 0x90b, form: 564, digit: None, length: None, wide: None, memory: 0, nds: true },
     VexForm { key: 0x90c, form: 550, digit: None, length: None, wide: Some(false), memory: 0, nds: true },
     VexForm { key: 0x90d, form: 551, digit: None, length: None, wide: Some(false), memory: 0, nds: true },
+    VexForm { key: 0x913, form: 757, digit: None, length: Some(false), wide: Some(false), memory: 8, nds: false },
+    VexForm { key: 0x913, form: 758, digit: None, length: Some(true), wide: Some(false), memory: 16, nds: false },
     VexForm { key: 0x917, form: 570, digit: None, length: None, wide: None, memory: 0, nds: false },
     VexForm { key: 0x918, form: 543, digit: None, length: None, wide: Some(false), memory: 4, nds: false },
     VexForm { key: 0x919, form: 544, digit: None, length: Some(true), wide: Some(false), memory: 8, nds: false },
@@ -3874,6 +3898,8 @@ pub static VEX_FORMS: [VexForm; 273] = [
     VexForm { key: 0xd17, form: 611, digit: None, length: Some(false), wide: None, memory: 4, nds: false },
     VexForm { key: 0xd18, form: 546, digit: None, length: Some(true), wide: Some(false), memory: 16, nds: true },
     VexForm { key: 0xd19, form: 547, digit: None, length: Some(true), wide: Some(false), memory: 16, nds: false },
+    VexForm { key: 0xd1d, form: 759, digit: None, length: Some(false), wide: Some(false), memory: 8, nds: false },
+    VexForm { key: 0xd1d, form: 760, digit: None, length: Some(true), wide: Some(false), memory: 16, nds: false },
     VexForm { key: 0xd20, form: 601, digit: None, length: Some(false), wide: None, memory: 1, nds: true },
     VexForm { key: 0xd21, form: 612, digit: None, length: Some(false), wide: None, memory: 4, nds: true },
     VexForm { key: 0xd22, form: 602, digit: None, length: Some(false), wide: None, memory: 255, nds: true },

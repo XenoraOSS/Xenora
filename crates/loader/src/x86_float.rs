@@ -9,8 +9,9 @@
 use crate::cpu::{CpuState, ExitReason, RFlags};
 use crate::memory::GuestMemory;
 use crate::softfloat::{
-    Arithmetic, Control, F32, F64, Format, Outcome, PRE_COMPUTATION, PRECISION, Rounding,
-    arithmetic, compare, convert, from_integer, round_to_integral, square_root, to_integer,
+    Arithmetic, Control, F16, F32, F64, Format, Outcome, PRE_COMPUTATION, PRECISION, Rounding,
+    arithmetic, compare, convert, from_integer, half_to_single, round_to_integral, single_to_half,
+    square_root, to_integer,
 };
 use crate::x86_decode::{Insn, RmOperand};
 use crate::x86_exec::{address, read_mem, read_reg, rm_operand, write_reg};
@@ -308,6 +309,60 @@ pub(crate) fn vector(
     if matches!(op, Op::Cvtpd2ps | Op::Cvtpd2dq | Op::Cvttpd2dq) {
         result = [result[0] | result[1] << 64, 0];
     }
+    Ok(Some(result))
+}
+
+/// The result of an F16C conversion, or `None` for another operation. The
+/// source is the ModRM operand of VCVTPH2PS (64 or 128 bits of binary16) or the
+/// register named by ModRM.reg of VCVTPS2PH (a packed single vector). The
+/// exceptions of all lanes are committed together, so an unmasked one leaves
+/// the destination untouched.
+pub(crate) fn half_precision(
+    cpu: &mut CpuState,
+    op: Op,
+    source: [u128; 2],
+    length: u8,
+    imm: u64,
+) -> Result<Option<[u128; 2]>, ExitReason> {
+    let widening = match op {
+        Op::Vcvtph2ps => true,
+        Op::Vcvtps2ph => false,
+        _ => return Ok(None),
+    };
+    let control = Control::from_mxcsr(cpu.mxcsr.0);
+    // imm8[2] selects MXCSR.RC; imm8[7:3] is ignored by the processor.
+    let rounding = if imm & 4 != 0 {
+        control.rounding
+    } else {
+        Rounding::from_bits(imm)
+    };
+    let source_bits = if widening { F16.bits } else { F32.bits };
+    // Both conversions handle one value per four bytes of the source: four at
+    // VEX.128 and eight at VEX.256.
+    let count = u32::from(length) / 4;
+    let mut raised = Raised::default();
+    let mut result = [0; 2];
+    for index in 0..count {
+        let value = if widening {
+            // VCVTPH2PS takes every half from the low 64 or 128 bits.
+            lane(source[0], source_bits, index)
+        } else {
+            let half = (index / 4) as usize;
+            lane(source[half], source_bits, index % 4)
+        };
+        let outcome = if widening {
+            half_to_single(value)
+        } else {
+            single_to_half(value, rounding, &control)
+        };
+        let bits = raised.take(outcome);
+        if widening {
+            insert(&mut result[(index / 4) as usize], bits, F32.bits, index % 4);
+        } else {
+            insert(&mut result[0], bits, F16.bits, index);
+        }
+    }
+    raised.commit(cpu)?;
     Ok(Some(result))
 }
 
