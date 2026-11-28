@@ -22,6 +22,11 @@ const IANA_SOFTWARE_LOOPBACK: u32 = 24;
 const MAX_STATISTICS_TYPE: u32 = 2;
 const MAX_CONFIGURATION_SETTING: u32 = 2;
 const TCP_QUEUED_RECEIVE_STATISTICS_SIZE: usize = 40;
+/// The documented default preferred UDP multiplayer port. Xenora's bounded
+/// network machine has no external route, UPnP negotiation or user override,
+/// so this fixed value is the exact preference of its loopback machine rather
+/// than Internet or NAT evidence.
+const PREFERRED_LOCAL_UDP_MULTIPLAYER_PORT: u16 = 3074;
 
 /// Register the implemented query. Registration and change-notification
 /// functions, security-information queries and configuration settings remain
@@ -91,6 +96,26 @@ pub(super) fn register(registry: &mut ImportRegistry) {
             Ok(HResult::OK.guest_return())
         },
     );
+
+    // The synchronous preferred-port query. The fixed value is meaningful for
+    // a UDP bind inside Xenora's loopback network only: no router traversal,
+    // NAT type or external reachability follows from it.
+    registry.register_with_status(
+        MODULE,
+        "XNetworkingQueryPreferredLocalUdpMultiplayerPort",
+        ServiceStatus::Implemented,
+        |args, _, memory| {
+            let output = args.rcx;
+            if output == 0
+                || memory
+                    .write_u16(output, PREFERRED_LOCAL_UDP_MULTIPLAYER_PORT)
+                    .is_err()
+            {
+                return Ok(HResult::from_win32(ERROR_INVALID_PARAMETER).guest_return());
+            }
+            Ok(HResult::OK.guest_return())
+        },
+    );
 }
 
 #[cfg(test)]
@@ -143,6 +168,51 @@ mod tests {
             )
             .unwrap();
         (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    }
+
+    fn call_preferred_port(memory: &mut GuestMemory, output: u64) -> u64 {
+        let mut registry = ImportRegistry::new();
+        register(&mut registry);
+        let mut cpu = CpuState::default();
+        cpu.set(crate::cpu::Register::Rcx, output);
+        let descriptor = registry
+            .resolve(
+                MODULE,
+                &ImportName::Name("XNetworkingQueryPreferredLocalUdpMultiplayerPort".to_owned()),
+            )
+            .unwrap();
+        (descriptor.handler)(&Win64Args::new(&cpu), &mut cpu, memory).unwrap()
+    }
+
+    #[test]
+    fn preferred_udp_port_is_the_fixed_loopback_default_and_writes_two_bytes() {
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x1000, 0x1000, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        memory.write_bytes(0x1200, &[0xaa; 8]).unwrap();
+
+        assert_eq!(call_preferred_port(&mut memory, 0x1200), 0);
+        assert_eq!(memory.read_u16(0x1200).unwrap(), 3074);
+        let mut tail = [0; 6];
+        memory.read_bytes(0x1202, &mut tail).unwrap();
+        assert_eq!(tail, [0xaa; 6]);
+    }
+
+    #[test]
+    fn preferred_udp_port_rejects_invalid_output_without_writing() {
+        let mut memory = GuestMemory::new();
+        memory
+            .map_region(0x1000, 0x1000, MemoryPermissions::READ_WRITE)
+            .unwrap();
+        memory.write_bytes(0x1200, &[0xaa; 8]).unwrap();
+
+        assert_eq!(call_preferred_port(&mut memory, 0), 0x8007_0057);
+        assert_eq!(call_preferred_port(&mut memory, 0x5000), 0x8007_0057);
+        assert_eq!(call_preferred_port(&mut memory, 0x1fff), 0x8007_0057);
+        let mut unchanged = [0; 8];
+        memory.read_bytes(0x1200, &mut unchanged).unwrap();
+        assert_eq!(unchanged, [0xaa; 8]);
     }
 
     #[test]
