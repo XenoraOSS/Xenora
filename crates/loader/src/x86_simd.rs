@@ -331,6 +331,150 @@ pub(crate) fn packed(op: Op, a: u128, b: u128) -> u128 {
     }
 }
 
+/// AES field multiplication in GF(2^8), with the AES polynomial x^8+x^4+x^3+x+1.
+fn aes_mul(mut a: u8, mut b: u8) -> u8 {
+    let mut product = 0;
+    for _ in 0..8 {
+        if b & 1 != 0 {
+            product ^= a;
+        }
+        b >>= 1;
+        a = (a << 1) ^ (if a & 0x80 != 0 { 0x1B } else { 0 });
+    }
+    product
+}
+
+/// Multiplicative inverse in the AES field. Zero maps to zero, as FIPS 197's
+/// S-box definition does.
+fn aes_inverse(value: u8) -> u8 {
+    if value == 0 {
+        return 0;
+    }
+    let mut result = 1;
+    let mut base = value;
+    let mut exponent = 254;
+    while exponent != 0 {
+        if exponent & 1 != 0 {
+            result = aes_mul(result, base);
+        }
+        base = aes_mul(base, base);
+        exponent >>= 1;
+    }
+    result
+}
+
+/// FIPS 197 SubBytes transformation: invert in GF(2^8), then apply the affine
+/// transform. The inverse table is derived by search, never copied in.
+fn aes_sbox(value: u8) -> u8 {
+    let inverse = aes_inverse(value);
+    inverse
+        ^ inverse.rotate_left(1)
+        ^ inverse.rotate_left(2)
+        ^ inverse.rotate_left(3)
+        ^ inverse.rotate_left(4)
+        ^ 0x63
+}
+
+fn aes_inverse_sbox(value: u8) -> u8 {
+    (0..=u8::MAX)
+        .find(|&candidate| aes_sbox(candidate) == value)
+        .expect("every AES byte has an S-box preimage")
+}
+
+/// The 16 bytes are a column-major 4x4 state. Row r moves r columns left on
+/// ShiftRows and right on InvShiftRows.
+fn aes_shift_rows(state: [u8; 16], inverse: bool) -> [u8; 16] {
+    let mut out = [0; 16];
+    for row in 0..4 {
+        for column in 0..4 {
+            let from = (column + if inverse { 4 - row } else { row }) % 4;
+            out[row + 4 * column] = state[row + 4 * from];
+        }
+    }
+    out
+}
+
+fn aes_sub_bytes(state: [u8; 16], inverse: bool) -> [u8; 16] {
+    let mut out = state;
+    for byte in &mut out {
+        *byte = if inverse {
+            aes_inverse_sbox(*byte)
+        } else {
+            aes_sbox(*byte)
+        };
+    }
+    out
+}
+
+fn aes_mix_columns(state: [u8; 16], inverse: bool) -> [u8; 16] {
+    // Rows of the forward and inverse column matrices, where 1, 2 and 3 are
+    // field elements and 9, 11, 13 and 14 come from the inverse polynomial.
+    const FORWARD: [[u8; 4]; 4] = [[2, 3, 1, 1], [1, 2, 3, 1], [1, 1, 2, 3], [3, 1, 1, 2]];
+    const INVERSE: [[u8; 4]; 4] = [
+        [14, 11, 13, 9],
+        [9, 14, 11, 13],
+        [13, 9, 14, 11],
+        [11, 13, 9, 14],
+    ];
+    let matrix = if inverse { INVERSE } else { FORWARD };
+    let mut out = [0; 16];
+    for column in 0..4 {
+        for row in 0..4 {
+            let mut value = 0;
+            for index in 0..4 {
+                value ^= aes_mul(matrix[row][index], state[4 * column + index]);
+            }
+            out[4 * column + row] = value;
+        }
+    }
+    out
+}
+
+/// AESENC and AESDEC and their last-round forms, in the SDM's operation order.
+fn aes_round(op: Op, state: u128, round_key: u128) -> u128 {
+    let inverse = matches!(op, Op::Aesdec | Op::Aesdeclast);
+    let mut bytes = aes_shift_rows(state.to_le_bytes(), inverse);
+    bytes = aes_sub_bytes(bytes, inverse);
+    if matches!(op, Op::Aesenc | Op::Aesdec) {
+        bytes = aes_mix_columns(bytes, inverse);
+    }
+    let key = round_key.to_le_bytes();
+    for (byte, key_byte) in bytes.iter_mut().zip(&key) {
+        *byte ^= key_byte;
+    }
+    u128::from_le_bytes(bytes)
+}
+
+/// AESKEYGENASSIST takes X1 and X3 from the source, as the SDM names them.
+fn aes_keygen_assist(source: u128, imm: u64) -> u128 {
+    let source = source.to_le_bytes();
+    let x1: [u8; 4] = source[4..8].try_into().expect("four bytes");
+    let x3: [u8; 4] = source[12..16].try_into().expect("four bytes");
+    let sub_word = |word: [u8; 4]| word.map(aes_sbox);
+    let rot_word = |word: [u8; 4]| [word[1], word[2], word[3], word[0]];
+    let rcon = [imm as u8, 0, 0, 0];
+    let mut out = [0; 16];
+    out[..4].copy_from_slice(&sub_word(x1));
+    for (at, (value, constant)) in rot_word(sub_word(x1)).iter().zip(&rcon).enumerate() {
+        out[4 + at] = value ^ constant;
+    }
+    out[8..12].copy_from_slice(&sub_word(x3));
+    for (at, (value, constant)) in rot_word(sub_word(x3)).iter().zip(&rcon).enumerate() {
+        out[12 + at] = value ^ constant;
+    }
+    u128::from_le_bytes(out)
+}
+
+/// Result of an AES-NI operation. No AES form reads or writes RFLAGS.
+pub(crate) fn aes(op: Op, old: u128, source: u128, imm: u64) -> u128 {
+    match op {
+        Op::Aesenc | Op::Aesenclast | Op::Aesdec | Op::Aesdeclast => aes_round(op, old, source),
+        Op::Aesimc => u128::from_le_bytes(aes_mix_columns(source.to_le_bytes(), true)),
+        Op::Aeskeygenassist => aes_keygen_assist(source, imm),
+        _ => unreachable!("not an AES operation"),
+    }
+}
+
 /// Result of a shuffle, blend or similar operation controlled by an immediate.
 pub(crate) fn controlled(op: Op, old: u128, source: u128, imm: u64) -> u128 {
     match op {
@@ -612,6 +756,17 @@ pub(crate) fn execute_legacy(
                 let target = &mut cpu.xmm[xmm(target)];
                 *target = shift_by(insn.op, *target, insn.imm);
             }
+        }
+        (Op::Aeskeygenassist, Encoding::XmmRmImm) => {
+            let source = read_rm(cpu, memory, insn)?;
+            cpu.xmm[reg] = aes(insn.op, cpu.xmm[reg], source, insn.imm);
+        }
+        (
+            Op::Aesenc | Op::Aesenclast | Op::Aesdec | Op::Aesdeclast | Op::Aesimc,
+            Encoding::XmmRm,
+        ) => {
+            let source = read_rm(cpu, memory, insn)?;
+            cpu.xmm[reg] = aes(insn.op, cpu.xmm[reg], source, 0);
         }
         (_, Encoding::XmmRmImm) => {
             let source = read_rm(cpu, memory, insn)?;

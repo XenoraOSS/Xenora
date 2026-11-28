@@ -206,6 +206,11 @@ def vector_cases():
     for op in """pmuldq pcmpeqq pcmpgtq packusdw pminsb pminsd pminuw pminud pmaxsb pmaxsd pmaxuw pmaxud pmulld
             phminposuw ptest""".split():
         out += [f"{op} xmm3, xmm9", f"{op} xmm10, {wide}", f"{op} xmm2, xmm2"]
+    for op in "aesenc aesenclast aesdec aesdeclast aesimc".split():
+        out += [f"{op} xmm3, xmm9", f"{op} xmm10, {wide}", f"{op} xmm2, xmm2"]
+    for n in (0, 1, 2, 4, 8, 16, 32, 64, 90, 128, 165, 255):
+        out += [f"aeskeygenassist xmm3, xmm9, {n}", f"aeskeygenassist xmm10, {wide}, {n}",
+                f"aeskeygenassist xmm2, xmm2, {n}"]
     # XMM0 selects; it may also be the source or the destination.
     for op in "pblendvb blendvps blendvpd".split():
         out += [f"{op} xmm3, xmm9, xmm0", f"{op} xmm10, {wide}, xmm0", f"{op} xmm2, xmm0, xmm0",

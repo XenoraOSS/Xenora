@@ -479,6 +479,57 @@ f2 0f 70 d2 39 | pshuflw xmm2, xmm2, 57
 66 41 0f 38 17 d9 | ptest xmm3, xmm9
 66 44 0f 38 17 54 be 10 | ptest xmm10, xmmword ptr [rsi + 4*rdi + 16]
 66 0f 38 17 d2 | ptest xmm2, xmm2
+66 41 0f 38 dc d9 | aesenc xmm3, xmm9
+66 44 0f 38 dc 54 be 10 | aesenc xmm10, xmmword ptr [rsi + 4*rdi + 16]
+66 0f 38 dc d2 | aesenc xmm2, xmm2
+66 41 0f 38 dd d9 | aesenclast xmm3, xmm9
+66 44 0f 38 dd 54 be 10 | aesenclast xmm10, xmmword ptr [rsi + 4*rdi + 16]
+66 0f 38 dd d2 | aesenclast xmm2, xmm2
+66 41 0f 38 de d9 | aesdec xmm3, xmm9
+66 44 0f 38 de 54 be 10 | aesdec xmm10, xmmword ptr [rsi + 4*rdi + 16]
+66 0f 38 de d2 | aesdec xmm2, xmm2
+66 41 0f 38 df d9 | aesdeclast xmm3, xmm9
+66 44 0f 38 df 54 be 10 | aesdeclast xmm10, xmmword ptr [rsi + 4*rdi + 16]
+66 0f 38 df d2 | aesdeclast xmm2, xmm2
+66 41 0f 38 db d9 | aesimc xmm3, xmm9
+66 44 0f 38 db 54 be 10 | aesimc xmm10, xmmword ptr [rsi + 4*rdi + 16]
+66 0f 38 db d2 | aesimc xmm2, xmm2
+66 41 0f 3a df d9 00 | aeskeygenassist xmm3, xmm9, 0
+66 44 0f 3a df 54 be 10 00 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 0
+66 0f 3a df d2 00 | aeskeygenassist xmm2, xmm2, 0
+66 41 0f 3a df d9 01 | aeskeygenassist xmm3, xmm9, 1
+66 44 0f 3a df 54 be 10 01 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 1
+66 0f 3a df d2 01 | aeskeygenassist xmm2, xmm2, 1
+66 41 0f 3a df d9 02 | aeskeygenassist xmm3, xmm9, 2
+66 44 0f 3a df 54 be 10 02 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 2
+66 0f 3a df d2 02 | aeskeygenassist xmm2, xmm2, 2
+66 41 0f 3a df d9 04 | aeskeygenassist xmm3, xmm9, 4
+66 44 0f 3a df 54 be 10 04 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 4
+66 0f 3a df d2 04 | aeskeygenassist xmm2, xmm2, 4
+66 41 0f 3a df d9 08 | aeskeygenassist xmm3, xmm9, 8
+66 44 0f 3a df 54 be 10 08 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 8
+66 0f 3a df d2 08 | aeskeygenassist xmm2, xmm2, 8
+66 41 0f 3a df d9 10 | aeskeygenassist xmm3, xmm9, 16
+66 44 0f 3a df 54 be 10 10 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 16
+66 0f 3a df d2 10 | aeskeygenassist xmm2, xmm2, 16
+66 41 0f 3a df d9 20 | aeskeygenassist xmm3, xmm9, 32
+66 44 0f 3a df 54 be 10 20 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 32
+66 0f 3a df d2 20 | aeskeygenassist xmm2, xmm2, 32
+66 41 0f 3a df d9 40 | aeskeygenassist xmm3, xmm9, 64
+66 44 0f 3a df 54 be 10 40 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 64
+66 0f 3a df d2 40 | aeskeygenassist xmm2, xmm2, 64
+66 41 0f 3a df d9 5a | aeskeygenassist xmm3, xmm9, 90
+66 44 0f 3a df 54 be 10 5a | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 90
+66 0f 3a df d2 5a | aeskeygenassist xmm2, xmm2, 90
+66 41 0f 3a df d9 80 | aeskeygenassist xmm3, xmm9, 128
+66 44 0f 3a df 54 be 10 80 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 128
+66 0f 3a df d2 80 | aeskeygenassist xmm2, xmm2, 128
+66 41 0f 3a df d9 a5 | aeskeygenassist xmm3, xmm9, 165
+66 44 0f 3a df 54 be 10 a5 | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 165
+66 0f 3a df d2 a5 | aeskeygenassist xmm2, xmm2, 165
+66 41 0f 3a df d9 ff | aeskeygenassist xmm3, xmm9, 255
+66 44 0f 3a df 54 be 10 ff | aeskeygenassist xmm10, xmmword ptr [rsi + 4*rdi + 16], 255
+66 0f 3a df d2 ff | aeskeygenassist xmm2, xmm2, 255
 66 41 0f 38 10 d9 | pblendvb xmm3, xmm9, xmm0
 66 44 0f 38 10 54 be 10 | pblendvb xmm10, xmmword ptr [rsi + 4*rdi + 16], xmm0
 66 0f 38 10 d0 | pblendvb xmm2, xmm0, xmm0
