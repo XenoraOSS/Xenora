@@ -170,6 +170,8 @@ impl CpuState {
     }
 }
 
+/// CPUID leaf 1, EDX: the time-stamp counter and RDTSC.
+pub const CPUID_TSC: u32 = 1 << 4;
 /// CPUID leaf 1, EDX: CMPXCHG8B.
 pub const CPUID_CX8: u32 = 1 << 8;
 /// CPUID leaf 1, EDX: CMOVcc.
@@ -201,7 +203,7 @@ pub fn cpuid(leaf: u32, _subleaf: u32) -> [u32; 4] {
             0,
             0,
             CPUID_CMPXCHG16B | CPUID_POPCNT,
-            CPUID_CX8 | CPUID_CMOV,
+            CPUID_TSC | CPUID_CX8 | CPUID_CMOV,
         ],
         // Highest extended leaf.
         0x8000_0000 => [0x8000_0001, 0, 0, 0],

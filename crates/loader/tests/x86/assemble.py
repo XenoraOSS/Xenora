@@ -139,7 +139,7 @@ def cases():
     out += ["mov ah, bl", "mov dl, ch", "mov bh, 0x21", "xchg ah, bl", "mov sil, dil",
             "movabs r15, 0x8877665544332211", "mov rcx, -2", "bswap ebx", "bswap r9",
             "cbw", "cwde", "cdqe", "cwd", "cdq", "cqo", "clc", "stc", "cmc", "lahf", "sahf",
-            "nop", "cpuid", "nop dword ptr [rax + 8]", "pause", "lfence", "mfence", "sfence", "fninit",
+            "nop", "cpuid", "rdtsc", "nop dword ptr [rax + 8]", "pause", "lfence", "mfence", "sfence", "fninit",
             f"movnti {mem(32)}, ebx", f"movnti {mem(64)}, rbx",
             f"movnti {mem(32)}, r9d", f"movnti {mem(64)}, r14", "push r9", "push rbx", "push -5", "push 0x12345678",
             f"push {mem(64)}", "pop rbx", "pop r12", f"pop {mem(64)}", "leave"]
