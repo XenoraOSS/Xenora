@@ -86,6 +86,10 @@ successful exit. **Cancel session** ends an active session without confirming
 completion. The app uses the bundled ARM64 `xenora-pe-session` runner and
 the deterministic guest clock by default.
 
+The status and any displayed frame identify the executable path and supplied
+SHA-256 from that run. These labels stay with the result when you edit the
+setup for the next run.
+
 ## Guest contract
 
 Link against the Win64 C ABI from `xenora-session-v1.dll`. The

@@ -89,9 +89,23 @@ struct AuthoredPESessionView: View {
                     .disabled(!acceptingInput || inputValue == nil)
             }
 
-            Text(model.statusText)
-                .font(.callout)
-                .textSelection(.enabled)
+            if let root = model.launchRoot {
+                LabeledContent("Run executable") {
+                    Text(verbatim: root.url.path)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .help(root.url.path)
+                        .textSelection(.enabled)
+                }
+                LabeledContent("Supplied SHA-256") {
+                    Text(verbatim: root.sha256)
+                        .font(.caption.monospaced())
+                        .textSelection(.enabled)
+                }
+                Text(model.statusText)
+                    .font(.callout)
+                    .textSelection(.enabled)
+            }
             if let frame = model.frame {
                 if let image = frame.image {
                     Image(decorative: image, scale: 1)

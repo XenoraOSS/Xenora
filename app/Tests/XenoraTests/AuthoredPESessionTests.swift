@@ -86,8 +86,13 @@ struct AuthoredPESessionTests {
             """)
         defer { try? FileManager.default.removeItem(at: worker.deletingLastPathComponent()) }
         let model = AuthoredPESessionModel(executable: worker)
-        model.start(configuration())
+        let first = configuration()
+        let next = configuration(path: "/tmp/other/original.exe", digest: String(repeating: "BC", count: 32))
+        #expect(model.launchRoot == nil)
+        model.start(first)
         try await wait(for: .ready, in: model)
+        model.start(next)
+        #expect(model.launchRoot == first.executable)
         model.send(UInt32.max)
         model.send(8)
         try await wait(for: .ready, in: model)
@@ -95,6 +100,16 @@ struct AuthoredPESessionTests {
         #expect(model.frame?.rgba == Data([255, 0, 0, 255]))
         model.finish()
         try await wait(for: .finished, in: model)
+        #expect(model.launchRoot == first.executable)
+        #expect(model.frame?.sha256 == redDigest)
+
+        model.start(next)
+        #expect(model.launchRoot == next.executable)
+        #expect(model.frame == nil && model.frames == 0)
+        try await wait(for: .ready, in: model)
+        model.cancel()
+        try await wait(for: .cancelled, in: model)
+        #expect(model.launchRoot == next.executable)
     }
 
     @Test func processStatusAndCompleteTranscriptBothMatter() async throws {
@@ -205,10 +220,12 @@ struct AuthoredPESessionTests {
     }
 
     @Test func launchAndDiagnosticFailuresAreReported() async throws {
+        let first = configuration()
         let missing = AuthoredPESessionModel(executable: URL(fileURLWithPath: "/nonexistent/xenora-pe-session"))
-        missing.start(configuration())
+        missing.start(first)
         #expect(missing.phase == .failed)
         #expect(!missing.statusText.isEmpty)
+        #expect(missing.launchRoot == first.executable)
 
         let worker = try sample("""
             printf 'digest rejected\\n' >&2
@@ -217,10 +234,13 @@ struct AuthoredPESessionTests {
             """)
         defer { try? FileManager.default.removeItem(at: worker.deletingLastPathComponent()) }
         let model = AuthoredPESessionModel(executable: worker)
-        model.start(configuration())
+        let rejected = configuration(path: "/tmp/rejected.exe")
+        model.start(rejected)
         try await wait(for: .failed, in: model)
         #expect(model.statusText.hasPrefix("digest rejected"))
         #expect(model.statusText.hasSuffix("Session diagnostics were truncated."))
+        #expect(model.launchRoot == rejected.executable)
+        #expect(model.frame == nil)
     }
 
     @Test func aClosedWorkerInputReportsAWriteFailure() async throws {
@@ -238,11 +258,10 @@ struct AuthoredPESessionTests {
         #expect(model.statusText == "Could not write the session input.")
     }
 
-    private func configuration() -> AuthoredPESessionConfiguration {
+    private func configuration(path: String = "/tmp/original.exe",
+                               digest: String = String(repeating: "a", count: 64)) -> AuthoredPESessionConfiguration {
         AuthoredPESessionConfiguration(
-            executable: AuthoredPESessionImage(
-                url: URL(fileURLWithPath: "/tmp/original.exe"), sha256: String(repeating: "a", count: 64)
-            ),
+            executable: AuthoredPESessionImage(url: URL(fileURLWithPath: path), sha256: digest),
             companions: [],
             backend: .reference
         )
