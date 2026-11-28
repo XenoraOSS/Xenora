@@ -1009,6 +1009,26 @@ fn startup_report_keeps_the_admission_failure_outside_the_loader_stages() {
 }
 
 #[test]
+fn standalone_dll_is_rejected_during_admission_even_with_exe_suffix() {
+    let dll = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/pe/package-scene/xenora_scene.dll");
+    let disguised = scratch("dll-root.exe");
+    std::fs::copy(dll, &disguised).unwrap();
+    let run = run_program(&disguised, &["--startup-report"], &[]);
+    std::fs::remove_file(disguised).unwrap();
+
+    assert_eq!(run.code, Some(125), "{}", run.stderr);
+    assert!(run.stdout.is_empty(), "{}", run.stdout);
+    assert_eq!(
+        startup_report(&run),
+        concat!(
+            r#"{"schema_version":1,"events":[],"last_completed_stage":null,"protocol":"complete","outcome":"#,
+            r#"{"kind":"known_failure","phase":"admission","message":"execution denied: program root must be a PE executable","message_truncated":false,"worker_code":125}}"#,
+        )
+    );
+}
+
+#[test]
 #[ignore = "requires native Metal; run with API and shader validation enabled"]
 fn startup_report_ends_in_verified_metal_frame() {
     let path = fixture("trusted-runner");

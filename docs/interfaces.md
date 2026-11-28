@@ -253,6 +253,10 @@ budget as the arena limit. The tested package is an original no-CRT executable
 with two dependent provider DLLs built by the native ARM64 toolchain; console
 compatibility and game execution are not claimed.
 
+In both standalone and package runs, the runner checks the PE header of the
+admitted root snapshot. A DLL root fails admission before any guest startup,
+regardless of its file suffix.
+
 A separate closed-world provisioned module store admits immutable PE32+ images
 under bounded, printable logical names. Host callers populate it before
 execution; guest strings are never converted to host paths. Admission rejects

@@ -197,6 +197,34 @@ fn a_dll_exiting_before_root_entry_is_a_guest_exit_not_a_protocol_error() {
 }
 
 #[test]
+fn dll_root_is_rejected_before_package_initializers() {
+    // Used as a valid companion above, this DLL exits 33 during its attach.
+    // If selected as the program root, it must never have that opportunity.
+    let output = run(&[
+        "--experimental",
+        "--startup-report",
+        "--pe",
+        name(&fixture("exiting/xenora_chain.dll")),
+        "--package",
+        name(&fixture("xenora_math.dll")),
+    ]);
+    assert_eq!(
+        output.status.code(),
+        Some(125),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        startup_report(&output.stderr),
+        concat!(
+            r#"xenora-startup {"schema_version":1,"events":[],"last_completed_stage":null,"protocol":"complete","outcome":"#,
+            r#"{"kind":"known_failure","phase":"admission","message":"execution denied: program root must be a PE executable","message_truncated":false,"worker_code":125}}"#,
+        )
+    );
+}
+
+#[test]
 fn a_post_entry_stop_reports_the_entry_boundary_before_execution_failure() {
     let output = run(&[
         "--experimental",
