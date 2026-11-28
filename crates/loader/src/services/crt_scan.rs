@@ -53,8 +53,8 @@
 //! - a `%c` field that the input ends inside, after its first character;
 //! - in the secure forms, a field that does not fit its buffer: Microsoft
 //!   says only that "nothing is written to the buffer";
-//! - wide conversions (`C`, `S`, `lc`, `ls`, `l[`), which narrow `scanf`
-//!   would have to convert through a locale;
+//! - non-ASCII bytes converted to a wide destination. The supported C-locale
+//!   subset stores one 16-bit wide unit per ASCII input byte;
 //! - an input item longer than 1 MiB.
 //!
 //! The NaN payload of `nan(...)` is not kept: the result is the default
@@ -513,11 +513,9 @@ fn convert<S: Source, T: Target>(
             target.store(address, value.to_le_bytes()[..bytes].to_vec());
             Ok(Ok(NO_CONVERSION))
         }
-        b'c' | b's' | b'[' => characters(reader, target, spec, secure),
+        b'c' | b'C' | b's' | b'S' | b'[' => characters(reader, target, spec, secure),
         b'd' | b'i' | b'u' | b'o' | b'x' | b'X' | b'p' => integer(reader, target, spec),
         b'a' | b'A' | b'e' | b'E' | b'f' | b'F' | b'g' | b'G' => floating(reader, target, spec),
-        // `C` and `S` are wide in the narrow functions, and anything else
-        // has no meaning.
         _ => Err(ScanError::Unsupported),
     }
 }
@@ -528,19 +526,33 @@ fn characters<S: Source, T: Target>(
     spec: &Spec,
     secure: bool,
 ) -> Result<Result<Done, Failure>, ScanError> {
-    // `h` is "single-byte"; `l` is wide; other sizes have no meaning here.
-    if !matches!(spec.size, Size::Default | Size::Short) {
-        return Err(ScanError::Unsupported);
-    }
+    // The case supplies the default width, while h or l overrides it.
+    let wide = match spec.size {
+        Size::Default => matches!(spec.kind, b'C' | b'S'),
+        Size::Short => false,
+        Size::Long => true,
+        _ => return Err(ScanError::Unsupported),
+    };
+    let kind = spec.kind.to_ascii_lowercase();
     let destination = if spec.suppress {
         None
     } else {
         Some(character_destination(target, secure)?)
     };
     let mut bytes = Vec::new();
-    let keep = destination.is_some();
-    let terminated = spec.kind != b'c';
-    match spec.kind {
+    let mut collect = |byte: u8| {
+        // This is the basic C-locale range accepted by the CRT mbrtowc
+        // service. Other locales and non-ASCII wide conversions are refused.
+        if wide && !byte.is_ascii() {
+            return Err(ScanError::Unsupported);
+        }
+        if destination.is_some() {
+            bytes.push(byte);
+        }
+        Ok(())
+    };
+    let terminated = kind != b'c';
+    match kind {
         b'c' => {
             // "The width indicates the exact number of characters", one by
             // default, with no terminator.
@@ -552,9 +564,7 @@ fn characters<S: Source, T: Target>(
             }
             let mut field = reader.field(Some(width));
             while let Some(byte) = field.take_if(|_| true)? {
-                if keep {
-                    bytes.push(byte);
-                }
+                collect(byte)?;
             }
             if field.length < width {
                 if field.length == 0 {
@@ -567,9 +577,7 @@ fn characters<S: Source, T: Target>(
             reader.skip_space()?;
             let mut field = reader.field(spec.width);
             while let Some(byte) = field.take_if(|byte| !is_space(byte))? {
-                if keep {
-                    bytes.push(byte);
-                }
+                collect(byte)?;
             }
             if field.length == 0 {
                 return Ok(Err(field.failure()));
@@ -579,9 +587,7 @@ fn characters<S: Source, T: Target>(
             let set = spec.set.as_deref().expect("a scanset");
             let mut field = reader.field(spec.width);
             while let Some(byte) = field.take_if(|byte| set[usize::from(byte)])? {
-                if keep {
-                    bytes.push(byte);
-                }
+                collect(byte)?;
             }
             if field.length == 0 {
                 return Ok(Err(field.failure()));
@@ -597,7 +603,15 @@ fn characters<S: Source, T: Target>(
     if size.is_some_and(|size| bytes.len() as u64 > size) {
         return Err(ScanError::Unsupported);
     }
-    target.store(address, bytes);
+    if wide {
+        let wide_bytes = bytes
+            .into_iter()
+            .flat_map(|byte| u16::from(byte).to_le_bytes())
+            .collect();
+        target.store(address, wide_bytes);
+    } else {
+        target.store(address, bytes);
+    }
     Ok(Ok(CONVERTED))
 }
 
@@ -1715,11 +1729,11 @@ mod tests {
             ("%", "1"),
             ("%[abc", "a"),
             ("%[a-c-e]", "a"),
-            ("%lc", "a"),
-            ("%ls", "a"),
-            ("%l[a]", "a"),
-            ("%C", "a"),
-            ("%S", "a"),
+            ("%lc", "é"),
+            ("%ls", "é"),
+            ("%ll[a]", "a"),
+            ("%hhC", "a"),
+            ("%llS", "a"),
             ("%hhc", "a"),
             ("%Ld", "1"),
             ("%hf", "1"),
