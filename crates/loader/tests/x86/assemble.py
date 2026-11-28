@@ -188,6 +188,9 @@ def vector_cases():
         out += [f"{op} xmm10, {wide}, 114", f"{op} xmm2, xmm2, 57"]
     for n in (0, 1, 5, 15, 16, 17, 31, 32, 255):
         out += [f"palignr xmm3, xmm9, {n}", f"palignr xmm10, {wide}, {n}", f"palignr xmm2, xmm2, {n}"]
+    for n in (0, 1, 4, 5):
+        out += [f"pclmulqdq xmm3, xmm9, {n}", f"pclmulqdq xmm10, {wide}, {n}",
+                f"pclmulqdq xmm2, xmm2, {n}"]
     for op in """pmuldq pcmpeqq pcmpgtq packusdw pminsb pminsd pminuw pminud pmaxsb pmaxsd pmaxuw pmaxud pmulld
             phminposuw ptest""".split():
         out += [f"{op} xmm3, xmm9", f"{op} xmm10, {wide}", f"{op} xmm2, xmm2"]

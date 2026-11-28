@@ -249,13 +249,15 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("SSE", 1, EDX, 25, &[0x0F, 0x52, 0xC1]),        // rsqrtps xmm0, xmm1
         ("SSE2", 1, EDX, 26, &[0x66, 0x0F, 0xF7, 0xC1]), // maskmovdqu xmm0, xmm1
         ("SSE3", 1, ECX, 0, &[0xF2, 0x0F, 0x7C, 0xC1]),  // haddps xmm0, xmm1
+        // All four defined selector pairs are implemented; imm8 bit 3 is
+        // reserved and remains refused, so it is the witness.
         (
             "PCLMULQDQ",
             1,
             ECX,
             1,
-            &[0x66, 0x0F, 0x3A, 0x44, 0xC1, 0x00],
-        ), // pclmulqdq xmm0, xmm1, 0
+            &[0x66, 0x0F, 0x3A, 0x44, 0xC1, 0x08],
+        ), // reserved pclmulqdq selector
         ("SSSE3", 1, ECX, 9, &[0x0F, 0x38, 0x00, 0xC1]), // pshufb mm0, mm1
         ("MOVBE", 1, ECX, 22, &[0x0F, 0x38, 0xF0, 0x06]), // movbe eax, [rsi]
         ("AESNI", 1, ECX, 25, &[0x66, 0x0F, 0x38, 0xDC, 0xC1]), // aesenc xmm0, xmm1

@@ -258,6 +258,7 @@ pabsb = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 pabsw = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 pabsd = { ref = "sdm PABSB/PABSW/PABSD/PABSQ" }
 palignr = { ref = "sdm PALIGNR" }
+pclmulqdq = { ref = "sdm PCLMULQDQ" }
 # SSE4.1, integer. PTEST writes ZF and CF and clears the other four.
 pblendvb = { ref = "sdm PBLENDVB" }
 ptest = { writes = "cf zf sf of pf af", ref = "sdm PTEST" }
@@ -1278,6 +1279,19 @@ op = "palignr"
 map = "0f3a"
 prefix = "66"
 opcode = 0x0F
+enc = "xmm_rm_imm"
+size = "x"
+src = "x"
+imm = "ub"
+
+# PCLMULQDQ has no VEX form. imm8[1:0] and imm8[3:2] select the low or high
+# qword of the destination and source; the remaining bits are reserved and are
+# rejected by the executor rather than silently masked.
+[[form]]
+op = "pclmulqdq"
+map = "0f3a"
+prefix = "66"
+opcode = 0x44
 enc = "xmm_rm_imm"
 size = "x"
 src = "x"

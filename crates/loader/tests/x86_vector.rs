@@ -229,6 +229,83 @@ fn aligned_operands_fault_and_unaligned_operands_do_not() {
 }
 
 #[test]
+fn pclmulqdq_known_products_match_selected_qwords() {
+    let all = cases();
+    // Text, destination low/high qwords, source low/high qwords, expected
+    // product low/high qwords. The highest qword values exercise a high
+    // 128-bit product; the all-ones pair exercises carry-less bit propagation.
+    let checks: &[(&str, u64, u64, u64, u64, u64, u64)] = &[
+        // Zero, one and all-ones operands, all with the low/low selector.
+        ("pclmulqdq xmm3, xmm9, 0", 0, 0, u64::MAX, 0, 0, 0),
+        ("pclmulqdq xmm3, xmm9, 0", 1, 0, u64::MAX, 0, u64::MAX, 0),
+        (
+            "pclmulqdq xmm3, xmm9, 0",
+            u64::MAX,
+            0,
+            u64::MAX,
+            0,
+            0x5555_5555_5555_5555,
+            0x5555_5555_5555_5555,
+        ),
+        // Sparse operands: 3 * 3 without carries is 5, and the highest set
+        // bit of a qword shifts that product into bit 63 of the low result.
+        ("pclmulqdq xmm3, xmm9, 0", 3, 0, 3, 0, 5, 0),
+        ("pclmulqdq xmm3, xmm9, 1", 0, 1 << 63, 3, 0, 1 << 63, 1),
+        ("pclmulqdq xmm3, xmm9, 4", 3, 0, 0, 3, 5, 0),
+        ("pclmulqdq xmm3, xmm9, 5", 0, 1 << 63, 0, 3, 1 << 63, 1),
+    ];
+    for &(text, a_low, a_high, b_low, b_high, low, high) in checks {
+        let case = all
+            .iter()
+            .find(|case| case.text == text)
+            .unwrap_or_else(|| panic!("missing fixture {text}"));
+        let mut machine = Random(31).machine();
+        machine.xmm[3][..8].copy_from_slice(&a_low.to_le_bytes());
+        machine.xmm[3][8..].copy_from_slice(&a_high.to_le_bytes());
+        machine.xmm[9][..8].copy_from_slice(&b_low.to_le_bytes());
+        machine.xmm[9][8..].copy_from_slice(&b_high.to_le_bytes());
+        let (cpu, _) = load(&machine, &case.code, MemoryPermissions::READ_WRITE);
+        let mut expected = cpu;
+        expected.rip += case.code.len() as u64;
+        let mut product = [0; 16];
+        product[..8].copy_from_slice(&low.to_le_bytes());
+        product[8..].copy_from_slice(&high.to_le_bytes());
+        expected.xmm[3] = u128::from_le_bytes(product);
+        for native in [false, true] {
+            let (_, mut memory) = load(&machine, &case.code, MemoryPermissions::READ_WRITE);
+            let result = run(native, &cpu, &mut memory, 1);
+            assert_eq!(result.exit_reason, ExitReason::StepLimitExceeded, "{text}");
+            assert_eq!(result.final_state, expected, "{text} native={native}");
+        }
+    }
+}
+
+#[test]
+fn reserved_pclmulqdq_immediates_are_refused() {
+    let case = cases()
+        .into_iter()
+        .find(|case| case.text == "pclmulqdq xmm3, xmm9, 0")
+        .expect("fixture");
+    for imm in [0x02, 0x03, 0x06, 0x07, 0x08, 0x10, 0xFF] {
+        let mut code = case.code.clone();
+        *code.last_mut().unwrap() = imm;
+        let machine = Random(37).machine();
+        for native in [false, true] {
+            let (cpu, mut memory) = load(&machine, &code, MemoryPermissions::READ_WRITE);
+            let before = data(&memory);
+            let result = run(native, &cpu, &mut memory, 1);
+            assert!(
+                matches!(result.exit_reason, ExitReason::IllegalInstruction(_)),
+                "imm {imm:#04x}: {:?}",
+                result.exit_reason
+            );
+            assert_eq!(result.final_state, cpu, "imm {imm:#04x}");
+            assert_eq!(data(&memory), before, "imm {imm:#04x}");
+        }
+    }
+}
+
+#[test]
 fn faulting_vector_accesses_change_nothing() {
     for case in cases()
         .into_iter()
