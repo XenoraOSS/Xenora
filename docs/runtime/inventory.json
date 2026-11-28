@@ -14233,6 +14233,16 @@
       "symbol": "?bad@ios_base@std@@QEBA_NXZ"
     },
     {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?cout@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A"
+    },
+    {
       "data_import": false,
       "family": "other",
       "kind": "name",
@@ -20216,15 +20226,15 @@
   "summary": {
     "aliases": 961,
     "api_set_aliases": 755,
-    "canonical_services": 1004,
-    "data_import_services": 12,
+    "canonical_services": 1005,
+    "data_import_services": 13,
     "duplicate_registrations": 0,
     "implemented": 247,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 702,
+    "manual_services": 703,
     "ordinal_aliases": 35,
-    "partial": 757,
+    "partial": 758,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,

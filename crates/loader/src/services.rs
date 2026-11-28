@@ -913,7 +913,7 @@ pub fn register_standard_services(registry: &mut ImportRegistry, state: Arc<Serv
     registry.hooks = Some(Arc::clone(&state.hooks));
     threads::register(registry, &state);
     static_cxx::register(registry, &state);
-    msvc_stl::register(registry);
+    msvc_stl::register(registry, &state);
     msvc_stl::register_stream_buffer_pointers(registry, &state);
     msvc_stl::register_atomic_deadlines(registry, &state);
     crate::exceptions::register(registry);

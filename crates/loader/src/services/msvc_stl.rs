@@ -4,9 +4,11 @@
 //!
 //! The public Microsoft STL `stl/src/iostream.cpp` at commit
 //! `0cabaf3c7e0a73fe3040aabce40cd8833e80392b` defines the count and
-//! operations. Standard stream objects and their flushing are not implemented;
-//! the final destructor therefore stops instead of claiming to have flushed.
+//! operations. A separate bounded synthetic `std::cout` object is supplied
+//! below; the final destructor checks and flushes that one object. This is not
+//! a general Microsoft STL stream or locale implementation.
 
+use super::ServicesState;
 use crate::cpu::ExitReason;
 use crate::imports::{CallbackStart, CallbackStep, CallbackTask, ImportRegistry, ServiceStatus};
 use crate::memory::{GuestMemory, MemoryError, PROCESS_HEAP};
@@ -19,6 +21,12 @@ const CTOR: &str = "?_Init_ctor@Init@ios_base@std@@CAXPEAV123@@Z";
 const DTOR: &str = "?_Init_dtor@Init@ios_base@std@@CAXPEAV123@@Z";
 const PUBLIC_CTOR: &str = "??0Init@ios_base@std@@QEAA@XZ";
 const PUBLIC_DTOR: &str = "??1Init@ios_base@std@@QEAA@XZ";
+const COUT: &str = "?cout@std@@3V?$basic_ostream@DU?$char_traits@D@std@@@1@A";
+/// A guest object large enough for the documented x64 `ios_base` fields this
+/// slice reads. It is not a Microsoft STL object layout.
+const COUT_BYTES: usize = 128;
+/// Matches the CRT transfer bound used by the host stream services.
+const MAX_COUT_TRANSFER: u64 = 1 << 20;
 const LIMIT: ExitReason = ExitReason::IllegalInstruction(0xFE);
 
 fn count_address(slot: &mut Option<u64>, memory: &mut GuestMemory) -> Result<u64, ExitReason> {
@@ -35,7 +43,11 @@ fn count_address(slot: &mut Option<u64>, memory: &mut GuestMemory) -> Result<u64
     Ok(address)
 }
 
-pub(super) fn register(registry: &mut ImportRegistry) {
+pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
+    // The one synthesized standard output object, created when a guest binds
+    // the `std::cout` data import. No other standard stream is constructed.
+    let cout = Arc::new(Mutex::new(None));
+
     // Microsoft x64 locale::facet has a 32-bit reference count at offset 8.
     // Both calls share a lock so their guest-memory update is indivisible.
     let facet_lock = Arc::new(Mutex::new(()));
@@ -70,8 +82,8 @@ pub(super) fn register(registry: &mut ImportRegistry) {
         ServiceStatus::Partial,
         |args, _, _| Ok(args.rdx & 0xff),
     );
-    register_ostream_flush(registry);
-    register_ostream_write(registry);
+    register_ostream_flush(registry, state, Arc::clone(&cout));
+    register_ostream_write(registry, state, Arc::clone(&cout));
     // x64 ios_base stores its iostate after the vptr and _Stdstr. These
     // accessors inspect only that field; construction remains unsupported.
     for (symbol, mask, raw) in [
@@ -146,6 +158,22 @@ pub(super) fn register(registry: &mut ImportRegistry) {
             )
         },
     );
+    // A data import receives the address of the provider's guest cell. Here
+    // the cell is a small writable object whose state word the supported
+    // queries and methods read; no streambuf vtable or locale is synthesized.
+    let cout_data = Arc::clone(&cout);
+    registry.register_data(MODULE, COUT, ServiceStatus::Partial, move |memory| {
+        let mut slot = cout_data.lock().expect("Microsoft cout object");
+        if let Some(address) = *slot {
+            return Ok(address);
+        }
+        let address = memory.map_heap_allocation(PROCESS_HEAP, COUT_BYTES)?;
+        for index in 0..(COUT_BYTES / 8) {
+            memory.write_u64(address + (index as u64) * 8, 0)?;
+        }
+        *slot = Some(address);
+        Ok(address)
+    });
     for symbol in [CTOR, PUBLIC_CTOR] {
         let count = Arc::clone(&cell);
         registry.register_with_status(
@@ -170,6 +198,8 @@ pub(super) fn register(registry: &mut ImportRegistry) {
     }
     for symbol in [DTOR, PUBLIC_DTOR] {
         let count = Arc::clone(&cell);
+        let cout = Arc::clone(&cout);
+        let state = Arc::clone(state);
         registry.register_with_status(
             MODULE,
             symbol,
@@ -183,12 +213,81 @@ pub(super) fn register(registry: &mut ImportRegistry) {
                     .write_u32(address, new as u32)
                     .map_err(ExitReason::MemoryFault)?;
                 if new == 0 {
-                    return Err(LIMIT);
+                    // The last initializer flushes std::cout before returning.
+                    // Our one stream writes straight through, so the flush
+                    // checks the live object and the CRT stream but holds no
+                    // buffered bytes.
+                    flush_cout(&state, memory, &cout)?;
                 }
                 Ok(0)
             },
         );
     }
+}
+
+/// Validate and flush the one synthesized standard output stream. No bytes
+/// are buffered by this slice, so the CRT flush is a check, not a transfer.
+fn flush_cout(
+    state: &ServicesState,
+    memory: &mut GuestMemory,
+    cout: &Mutex<Option<u64>>,
+) -> Result<(), ExitReason> {
+    let Some(object) = *cout.lock().expect("Microsoft cout object") else {
+        return Ok(());
+    };
+    // The state word must still belong to the live object.
+    memory
+        .read_u32(field(object, 16)?)
+        .map_err(ExitReason::MemoryFault)?;
+    let file = state.crt_streams().file(memory, 1)?;
+    let result = state.crt_streams().flush(file)?;
+    if result != 0 {
+        return Err(LIMIT);
+    }
+    Ok(())
+}
+
+/// Write through the synthesized `std::cout` object to the CRT's standard
+/// output. A short or failed transfer sets `badbit` like a stream buffer; an
+/// oversized request or an exception mask that fires stops explicitly.
+fn write_cout(
+    state: &ServicesState,
+    cout: &Mutex<Option<u64>>,
+    memory: &mut GuestMemory,
+    input: u64,
+    count: u64,
+) -> Result<u64, ExitReason> {
+    let object = cout.lock().expect("Microsoft cout object").ok_or(LIMIT)?;
+    if count > MAX_COUT_TRANSFER {
+        return Err(LIMIT);
+    }
+    let flags = field(object, 16)?;
+    let state_bits = memory.read_u32(flags).map_err(ExitReason::MemoryFault)?;
+    let exceptions = memory
+        .read_u32(field(object, 20)?)
+        .map_err(ExitReason::MemoryFault)?;
+    if state_bits & exceptions != 0 {
+        return Err(LIMIT);
+    }
+    if state_bits != 0 || count == 0 {
+        return Ok(object);
+    }
+    let file = state.crt_streams().file(memory, 1)?;
+    let mut objects = state.objects.lock().expect("guest object state");
+    let answer = state
+        .crt_streams()
+        .write_items(memory, &mut objects, input, 1, count, file)?;
+    let written = answer.unwrap_or_default();
+    if written != count {
+        let next = state_bits | 4;
+        memory
+            .write_u32(flags, next)
+            .map_err(ExitReason::MemoryFault)?;
+        if next & exceptions != 0 {
+            return Err(LIMIT);
+        }
+    }
+    Ok(object)
 }
 
 /// VCRUNTIME exports these same C memory contracts. The existing services
@@ -349,13 +448,27 @@ impl CallbackTask for FlushTask {
     }
 }
 
-fn register_ostream_flush(registry: &mut ImportRegistry) {
+fn register_ostream_flush(
+    registry: &mut ImportRegistry,
+    state: &Arc<ServicesState>,
+    cout: Arc<Mutex<Option<u64>>>,
+) {
+    let state = Arc::clone(state);
+    let flush_cout_ref = Arc::clone(&cout);
     registry.register_callback_task(
         MODULE,
         OSTREAM_FLUSH,
         ServiceStatus::Partial,
-        |args, _, memory, _| {
+        move |args, _, memory, _| {
             let stream = args.rcx;
+            if flush_cout_ref
+                .lock()
+                .expect("Microsoft cout object")
+                .is_some_and(|object| object == stream)
+            {
+                flush_cout(&state, memory, &flush_cout_ref)?;
+                return Ok(CallbackStart::Return(stream));
+            }
             let vbtable = memory.read_u64(stream).map_err(ExitReason::MemoryFault)?;
             let displacement = memory
                 .read_u32(field(vbtable, 4)?)
@@ -476,13 +589,27 @@ impl CallbackTask for WriteTask {
         }
     }
 }
-fn register_ostream_write(registry: &mut ImportRegistry) {
+fn register_ostream_write(
+    registry: &mut ImportRegistry,
+    state: &Arc<ServicesState>,
+    cout: Arc<Mutex<Option<u64>>>,
+) {
+    let state = Arc::clone(state);
+    let write_cout_ref = Arc::clone(&cout);
     registry.register_callback_task(
         MODULE,
         OSTREAM_WRITE,
         ServiceStatus::Partial,
-        |args, _, memory, _| {
+        move |args, _, memory, _| {
             let stream = args.rcx;
+            if write_cout_ref
+                .lock()
+                .expect("Microsoft cout object")
+                .is_some_and(|object| object == stream)
+            {
+                let object = write_cout(&state, &write_cout_ref, memory, args.rdx, args.r8)?;
+                return Ok(CallbackStart::Return(object));
+            }
             let vbtable = memory.read_u64(stream).map_err(ExitReason::MemoryFault)?;
             let displacement = memory
                 .read_u32(field(vbtable, 4)?)
