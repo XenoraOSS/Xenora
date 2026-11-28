@@ -6174,6 +6174,16 @@
       "api_set": true,
       "canonical_kind": "name",
       "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "_get_stream_buffer_pointers",
+      "kind": "name",
+      "library": "api-ms-win-crt-stdio-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "_get_stream_buffer_pointers"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
       "canonical_symbol": "_isatty",
       "kind": "name",
       "library": "api-ms-win-crt-stdio-l1-1-0.dll",
@@ -9199,6 +9209,56 @@
       "library": "ole32.dll",
       "status": "partial",
       "symbol": "StringFromGUID2"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memchr",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "implemented",
+      "symbol": "memchr"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memcmp",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "partial",
+      "symbol": "memcmp"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memcpy",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "partial",
+      "symbol": "memcpy"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memmove",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "partial",
+      "symbol": "memmove"
+    },
+    {
+      "api_set": false,
+      "canonical_kind": "name",
+      "canonical_library": "ucrtbase.dll",
+      "canonical_symbol": "memset",
+      "kind": "name",
+      "library": "vcruntime140.dll",
+      "status": "partial",
+      "symbol": "memset"
     },
     {
       "api_set": false,
@@ -14054,6 +14114,226 @@
     },
     {
       "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "??0Init@ios_base@std@@QEAA@XZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "??1Init@ios_base@std@@QEAA@XZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?_Decref@facet@locale@std@@UEAAPEAV_Facet_base@3@XZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?_Incref@facet@locale@std@@UEAAXXZ"
+    },
+    {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?_Init_cnt@Init@ios_base@std@@0HA"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?_Init_cnt_func@Init@ios_base@std@@CAAEAHXZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?_Init_ctor@Init@ios_base@std@@CAXPEAV123@@Z"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?_Init_dtor@Init@ios_base@std@@CAXPEAV123@@Z"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?bad@ios_base@std@@QEBA_NXZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?do_widen@?$ctype@D@std@@MEBADD@Z"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?eof@ios_base@std@@QEBA_NXZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?fail@ios_base@std@@QEBA_NXZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?flush@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@XZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?good@ios_base@std@@QEBA_NXZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?rdstate@ios_base@std@@QEBAHXZ"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?write@?$basic_ostream@DU?$char_traits@D@std@@@std@@QEAAAEAV12@PEBD_J@Z"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_atomic_wait.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "__std_atomic_wait_get_deadline"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_atomic_wait.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "__std_atomic_wait_get_remaining_timeout"
+    },
+    {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_codecvt_ids.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?id@?$codecvt@_SDU_Mbstatet@@@std@@2V0locale@2@A"
+    },
+    {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_codecvt_ids.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?id@?$codecvt@_S_QU_Mbstatet@@@std@@2V0locale@2@A"
+    },
+    {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_codecvt_ids.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?id@?$codecvt@_UDU_Mbstatet@@@std@@2V0locale@2@A"
+    },
+    {
+      "data_import": true,
+      "family": "other",
+      "kind": "name",
+      "library": "msvcp140_codecvt_ids.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "?id@?$codecvt@_U_QU_Mbstatet@@@std@@2V0locale@2@A"
+    },
+    {
+      "data_import": false,
       "family": "c-runtime",
       "kind": "name",
       "library": "msvcrt.dll",
@@ -14981,6 +15261,16 @@
       "status": "implemented",
       "status_explicit": true,
       "symbol": "_get_osfhandle"
+    },
+    {
+      "data_import": false,
+      "family": "c-runtime",
+      "kind": "name",
+      "library": "ucrtbase.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "_get_stream_buffer_pointers"
     },
     {
       "data_import": false,
@@ -19894,17 +20184,17 @@
     }
   ],
   "summary": {
-    "aliases": 955,
-    "api_set_aliases": 754,
-    "canonical_services": 978,
-    "data_import_services": 7,
+    "aliases": 961,
+    "api_set_aliases": 755,
+    "canonical_services": 998,
+    "data_import_services": 12,
     "duplicate_registrations": 0,
     "implemented": 247,
     "implicit_status_services": 78,
-    "libraries": 25,
-    "manual_services": 676,
+    "libraries": 28,
+    "manual_services": 696,
     "ordinal_aliases": 35,
-    "partial": 731,
+    "partial": 752,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 302,

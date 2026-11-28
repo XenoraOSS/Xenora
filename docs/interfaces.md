@@ -324,6 +324,127 @@ attribute bit, is truncated, or uses the earlier virtual-address descriptor form
 is reported in `delay_import_error` and in the Markdown report, together with
 the entries read before it.
 
+### Microsoft atomic-wait deadlines (#1163)
+
+`msvcp140_atomic_wait.dll` exposes deadline creation and remaining-time
+helpers backed by the guest monotonic clock. Infinite deadlines retain their
+sentinel, elapsed deadlines return zero, and finite wait intervals are capped
+at ten days. The behavior is derived from the public [Microsoft STL source](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/src/atomic_wait.cpp)
+(copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception). Atomic
+waiting, notification and scheduling are not provided by these helpers.
+
+### Microsoft codecvt locale-ID data (#1163)
+
+The four `msvcp140_codecvt_ids.dll` UTF conversion facet ID exports each
+bind to a distinct, zero-initialized eight-byte guest cell. This supports the
+initial data objects only: lazy locale ID assignment, facet construction and
+character conversion remain unsupported. The layout and initial value come
+from the public Microsoft STL [locale header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xlocale)
+and [codecvt ID definitions](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/src/ulocale.cpp),
+copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception. The
+independently authored PE verifies storage identity and initialization only.
+
+### Microsoft runtime memory exports (#1163)
+
+`vcruntime140.dll` resolves `memcpy`, `memmove`, `memset`, `memcmp` and
+`memchr` to the existing UCRT guest-memory services. They retain the same
+bounds and fault behavior. The original MSVC-ABI guest fixture exercises
+copying, overlap, filling, comparison, searching and zero-length comparison;
+it is not evidence for the rest of VCRUNTIME or for Xbox execution.
+
+### UCRT standard-stream buffer fields (#1163)
+
+`_get_stream_buffer_pointers` resolves for the three standard UCRT streams.
+It returns guest addresses of their current pointer, base pointer and count
+fields in the requested output order; null output arguments are allowed.
+A null stream returns `EINVAL`, and unknown or nonstandard streams stop with
+the runtime-limit fault. Standard streams are modeled as unbuffered: their
+base and current pointer reference their own two-byte guest storage and their
+available count is zero. `fputc` and `fflush` retain the existing immediate
+output behavior. Guest-controlled buffering, streams opened by `fopen`, and a
+complete UCRT `FILE` implementation are not supported by this interface.
+
+The declaration is in the public Windows SDK `stdio.h`; Microsoft classifies
+this as an [internal CRT function](https://learn.microsoft.com/en-us/cpp/c-runtime-library/internal-crt-globals-and-functions).
+The initial unbuffered pointer arrangement was checked against Windows SDK
+10.0.22621.0 UCRT source. Original guest fixtures cover stable field addresses,
+ordinary output, optional parameters, null input and invalid addresses.
+
+### Microsoft-header iostream workload (#1163)
+
+`fixtures/pe/msvc-iostream.cpp` is an original program that uses the actual
+Microsoft STL headers and calls `std::cout.write`, `flush`, and `good` before
+leaving its `ios_base::Init` scope. `fixtures/pe/build-msvc-iostream.sh` builds
+it using local header paths supplied in `MS_STL_INCLUDE`, `MSVC_INCLUDE` and
+`WINDOWS_SDK_INCLUDE`, and writes the executable under ignored `artifacts/`.
+One local build used Microsoft STL commit `0cabaf3c7e0a73fe3040aabce40cd8833e80392b`,
+VC headers 14.44.35207 and Windows SDK 10.0.22621.0. The Microsoft STL headers
+are copyright Microsoft Corporation and licensed Apache-2.0 WITH LLVM-exception;
+no vendor headers or redistributable binaries are included in this fixture.
+
+In that local build, six of seven imports resolve to standard services; the `cout` object remains
+unresolved. This is import resolution only, not successful execution. A
+separate local run with Microsoft redistributable DLLs supplied as guest
+modules stopped before execution with 76 required imports unresolved. No
+complete C++ stream execution or cleanup is claimed.
+
+### Microsoft ostream write and flush (#1163)
+
+The narrow `basic_ostream::write` and `flush` exports support a guest-provided
+x64 stream object with a guest stream buffer. They call the buffer lock,
+`xsputn` or `sync`, and unlock virtual functions through the guest callback
+boundary. Short writes and sync failure set `badbit`. A tied stream,
+unit-buffered sentry, or exception requiring C++ unwinding stops explicitly;
+these paths are not silently reported as successful. The documented method
+behavior follows the public [Microsoft STL ostream implementation](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/__msvc_ostream.hpp)
+and [stream buffer header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/streambuf),
+copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception. The vtable
+slots and virtual-base layout were inspected using Clang with those headers.
+The original synthetic-layout guests test callbacks, failure state and refusal
+paths; they do not construct `std::cout` or validate general iostream ABI.
+
+### Microsoft locale facet primitives (#1163)
+
+The Microsoft x64 `locale::facet` increment and decrement exports update the
+32-bit guest reference count at offset 8; decrement returns the facet when
+the new count is zero, leaving destruction to its caller. The narrow
+`ctype<char>::do_widen` scalar export preserves the input byte. These partial
+primitives do not construct locale or facet objects or run destructors. Their
+semantics follow the public [Microsoft STL locale header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xlocale),
+copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception. A locally
+compiled synthetic-layout guest tests the primitives; independent acceptance
+and a Microsoft-header locale lifecycle fixture remain outstanding.
+
+### Microsoft stream state queries (#1163)
+
+The x64 `ios_base` exports `rdstate`, `good`, `eof`, `fail` and `bad` read
+the 32-bit state field at offset 16 of the guest `ios_base` subobject. Bit
+meanings follow the public Microsoft STL [xiosbase header](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xiosbase);
+its x64 layout was inspected using Clang with Microsoft headers. Synthetic
+guest tests exercise the bits and an overflowing pointer. These accessors do
+not construct streams, validate object type, or provide exception handling.
+
+### Microsoft STL initialization count (#1163)
+
+`msvcp140.dll` exposes the Microsoft x64 decorated `ios_base::Init` count,
+count accessor, public constructor and destructor, and their helpers. The data import and
+accessor share one guest-memory cell, initialized to -1. Construction changes a
+negative count to 1 and otherwise increments it; destruction decrements it. On
+the final destruction Xenora stops with the runtime-limit fault because the
+standard stream objects and their required flush are not implemented. Count
+overflow also stops the guest. This is a partial initialization boundary: it
+does not initialize `std::cout` or establish general Microsoft STL support.
+
+The count behavior is independently implemented from the publicly available
+[Microsoft STL source at commit 0cabaf3](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/src/iostream.cpp)
+and its [header declarations](https://github.com/microsoft/STL/blob/0cabaf3c7e0a73fe3040aabce40cd8833e80392b/stl/inc/xiosbase).
+These files are copyright Microsoft Corporation, Apache-2.0 WITH LLVM-exception;
+no source text was copied. The original freestanding fixture declares just the
+ABI under test, imports the public constructor and destructor, and does not include
+the Microsoft headers or prove a complete MSVC iostream program. Its output uses UCRT `puts`, not a C++ stream.
+
+### Import name diagnostics
+
 `xenora_import_gen::demangle` decodes Microsoft Visual C++ decorated names
 for diagnostics, in the style of Microsoft's `undname`. It covers functions,
 data, member access and storage, `this` qualifiers, calling conventions,
@@ -1340,22 +1461,24 @@ not reuse them but does not give a complete parent-close cascade contract.
 Handles are process-local opaque values and are also discarded when the guest
 process exits.
 
-TLS certificate validation, HTTPS, asynchronous callbacks, in-flight cancellation,
-redirects, authentication, proxy resolution, connection
-reuse, the NUL-separated raw header form, custom named-header queries, duplicate-header enumeration,
-transfer codings other than exactly `chunked` and their combinations, chunk
-framing generated by the transport, and libcurl-compatible interfaces
 `WinHttpQueryHeaders` also answers `WINHTTP_QUERY_RAW_HEADERS_CRLF` with the
 exact wire text of the final response head: the status line and every header
 line in received order, each CRLF-terminated, with no trailing blank line.
-Interim informational responses are not included. The sizing contract matches
-the other textual queries and the documented example: insufficient or absent
-buffers report the required byte count including the terminator through the
-length parameter and fail with `ERROR_INSUFFICIENT_BUFFER` without writing,
-while success reports the byte count excluding the terminator. The
-NUL-separated `WINHTTP_QUERY_RAW_HEADERS` form and index-based duplicate
-enumeration remain unsupported.
+Interim informational responses are not included. It answers
+`WINHTTP_QUERY_CUSTOM` by matching the caller-supplied header name
+case-insensitively against the final response headers and returning the first
+value. The name must be a nonempty printable-ASCII field name; a missing
+header fails with `ERROR_WINHTTP_HEADER_NOT_FOUND`. Both forms share the
+textual sizing contract: insufficient or absent buffers report the required
+byte count including the terminator through the length parameter and fail
+with `ERROR_INSUFFICIENT_BUFFER` without writing, while success reports the
+byte count excluding the terminator.
 
+TLS certificate validation, HTTPS, asynchronous callbacks, in-flight cancellation,
+redirects, authentication, proxy resolution, connection
+reuse, the NUL-separated raw header form, duplicate-header enumeration,
+transfer codings other than exactly `chunked` and their combinations, chunk
+framing generated by the transport, and libcurl-compatible interfaces
 remain unsupported. Tests
 use independently authored controlled loopback servers and synthetic guest
 memory on Apple Silicon only. They are not Windows comparison evidence,
