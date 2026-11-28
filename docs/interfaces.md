@@ -1788,6 +1788,20 @@ is emitted by the compiler. Those error paths are noreturn functions: Xenora
 implements no C++ exception machinery, so they stop the guest with the
 runtime-limit fault instead of returning.
 
+The scalar and array C++17 aligned allocation operators are also registered:
+`_ZnwySt11align_val_t`, `_ZnaySt11align_val_t`, `_ZdlPvSt11align_val_t` and
+`_ZdaPvSt11align_val_t`. The alignment must be a nonzero power of two. The
+shared guest heap places the block at that alignment when it is representable,
+including alignments above Xenora's 64 KiB allocation granularity, and release
+uses exact block ownership: null deletion is harmless, while an interior or
+foreign pointer faults instead of releasing memory. An invalid alignment makes
+allocation return null with `EINVAL`; invalid aligned deletion stops the guest
+without releasing the block. Sized aligned deletion, exception propagation and
+`std::bad_alloc` remain unimplemented. An original no-CRT C++ fixture exercises
+compiler-emitted scalar and array forms at O0/O1/O2/Os, distinct live blocks,
+zero-size blocks, null deletion and an invalid-interior control. Local
+verification only; no Windows comparison or independent acceptance is claimed.
+
 `libgcc_s_seh-1.dll!__emutls_get_address` provides GCC's emulated
 thread-local storage. The compiler emits a descriptor holding one variable's
 size and alignment and passes the descriptor's address; the runtime returns the

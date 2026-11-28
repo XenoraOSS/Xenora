@@ -4055,7 +4055,8 @@ pub(crate) mod handlers {
     pub use super::crt_math::{
         acos, asin, atan, atan2, atan2f, cbrt, ceil, ceilf, copysign, cos, cosf, cosh, erf, exp,
         exp2, expf, expm1, fdim, floor, floorf, fmax, fmin, fmod, fmodf, frexp, hypot, ldexp,
-        llround, log, log1p, log2, log10, logf, lround, modf, nearbyint, pow, powf, remainder,
-        rint, round, roundf, sin, sinf, sinh, tan, tanf, tanh, tgamma, trunc,
+        llround, log, log1p, log2, log10, logf, lround, lroundf, modf, modff, nearbyint,
+        nextafterf, pow, powf, remainder, remainderf, rint, round, roundf, sin, sinf, sinh, tan,
+        tanf, tanh, tgamma, trunc,
     };
 }

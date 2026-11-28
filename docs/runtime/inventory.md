@@ -12,16 +12,16 @@ independent acceptance or compatibility claims.
 
 | Measure | Count |
 | --- | --- |
-| Canonical services | 875 |
-| Typed registry services | 296 |
-| Manual code registrations | 579 |
+| Canonical services | 883 |
+| Typed registry services | 300 |
+| Manual code registrations | 583 |
 | Canonical libraries | 22 |
-| Implemented | 237 |
-| Partial | 638 |
+| Implemented | 242 |
+| Partial | 641 |
 | Stub | 0 |
 | Data-import services | 7 |
-| Aliases of every kind | 929 |
-| API-set aliases | 740 |
+| Aliases of every kind | 933 |
+| API-set aliases | 744 |
 | Ordinal aliases | 23 |
 | Statuses never explicitly set | 76 |
 | Duplicate canonical registrations | 0 |
@@ -37,11 +37,11 @@ independent acceptance or compatibility claims.
 | <code>combase.dll</code> | <code>other</code> | 14 | 14 | 0 | 0 | 0 | 14 | 0 | 0 |
 | <code>kernel32.dll</code> | <code>windows-system</code> | 316 | 59 | 257 | 0 | 40 | 276 | 0 | 26 |
 | <code>libgcc_s_seh-1.dll</code> | <code>c++-support</code> | 1 | 0 | 1 | 0 | 1 | 0 | 0 | 0 |
-| <code>libstdc++-6.dll</code> | <code>c++-support</code> | 14 | 3 | 11 | 0 | 11 | 3 | 0 | 0 |
+| <code>libstdc++-6.dll</code> | <code>c++-support</code> | 18 | 3 | 15 | 0 | 15 | 3 | 0 | 0 |
 | <code>libwinpthread-1.dll</code> | <code>c++-support</code> | 8 | 0 | 8 | 0 | 4 | 4 | 0 | 0 |
 | <code>msvcrt.dll</code> | <code>c-runtime</code> | 39 | 13 | 26 | 7 | 14 | 25 | 0 | 14 |
 | <code>psapi.dll</code> | <code>windows-system</code> | 1 | 0 | 1 | 0 | 0 | 1 | 0 | 0 |
-| <code>ucrtbase.dll</code> | <code>c-runtime</code> | 297 | 207 | 90 | 0 | 103 | 194 | 0 | 10 |
+| <code>ucrtbase.dll</code> | <code>c-runtime</code> | 301 | 211 | 90 | 0 | 104 | 197 | 0 | 10 |
 | <code>user32.dll</code> | <code>other</code> | 7 | 0 | 7 | 0 | 0 | 7 | 0 | 0 |
 | <code>winhttp.dll</code> | <code>other</code> | 14 | 0 | 14 | 0 | 0 | 14 | 0 | 0 |
 | <code>ws2_32.dll</code> | <code>windows-networking</code> | 43 | 0 | 43 | 0 | 6 | 37 | 0 | 6 |
@@ -61,7 +61,7 @@ metadata, are in `inventory.json`.
 
 | Alias kind | Count |
 | --- | --- |
-| API-set | 740 |
+| API-set | 744 |
 | Ordinal | 23 |
 | Other module | 166 |
 

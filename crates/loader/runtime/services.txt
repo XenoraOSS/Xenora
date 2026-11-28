@@ -2115,6 +2115,14 @@ service ucrtbase.dll lround(x: f64) -> i32
     ref math.h lround (ISO C Annex F)
     test crt_math_integer_rounding_covers_the_range_edges
 
+service ucrtbase.dll lroundf(x: f32) -> i32
+    handler lroundf
+    status partial
+    alias api-ms-win-crt-math-l1-1-0.dll
+    fails LONG_MIN for a NaN or an out-of-range result; errno and floating-point exception flags are not set
+    ref math.h lroundf (ISO C Annex F)
+    test crt_math_binary32_lroundf_returns_a_win64_long
+
 service ucrtbase.dll modf(x: f64, integral: out<8>) -> f64
     handler modf
     status implemented
@@ -2124,6 +2132,14 @@ service ucrtbase.dll modf(x: f64, integral: out<8>) -> f64
     test crt_math_frexp_and_modf_store_through_guest_pointers
     test crt_math_special_values_follow_annex_f
 
+service ucrtbase.dll modff(x: f32, integral: out<4>) -> f32
+    handler modff
+    status implemented
+    alias api-ms-win-crt-math-l1-1-0.dll
+    fails stops the guest with a memory fault when integral is not writable
+    ref math.h modff (ISO C Annex F)
+    test crt_math_binary32_modff_stores_one_float_through_rdx
+
 service ucrtbase.dll nearbyint(x: f64) -> f64
     handler nearbyint
     status partial
@@ -2132,6 +2148,14 @@ service ucrtbase.dll nearbyint(x: f64) -> f64
     ref math.h nearbyint (ISO C, IEC 60559 roundToIntegralTiesToEven)
     test crt_math_exact_functions_match_hand_derived_values
     test crt_math_special_values_follow_annex_f
+
+service ucrtbase.dll nextafterf(x: f32, y: f32) -> f32
+    handler nextafterf
+    status partial
+    alias api-ms-win-crt-math-l1-1-0.dll
+    fails range events do not set errno or floating-point exception flags
+    ref math.h nextafterf (ISO C Annex F)
+    test crt_math_binary32_nextafterf_steps_to_adjacent_values
 
 service ucrtbase.dll pow(x: f64, y: f64) -> f64
     handler pow
@@ -2159,6 +2183,14 @@ service ucrtbase.dll remainder(x: f64, y: f64) -> f64
     ref math.h remainder (ISO C, IEC 60559 remainder)
     test crt_math_exact_functions_match_hand_derived_values
     test crt_math_special_values_follow_annex_f
+
+service ucrtbase.dll remainderf(x: f32, y: f32) -> f32
+    handler remainderf
+    status partial
+    alias api-ms-win-crt-math-l1-1-0.dll
+    fails NaN for a domain error; errno and floating-point exception flags are not set
+    ref math.h remainderf (ISO C, IEC 60559 remainder)
+    test crt_math_binary32_remainderf_rounds_quotient_ties_to_even
 
 service ucrtbase.dll rint(x: f64) -> f64
     handler rint
@@ -2577,10 +2609,9 @@ service combase.dll PropVariantClear(variant: ptr) -> i32
 service libstdc++-6.dll __cxa_guard_acquire(guard: ptr) -> i32
     handler cxx_guard_acquire
     status partial
-    fails -1 with ERROR_INVALID_PARAMETER for a null, unaligned, unmapped or contended guard
+    fails stops the guest with the runtime-limit fault for a null, unaligned, unmapped, contended or reentrant guard
     ref Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)
     test guard_acquire_once_release_and_second_acquire_returns_zero
-    test contended_and_reentrant_guard_acquire_fail_without_mutating
 
 service libstdc++-6.dll __cxa_guard_release(guard: ptr) -> void
     handler cxx_guard_release

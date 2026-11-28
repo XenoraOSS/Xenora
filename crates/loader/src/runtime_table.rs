@@ -8,7 +8,7 @@ use crate::runtime::{Call, Parameter, Return, ServiceContext, ServiceMetadata};
 use crate::services::{ServicesState, handlers};
 use std::sync::Arc;
 
-pub static SERVICES: [ServiceMetadata; 296] = [
+pub static SERVICES: [ServiceMetadata; 300] = [
     ServiceMetadata {
         library: "kernel32.dll",
         symbol: "SetProcessPriorityBoost",
@@ -2673,6 +2673,17 @@ pub static SERVICES: [ServiceMetadata; 296] = [
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
+        symbol: "lroundf",
+        parameters: &[Parameter { name: "x", kind: "f32" }],
+        result: "i32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-math-l1-1-0.dll"],
+        failure: "LONG_MIN for a NaN or an out-of-range result; errno and floating-point exception flags are not set",
+        reference: "math.h lroundf (ISO C Annex F)",
+        tests: &["crt_math_binary32_lroundf_returns_a_win64_long"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
         symbol: "modf",
         parameters: &[Parameter { name: "x", kind: "f64" }, Parameter { name: "integral", kind: "out<8>" }],
         result: "f64",
@@ -2684,6 +2695,17 @@ pub static SERVICES: [ServiceMetadata; 296] = [
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
+        symbol: "modff",
+        parameters: &[Parameter { name: "x", kind: "f32" }, Parameter { name: "integral", kind: "out<4>" }],
+        result: "f32",
+        status: ServiceStatus::Implemented,
+        aliases: &["api-ms-win-crt-math-l1-1-0.dll"],
+        failure: "stops the guest with a memory fault when integral is not writable",
+        reference: "math.h modff (ISO C Annex F)",
+        tests: &["crt_math_binary32_modff_stores_one_float_through_rdx"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
         symbol: "nearbyint",
         parameters: &[Parameter { name: "x", kind: "f64" }],
         result: "f64",
@@ -2692,6 +2714,17 @@ pub static SERVICES: [ServiceMetadata; 296] = [
         failure: "rounds to nearest, ties to even, whatever the guest MXCSR says; errno is not set",
         reference: "math.h nearbyint (ISO C, IEC 60559 roundToIntegralTiesToEven)",
         tests: &["crt_math_exact_functions_match_hand_derived_values", "crt_math_special_values_follow_annex_f"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "nextafterf",
+        parameters: &[Parameter { name: "x", kind: "f32" }, Parameter { name: "y", kind: "f32" }],
+        result: "f32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-math-l1-1-0.dll"],
+        failure: "range events do not set errno or floating-point exception flags",
+        reference: "math.h nextafterf (ISO C Annex F)",
+        tests: &["crt_math_binary32_nextafterf_steps_to_adjacent_values"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -2725,6 +2758,17 @@ pub static SERVICES: [ServiceMetadata; 296] = [
         failure: "NaN for a domain error; errno is not set",
         reference: "math.h remainder (ISO C, IEC 60559 remainder)",
         tests: &["crt_math_exact_functions_match_hand_derived_values", "crt_math_special_values_follow_annex_f"],
+    },
+    ServiceMetadata {
+        library: "ucrtbase.dll",
+        symbol: "remainderf",
+        parameters: &[Parameter { name: "x", kind: "f32" }, Parameter { name: "y", kind: "f32" }],
+        result: "f32",
+        status: ServiceStatus::Partial,
+        aliases: &["api-ms-win-crt-math-l1-1-0.dll"],
+        failure: "NaN for a domain error; errno and floating-point exception flags are not set",
+        reference: "math.h remainderf (ISO C, IEC 60559 remainder)",
+        tests: &["crt_math_binary32_remainderf_rounds_quotient_ties_to_even"],
     },
     ServiceMetadata {
         library: "ucrtbase.dll",
@@ -3239,9 +3283,9 @@ pub static SERVICES: [ServiceMetadata; 296] = [
         result: "i32",
         status: ServiceStatus::Partial,
         aliases: &[],
-        failure: "-1 with ERROR_INVALID_PARAMETER for a null, unaligned, unmapped or contended guard",
+        failure: "stops the guest with the runtime-limit fault for a null, unaligned, unmapped, contended or reentrant guard",
         reference: "Itanium C++ ABI, section 3.3.3 Guard Variables (itanium-cxx-abi.github.io/cxx-abi/abi.html)",
-        tests: &["guard_acquire_once_release_and_second_acquire_returns_zero", "contended_and_reentrant_guard_acquire_fail_without_mutating"],
+        tests: &["guard_acquire_once_release_and_second_acquire_returns_zero"],
     },
     ServiceMetadata {
         library: "libstdc++-6.dll",
@@ -5411,6 +5455,14 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "lroundf", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.f32(0)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: i32 = handlers::lroundf(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "modf", ServiceStatus::Implemented, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.f64(0)?;
@@ -5420,11 +5472,29 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         Ok(result.place(cpu))
     });
     let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "modff", ServiceStatus::Implemented, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.f32(0)?;
+        let a1 = call.out::<4>(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: crate::runtime::Float32 = handlers::modff(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
     registry.register_with_status("ucrtbase.dll", "nearbyint", ServiceStatus::Partial, move |args, cpu, memory| {
         let call = Call::new(args, cpu, memory);
         let a0 = call.f64(0)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: crate::runtime::Float64 = handlers::nearbyint(&mut context, a0)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "nextafterf", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.f32(0)?;
+        let a1 = call.f32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: crate::runtime::Float32 = handlers::nextafterf(&mut context, a0, a1)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();
@@ -5452,6 +5522,15 @@ pub fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>) {
         let a1 = call.f64(1)?;
         let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
         let result: crate::runtime::Float64 = handlers::remainder(&mut context, a0, a1)?;
+        Ok(result.place(cpu))
+    });
+    let s = state.clone();
+    registry.register_with_status("ucrtbase.dll", "remainderf", ServiceStatus::Partial, move |args, cpu, memory| {
+        let call = Call::new(args, cpu, memory);
+        let a0 = call.f32(0)?;
+        let a1 = call.f32(1)?;
+        let mut context = ServiceContext { state: &s, memory, teb: cpu.gs_base };
+        let result: crate::runtime::Float32 = handlers::remainderf(&mut context, a0, a1)?;
         Ok(result.place(cpu))
     });
     let s = state.clone();

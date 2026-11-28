@@ -493,8 +493,11 @@ through `xenora run`. Provenance is as for Gate A2.
 
 ## C runtime mathematics
 
-`tests/compat_fixtures/crt_math.c` (#468) is a hosted C program that calls the
-49 `math.h` functions Xenora serves beyond `sqrt` and `fabs`. Built by
+`tests/compat_fixtures/crt_math.c` (#468, #986) is a hosted C program that
+calls 53 `math.h` functions. Its binary32 checks cover the Windows `long`
+result from `lroundf`, the adjacent words around the `modff` output, the
+next representable value from `nextafterf`, and quotient ties in
+`remainderf`. Built by
 `build-crt-math.sh` with mingw-w64 (UCRT flavour) and `-fno-builtin`, each call
 is an import of `api-ms-win-crt-math-l1-1-0.dll`; the arguments are volatile so
 no call is folded at compile time. The program compares every result with a

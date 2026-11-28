@@ -393,14 +393,24 @@ impl GuestMemory {
         heap: u64,
         size: usize,
     ) -> Result<u64, MemoryError> {
-        if !self.has_heap(heap) {
+        self.map_heap_allocation_aligned(heap, size, ALLOCATION_GRANULARITY)
+    }
+
+    pub(crate) fn map_heap_allocation_aligned(
+        &mut self,
+        heap: u64,
+        size: usize,
+        alignment: u64,
+    ) -> Result<u64, MemoryError> {
+        if !self.has_heap(heap) || alignment == 0 || !alignment.is_power_of_two() {
             return Err(MemoryError::AllocationFailed);
         }
-        self.map_dynamic_allocation(
+        self.map_dynamic_allocation_aligned(
             0,
             size,
             MemoryPermissions::READ_WRITE,
             AllocationKind::Heap(heap),
+            alignment,
         )
     }
 
@@ -410,6 +420,23 @@ impl GuestMemory {
         size: usize,
         permissions: MemoryPermissions,
         allocation: AllocationKind,
+    ) -> Result<u64, MemoryError> {
+        self.map_dynamic_allocation_aligned(
+            requested_base,
+            size,
+            permissions,
+            allocation,
+            ALLOCATION_GRANULARITY,
+        )
+    }
+
+    fn map_dynamic_allocation_aligned(
+        &mut self,
+        requested_base: u64,
+        size: usize,
+        permissions: MemoryPermissions,
+        allocation: AllocationKind,
+        alignment: u64,
     ) -> Result<u64, MemoryError> {
         // Bound retained host storage independently for each allocation kind.
         let allocated = self.dynamic_bytes(allocation);
@@ -426,7 +453,7 @@ impl GuestMemory {
         }
 
         let base = if requested_base == 0 {
-            self.find_dynamic_base(size)?
+            self.find_dynamic_base_aligned(size, alignment)?
         } else {
             requested_base
         };
@@ -450,7 +477,14 @@ impl GuestMemory {
     }
 
     fn find_dynamic_base(&self, size: usize) -> Result<u64, MemoryError> {
-        let mut base = 0x0000_0003_0000_0000u64;
+        self.find_dynamic_base_aligned(size, ALLOCATION_GRANULARITY)
+    }
+
+    fn find_dynamic_base_aligned(&self, size: usize, alignment: u64) -> Result<u64, MemoryError> {
+        let granularity = ALLOCATION_GRANULARITY.max(alignment);
+        let mut base = 0x0000_0003_0000_0000u64
+            .checked_next_multiple_of(granularity)
+            .ok_or(MemoryError::Overflow)?;
         let mut region_index = 0;
         let mut reservation_index = 0;
         loop {
@@ -477,7 +511,7 @@ impl GuestMemory {
             }
             if base < interval_end {
                 base = interval_end
-                    .checked_next_multiple_of(ALLOCATION_GRANULARITY)
+                    .checked_next_multiple_of(granularity)
                     .ok_or(MemoryError::Overflow)?;
             }
             if region.is_some_and(|region| region == (interval_base, interval_end)) {

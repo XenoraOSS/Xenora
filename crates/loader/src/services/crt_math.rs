@@ -7,7 +7,7 @@
 //!
 //! - Functions whose result IEC 60559 fixes exactly (rounding to an integer,
 //!   `copysign`, `fmod`, `remainder`, `fmax`, `fmin`, `fdim`, `frexp`, `modf`,
-//!   `lround`, `llround`) are computed here on exact operations, so the result
+//!   `lround`, `llround`, `nextafterf`) are computed here on exact operations, so the result
 //!   is the one any conforming C library returns.
 //! - The others (trigonometric, hyperbolic, exponential, logarithmic, `pow`,
 //!   `cbrt`, `hypot`, `erf`, `tgamma`) return the host math library's result.
@@ -105,7 +105,30 @@ unary!(Float32, value32, result32, f32:
 
 // Exact: the remainder of a truncating division is representable.
 binary!(Float64, value64, result64, f64: fmod => |x, y| x % y, remainder => remainder_exact, fdim => difference);
-binary!(Float32, value32, result32, f32: fmodf => |x, y| x % y);
+binary!(Float32, value32, result32, f32:
+    fmodf => |x, y| x % y,
+    remainderf => remainder_exact32,
+    nextafterf => next_after32,
+);
+
+fn remainder_exact32(x: f32, y: f32) -> f32 {
+    // Both operands widen exactly and the IEEE remainder is representable
+    // in the original precision. No quotient rounding is involved.
+    remainder_exact(f64::from(x), f64::from(y)) as f32
+}
+
+fn next_after32(x: f32, y: f32) -> f32 {
+    if x.is_nan() || y.is_nan() {
+        f32::NAN
+    } else if x == y {
+        // Equality includes opposite signed zeros. The target supplies the sign.
+        y
+    } else if x < y {
+        x.next_up()
+    } else {
+        x.next_down()
+    }
+}
 
 // Host library: correct to within an ulp or so, not to the last place.
 unary!(Float64, value64, result64, f64:
@@ -274,13 +297,39 @@ pub fn modf(context: &mut ServiceContext<'_>, x: Float64, integral: OutPtr<8>) -
     Ok(result64(&[x], fraction))
 }
 
-/// `long` is 32 bits on Windows. A NaN or a rounded value outside the range
-/// returns `LONG_MIN`, the value of x86 integer conversion; ISO C leaves it
-/// unspecified and the Universal CRT's choice is not verified.
+pub fn modff(
+    context: &mut ServiceContext<'_>,
+    x: Float32,
+    integral: OutPtr<4>,
+) -> Outcome<Float32> {
+    let value = value32(x);
+    let whole = value.trunc();
+    integral
+        .store(context.memory, result32(&[x], whole).0.to_le_bytes())
+        .map_err(ExitReason::MemoryFault)?;
+    let fraction = if value.is_infinite() {
+        0.0
+    } else {
+        value - whole
+    };
+    Ok(result32(&[x], fraction.copysign(value)))
+}
+
 pub fn lround(_: &mut ServiceContext<'_>, x: Float64) -> Outcome<i32> {
-    let rounded = value64(x).round();
+    Ok(round_windows_long(value64(x)))
+}
+
+pub fn lroundf(_: &mut ServiceContext<'_>, x: Float32) -> Outcome<i32> {
+    Ok(round_windows_long(f64::from(value32(x))))
+}
+
+/// `long` is 32 bits on Windows. A NaN or a rounded value outside the range
+/// returns `LONG_MIN`, the value of x86 integer conversion. ISO C leaves that
+/// result unspecified.
+fn round_windows_long(value: f64) -> i32 {
+    let rounded = value.round();
     let inside = (-2_147_483_648.0..2_147_483_648.0).contains(&rounded);
-    Ok(if inside { rounded as i32 } else { i32::MIN })
+    if inside { rounded as i32 } else { i32::MIN }
 }
 
 /// As `lround`, for `long long`; returns the two's-complement bits.

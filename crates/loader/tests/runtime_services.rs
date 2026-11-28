@@ -5024,6 +5024,164 @@ fn crt_math_integer_rounding_covers_the_range_edges() {
     }
 }
 
+const CRT_MATH_API_SET: &str = "api-ms-win-crt-math-l1-1-0.dll";
+
+fn crt_math_binary32_cpu(x: f32, y: f32, second_integer: u64) -> CpuState {
+    let mut cpu = CpuState::new(BASE + u64::from(CODE_RVA), STACK_TOP);
+    cpu.set(Register::Rax, u64::MAX);
+    cpu.set(Register::Rcx, JUNK_HIGH | u64::from(42.0_f32.to_bits()));
+    cpu.set(Register::Rdx, second_integer);
+    // Poison the rest of each lane to expose an accidental binary64 argument.
+    let junk = 0xAAAA_BBBB_CCCC_DDDD_7FF8_0000_0000_0000_u128;
+    cpu.xmm[0] = junk | u128::from(x.to_bits());
+    cpu.xmm[1] = junk | u128::from(y.to_bits());
+    cpu
+}
+
+#[test]
+fn crt_math_binary32_lroundf_returns_a_win64_long() {
+    let (mut engine, mut memory) = aliased_guest(CRT_MATH_API_SET, "lroundf");
+    for (x, expected) in [
+        (2.5, 3),
+        (-2.5, -3),
+        (f32::from_bits(0x3EFF_FFFF), 0), // immediately below 0.5
+        (-f32::from_bits(0x3EFF_FFFF), 0),
+        (-0.0, 0),
+        (f32::from_bits(0x4EFF_FFFF), 2_147_483_520), // 2^31 - 128
+        (f32::from_bits(0xCEFF_FFFF), -2_147_483_520),
+        (f32::from_bits(0xCF00_0000), i32::MIN), // -2^31, still in range
+        // Xenora's existing lround policy uses LONG_MIN for invalid conversions.
+        (f32::from_bits(0x4F00_0000), i32::MIN),
+        (f32::from_bits(0xCF00_0001), i32::MIN),
+        (f32::INFINITY, i32::MIN),
+        (f32::NEG_INFINITY, i32::MIN),
+        (f32::NAN, i32::MIN),
+    ] {
+        let mut cpu = crt_math_binary32_cpu(x, f32::NAN, JUNK_HIGH);
+        assert_eq!(
+            engine.run(&mut cpu, &mut memory, 8).exit_reason,
+            ExitReason::Halt
+        );
+        assert_eq!(
+            cpu.get(Register::Rax),
+            u64::from(expected as u32),
+            "lroundf({x})"
+        );
+    }
+}
+
+#[test]
+fn crt_math_binary32_modff_stores_one_float_through_rdx() {
+    let (mut engine, mut memory) = aliased_guest(CRT_MATH_API_SET, "modff");
+    let smallest = f32::from_bits(1);
+    let output = SCRATCH + 4;
+    for (x, fraction, integral) in [
+        (3.75_f32, 0.75_f32, 3.0_f32),
+        (-3.75, -0.75, -3.0),
+        (-3.0, -0.0, -3.0),
+        (-smallest, -smallest, -0.0),
+        (0.25, 0.25, 0.0),
+        (-0.0, -0.0, -0.0),
+        (8_388_607.5, 0.5, 8_388_607.0),
+        (f32::NEG_INFINITY, -0.0, f32::NEG_INFINITY),
+        (f32::NAN, f32::NAN, f32::NAN),
+    ] {
+        memory.write_bytes(SCRATCH, &[0xAB; 12]).unwrap();
+        let mut cpu = crt_math_binary32_cpu(x, f32::NAN, output);
+        assert_eq!(
+            engine.run(&mut cpu, &mut memory, 8).exit_reason,
+            ExitReason::Halt
+        );
+        let mut stored = [0; 12];
+        memory.read_bytes(SCRATCH, &mut stored).unwrap();
+        assert_eq!(stored[..4], [0xAB; 4], "modff({x})");
+        assert_eq!(stored[8..], [0xAB; 4], "modff({x})");
+        let result = cpu.xmm[0] as u32;
+        if x.is_nan() {
+            assert!(f32::from_bits(result).is_nan());
+            assert!(f32::from_le_bytes(stored[4..8].try_into().unwrap()).is_nan());
+        } else {
+            assert_eq!(result, fraction.to_bits(), "modff({x})");
+            assert_eq!(stored[4..8], integral.to_le_bytes(), "modff({x})");
+        }
+    }
+    for address in [0, 0x10] {
+        let mut cpu = crt_math_binary32_cpu(3.75, f32::NAN, address);
+        let exit = engine.run(&mut cpu, &mut memory, 8).exit_reason;
+        assert!(
+            matches!(exit, ExitReason::MemoryFault(_)),
+            "modff({address:#x}): {exit:?}"
+        );
+    }
+}
+
+#[test]
+fn crt_math_binary32_nextafterf_steps_to_adjacent_values() {
+    let (mut engine, mut memory) = aliased_guest(CRT_MATH_API_SET, "nextafterf");
+    let smallest = f32::from_bits(1);
+    for (x, y, expected) in [
+        (0.0, -0.0, 0x8000_0000),
+        (-0.0, 0.0, 0),
+        (0.0, -1.0, 0x8000_0001),
+        (-0.0, 1.0, 1),
+        (-smallest, 1.0, 0x8000_0000),
+        (smallest, -1.0, 0),
+        (f32::MIN_POSITIVE, 0.0, 0x007F_FFFF),
+        (f32::from_bits(0x007F_FFFF), 1.0, 0x0080_0000),
+        (1.0, 2.0, 0x3F80_0001),
+        (1.0, 0.0, 0x3F7F_FFFF),
+        (-1.0, -2.0, 0xBF80_0001),
+        (-1.0, 0.0, 0xBF7F_FFFF),
+        (f32::MAX, f32::INFINITY, 0x7F80_0000),
+        (f32::NEG_INFINITY, 0.0, 0xFF7F_FFFF),
+        (f32::INFINITY, f32::INFINITY, 0x7F80_0000),
+    ] {
+        let mut cpu = crt_math_binary32_cpu(x, y, JUNK_HIGH);
+        assert_eq!(
+            engine.run(&mut cpu, &mut memory, 8).exit_reason,
+            ExitReason::Halt
+        );
+        assert_eq!(cpu.xmm[0] as u32, expected, "nextafterf({x}, {y})");
+    }
+}
+
+#[test]
+fn crt_math_binary32_remainderf_rounds_quotient_ties_to_even() {
+    let (mut engine, mut memory) = aliased_guest(CRT_MATH_API_SET, "remainderf");
+    for (x, y, expected) in [
+        (5.0, 2.0, 1.0_f32), // 5 - 2*2
+        (7.0, 2.0, -1.0),    // 7 - 4*2
+        (7.0, -2.0, -1.0),
+        (-7.0, 2.0, 1.0),
+        (4.0, -2.0, 0.0),
+        (-4.0, 2.0, -0.0),
+        (-0.0, 2.0, -0.0),
+        (1.5, f32::NEG_INFINITY, 1.5),
+        // In units of the smallest subnormal, 2^249 leaves 2 modulo 3.
+        (
+            f32::from_bits(0x7180_0000),
+            f32::from_bits(3),
+            -f32::from_bits(1),
+        ),
+        (1.0, -0.0, f32::NAN),
+        (f32::INFINITY, 2.0, f32::NAN),
+        (f32::NAN, 2.0, f32::NAN),
+        (2.0, f32::NAN, f32::NAN),
+    ] {
+        let mut cpu = crt_math_binary32_cpu(x, y, JUNK_HIGH);
+        assert_eq!(
+            engine.run(&mut cpu, &mut memory, 8).exit_reason,
+            ExitReason::Halt
+        );
+        let result = cpu.xmm[0] as u32;
+        if expected.is_nan() {
+            assert!(f32::from_bits(result).is_nan(), "remainderf({x}, {y})");
+        } else {
+            assert_eq!(result, expected.to_bits(), "remainderf({x}, {y})");
+        }
+    }
+}
+
 #[test]
 fn guest_call_through_dbt_preserves_win64_abi_state() {
     use Register::{R8, R9, R12, R13, R14, R15, Rax, Rbp, Rbx, Rcx, Rdi, Rdx, Rsi, Rsp};

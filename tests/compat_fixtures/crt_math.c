@@ -1,8 +1,9 @@
 /* SPDX-License-Identifier: GPL-3.0-or-later */
 
 /*
- * A hosted C program that calls the 49 math.h functions of issue #468 through
- * the Universal C runtime. Original code written for Xenora.
+ * A hosted C program that calls the 49 math.h functions of issue #468 and the
+ * four binary32 functions of issue #986 through the Universal C runtime.
+ * Original code written for Xenora.
  *
  * Built with mingw-w64 (UCRT flavour) and -fno-builtin, every function is an
  * import of api-ms-win-crt-math-l1-1-0.dll, and the arguments are volatile so
@@ -212,6 +213,24 @@ int main(void) {
     check("lround", lround(big - 1.0) == 2147483647L);
     check("llround", llround(edge) == 9223372036854774784LL);
     check("llround", llround(-0.5 + 0.0 * mixed) == -1LL);
+
+    volatile float half = -2.5f, long_edge = from32(0x4EFFFFFFu);
+    volatile float mixed32 = -3.75f, zero = 0.0f, negative_zero = from32(0x80000000u);
+    volatile float seven = 7.0f, two = 2.0f;
+    struct {
+        volatile u32 before;
+        float whole;
+        volatile u32 after;
+    } split32 = {0x12345678u, 0.0f, 0x9ABCDEF0u};
+
+    check("lroundf ties away", lroundf(half) == -3L);
+    check("lroundf below LONG overflow", lroundf(long_edge) == 2147483520L);
+    float fraction32 = modff(mixed32, &split32.whole);
+    check("modff parts", bits32(fraction32) == 0xBF400000u && bits32(split32.whole) == 0xC0400000u);
+    check("modff write width", split32.before == 0x12345678u && split32.after == 0x9ABCDEF0u);
+    check("nextafterf equal zeros", bits32(nextafterf(zero, negative_zero)) == 0x80000000u);
+    check("nextafterf first subnormal", bits32(nextafterf(negative_zero, two)) == 1u);
+    check("remainderf ties even", bits32(remainderf(seven, two)) == 0xBF800000u);
 
     printf("crt_math: %u of %u checks passed\n", passed, checks);
     return (int)first_failure;

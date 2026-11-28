@@ -6,14 +6,14 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 296 |
-| Generated adapters | 296 |
-| Unique handler implementations | 278 |
-| Implemented | 100 |
-| Partial | 196 |
+| Services with a declared ABI | 300 |
+| Generated adapters | 300 |
+| Unique handler implementations | 282 |
+| Implemented | 101 |
+| Partial | 199 |
 | Stub | 0 |
-| Conformance-tested through guest dispatch | 296 |
-| API-set aliases (not services) | 369 |
+| Conformance-tested through guest dispatch | 300 |
+| API-set aliases (not services) | 373 |
 | Independently accepted | 0 |
 
 | Service | Signature | Status | Failure |
@@ -260,11 +260,15 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `ucrtbase.dll!log1p` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
 | `ucrtbase.dll!log2` | `(x: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
 | `ucrtbase.dll!lround` | `(x: f64) -> i32` | partial | LONG_MIN for a NaN or an out-of-range result; errno is not set |
+| `ucrtbase.dll!lroundf` | `(x: f32) -> i32` | partial | LONG_MIN for a NaN or an out-of-range result; errno and floating-point exception flags are not set |
 | `ucrtbase.dll!modf` | `(x: f64, integral: out<8>) -> f64` | implemented | stops the guest with a memory fault when integral is not writable |
+| `ucrtbase.dll!modff` | `(x: f32, integral: out<4>) -> f32` | implemented | stops the guest with a memory fault when integral is not writable |
 | `ucrtbase.dll!nearbyint` | `(x: f64) -> f64` | partial | rounds to nearest, ties to even, whatever the guest MXCSR says; errno is not set |
+| `ucrtbase.dll!nextafterf` | `(x: f32, y: f32) -> f32` | partial | range events do not set errno or floating-point exception flags |
 | `ucrtbase.dll!pow` | `(x: f64, y: f64) -> f64` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
 | `ucrtbase.dll!powf` | `(x: f32, y: f32) -> f32` | partial | host math library result, can differ from the UCRT in the last place; errno is not set and no exception flag is raised |
 | `ucrtbase.dll!remainder` | `(x: f64, y: f64) -> f64` | partial | NaN for a domain error; errno is not set |
+| `ucrtbase.dll!remainderf` | `(x: f32, y: f32) -> f32` | partial | NaN for a domain error; errno and floating-point exception flags are not set |
 | `ucrtbase.dll!rint` | `(x: f64) -> f64` | partial | rounds to nearest, ties to even, whatever the guest MXCSR says; errno is not set |
 | `ucrtbase.dll!round` | `(x: f64) -> f64` | implemented | never |
 | `ucrtbase.dll!roundf` | `(x: f32) -> f32` | implemented | never |
@@ -311,6 +315,11 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `combase.dll!CoGetClassObject` | `(clsid: ptr, class_context: u32, server_info: ptr, iid: ptr, object: ptr) -> i32` | partial | uninitialized threads return CO_E_NOTINITIALIZED; ordinary runtime has no registered classes; remote activation is unsupported |
 | `combase.dll!CoCreateInstanceEx` | `(clsid: ptr, outer: ptr, class_context: u32, server_info: ptr, count: u32, results: ptr) -> i32` | partial | validates up to 64 MULTI_QI records; refuses remote or larger requests; ordinary runtime has no registered classes and output records remain unchanged on class lookup failure |
 | `combase.dll!PropVariantClear` | `(variant: ptr) -> i32` | partial | stops the guest for a null pointer, array, vector and by-reference forms, VT_BSTR, VT_UNKNOWN and VT_DISPATCH; their results or release paths are not modelled |
+| `libstdc++-6.dll!__cxa_guard_acquire` | `(guard: ptr) -> i32` | partial | stops the guest with the runtime-limit fault for a null, unaligned, unmapped, contended or reentrant guard |
+| `libstdc++-6.dll!_ZnwySt11align_val_t` | `(size: u64, alignment: u64) -> ptr` | partial | null with EINVAL for a zero or non-power-of-two alignment; null with ENOMEM when allocation fails |
+| `libstdc++-6.dll!_ZnaySt11align_val_t` | `(size: u64, alignment: u64) -> ptr` | partial | same allocation contract as the scalar aligned form |
+| `libstdc++-6.dll!_ZdlPvSt11align_val_t` | `(address: ptr, alignment: u64) -> void` | partial | null is harmless; exact block ownership is required; invalid alignment stops the guest without releasing |
+| `libstdc++-6.dll!_ZdaPvSt11align_val_t` | `(address: ptr, alignment: u64) -> void` | partial | same deletion contract as the scalar aligned form |
 | `libstdc++-6.dll!__cxa_guard_acquire` | `(guard: ptr) -> i32` | partial | -1 with ERROR_INVALID_PARAMETER for a null, unaligned, unmapped or contended guard |
 | `libstdc++-6.dll!__cxa_guard_release` | `(guard: ptr) -> void` | partial | stops the guest for a guard the calling thread did not acquire |
 | `libstdc++-6.dll!__cxa_guard_abort` | `(guard: ptr) -> void` | partial | stops the guest for a guard the calling thread did not acquire |

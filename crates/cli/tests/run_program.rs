@@ -432,13 +432,13 @@ fn program_arguments_arrive_as_they_were_written() {
 
 #[test]
 fn a_program_using_math_h_gets_its_results_from_the_runtime() {
-    // crt_math.c checks each of the 49 functions of #468 against values it
-    // carries, and exits with the number of the first check that failed.
+    // crt_math.c checks the 49 functions of #468 and the four binary32
+    // functions of #986, then exits with the number of the first failed check.
     for name in ["crt-math-O0", "crt-math-O2"] {
         let run = run_program(&crt_math(name), &[], &[]);
         assert_eq!(run.code, Some(0), "{name}: {}{}", run.stdout, run.stderr);
         assert_eq!(
-            run.stdout, "crt_math: 110 of 110 checks passed\r\n",
+            run.stdout, "crt_math: 117 of 117 checks passed\r\n",
             "{name}"
         );
         assert_eq!(run.stderr, "", "{name}");
@@ -447,7 +447,7 @@ fn a_program_using_math_h_gets_its_results_from_the_runtime() {
     assert_eq!(run.code, Some(67), "{}", run.stderr);
     assert_eq!(
         run.stdout,
-        "check 67 failed: atan2\r\ncrt_math: 109 of 110 checks passed\r\n"
+        "check 67 failed: atan2\r\ncrt_math: 116 of 117 checks passed\r\n"
     );
 }
 
