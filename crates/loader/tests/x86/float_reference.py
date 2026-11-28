@@ -360,6 +360,174 @@ def dot(fmt, a, b, imm, control, masks):
     return [total if imm // 2 ** i % 2 else 0 for i in range(count)], flags
 
 
+def fma(fmt, a, b, c, form, control):
+    """A fused multiply-add: one rounding of a*b, negated for `nm`, then c.
+
+    `form` is "add", "sub", "nmadd" or "nmsub". The product and the sum are
+    exact `Fraction`s, so the single rounding in `rounded` is the only one.
+    """
+    a, b, c = prepare(fmt, a, control), prepare(fmt, b, control), prepare(fmt, c, control)
+    de = DE if fmt.denormal(a) or fmt.denormal(b) or fmt.denormal(c) else 0
+    negate = form in ("nmadd", "nmsub")
+    subtract = form in ("sub", "nmsub")
+    product_sign = (fmt.neg(a) != fmt.neg(b)) != negate
+    addend_sign = fmt.neg(c) != subtract
+    zero_product = fmt.mag(a) == 0 or fmt.mag(b) == 0
+    infinite_product = fmt.isinf(a) or fmt.isinf(b)
+    invalid_product = zero_product and infinite_product
+    if fmt.nan(a) or fmt.nan(b) or fmt.nan(c):
+        chosen = a if fmt.nan(a) else b if fmt.nan(b) else c
+        signaling = fmt.snan(a) or fmt.snan(b) or fmt.snan(c)
+        return chosen | fmt.quiet, IE if signaling or invalid_product else 0
+    if invalid_product:
+        return default(fmt), IE
+    if infinite_product:
+        if fmt.isinf(c) and addend_sign != product_sign:
+            return default(fmt), IE
+        return fmt.inf + (fmt.top if product_sign else 0), de
+    if fmt.isinf(c):
+        return fmt.inf + (fmt.top if addend_sign else 0), de
+    x = fmt.value(a) * fmt.value(b)
+    if negate:
+        x = -x
+    y = fmt.value(c)
+    if subtract:
+        y = -y
+    total = x + y
+    if total == 0:
+        # An exact zero takes the common sign of two zeros of the same sign,
+        # and is negative for opposite signs only when rounding down.
+        sign = product_sign if product_sign == addend_sign else control["mode"] == DOWN
+        return fmt.encode(sign, Fraction(0)), de
+    out = rounded(fmt, total, control)
+    return out and (out[0], out[1] | de)
+
+
+def vector_fma(fmt, a, b, c, form, ordering, control, scalar):
+    """Lanes of a packed or scalar fused multiply-add, and the flags they raise.
+
+    The ordering is the position of the destination among the three sources:
+    132 multiplies the destination by the third, 213 the second by the
+    destination, and 231 the second by the third. The alternating families
+    subtract in even lanes and add in odd ones, or the other way round.
+    """
+    count = 1 if scalar else 128 // fmt.bits
+    mask = (1 << fmt.bits) - 1
+    result, flags = a, 0
+    for i in range(count):
+        lane_form = form
+        if form == "maddsub":
+            lane_form = "sub" if i % 2 == 0 else "add"
+        elif form == "msubadd":
+            lane_form = "add" if i % 2 == 0 else "sub"
+        av = (a >> (fmt.bits * i)) & mask
+        bv = (b >> (fmt.bits * i)) & mask
+        cv = (c >> (fmt.bits * i)) & mask
+        if ordering == "132":
+            x, y, z = av, cv, bv
+        elif ordering == "213":
+            x, y, z = bv, av, cv
+        else:
+            x, y, z = bv, cv, av
+        out = fma(fmt, x, y, z, lane_form, control)
+        if out is None:
+            return None
+        flags |= out[1]
+        result = (result & ~(mask << (fmt.bits * i))) | (out[0] << (fmt.bits * i))
+    return result, flags
+
+
+def build_fma():
+    """FMA3 vectors: every family, ordering, precision and operand form."""
+    rng = random.Random(0x464D4133)
+    lines = []
+    packed = [("fmadd", "add"), ("fmsub", "sub"), ("fnmadd", "nmadd"), ("fnmsub", "nmsub"),
+              ("fmaddsub", "maddsub"), ("fmsubadd", "msubadd")]
+    plain = packed[:4]
+    orderings = ("132", "213", "231")
+
+    def control(mode):
+        daz, ftz = rng.random() < 0.15, rng.random() < 0.15
+        return {"mode": mode, "daz": daz, "ftz": ftz,
+                "mxcsr": 0x1F80 | mode << 13 | daz << 6 | ftz << 15}
+
+    def pack(fmt, lanes):
+        return sum(v << (fmt.bits * i) for i, v in enumerate(lanes))
+
+    def emit(name, fmt, form, ordering, mode, a, b, c, scalar=False):
+        rules = control(mode)
+        out = vector_fma(fmt, a, b, c, form, ordering, rules, scalar)
+        if out is None:
+            return
+        result, flags = out
+        lines.append(f"{name} {rules['mxcsr']:x} {a:x} {b:x} {c:x} {result:x} {flags:x}\n")
+
+    for fmt, kind in ((S, "ps"), (D, "pd")):
+        count = 128 // fmt.bits
+        for stem, form in packed:
+            for ordering in orderings:
+                name = stem + ordering + kind
+                for _ in range(32):
+                    mode = rng.randrange(4)
+                    emit(name, fmt, form, ordering, mode,
+                         pack(fmt, [operands(fmt, rng) for _ in range(count)]),
+                         pack(fmt, [operands(fmt, rng) for _ in range(count)]),
+                         pack(fmt, [operands(fmt, rng) for _ in range(count)]))
+                # Every pair of special operands, with the addend cycling. The
+                # grid is kept to two families to bound the suite's run time.
+                if stem not in ("fmadd", "fnmsub"):
+                    continue
+                one, least = fmt.emax << fmt.frac, 1 << fmt.frac
+                special = [0, fmt.top, 1, least - 1, least, one - 1, one, one + least,
+                           fmt.inf - 1, fmt.inf, fmt.top + fmt.inf, fmt.inf + fmt.quiet + 5]
+                addends = [0, one, fmt.top + one, fmt.inf, fmt.top + fmt.inf, least - 1]
+                for n, x in enumerate(special):
+                    for m, y in enumerate(special):
+                        z = addends[(n + m) % len(addends)]
+                        emit(name, fmt, form, ordering, 0,
+                             pack(fmt, [x] * count), pack(fmt, [y] * count),
+                             pack(fmt, [z] * count))
+                # The product of two values either side of one is not exactly
+                # one: a fused result keeps the difference, a separately rounded
+                # product loses it.
+                near = one + (1 << (fmt.frac - 1))
+                below = one - (1 << (fmt.frac - 1))
+                if form in ("add", "sub", "nmadd", "nmsub"):
+                    for mode in range(4):
+                        for sign in (0, fmt.top):
+                            emit(name, fmt, form, ordering, mode,
+                                 pack(fmt, [near] * count), pack(fmt, [below | sign] * count),
+                                 pack(fmt, [one | fmt.top] * count))
+    for fmt, kind in ((S, "ss"), (D, "sd")):
+        count = 128 // fmt.bits
+        for stem, form in plain:
+            for ordering in orderings:
+                name = stem + ordering + kind
+                for _ in range(32):
+                    mode = rng.randrange(4)
+                    emit(name, fmt, form, ordering, mode,
+                         pack(fmt, [operands(fmt, rng) for _ in range(count)]),
+                         pack(fmt, [operands(fmt, rng) for _ in range(count)]),
+                         pack(fmt, [operands(fmt, rng) for _ in range(count)]), scalar=True)
+                if stem not in ("fmadd", "fnmsub"):
+                    continue
+                one, least = fmt.emax << fmt.frac, 1 << fmt.frac
+                special = [0, fmt.top, 1, least, one, fmt.inf]
+                for x in special:
+                    for y in special:
+                        for z in (0, one, fmt.inf):
+                            emit(name, fmt, form, ordering, 0,
+                                 pack(fmt, [x] * count), pack(fmt, [y] * count),
+                                 pack(fmt, [z] * count), scalar=True)
+                near = one + (1 << (fmt.frac - 1))
+                below = one - (1 << (fmt.frac - 1))
+                for mode in range(4):
+                    emit(name, fmt, form, ordering, mode,
+                         pack(fmt, [near] * count), pack(fmt, [below] * count),
+                         pack(fmt, [one | fmt.top] * count), scalar=True)
+    return "".join(lines)
+
+
 def from_int(fmt, v, bits, control):
     x = v - 2 ** bits if v >= 2 ** (bits - 1) else v
     return rounded(fmt, Fraction(x), control) if x else (0, 0)
@@ -548,7 +716,8 @@ def build_dots():
 def main(argv):
     if len(argv) != 2 or argv[1] not in ("generate", "--check"):
         sys.exit("usage: float_reference.py generate|--check")
-    for name, text in (("float_vectors.txt", build()), ("dot_vectors.txt", build_dots())):
+    for name, text in (("float_vectors.txt", build()), ("dot_vectors.txt", build_dots()),
+                       ("fma_vectors.txt", build_fma())):
         if argv[1] == "generate":
             (HERE / name).write_text(text)
         elif (HERE / name).read_text() != text:

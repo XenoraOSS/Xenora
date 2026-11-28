@@ -678,3 +678,64 @@ fn device_control_library_ex_and_the_fixed_environment() {
         0
     );
 }
+
+/// The NUL device, as DOS device names resolve it: the final component's
+/// base name is `nul` in any directory position, writes discard and succeed,
+/// reads answer end of file, and the device needs no directory behind it.
+/// https://learn.microsoft.com/windows/win32/fileio/naming-a-file#win32-device-namespaces
+#[test]
+fn the_nul_device_discards_writes_and_reads_end_of_file() {
+    const OUT: u64 = SCRATCH + 0x400;
+    const GOT: u64 = SCRATCH + 0x808;
+    let mut guest = Guest::new(IMPORTS, &[]);
+    // The plain name, an upper-case spelling, a drive prefix, a directory
+    // position and a meaningless extension all name the same device, and the
+    // directory position needs no directory to exist.
+    for name in ["nul", "NUL", "C:\\nul", "missing\\dir\\nul", "nul.txt"] {
+        let handle = create_file_disposition(&mut guest, name, GENERIC_READ | GENERIC_WRITE, 4);
+        assert_ne!(handle, INVALID_HANDLE_VALUE, "{name}");
+        // A write discards and reports the count, exactly as the device does.
+        guest.memory.write_bytes(OUT, b"discarded").unwrap();
+        assert_eq!(
+            guest.call("WriteFile", &[handle, OUT, 9, GOT, 0]),
+            1,
+            "{name}"
+        );
+        assert_eq!(guest.u32_at(GOT), 9, "{name}");
+        // A read answers end of file: success with zero bytes.
+        assert_eq!(
+            guest.call("ReadFile", &[handle, OUT, 16, GOT, 0]),
+            1,
+            "{name}"
+        );
+        assert_eq!(guest.u32_at(GOT), 0, "{name}");
+        // The device is a character device, not a disk file.
+        assert_eq!(
+            guest.call("GetFileType", &[handle]),
+            FILE_TYPE_CHAR,
+            "{name}"
+        );
+        assert_eq!(guest.call("CloseHandle", &[handle]), 1, "{name}");
+    }
+    // The device leaves no trace on the drive: nothing enumerates it.
+    let probe = create_file_disposition(&mut guest, "nul", GENERIC_WRITE, 1);
+    assert_ne!(
+        probe, INVALID_HANDLE_VALUE,
+        "even CREATE_NEW opens the device"
+    );
+    assert_eq!(guest.call("CloseHandle", &[probe]), 1);
+    narrow_at(&mut guest, SCRATCH, "nul");
+    assert_eq!(
+        guest.call("GetFileAttributesA", &[SCRATCH]) & 0xFFFF_FFFF,
+        0xFFFF_FFFF,
+        "the device is not a drive file"
+    );
+    // A component after the device name cannot resolve - nothing traverses
+    // into a device - and the other DOS device names stay rejected.
+    let bad = create_file_disposition(&mut guest, "nul\\child", GENERIC_WRITE, 4);
+    assert_eq!(bad, INVALID_HANDLE_VALUE);
+    for device in ["con", "prn", "aux", "com1", "lpt1"] {
+        let bad = create_file_disposition(&mut guest, device, GENERIC_WRITE, 4);
+        assert_eq!(bad, INVALID_HANDLE_VALUE, "{device}");
+    }
+}

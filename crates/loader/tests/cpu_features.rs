@@ -241,7 +241,6 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
             &[0x66, 0x0F, 0x3A, 0x44, 0xC1, 0x00],
         ), // pclmulqdq xmm0, xmm1, 0
         ("SSSE3", 1, ECX, 9, &[0x0F, 0x38, 0x00, 0xC1]), // pshufb mm0, mm1
-        ("FMA", 1, ECX, 12, &[0xC4, 0xE2, 0x71, 0x98, 0xC2]), // vfmadd132ps xmm0, xmm1, xmm2
         ("MOVBE", 1, ECX, 22, &[0x0F, 0x38, 0xF0, 0x06]), // movbe eax, [rsi]
         ("AESNI", 1, ECX, 25, &[0x66, 0x0F, 0x38, 0xDC, 0xC1]), // aesenc xmm0, xmm1
         ("XSAVE", 1, ECX, 26, &[0x0F, 0x01, 0xD0]),      // xgetbv
@@ -253,9 +252,9 @@ fn unreported_features_each_have_an_instruction_that_is_refused() {
         ("BMI1", 7, EBX, 3, &[0xC4, 0xE2, 0x70, 0xF7, 0xC2]), // bextr eax, edx, ecx
         ("AVX2", 7, EBX, 5, &[0xC4, 0xE2, 0x75, 0x47, 0xC2]), // vpsllvd ymm0, ymm1, ymm2
         ("BMI2", 7, EBX, 8, &[0xC4, 0xE2, 0x73, 0xF6, 0xC2]), // mulx eax, ecx, edx
-        ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),     // rdseed eax
+        ("RDSEED", 7, EBX, 18, &[0x0F, 0xC7, 0xF8]),          // rdseed eax
         ("ADX", 7, EBX, 19, &[0x66, 0x0F, 0x38, 0xF6, 0xC1]), // adcx eax, ecx
-        ("SHA", 7, EBX, 29, &[0x0F, 0x38, 0xC9, 0xC1]),  // sha1msg1 xmm0, xmm1
+        ("SHA", 7, EBX, 29, &[0x0F, 0x38, 0xC9, 0xC1]),       // sha1msg1 xmm0, xmm1
         ("PREFETCHW", 0x8000_0001, ECX, 8, &[0x0F, 0x0D, 0x0E]), // prefetchw [rsi]
         ("SYSCALL/SYSRET", 0x8000_0001, EDX, 11, &[0x48, 0x0F, 0x07]), // sysretq
         ("RDTSCP", 0x8000_0001, EDX, 27, &[0x0F, 0x01, 0xF9]), // rdtscp
@@ -321,6 +320,37 @@ fn sse4_is_complete_but_unreported_while_its_prerequisites_are() {
         ([0; 4], 0),
         "SSE, SSE2, SSE3 and SSSE3 come before SSE4"
     );
+}
+
+/// The whole FMA3 family runs, in both engines and through `tests/x86_fma.rs`,
+/// but the bit stays clear until independent acceptance.
+#[test]
+fn fma_is_complete_but_unreported() {
+    let fixture = include_str!("x86/fma.txt");
+    let has = |name: &str, memory: bool| {
+        fixture.lines().any(|line| {
+            let text = line.split_once(" | ").unwrap().1;
+            text.split(' ').next() == Some(name) && text.contains(" ptr ") == memory
+        })
+    };
+    for family in ["fmadd", "fmsub", "fnmadd", "fnmsub", "fmaddsub", "fmsubadd"] {
+        let alternating = family.starts_with("fmaddsub") || family.starts_with("fmsubadd");
+        for ordering in ["132", "213", "231"] {
+            for kind in ["ps", "pd"] {
+                let name = format!("v{family}{ordering}{kind}");
+                assert!(has(&name, false) && has(&name, true), "{name}");
+            }
+            if alternating {
+                continue;
+            }
+            for kind in ["ss", "sd"] {
+                let name = format!("v{family}{ordering}{kind}");
+                assert!(has(&name, false) && has(&name, true), "{name}");
+            }
+        }
+    }
+    let [_, _, ecx, _] = cpuid(1, 0);
+    assert_eq!(ecx >> 12 & 1, 0, "FMA is reported before acceptance");
 }
 
 #[test]

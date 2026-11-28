@@ -1010,6 +1010,41 @@ fn closing_a_standard_descriptor_succeeds_and_fails_everything_after() {
 }
 
 #[test]
+fn the_nul_device_is_open_read_and_written_through_the_crt() {
+    let (mut guest, [_, _, _]) = stdio_guest();
+    let buf = TEXT + 0x4000;
+    // `_open` of the device names succeeds for reading and writing alike,
+    // in any directory position and with the extension the name rules strip.
+    for name in [b"nul\0".as_slice(), b"NUL.TXT\0", b"dev\\nul\0"] {
+        guest.memory.write_bytes(NAME, name).unwrap();
+        let fd = guest.call("_open", &[NAME, 2 | 0x8000, 0]) & 0xFFFF_FFFF;
+        assert!((3..0x8000).contains(&fd), "{fd:x} for {name:?}");
+        // A write discards and reports the count.
+        guest.memory.write_bytes(buf, b"noise").unwrap();
+        assert_eq!(guest.call("_write", &[fd, buf, 5]) & 0xFFFF_FFFF, 5);
+        // A read is end of file: a zero count, no error.
+        assert_eq!(guest.call("_read", &[fd, buf, 8]) & 0xFFFF_FFFF, 0);
+        assert_eq!(guest.call("_close", &[fd]) & 0xFFFF_FFFF, 0);
+    }
+    // The device is no drive file: `_access` of the plain name misses it,
+    // exactly as the drive has no such entry.
+    guest.memory.write_bytes(NAME, b"nul\0").unwrap();
+    guest.set_errno(0);
+    assert_eq!(
+        guest.call("_access", &[NAME, 0]) & 0xFFFF_FFFF,
+        (-1i32) as u32 as u64
+    );
+    // A component after the device name cannot resolve, and the other DOS
+    // device names stay rejected.
+    for bad in [b"nul\\child\0".as_slice(), b"con\0", b"com1\0"] {
+        guest.memory.write_bytes(NAME, bad).unwrap();
+        guest.set_errno(0);
+        let fd = guest.call("_open", &[NAME, 2, 0]) & 0xFFFF_FFFF;
+        assert_eq!(fd, (-1i32) as u32 as u64, "{bad:?}");
+    }
+}
+
+#[test]
 fn snprintf_writes_inside_the_buffer_and_returns_the_would_be_length() {
     let one_slot = &[42];
     // A fit: the text, its terminator, and the result is the length. The
@@ -9104,4 +9139,46 @@ fn invalid_guard_release_and_abort_fail_closed() {
     guest.call("__cxa_guard_abort", &[SCRATCH]);
     assert_eq!(guest.memory.read_u8(SCRATCH).unwrap(), 0);
     assert_eq!(guest.call("__cxa_guard_acquire", &[SCRATCH]), 1);
+}
+
+/// E_POINTER for a null out pointer, E_NOTIMPL for a nonzero flag, and a
+/// null out pointer after a call that failed.
+#[test]
+fn xaudio2_create_reports_pointer_and_flag_failures() {
+    let mut guest = Guest::new();
+    assert_eq!(
+        guest.call("XAudio2Create", &[0, 0, 1]) as u32,
+        0x8000_4003,
+        "a null out pointer"
+    );
+    guest.memory.write_u64(SCRATCH, 0x1234).unwrap();
+    assert_eq!(
+        guest.call("XAudio2Create", &[SCRATCH, 1, 1]) as u32,
+        0x8000_4001,
+        "a nonzero flag"
+    );
+    assert_eq!(guest.memory.read_u64(SCRATCH).unwrap(), 0);
+    assert_eq!(guest.call("XAudio2Create", &[SCRATCH, 0, 1]) as u32, 0);
+    assert_ne!(guest.memory.read_u64(SCRATCH).unwrap(), 0);
+}
+
+/// The version argument of XAudio2CreateWithVersionInfo is accepted and
+/// recorded with the engine it created.
+#[test]
+fn xaudio2_create_with_version_info_records_the_version_argument() {
+    let mut guest = Guest::new();
+    guest.memory.write_u64(SCRATCH, 0).unwrap();
+    assert_eq!(
+        guest.call(
+            "XAudio2CreateWithVersionInfo",
+            &[SCRATCH, 0, 1, 0x0A00_0000]
+        ) as u32,
+        0
+    );
+    let engine = guest.memory.read_u64(SCRATCH).unwrap();
+    assert_ne!(engine, 0);
+    assert_eq!(
+        guest.state.xaudio2_engine_version(engine),
+        Some(0x0A00_0000)
+    );
 }

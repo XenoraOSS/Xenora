@@ -6,13 +6,13 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 
 | Measure | Count |
 | --- | ---: |
-| Services with a declared ABI | 300 |
-| Generated adapters | 300 |
-| Unique handler implementations | 282 |
+| Services with a declared ABI | 302 |
+| Generated adapters | 302 |
+| Unique handler implementations | 284 |
 | Implemented | 101 |
-| Partial | 199 |
+| Partial | 201 |
 | Stub | 0 |
-| Conformance-tested through guest dispatch | 300 |
+| Conformance-tested through guest dispatch | 302 |
 | API-set aliases (not services) | 373 |
 | Independently accepted | 0 |
 
@@ -316,10 +316,7 @@ A declared service is not a claim of compatibility. `implemented` and `partial` 
 | `combase.dll!CoCreateInstanceEx` | `(clsid: ptr, outer: ptr, class_context: u32, server_info: ptr, count: u32, results: ptr) -> i32` | partial | validates up to 64 MULTI_QI records; refuses remote or larger requests; ordinary runtime has no registered classes and output records remain unchanged on class lookup failure |
 | `combase.dll!PropVariantClear` | `(variant: ptr) -> i32` | partial | stops the guest for a null pointer, array, vector and by-reference forms, VT_BSTR, VT_UNKNOWN and VT_DISPATCH; their results or release paths are not modelled |
 | `libstdc++-6.dll!__cxa_guard_acquire` | `(guard: ptr) -> i32` | partial | stops the guest with the runtime-limit fault for a null, unaligned, unmapped, contended or reentrant guard |
-| `libstdc++-6.dll!_ZnwySt11align_val_t` | `(size: u64, alignment: u64) -> ptr` | partial | null with EINVAL for a zero or non-power-of-two alignment; null with ENOMEM when allocation fails |
-| `libstdc++-6.dll!_ZnaySt11align_val_t` | `(size: u64, alignment: u64) -> ptr` | partial | same allocation contract as the scalar aligned form |
-| `libstdc++-6.dll!_ZdlPvSt11align_val_t` | `(address: ptr, alignment: u64) -> void` | partial | null is harmless; exact block ownership is required; invalid alignment stops the guest without releasing |
-| `libstdc++-6.dll!_ZdaPvSt11align_val_t` | `(address: ptr, alignment: u64) -> void` | partial | same deletion contract as the scalar aligned form |
-| `libstdc++-6.dll!__cxa_guard_acquire` | `(guard: ptr) -> i32` | partial | -1 with ERROR_INVALID_PARAMETER for a null, unaligned, unmapped or contended guard |
 | `libstdc++-6.dll!__cxa_guard_release` | `(guard: ptr) -> void` | partial | stops the guest for a guard the calling thread did not acquire |
 | `libstdc++-6.dll!__cxa_guard_abort` | `(guard: ptr) -> void` | partial | stops the guest for a guard the calling thread did not acquire |
+| `xaudio2_9.dll!XAudio2Create` | `(ppv: ptr, flags: u32, processor: u32) -> i32` | partial | E_POINTER for a null or an unwritable out pointer; E_NOTIMPL for a nonzero flag; the out pointer is set to null before a call that fails |
+| `xaudio2_9.dll!XAudio2CreateWithVersionInfo` | `(ppv: ptr, flags: u32, processor: u32, version: u32) -> i32` | partial | E_POINTER for a null or an unwritable out pointer; E_NOTIMPL for a nonzero flag; the version argument is accepted and recorded; the out pointer is set to null before a call that fails |
