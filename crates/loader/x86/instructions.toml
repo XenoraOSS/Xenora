@@ -5778,6 +5778,66 @@ src = "q"
 nds = true
 
 [[vex]]
+op = "haddps"
+map = "0f"
+prefix = "f2"
+opcode = 0x7c
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "hsubps"
+map = "0f"
+prefix = "f2"
+opcode = 0x7d
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "addsubps"
+map = "0f"
+prefix = "f2"
+opcode = 0xd0
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "haddpd"
+map = "0f"
+prefix = "66"
+opcode = 0x7c
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "hsubpd"
+map = "0f"
+prefix = "66"
+opcode = 0x7d
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
+op = "addsubpd"
+map = "0f"
+prefix = "66"
+opcode = 0xd0
+enc = "xmm_rm"
+length = "any"
+src = "v"
+nds = true
+
+[[vex]]
 op = "addps"
 map = "0f"
 opcode = 0x58
