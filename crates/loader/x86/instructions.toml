@@ -5478,8 +5478,8 @@ map = "0f"
 prefix = "66"
 opcode = 0x70
 enc = "xmm_rm_imm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "pshufhw"
@@ -5487,8 +5487,8 @@ map = "0f"
 prefix = "f3"
 opcode = 0x70
 enc = "xmm_rm_imm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "pshuflw"
@@ -5496,8 +5496,8 @@ map = "0f"
 prefix = "f2"
 opcode = 0x70
 enc = "xmm_rm_imm"
-length = "128"
-src = "x"
+length = "any"
+src = "v"
 
 [[vex]]
 op = "shufps"
