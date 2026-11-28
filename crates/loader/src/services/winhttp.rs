@@ -21,6 +21,10 @@ use std::time::Duration;
 mod request_headers;
 mod url;
 
+/// The caller-owned opaque value Windows stores on every WinHTTP handle
+/// (Microsoft Learn, WINHTTP_OPTION_CONTEXT_VALUE in "Option Flags").
+const WINHTTP_OPTION_CONTEXT_VALUE: u32 = 78;
+
 const MODULE: &str = "winhttp.dll";
 const MAX_HANDLES: usize = 256;
 const MAX_WIDE_UNITS: usize = 512;
@@ -318,6 +322,9 @@ fn resolve_redirect(transport: &mut TransportState, location: &str) -> Result<()
 pub(super) struct WinHttpHandles {
     next: u64,
     handles: BTreeMap<u64, HandleKind>,
+    /// WINHTTP_OPTION_CONTEXT_VALUE of each handle: the caller's own opaque
+    /// value, zero until set, exactly as Windows stores one per handle.
+    contexts: BTreeMap<u64, u64>,
 }
 
 impl WinHttpHandles {
@@ -327,6 +334,7 @@ impl WinHttpHandles {
 
     pub(super) fn close_all(&mut self) {
         self.handles.clear();
+        self.contexts.clear();
     }
 
     fn insert(&mut self, kind: HandleKind) -> Result<u64, u32> {
@@ -373,7 +381,26 @@ impl WinHttpHandles {
     }
 
     fn close(&mut self, handle: u64) -> bool {
+        self.contexts.remove(&handle);
         self.handles.remove(&handle).is_some()
+    }
+
+    /// The handle's context value, or its absence when the handle itself is
+    /// no handle: reading and writing the context of a closed handle fails
+    /// with the invalid-handle error, exactly as every other per-handle
+    /// state does.
+    fn context(&self, handle: u64) -> Option<u64> {
+        self.handles
+            .contains_key(&handle)
+            .then(|| self.contexts.get(&handle).copied().unwrap_or(0))
+    }
+
+    fn set_context(&mut self, handle: u64, value: u64) -> Result<(), u32> {
+        if !self.handles.contains_key(&handle) {
+            return Err(ERROR_INVALID_HANDLE);
+        }
+        self.contexts.insert(handle, value);
+        Ok(())
     }
 }
 
@@ -1472,6 +1499,23 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         "WinHttpSetOption",
         ServiceStatus::Partial,
         move |args, cpu, memory| {
+            // WINHTTP_OPTION_CONTEXT_VALUE carries a DWORD_PTR, eight bytes
+            // here; the timeouts are four. The size is part of the option's
+            // own contract (Microsoft Learn, "Option Flags").
+            if args.rdx as u32 == WINHTTP_OPTION_CONTEXT_VALUE {
+                if args.r8 == 0 || args.r9 as u32 != 8 {
+                    return set_option.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
+                }
+                let value = match memory.read_u64(args.r8) {
+                    Ok(value) => value,
+                    Err(_) => return set_option.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0),
+                };
+                let mut handles = set_option.winhttp.lock().expect("WinHTTP handle table");
+                return match handles.set_context(args.rcx, value) {
+                    Ok(()) => Ok(1),
+                    Err(error) => set_option.fail(cpu.gs_base, error, 0),
+                };
+            }
             if args.r8 == 0 || args.r9 as u32 != 4 {
                 return set_option.fail(cpu.gs_base, ERROR_INVALID_PARAMETER, 0);
             }
@@ -2192,6 +2236,23 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             }
             let length_ptr = args.r9;
             let capacity = memory.read_u32(length_ptr).map_err(memory_fault)?;
+            if args.rdx as u32 == WINHTTP_OPTION_CONTEXT_VALUE {
+                let value = {
+                    let handles = query_option.winhttp.lock().expect("WinHTTP handle table");
+                    match handles.context(args.rcx) {
+                        Some(value) => value,
+                        None => {
+                            return query_option.fail(cpu.gs_base, ERROR_INVALID_HANDLE, 0);
+                        }
+                    }
+                };
+                memory.write_u32(length_ptr, 8).map_err(memory_fault)?;
+                if args.r8 == 0 || capacity < 8 {
+                    return query_option.fail(cpu.gs_base, ERROR_INSUFFICIENT_BUFFER, 0);
+                }
+                memory.write_u64(args.r8, value).map_err(memory_fault)?;
+                return Ok(1);
+            }
             let mut timeouts = {
                 let handles = query_option.winhttp.lock().expect("WinHTTP handle table");
                 match handles.kind(args.rcx) {
@@ -2673,6 +2734,55 @@ mod tests {
             );
             assert_eq!(fixture.memory.read_u32(0x2920).unwrap(), expected);
         }
+    }
+
+    /// WINHTTP_OPTION_CONTEXT_VALUE is the caller's own opaque per-handle
+    /// value: zero until set, an eight-byte DWORD_PTR on this bitness, and
+    /// gone with the handle (Microsoft Learn, "Option Flags").
+    #[test]
+    fn context_value_round_trips_per_handle_and_dies_with_it() {
+        let mut fixture = Fixture::new();
+        let (session, connection) = fixture.open_connection();
+        assert_ne!(connection, 0);
+        // Unset reads as zero.
+        fixture.memory.write_u32(0x2900, 8).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[session, 78, 0x2920, 0x2900]),
+            1
+        );
+        assert_eq!(fixture.memory.read_u64(0x2920).unwrap(), 0);
+        // Set then query returns the exact value, here on two handles that
+        // do not share one context.
+        fixture.memory.write_u64(0x2910, 0xDEAD_BEEF_CAFE).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpSetOption", &[session, 78, 0x2910, 8]),
+            1
+        );
+        fixture.memory.write_u32(0x2900, 8).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[connection, 78, 0x2920, 0x2900]),
+            1
+        );
+        assert_eq!(fixture.memory.read_u64(0x2920).unwrap(), 0);
+        fixture.memory.write_u32(0x2900, 8).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[session, 78, 0x2920, 0x2900]),
+            1
+        );
+        assert_eq!(fixture.memory.read_u64(0x2920).unwrap(), 0xDEAD_BEEF_CAFE);
+        // The size is part of the contract: four bytes is not the option.
+        assert_eq!(
+            fixture.call("WinHttpSetOption", &[session, 78, 0x2910, 4]),
+            0
+        );
+        // Closing the handle ends its context: the same numeric handle is no
+        // handle at all, exactly as its other state is gone.
+        assert_eq!(fixture.call("WinHttpCloseHandle", &[session]), 1);
+        fixture.memory.write_u32(0x2900, 8).unwrap();
+        assert_eq!(
+            fixture.call("WinHttpQueryOption", &[session, 78, 0x2920, 0x2900]),
+            0
+        );
     }
 
     #[test]
