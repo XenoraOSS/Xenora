@@ -4,3 +4,5 @@
 
 #[path = "runner_graphics.rs"]
 pub mod hosted_graphics;
+
+pub mod host_output;
