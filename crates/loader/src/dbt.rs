@@ -225,12 +225,17 @@ impl Drop for LinkArena {
 /// A cached block is only valid while those bytes are still executable at the
 /// same address. Guest stores into code (Intel SDM Vol. 3A 11.6) and a different
 /// address space at the same address both change them.
+#[derive(Clone)]
 struct CachedBlock {
     code: *const u8,
     start: u64,
     source: Box<[u8]>,
     /// Link records of a full block; null for a budget-limited one.
     links: *mut BlockLinks,
+    /// Guest instructions the emitted block runs before returning. A cached
+    /// block is safe for any budget at least this large, regardless of the
+    /// limit it was translated with.
+    instructions: usize,
 }
 
 /// A block the dispatcher selected: its entry point and, for a full block,
@@ -247,6 +252,18 @@ impl CachedBlock {
             matches!(memory.fetch_instruction_byte(address), Ok(current) if current == byte)
         })
     }
+}
+
+/// Record a hit on a cached translation whose guest bytes still match.
+fn record_cache_hit(
+    cached: &CachedBlock,
+    metrics: &mut DbtMetrics,
+    link_metrics: &mut LinkMetrics,
+    profile: &mut DbtProfile,
+) {
+    metrics.cache_hits += 1;
+    link_metrics.bytes_verified += cached.source.len();
+    profile.verified_cache_bytes += cached.source.len() as u64;
 }
 
 /// Dynamic Binary Translator and native execution runtime.
@@ -284,6 +301,9 @@ pub struct DbtEngine {
     jit: JitMemory,
     block_cache: HashMap<u64, CachedBlock>,
     limited_block_cache: HashMap<(u64, usize), CachedBlock>,
+    /// Block limits cached for each entry address, so a limited selection can
+    /// find a compatible translation without scanning the whole cache.
+    limited_block_limits: HashMap<u64, Vec<usize>>,
     assembler: Arm64Assembler,
     /// Scratch for fault-patch positions while a block is emitted. Its length
     /// is always zero between translations; keeping only the capacity avoids
@@ -318,6 +338,7 @@ impl DbtEngine {
             jit: JitMemory::new(capacity)?,
             block_cache: HashMap::new(),
             limited_block_cache: HashMap::new(),
+            limited_block_limits: HashMap::new(),
             assembler: Arm64Assembler::new(),
             fault_guard_scratch: Vec::new(),
             decoded_blocks: Vec::new(),
@@ -671,6 +692,24 @@ impl DbtEngine {
         result
     }
 
+    /// Remove every budget-limited translation of `rip`. The entries are
+    /// aliases of the same guest bytes, so once one is stale all must go.
+    fn retire_limited_entries(&mut self, rip: u64) {
+        if let Some(limits) = self.limited_block_limits.remove(&rip) {
+            for limit in limits {
+                self.limited_block_cache.remove(&(rip, limit));
+            }
+        }
+    }
+
+    /// Remember that `rip` has a limited translation for `limit`.
+    fn add_limited_limit(&mut self, rip: u64, limit: usize) {
+        let limits = self.limited_block_limits.entry(rip).or_default();
+        if !limits.contains(&limit) {
+            limits.push(limit);
+        }
+    }
+
     fn select_block(
         &mut self,
         rip: u64,
@@ -680,9 +719,12 @@ impl DbtEngine {
         if block_limit == MAX_BLOCK_INSTRUCTIONS {
             if let Some(cached) = self.block_cache.get(&rip) {
                 if cached.is_current(memory) {
-                    self.metrics.cache_hits += 1;
-                    self.link_metrics.bytes_verified += cached.source.len();
-                    self.profile.verified_cache_bytes += cached.source.len() as u64;
+                    record_cache_hit(
+                        cached,
+                        &mut self.metrics,
+                        &mut self.link_metrics,
+                        &mut self.profile,
+                    );
                     if !cached.links.is_null() {
                         // SAFETY: owned by `self.links`; no translated code
                         // runs while the dispatcher selects a block.
@@ -715,27 +757,94 @@ impl DbtEngine {
             return Ok(selected);
         }
 
-        // Keep budget-limited blocks separate so they cannot shorten a later run.
+        // An exact entry is still the first choice: it has the longest block
+        // this budget can execute without another dispatch.
         let key = (rip, block_limit);
+        let mut stale_key = false;
         if let Some(cached) = self.limited_block_cache.get(&key) {
             if cached.is_current(memory) {
-                self.metrics.cache_hits += 1;
-                self.link_metrics.bytes_verified += cached.source.len();
-                self.profile.verified_cache_bytes += cached.source.len() as u64;
+                record_cache_hit(
+                    cached,
+                    &mut self.metrics,
+                    &mut self.link_metrics,
+                    &mut self.profile,
+                );
+                // Budget-limited selections never install or follow links:
+                // there is no full block of headroom left after them.
                 return Ok(SelectedBlock {
                     code: cached.code,
                     links: std::ptr::null_mut(),
                 });
             }
+            stale_key = true;
             self.metrics.blocks_invalidated += 1;
         }
+
+        // A cached block that runs no more instructions than this exact budget
+        // returns before the budget is spent, so it is safe under any larger
+        // limit. Prefer the longest such block. Its own exit stub cannot follow
+        // a link with less than a full block of budget left, so a full block
+        // reused here is still indistinguishable from a limited one.
+        let mut best: Option<(usize, Option<usize>)> = None;
+        if let Some(cached) = self.block_cache.get(&rip)
+            && cached.is_current(memory)
+            && cached.instructions <= block_limit
+        {
+            best = Some((cached.instructions, None));
+        }
+        if let Some(limits) = self.limited_block_limits.get(&rip) {
+            for &limit in limits {
+                if limit == block_limit {
+                    continue;
+                }
+                if let Some(cached) = self.limited_block_cache.get(&(rip, limit))
+                    && cached.is_current(memory)
+                    && cached.instructions <= block_limit
+                    && best.is_none_or(|(instructions, _)| cached.instructions > instructions)
+                {
+                    best = Some((cached.instructions, Some(limit)));
+                }
+            }
+        }
+
+        if let Some((_, source_limit)) = best {
+            let alias = match source_limit {
+                Some(limit) => self.limited_block_cache[&(rip, limit)].clone(),
+                None => self.block_cache[&rip].clone(),
+            };
+            if stale_key {
+                self.retire_limited_entries(rip);
+            }
+            record_cache_hit(
+                &alias,
+                &mut self.metrics,
+                &mut self.link_metrics,
+                &mut self.profile,
+            );
+            let selected = SelectedBlock {
+                code: alias.code,
+                links: std::ptr::null_mut(),
+            };
+            // Cache the alias so the next identical budget takes the exact
+            // path instead of searching for a compatible block again.
+            if !self.limited_block_cache.contains_key(&key) {
+                self.limited_block_cache.insert(key, alias);
+                self.add_limited_limit(rip, block_limit);
+            }
+            return Ok(selected);
+        }
+
         self.metrics.cache_misses += 1;
         let compiled = self.compile_block(rip, memory, block_limit)?;
+        if stale_key {
+            self.retire_limited_entries(rip);
+        }
         let selected = SelectedBlock {
             code: compiled.code,
             links: std::ptr::null_mut(),
         };
         self.limited_block_cache.insert(key, compiled);
+        self.add_limited_limit(rip, block_limit);
         Ok(selected)
     }
 
@@ -804,6 +913,7 @@ impl DbtEngine {
         // Emitted code holds pointers to these instructions for helper calls,
         // so the allocation lives as long as the engine's code cache.
         let insns = decoded.into_boxed_slice();
+        let instructions = insns.len();
 
         // Reuse the emission buffer across cold block translations.
         let asm = &mut self.assembler;
@@ -913,6 +1023,7 @@ impl DbtEngine {
             start: start_rip,
             source,
             links,
+            instructions,
         })
     }
 }
@@ -2581,6 +2692,106 @@ mod tests {
         assert_eq!(engine.metrics.blocks_compiled, 3);
         assert_eq!(engine.metrics.cache_misses, 3);
         assert_eq!(engine.metrics.cache_hits, 2);
+    }
+
+    #[test]
+    fn repeated_exact_budgets_reuse_compatible_blocks() {
+        let code = [
+            0x48, 0x83, 0xC0, 0x01, // add rax, 1
+            0x48, 0x83, 0xC0, 0x01, // add rax, 1
+            0xF4, // hlt
+        ];
+        let (mut engine, initial, mut memory) = fixture(&code);
+
+        for budget in 1..=8 {
+            let mut cpu = initial.clone();
+            let result = engine.run(&mut cpu, &mut memory, budget);
+            if budget < 3 {
+                assert_eq!(result.exit_reason, ExitReason::StepLimitExceeded);
+                assert_eq!(result.instructions_executed, budget);
+                assert_eq!(cpu.rip, ENTRY + 4 * budget as u64);
+                assert_eq!(cpu.get(Register::Rax), budget as u64);
+            } else {
+                assert_eq!(result.exit_reason, ExitReason::Halt);
+                assert_eq!(result.instructions_executed, 3);
+                assert_eq!(cpu.get(Register::Rax), 2);
+            }
+        }
+
+        // The old cache compiled one translation for every budget. A single
+        // translation of each distinct prefix now serves all eight budgets.
+        assert_eq!(engine.metrics.blocks_compiled, 3);
+        assert_eq!(engine.metrics.cache_misses, 3);
+        assert!(engine.metrics.cache_hits >= 5);
+    }
+
+    #[test]
+    fn a_reused_full_block_does_not_follow_its_link_under_a_short_budget() {
+        // add rax, 1; jmp ENTRY+8; two padding bytes; hlt
+        let code = [0x48, 0x83, 0xC0, 0x01, 0xEB, 0x02, 0x90, 0x90, 0xF4];
+        let (mut engine, initial, mut memory) = fixture(&code);
+
+        // Populate the full cache and its verified link target.
+        let mut cpu = initial.clone();
+        let whole = engine.run(&mut cpu, &mut memory, 16);
+        assert_eq!(whole.exit_reason, ExitReason::Halt);
+        assert_eq!(whole.instructions_executed, 3);
+        assert_eq!(engine.link_metrics.links_followed, 0);
+
+        let mut cpu = initial;
+        let limited = engine.run(&mut cpu, &mut memory, 2);
+        assert_eq!(limited.exit_reason, ExitReason::StepLimitExceeded);
+        assert_eq!(limited.instructions_executed, 2);
+        assert_eq!(cpu.rip, ENTRY + 8);
+        assert_eq!(cpu.get(Register::Rax), 1);
+        assert_eq!(engine.link_metrics.links_followed, 0);
+        // The two-instruction full block served the short budget directly.
+        assert_eq!(engine.metrics.blocks_compiled, 2);
+        assert_eq!(engine.metrics.cache_misses, 2);
+    }
+
+    #[test]
+    fn rewritten_bytes_invalidate_every_limited_alias() {
+        let code = [
+            0x48, 0x83, 0xC0, 0x01, // add rax, 1
+            0x48, 0x83, 0xC0, 0x01, // add rax, 1
+            0xF4, // hlt
+        ];
+        let (mut engine, mut memory) = writable_fixture(&code);
+        for budget in 1..=8 {
+            let mut cpu = CpuState::new(ENTRY, 0);
+            engine.run(&mut cpu, &mut memory, budget);
+        }
+        let compiled = engine.metrics.blocks_compiled;
+        assert_eq!(compiled, 3);
+
+        memory.write_bytes(ENTRY + 3, &[2]).unwrap();
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 8), 3);
+        assert_eq!(engine.metrics.blocks_compiled, compiled + 1);
+
+        // A budget whose alias was retired must use the new bytes too.
+        let mut cpu = CpuState::new(ENTRY, 0);
+        let result = engine.run(&mut cpu, &mut memory, 1);
+        assert_eq!(result.exit_reason, ExitReason::StepLimitExceeded);
+        assert_eq!(cpu.get(Register::Rax), 2);
+        assert_eq!(engine.metrics.blocks_compiled, compiled + 2);
+    }
+
+    #[test]
+    fn a_limited_block_is_not_reused_in_another_address_space() {
+        let (mut engine, mut first) = writable_fixture(&mov_eax(1));
+        let (_, mut second) = writable_fixture(&mov_eax(7));
+
+        let mut cpu = CpuState::new(ENTRY, 0);
+        let first_result = engine.run(&mut cpu, &mut first, 1);
+        assert_eq!(first_result.exit_reason, ExitReason::StepLimitExceeded);
+        assert_eq!(cpu.get(Register::Rax), 1);
+
+        let mut cpu = CpuState::new(ENTRY, 0);
+        let second_result = engine.run(&mut cpu, &mut second, 1);
+        assert_eq!(second_result.exit_reason, ExitReason::StepLimitExceeded);
+        assert_eq!(cpu.get(Register::Rax), 7);
+        assert_eq!(engine.metrics.blocks_compiled, 2);
     }
 
     #[test]
