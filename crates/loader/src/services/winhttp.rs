@@ -45,6 +45,7 @@ const WINHTTP_QUERY_SERVER: u32 = 37;
 const WINHTTP_QUERY_DATE: u32 = 9;
 const WINHTTP_QUERY_EXPIRES: u32 = 10;
 const WINHTTP_QUERY_LAST_MODIFIED: u32 = 11;
+const WINHTTP_QUERY_RAW_HEADERS_CRLF: u32 = 22;
 const WINHTTP_QUERY_FLAG_SYSTEMTIME: u32 = 0x4000_0000;
 const WINHTTP_QUERY_FLAG_NUMBER: u32 = 0x2000_0000;
 const WINHTTP_OPTION_RESOLVE_TIMEOUT: u32 = 2;
@@ -181,6 +182,10 @@ struct ResponseHead {
     status: u32,
     status_text: String,
     headers: Vec<(String, String)>,
+    /// Exact wire text of the final response head: the status line and each
+    /// header line in received order, every line CRLF-terminated, with no
+    /// trailing blank line.
+    raw: String,
 }
 
 struct TransportState {
@@ -646,6 +651,7 @@ fn parse_one_response_head(reader: &mut BufReader<TcpStream>) -> Result<Response
     let mut total = status_line.len() + 2;
     let status_text =
         String::from_utf8(status_line).map_err(|_| ERROR_WINHTTP_INVALID_SERVER_RESPONSE)?;
+    let mut raw = format!("{status_text}\r\n");
     let mut parts = status_text.splitn(3, ' ');
     let version = parts.next().ok_or(ERROR_WINHTTP_INVALID_SERVER_RESPONSE)?;
     let status = parts.next().ok_or(ERROR_WINHTTP_INVALID_SERVER_RESPONSE)?;
@@ -670,6 +676,8 @@ fn parse_one_response_head(reader: &mut BufReader<TcpStream>) -> Result<Response
             break;
         }
         let line = String::from_utf8(line).map_err(|_| ERROR_WINHTTP_INVALID_SERVER_RESPONSE)?;
+        raw.push_str(&line);
+        raw.push_str("\r\n");
         let Some((name, value)) = line.split_once(':') else {
             return Err(ERROR_WINHTTP_INVALID_SERVER_RESPONSE);
         };
@@ -683,6 +691,7 @@ fn parse_one_response_head(reader: &mut BufReader<TcpStream>) -> Result<Response
         status,
         status_text,
         headers,
+        raw,
     })
 }
 
@@ -1837,6 +1846,7 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
             let textual_content_type = info_level == WINHTTP_QUERY_CONTENT_TYPE;
             let textual_content_length = info_level == WINHTTP_QUERY_CONTENT_LENGTH;
             let textual_server = info_level == WINHTTP_QUERY_SERVER;
+            let raw_crlf = info_level == WINHTTP_QUERY_RAW_HEADERS_CRLF;
             let textual_date = matches!(
                 info_level,
                 WINHTTP_QUERY_DATE | WINHTTP_QUERY_EXPIRES | WINHTTP_QUERY_LAST_MODIFIED
@@ -1849,7 +1859,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                 || textual_status_text
                 || textual_content_type
                 || textual_content_length
-                || textual_server;
+                || textual_server
+                || raw_crlf;
             if !supported {
                 return query_headers.fail(cpu.gs_base, ERROR_NOT_SUPPORTED, 0);
             }
@@ -1921,6 +1932,8 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
                     response.status.to_string()
                 } else if textual_status_text {
                     response.status_text.clone()
+                } else if raw_crlf {
+                    response.raw.clone()
                 } else {
                     header_value
                         .and_then(|value| value)
@@ -3048,6 +3061,74 @@ mod tests {
             ERROR_WINHTTP_INCORRECT_HANDLE_STATE
         );
         assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn raw_headers_crlf_returns_the_exact_wire_head_with_documented_sizing() {
+        let (port, _captured, server) = serve_once(
+            b"HTTP/1.1 203 Non-Authoritative\r\nContent-Length: 11\r\nContent-Type: text/plain\r\nX-Server: fixture\r\n\r\nhello WORLD",
+        );
+        let mut fixture = Fixture::new();
+        let request = open_loopback_request(&mut fixture, port);
+        assert_eq!(
+            fixture.call("WinHttpSendRequest", &[request, 0, 0, 0, 0, 0, 0]),
+            1
+        );
+        assert_eq!(fixture.call("WinHttpReceiveResponse", &[request, 0]), 1);
+        let expected = "HTTP/1.1 203 Non-Authoritative\r\nContent-Length: 11\r\nContent-Type: text/plain\r\nX-Server: fixture\r\n";
+        let units = expected.encode_utf16().count();
+        let required = ((units + 1) * 2) as u32;
+        // Sizing: absent or short buffers report the required byte count
+        // including the terminator and write nothing.
+        for (buffer, capacity) in [(0u64, 0u32), (0x2a00, required - 2)] {
+            fixture.memory.write_u32(0x2908, capacity).unwrap();
+            assert_eq!(
+                fixture.call(
+                    "WinHttpQueryHeaders",
+                    &[
+                        request,
+                        WINHTTP_QUERY_RAW_HEADERS_CRLF as u64,
+                        0,
+                        buffer,
+                        0x2908,
+                        0
+                    ]
+                ),
+                0
+            );
+            assert_eq!(fixture.state.last_error(0), ERROR_INSUFFICIENT_BUFFER);
+            assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), required);
+        }
+        // Exact capacity succeeds and reports the count excluding the terminator.
+        fixture.memory.write_u32(0x2908, required).unwrap();
+        assert_eq!(
+            fixture.call(
+                "WinHttpQueryHeaders",
+                &[
+                    request,
+                    WINHTTP_QUERY_RAW_HEADERS_CRLF as u64,
+                    0,
+                    0x2a00,
+                    0x2908,
+                    0
+                ]
+            ),
+            1
+        );
+        assert_eq!(fixture.memory.read_u32(0x2908).unwrap(), (units * 2) as u32);
+        let mut bytes = vec![0u8; units * 2 + 2];
+        fixture.memory.read_bytes(0x2a00, &mut bytes).unwrap();
+        let (words, _) = bytes.as_chunks::<2>();
+        let text = String::from_utf16(
+            &words
+                .iter()
+                .copied()
+                .map(u16::from_le_bytes)
+                .collect::<Vec<_>>(),
+        )
+        .unwrap();
+        assert_eq!(text, format!("{expected}\0"));
         server.join().unwrap();
     }
 
