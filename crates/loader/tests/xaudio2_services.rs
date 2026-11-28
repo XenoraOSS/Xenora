@@ -25,6 +25,7 @@ const AUDIO: u64 = 0x9_0000;
 
 const S_OK: u32 = 0;
 const E_POINTER: u32 = 0x8000_4003;
+const E_NOTIMPL: u32 = 0x8000_4001;
 const E_INVALIDARG: u32 = 0x8007_0057;
 const XAUDIO2_E_INVALID_CALL: u32 = 0x8896_0001;
 
@@ -300,6 +301,33 @@ fn set_source_sample_rate_requires_an_empty_queue() {
         MODULE,
         "IXAudio2SourceVoice.SetSourceSampleRate",
         Guest::args(mastering, 48_000, 0, 0),
+    );
+    assert_eq!(result, XAUDIO2_E_INVALID_CALL);
+}
+
+/// ExitLoop is an empty-queue no-op, but deferred sets and wrong voices fail.
+#[test]
+fn exit_loop_reports_noop_and_error_boundaries() {
+    let mut guest = Guest::new();
+    let engine = guest.engine();
+    let (mastering, voice) = guest.voices(engine);
+
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.ExitLoop",
+        Guest::args(voice, 0, 0, 0),
+    );
+    assert_eq!(result, S_OK);
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.ExitLoop",
+        Guest::args(voice, 9, 0, 0),
+    );
+    assert_eq!(result, E_NOTIMPL);
+    let result = guest.call(
+        MODULE,
+        "IXAudio2SourceVoice.ExitLoop",
+        Guest::args(mastering, 0, 0, 0),
     );
     assert_eq!(result, XAUDIO2_E_INVALID_CALL);
 }

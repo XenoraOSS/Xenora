@@ -244,6 +244,17 @@ static void round_trip(bool first) {
     details = {0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu, 0xFFFFFFFFu};
     s->v->GetVoiceDetails(s, &details);
     expect(details.InputSampleRate == 22050);
+    expect(s->v->SetSourceSampleRate(s, 48000) == S_OK);
+
+    // ExitLoop ends an infinite loop at the end of its current pass.
+    XAUDIO2_BUFFER looping = {0, sizeof pcm[0], (const u8 *)pcm[0], 0, 0, 0, 100, 255, (void *)0xC};
+    expect(s->v->SubmitSourceBuffer(s, &looping, nullptr) == S_OK);
+    st = state_of(s);  // 480 frames: four loop ends, cursor at frame 80.
+    expect(st.BuffersQueued == 1);
+    expect(s->v->ExitLoop(s, 0) == S_OK);
+    expect(s->v->ExitLoop(s, 9) == E_NOTIMPL);
+    for (int i = 0; i < 10; ++i) st = state_of(s);
+    expect(st.BuffersQueued == 0 && st.SamplesPlayed == 5200);
 
     // Flush on a stopped voice removes everything queued.
     expect(s->v->Stop(s, 0, 0) == S_OK);
