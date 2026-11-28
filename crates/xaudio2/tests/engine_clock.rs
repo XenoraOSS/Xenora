@@ -90,6 +90,18 @@ fn the_quantum_scales_with_the_frequency_ratio_and_the_source_rate() {
 }
 
 #[test]
+fn changing_the_source_sample_rate_retimes_future_quantums() {
+    let (mut rt, engine, voice) = engine_with_voice(48_000, 48_000);
+    rt.flush_source_buffers(voice).unwrap();
+    rt.set_source_sample_rate(voice, 24_000).unwrap();
+    rt.submit_source_buffer(voice, &buffer(4800), 0).unwrap();
+    rt.start(voice, 0, 0).unwrap();
+
+    assert_eq!(rt.advance_engine_clock(engine).unwrap(), 480);
+    assert_eq!(rt.state(voice, 0).unwrap().samples_played, 240);
+}
+
+#[test]
 fn the_clock_of_an_engine_that_is_gone_is_refused() {
     let (mut rt, engine, _voice) = engine_with_voice(48_000, 48_000);
     rt.release_engine(engine).unwrap();

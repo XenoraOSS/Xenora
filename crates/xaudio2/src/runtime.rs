@@ -9,8 +9,9 @@
 
 use crate::buffer::{BufferDesc, Event, VoiceState};
 use crate::consts::{
-    XAUDIO2_MAX_QUEUED_BUFFERS, XAUDIO2_MAX_VOLUME_LEVEL, XAUDIO2_MIN_FREQ_RATIO,
-    XAUDIO2_PLAY_TAILS, XAUDIO2_VOICE_NOSAMPLESPLAYED,
+    XAUDIO2_MAX_QUEUED_BUFFERS, XAUDIO2_MAX_SAMPLE_RATE, XAUDIO2_MAX_VOLUME_LEVEL,
+    XAUDIO2_MIN_FREQ_RATIO, XAUDIO2_MIN_SAMPLE_RATE, XAUDIO2_PLAY_TAILS,
+    XAUDIO2_VOICE_NOSAMPLESPLAYED,
 };
 use crate::engine::Engine;
 use crate::hresult::Error;
@@ -360,6 +361,38 @@ impl Runtime {
             return Err(Error::InvalidCall("the voice is not a source voice"));
         };
         Ok(source.frequency_ratio)
+    }
+
+    /// Reconfigures the input sample rate of a source voice.
+    ///
+    /// The public contract accepts every rate from `XAUDIO2_MIN_SAMPLE_RATE`
+    /// through `XAUDIO2_MAX_SAMPLE_RATE` and requires the queue to be empty.
+    /// Creation flags that would forbid pitch or sample-rate conversion are
+    /// not a separate gate here because this bounded runtime currently refuses
+    /// every source-voice creation flag. The model records the new input rate
+    /// and uses it in the fixed clock; it still does not resample audio.
+    pub fn set_source_sample_rate(
+        &mut self,
+        voice: VoiceId,
+        sample_rate: u32,
+    ) -> Result<(), Error> {
+        let state = self
+            .voices
+            .get_mut(voice.slot(), voice.generation())
+            .ok_or(Error::InvalidCall("the voice handle is no longer valid"))?;
+        let VoiceKind::Source(source) = &mut state.kind else {
+            return Err(Error::InvalidCall("the voice is not a source voice"));
+        };
+        if !(XAUDIO2_MIN_SAMPLE_RATE..=XAUDIO2_MAX_SAMPLE_RATE).contains(&sample_rate) {
+            return Err(Error::InvalidArg("the source sample rate is out of range"));
+        }
+        if !source.queue.is_empty() {
+            return Err(Error::InvalidCall(
+                "the source sample rate cannot change while buffers are queued",
+            ));
+        }
+        source.format.sample_rate = sample_rate;
+        Ok(())
     }
 
     /// Advances the sample clock of a source voice.
