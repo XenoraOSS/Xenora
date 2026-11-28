@@ -1,22 +1,32 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+use std::collections::BTreeMap;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use sha2::{Digest, Sha256};
-use xenora_loader::graphics::{FramePresentation, GraphicsBackendId};
+use xenora::hosted_graphics::{Backend, install_metal};
+use xenora_loader::graphics::FramePresentation;
+use xenora_loader::module_graph::PackageModule;
+use xenora_loader::module_layout::ModuleLayoutArena;
+use xenora_loader::package::{
+    InitializationOutcome, InitializationPhase, PackageEntryEvent, PackageStartupLayout,
+    StartupDiagnostics, run_package_startup_with_entry_observer,
+};
+use xenora_loader::pe::{DEFAULT_MAPPED_IMAGE_BUDGET, ParsedPe};
 use xenora_loader::startup::{StartupEvent, StartupLayout, run_synthetic_startup_scheduled};
 use xenora_loader::{
     Clock, ExitReason, ImportRegistry, MockClock, ServicesState, SystemClock,
     register_standard_services,
 };
 
+use super::Options;
 use super::wire::{MAX_FRAMES, Reply, Request, frame_len, read_request, write_reply};
 
 const MODULE: &str = "xenora-session-v1.dll";
-const MAX_EXECUTABLE_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_INPUT_BYTES: u64 = 64 * 1024 * 1024;
 const QUANTUM: usize = 64;
 const REPLAY_FILETIME: u64 = 116_444_736_000_000_000; // 1970-01-01 00:00:00 UTC
 const TICKS_PER_INPUT: u64 = 160_000; // 16 milliseconds in 100 ns ticks
@@ -28,18 +38,50 @@ const LAYOUT: StartupLayout = StartupLayout {
 // Scheduled startup maps the main TEB 64 KiB above its TLS pointer array.
 const MAIN_TEB: u64 = LAYOUT.tls_base + 0x10000;
 
-pub(super) fn run(
-    path: &Path,
-    digest: [u8; 32],
-    steps: usize,
-    deterministic_clock: bool,
-) -> Result<(), String> {
-    let bytes = snapshot(path, digest)?;
-    let image_name = path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .ok_or("the guest PE file name must be UTF-8")?;
-    let replay_clock = deterministic_clock.then(|| Arc::new(MockClock::new(REPLAY_FILETIME)));
+pub(super) fn run(options: &Options) -> Result<(), String> {
+    let steps = options.steps;
+    let image_name = file_name(&options.executable.path)?;
+    if !options.companions.is_empty() && image_name.eq_ignore_ascii_case(MODULE) {
+        return Err(format!(
+            "package image name {image_name:?} is reserved for the session ABI"
+        ));
+    }
+    let bytes = snapshot(
+        &options.executable.path,
+        options.executable.digest,
+        MAX_INPUT_BYTES,
+    )?;
+    if !options.companions.is_empty() {
+        let executable = ParsedPe::parse(&bytes)
+            .map_err(|error| format!("package executable {image_name:?}: {error}"))?;
+        if executable.is_dll() {
+            return Err(format!(
+                "package root {image_name:?} must be a PE executable"
+            ));
+        }
+    }
+    let mut remaining = MAX_INPUT_BYTES - bytes.len() as u64;
+    let mut companions = Vec::with_capacity(options.companions.len());
+    for companion in &options.companions {
+        let name = file_name(&companion.path)?;
+        if name.eq_ignore_ascii_case(MODULE) {
+            return Err(format!(
+                "companion DLL name {name:?} is reserved for the session ABI"
+            ));
+        }
+        let bytes = snapshot(&companion.path, companion.digest, remaining)?;
+        let pe =
+            ParsedPe::parse(&bytes).map_err(|error| format!("companion DLL {name:?}: {error}"))?;
+        if !pe.is_dll() {
+            return Err(format!("companion {name:?} must be a PE DLL"));
+        }
+        remaining -= bytes.len() as u64;
+        companions.push((name, bytes));
+    }
+
+    let replay_clock = options
+        .deterministic_clock
+        .then(|| Arc::new(MockClock::new(REPLAY_FILETIME)));
     let clock: Arc<dyn Clock> = match &replay_clock {
         Some(clock) => clock.clone(),
         None => Arc::new(SystemClock),
@@ -48,6 +90,9 @@ pub(super) fn run(
     services
         .set_program_arguments(&[image_name])
         .map_err(|error| format!("could not set guest program arguments: {error}"))?;
+    if matches!(options.backend, Backend::Metal) {
+        install_metal(&services).map_err(|error| format!("could not start Metal: {error}"))?;
+    }
     let presentation = services
         .graphics
         .lock()
@@ -57,28 +102,72 @@ pub(super) fn run(
     let phase = Arc::new(Mutex::new(Session::default()));
     let mut imports = ImportRegistry::new();
     register_standard_services(&mut imports, Arc::clone(&services));
-    register_protocol(&mut imports, &phase, &presentation, &services, replay_clock);
-
-    let result = run_synthetic_startup_scheduled(
-        &bytes,
-        LAYOUT,
-        imports,
-        Arc::clone(&services),
-        steps,
-        QUANTUM,
-        |event| {
-            if matches!(event, StartupEvent::Entering { .. }) {
-                phase.lock().expect("guest session state").entered = true;
-            }
-        },
+    register_protocol(
+        &mut imports,
+        &phase,
+        &presentation,
+        &services,
+        replay_clock,
+        options.backend,
     );
+
+    let result = if companions.is_empty() {
+        run_synthetic_startup_scheduled(
+            &bytes,
+            LAYOUT,
+            imports,
+            Arc::clone(&services),
+            steps,
+            QUANTUM,
+            |event| {
+                if matches!(event, StartupEvent::Entering { .. }) {
+                    phase.lock().expect("guest session state").entry_teb = Some(MAIN_TEB);
+                }
+            },
+        )
+        .map(|result| (result.execution, None))
+        .map_err(|error| format!("guest startup: {error}"))
+    } else {
+        let package: Vec<_> = std::iter::once(PackageModule {
+            file_name: image_name,
+            bytes: &bytes,
+        })
+        .chain(companions.iter().map(|(name, bytes)| PackageModule {
+            file_name: name,
+            bytes,
+        }))
+        .collect();
+        run_package_startup_with_entry_observer(
+            &package,
+            PackageStartupLayout {
+                arena: ModuleLayoutArena {
+                    base: LAYOUT.image_base,
+                    size: DEFAULT_MAPPED_IMAGE_BUDGET,
+                },
+                stack_top: LAYOUT.stack_top,
+                thread_tls_base: LAYOUT.tls_base,
+            },
+            0,
+            imports,
+            steps,
+            Some((Arc::clone(&services), QUANTUM)),
+            |event| {
+                phase.lock().expect("guest session state").entry_teb = match event {
+                    PackageEntryEvent::Entering { main_teb, .. } => Some(main_teb),
+                    PackageEntryEvent::Leaving => None,
+                };
+            },
+        )
+        .map(|result| (result.execution, Some(result.diagnostics)))
+        .map_err(|error| format!("guest package startup: {error}"))
+    };
 
     let session = phase.lock().map_err(|_| "the session state is poisoned")?;
     if let Some(error) = &session.failure {
         return Err(error.clone());
     }
-    let result = result.map_err(|error| format!("guest startup: {error}"))?;
-    match result.execution.exit_reason {
+    let (execution, diagnostics) = result?;
+    match execution.exit_reason {
         ExitReason::ProcessExit(0) if services.exit_status() == Some(0) => {}
         ExitReason::ProcessExit(status) => {
             return Err(format!("guest exited with status {status}"));
@@ -91,12 +180,66 @@ pub(super) fn run(
         reason => return Err(format!("guest execution stopped: {reason:?}")),
     }
     session.expect(Phase::Finished, "guest exited before XenoraSessionFinish")?;
+    if let Some(diagnostics) = diagnostics {
+        check_package_shutdown(&diagnostics)?;
+        check_open_handles(&services)?;
+    }
     session.check_frame_index(&presentation)?;
     send(&Reply::Done)
 }
 
-fn snapshot(path: &Path, digest: [u8; 32]) -> Result<Vec<u8>, String> {
+fn check_package_shutdown(diagnostics: &StartupDiagnostics) -> Result<(), String> {
+    let mut pending = BTreeMap::new();
+    for record in &diagnostics.initialization {
+        let callback = match record.phase {
+            InitializationPhase::DllMain => None,
+            InitializationPhase::TlsCallback { callback_index } => Some(callback_index),
+            _ => continue,
+        };
+        pending.insert((record.image_index, callback), &record.file_name);
+    }
+    for record in &diagnostics.shutdown {
+        let callback = match (record.phase, record.outcome) {
+            (InitializationPhase::DllDetach, InitializationOutcome::Returned(_)) => None,
+            (
+                InitializationPhase::TlsDetach { callback_index },
+                InitializationOutcome::Completed,
+            ) => Some(callback_index),
+            _ => {
+                return Err(format!(
+                    "guest package shutdown: {} {:?} stopped: {:?}",
+                    record.file_name, record.phase, record.outcome
+                ));
+            }
+        };
+        pending.remove(&(record.image_index, callback));
+    }
+    if let Some(((_, callback), name)) = pending.first_key_value() {
+        let phase = match callback {
+            Some(index) => format!("TLS callback {index}"),
+            None => "DllMain".to_owned(),
+        };
+        return Err(format!(
+            "guest package shutdown: {name} {phase} did not detach"
+        ));
+    }
+    Ok(())
+}
+
+fn file_name(path: &Path) -> Result<&str, String> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("guest PE file name must be UTF-8: {}", path.display()))
+}
+
+fn snapshot(path: &Path, digest: [u8; 32], remaining: u64) -> Result<Vec<u8>, String> {
     let read_error = |error| format!("could not read guest PE {}: {error}", path.display());
+    let size_error = || {
+        format!(
+            "guest PE inputs exceed the combined 64 MiB limit at {}",
+            path.display()
+        )
+    };
     if !fs::metadata(path).map_err(read_error)?.is_file() {
         return Err("the guest PE must be a regular file".to_owned());
     }
@@ -116,20 +259,23 @@ fn snapshot(path: &Path, digest: [u8; 32]) -> Result<Vec<u8>, String> {
     if !metadata.is_file() {
         return Err("the guest PE must be a regular file".to_owned());
     }
-    if metadata.len() > MAX_EXECUTABLE_BYTES {
-        return Err("the guest PE exceeds the 64 MiB limit".to_owned());
+    if metadata.len() > remaining {
+        return Err(size_error());
     }
     let mut bytes = Vec::new();
-    file.take(MAX_EXECUTABLE_BYTES + 1)
+    file.take(remaining + 1)
         .read_to_end(&mut bytes)
         .map_err(read_error)?;
-    if bytes.len() as u64 > MAX_EXECUTABLE_BYTES {
-        return Err("the guest PE exceeds the 64 MiB limit".to_owned());
+    if bytes.len() as u64 > remaining {
+        return Err(size_error());
     }
 
     let actual: [u8; 32] = Sha256::digest(&bytes).into();
     if actual != digest {
-        return Err("guest PE SHA-256 does not match".to_owned());
+        return Err(format!(
+            "guest PE SHA-256 does not match: {}",
+            path.display()
+        ));
     }
     Ok(bytes)
 }
@@ -145,7 +291,7 @@ enum Phase {
 
 #[derive(Default)]
 struct Session {
-    entered: bool,
+    entry_teb: Option<u64>,
     phase: Phase,
     frames: u64,
     failure: Option<String>,
@@ -179,13 +325,13 @@ fn invoke(
     let mut session = session
         .lock()
         .map_err(|_| ExitReason::ServiceAbiViolation)?;
-    let result = if session.entered && teb == MAIN_TEB {
+    let result = if session.entry_teb == Some(teb) {
         operation(&mut session)
     } else {
         Err("session imports require the main guest thread after startup".to_owned())
     };
     result.map_err(|message| {
-        session.failure = Some(message);
+        session.failure.get_or_insert(message);
         ExitReason::ServiceAbiViolation
     })
 }
@@ -201,6 +347,7 @@ fn register_protocol(
     presentation: &Arc<Mutex<FramePresentation>>,
     services: &Arc<ServicesState>,
     replay_clock: Option<Arc<MockClock>>,
+    backend: Backend,
 ) {
     let next = Arc::clone(session);
     let current = Arc::clone(presentation);
@@ -252,10 +399,11 @@ fn register_protocol(
             )?;
             let reply = {
                 let frame = current.lock().map_err(|_| "the presentation is poisoned")?;
-                if frame.frame_index != session.frames + 1
-                    || frame.backend != Some(GraphicsBackendId::SoftwareReference)
-                {
-                    return Err("each input requires exactly one new reference presentation".into());
+                if frame.frame_index != session.frames + 1 || frame.backend != Some(backend.id()) {
+                    return Err(format!(
+                        "each input requires exactly one new {} presentation",
+                        backend.name()
+                    ));
                 }
                 let width =
                     u32::try_from(frame.width).map_err(|_| "frame width is out of range")?;
@@ -288,14 +436,20 @@ fn register_protocol(
                 "XenoraSessionFinish requires a Stop request",
             )?;
             session.check_frame_index(&current)?;
-            let open_handles = services.open_handle_count();
-            if open_handles != 0 {
-                return Err(format!(
-                    "guest retained {open_handles} open runtime handles"
-                ));
-            }
+            check_open_handles(&services)?;
             session.phase = Phase::Finished;
             Ok(1)
         })
     });
+}
+
+fn check_open_handles(services: &ServicesState) -> Result<(), String> {
+    let open_handles = services.open_handle_count();
+    if open_handles == 0 {
+        Ok(())
+    } else {
+        Err(format!(
+            "guest retained {open_handles} open runtime handles"
+        ))
+    }
 }
