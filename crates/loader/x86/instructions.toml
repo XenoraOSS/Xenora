@@ -111,6 +111,8 @@ andn = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm ANDN" }
 blsi = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSI" }
 blsmsk = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSMSK" }
 blsr = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BLSR" }
+bextr = { writes = "cf zf of", undefined = "sf pf af", ref = "sdm BEXTR" }
+bzhi = { writes = "cf zf sf of", undefined = "pf af", ref = "sdm BZHI" }
 shlx = { ref = "sdm SHLX/SHRX/SARX" }
 shrx = { ref = "sdm SHLX/SHRX/SARX" }
 sarx = { ref = "sdm SHLX/SHRX/SARX" }
@@ -6078,6 +6080,22 @@ src = "q"
 op = "andn"
 map = "0f38"
 opcode = 0xF2
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "bextr"
+map = "0f38"
+opcode = 0xF7
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+[[vex]]
+op = "bzhi"
+map = "0f38"
+opcode = 0xF5
 enc = "reg_vvvv_rm"
 length = "128"
 nds = true

@@ -78,6 +78,14 @@ fn read_guest_path(memory: &GuestMemory, address: u64) -> Result<Option<String>,
             let Ok(path) = String::from_utf16(&units) else {
                 return Ok(None);
             };
+            // The empty string is no path at all: every operation on it
+            // fails as invalid. Dot components stay untouched here - the
+            // consumers resolve them at the point the path becomes
+            // root-anchored, because a relative `..` must first join the
+            // working directory before it knows what it climbs.
+            if path.is_empty() {
+                return Ok(None);
+            }
             let path = path.replace('/', "\\").to_ascii_lowercase();
             let name = path.strip_prefix("c:\\").unwrap_or(&path);
             return Ok(Some(name.to_owned()));
@@ -110,9 +118,35 @@ pub(super) fn is_nul_path(path: &str) -> bool {
     final_component.split('.').next().unwrap_or_default() == "nul"
 }
 
+/// The lexical resolution the path rules document: `.` is the directory the
+/// path is already in and drops, `..` is its parent and pops one component,
+/// and a `..` at the root stays at the root because there is nothing to pop.
+/// The resolution is purely lexical - `a\..\b` is exactly `b` whether or
+/// not `a` ever existed - and it runs ahead of validation, so the dot
+/// components are never file names at all while a real name ending with a
+/// dot stays rejected exactly as before.
+fn resolve_dots(path: &str) -> String {
+    let mut components: Vec<&str> = Vec::new();
+    for component in path.split('\\') {
+        match component {
+            "." => {}
+            ".." => {
+                // The leading empty component of an anchored path is no real
+                // component: the root cannot be climbed past, so it stays.
+                if components.last().is_some_and(|last| !last.is_empty()) {
+                    components.pop();
+                }
+            }
+            _ => components.push(component),
+        }
+    }
+    components.join("\\")
+}
+
 fn valid_key(name: &str) -> bool {
+    // The empty key is the root: a path of dot components resolves to it.
     if name.is_empty() {
-        return false;
+        return true;
     }
     if is_nul_path(name) {
         // The device resolves in any directory position; the components
@@ -153,7 +187,7 @@ fn resolve_bare_path(state: &ServicesState, name: &str) -> Option<String> {
 
 fn guest_path(memory: &GuestMemory, address: u64) -> Result<Option<String>, MemoryError> {
     Ok(read_guest_path(memory, address)?
-        .map(|name| strip_root_anchor(&name).to_owned())
+        .map(|name| resolve_dots(strip_root_anchor(&name)))
         .filter(|name| valid_key(name)))
 }
 
@@ -172,6 +206,9 @@ fn read_guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String
             let Ok(path) = String::from_utf8(bytes) else {
                 return Ok(None);
             };
+            if path.is_empty() {
+                return Ok(None);
+            }
             let path = path.replace('/', "\\").to_ascii_lowercase();
             let name = path.strip_prefix("c:\\").unwrap_or(&path);
             return Ok(Some(name.to_owned()));
@@ -183,7 +220,7 @@ fn read_guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String
 
 fn guest_path_a(memory: &GuestMemory, address: u64) -> Result<Option<String>, MemoryError> {
     Ok(read_guest_path_a(memory, address)?
-        .map(|name| strip_root_anchor(&name).to_owned())
+        .map(|name| resolve_dots(strip_root_anchor(&name)))
         .filter(|name| valid_key(name)))
 }
 
@@ -482,6 +519,20 @@ fn find_first(
                 attributes,
                 size,
                 times,
+            });
+        }
+    }
+    // The real enumeration of a directory always begins with the dot
+    // entries: `.` is the directory itself and `..` its parent, both
+    // directories, and even an empty directory answers them to a `*`
+    // pattern. They go through the same wildcard match as real names.
+    for dot in [".", ".."] {
+        if wildcard_match(pattern, dot) {
+            entries.push(SearchEntry {
+                name: dot.to_owned(),
+                attributes: 0x10,
+                size: 0,
+                times: EPOCH_FILETIME3,
             });
         }
     }
@@ -2524,14 +2575,20 @@ impl super::ObjectState {
             .replace('/', "\\")
             .to_ascii_lowercase();
         let path = path.strip_prefix("c:\\").unwrap_or(&path);
-        let path = strip_root_anchor(path).to_owned();
+        // The empty string is no path at all, while a path of dot components
+        // - or the root anchor itself - resolves to the root, which is valid.
+        if path.is_empty() {
+            return None;
+        }
+        let path = resolve_dots(strip_root_anchor(path));
         valid_key(&path).then_some(path)
     }
 
     pub(super) fn drive_entry(&self, path: &str) -> DriveEntry {
         if self.files.contains_key(path) {
             DriveEntry::File
-        } else if self.directories.contains(path) {
+        } else if path.is_empty() || self.directories.contains(path) {
+            // The empty key is the root, which always exists.
             DriveEntry::Directory
         } else {
             let parent = parent(path);

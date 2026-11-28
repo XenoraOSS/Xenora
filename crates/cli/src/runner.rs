@@ -837,7 +837,10 @@ fn run_program(
             .inspect_err(|error| reporter.failed(FailurePhase::Startup, error))?;
     }
 
+    let packaged = !options.package.is_empty();
     let mut entered = false;
+    let mut left_entry = false;
+    let mut package_initialization_started = false;
     let execution = if options.package.is_empty() {
         // The entry point runs under the deterministic cooperative scheduler,
         // so a program that creates threads with CreateThread runs them all,
@@ -895,7 +898,7 @@ fn run_program(
                 wall.as_millis()
             );
         }
-        xenora_loader::run_package_startup(
+        xenora_loader::package::run_package_startup_with_entry_observer(
             &package,
             xenora_loader::PackageStartupLayout {
                 arena: xenora_loader::module_layout::ModuleLayoutArena {
@@ -909,14 +912,26 @@ fn run_program(
             imports,
             steps,
             Some((Arc::clone(&state), DEFAULT_QUANTUM)),
+            |event| match event {
+                xenora_loader::package::PackageEntryEvent::Entering { .. } => {
+                    entered = true;
+                    report_package_startup_stages(reporter, true);
+                    reporter.stage(Stage::EntryStarted);
+                }
+                xenora_loader::package::PackageEntryEvent::Leaving => left_entry = true,
+            },
         )
-        .map_err(|error| -> Box<dyn Error> { Box::new(error) })
+        .map_err(|error| {
+            if matches!(
+                error,
+                xenora_loader::PackageStartupError::Initialization { .. }
+            ) {
+                report_package_startup_stages(reporter, false);
+            }
+            Box::new(error) as Box<dyn Error>
+        })
         .map(|result| {
-            entered = result
-                .diagnostics
-                .initialization
-                .iter()
-                .any(|record| record.phase == xenora_loader::InitializationPhase::ProcessEntry);
+            package_initialization_started = !result.diagnostics.initialization.is_empty();
             if options.trace {
                 eprintln!(
                     "trace package imports={} initialization={}",
@@ -931,8 +946,13 @@ fn run_program(
     // the deadline no longer writes it.
     let _turn = finishing.lock();
     let execution = execution.inspect_err(|error| reporter.failed(FailurePhase::Startup, error));
-    if execution.is_ok() && entered {
-        reporter.stage(Stage::EntryReturned);
+    if execution.is_ok() {
+        if package_initialization_started && !entered {
+            report_package_startup_stages(reporter, false);
+        }
+        if entered && (!packaged || left_entry) {
+            reporter.stage(Stage::EntryReturned);
+        }
     }
     let mut stdout = std::io::stdout().lock();
     stdout.write_all(&state.standard_output())?;
@@ -1125,6 +1145,21 @@ fn run_worker(options: &Options, steps: usize, reporter: &Reporter) -> Result<()
     println!("Trusted fixture completed one verified offscreen Metal draw.");
     reporter.verified();
     Ok(())
+}
+
+/// Report the package phases that must have completed before module initialization.
+///
+/// The package loader performs these as whole-package phases. `tls_completed`
+/// is emitted only when the entry observer proves that every TLS callback and
+/// DLL attach completed and the root executable is about to be entered.
+fn report_package_startup_stages(reporter: &Reporter, tls_completed: bool) {
+    reporter.stage(Stage::Parsed);
+    reporter.stage(Stage::Mapped);
+    reporter.stage(Stage::Relocated);
+    reporter.stage(Stage::ImportsBound);
+    if tls_completed {
+        reporter.stage(Stage::TlsCompleted);
+    }
 }
 
 fn trace_startup(event: StartupEvent) {
