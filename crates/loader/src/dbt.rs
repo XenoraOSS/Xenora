@@ -15,6 +15,7 @@ use crate::memory::GuestMemory;
 use crate::x86_decode::{Encoding, Insn, MemOperand, RegOperand, RmOperand, Segment, decode};
 use crate::x86_exec;
 use crate::x86_table::{FORMS, Op};
+use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -127,6 +128,178 @@ pub struct LinkMetrics {
     pub bytes_verified: usize,
 }
 
+/// Maximum number of blocks retained in a hot-block profile snapshot.
+pub const HOT_BLOCK_PROFILE_CAPACITY: usize = 64;
+
+/// One measured block in a hot-block profile.
+///
+/// The table ranks blocks by `guest_instructions`, the guest work attributed to
+/// the block, and reports how many dispatcher entries produced that work. It
+/// does not measure host nanoseconds: recording a timestamp on every block
+/// entry would make the profiler itself a large part of short workloads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HotBlockEntry {
+    /// Guest address of the block's first instruction.
+    pub start_rip: u64,
+    /// Dispatcher block limit, which distinguishes shortened blocks at a
+    /// budget boundary from a full block at the same address.
+    pub block_limit: usize,
+    /// Dispatcher entries that selected this block.
+    pub executions: u64,
+    /// Guest instructions completed when this block was selected. A faulting
+    /// block contributes only the instructions that completed before it.
+    pub guest_instructions: u64,
+    /// Guest code bytes the translation was made from.
+    pub source_bytes: usize,
+    /// Native bytes emitted for the translation.
+    pub native_bytes: usize,
+}
+
+/// Bounded snapshot of the hottest translated blocks.
+///
+/// Blocks are ordered by guest instructions, then executions, then guest
+/// address and block limit for a stable tie-break. Totals count every sampled
+/// dispatch, including blocks that did not fit in the bounded table.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HotBlockProfile {
+    /// Whether recording was enabled when the snapshot was taken.
+    pub enabled: bool,
+    /// Dispatcher entries included in the totals.
+    pub recorded_dispatches: u64,
+    /// Guest instructions included in the totals.
+    pub recorded_guest_instructions: u64,
+    /// Dispatcher entries whose block was not retained after evictions.
+    pub untracked_dispatches: u64,
+    /// Guest instructions from entries whose block was not retained.
+    pub untracked_guest_instructions: u64,
+    /// Bounded-table replacements made by lower-ranked incoming blocks.
+    pub evicted_blocks: u64,
+    /// At most [`HOT_BLOCK_PROFILE_CAPACITY`] blocks, hottest first.
+    pub blocks: Vec<HotBlockEntry>,
+}
+
+impl HotBlockEntry {
+    fn key(self) -> (u64, usize) {
+        (self.start_rip, self.block_limit)
+    }
+
+    fn score(self) -> (u64, u64, u64, usize) {
+        (
+            self.guest_instructions,
+            self.executions,
+            self.start_rip,
+            self.block_limit,
+        )
+    }
+}
+
+#[derive(Clone, Debug)]
+struct HotBlockProfiler {
+    enabled: bool,
+    slots: Vec<Option<HotBlockEntry>>,
+    recorded_dispatches: u64,
+    recorded_guest_instructions: u64,
+    untracked_dispatches: u64,
+    untracked_guest_instructions: u64,
+    evicted_blocks: u64,
+}
+
+impl Default for HotBlockProfiler {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            slots: vec![None; HOT_BLOCK_PROFILE_CAPACITY],
+            recorded_dispatches: 0,
+            recorded_guest_instructions: 0,
+            untracked_dispatches: 0,
+            untracked_guest_instructions: 0,
+            evicted_blocks: 0,
+        }
+    }
+}
+
+impl HotBlockProfiler {
+    #[inline]
+    fn record(
+        &mut self,
+        key: (u64, usize),
+        executed: usize,
+        source_bytes: usize,
+        native_bytes: usize,
+    ) {
+        if !self.enabled {
+            return;
+        }
+        let executed = executed as u64;
+        self.recorded_dispatches += 1;
+        self.recorded_guest_instructions += executed;
+
+        if let Some(entry) = self
+            .slots
+            .iter_mut()
+            .find_map(|slot| slot.as_mut().filter(|entry| entry.key() == key))
+        {
+            entry.executions += 1;
+            entry.guest_instructions += executed;
+            entry.source_bytes = source_bytes;
+            entry.native_bytes = native_bytes;
+            return;
+        }
+
+        let incoming = HotBlockEntry {
+            start_rip: key.0,
+            block_limit: key.1,
+            executions: 1,
+            guest_instructions: executed,
+            source_bytes,
+            native_bytes,
+        };
+        if let Some(empty) = self.slots.iter_mut().find(|slot| slot.is_none()) {
+            *empty = Some(incoming);
+            return;
+        }
+
+        let least = self
+            .slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| slot.map(|entry| (index, entry.score())))
+            .min_by_key(|&(_, score)| score);
+        if let Some((index, least_score)) = least
+            && incoming.score() > least_score
+        {
+            self.slots[index] = Some(incoming);
+            self.evicted_blocks += 1;
+        } else {
+            self.untracked_dispatches += 1;
+            self.untracked_guest_instructions += executed;
+        }
+    }
+
+    fn reset(&mut self) {
+        self.slots.fill(None);
+        self.recorded_dispatches = 0;
+        self.recorded_guest_instructions = 0;
+        self.untracked_dispatches = 0;
+        self.untracked_guest_instructions = 0;
+        self.evicted_blocks = 0;
+    }
+
+    fn snapshot(&self, enabled: bool) -> HotBlockProfile {
+        let mut blocks = self.slots.iter().flatten().copied().collect::<Vec<_>>();
+        blocks.sort_unstable_by_key(|entry| Reverse(entry.score()));
+        HotBlockProfile {
+            enabled,
+            recorded_dispatches: self.recorded_dispatches,
+            recorded_guest_instructions: self.recorded_guest_instructions,
+            untracked_dispatches: self.untracked_dispatches,
+            untracked_guest_instructions: self.untracked_guest_instructions,
+            evicted_blocks: self.evicted_blocks,
+            blocks,
+        }
+    }
+}
+
 /// The verification epoch of a retired link target. Live epochs start at 1.
 const RETIRED_EPOCH: u64 = 0;
 
@@ -231,13 +404,18 @@ struct CachedBlock {
     source: Box<[u8]>,
     /// Link records of a full block; null for a budget-limited one.
     links: *mut BlockLinks,
+    /// Native bytes emitted for this translation, for hot-block reporting.
+    native_bytes: usize,
 }
 
-/// A block the dispatcher selected: its entry point and, for a full block,
-/// its link records.
+/// A block the dispatcher selected: its entry point, link records and the
+/// identity and translation sizes needed by optional profiling.
 struct SelectedBlock {
     code: *const u8,
     links: *mut BlockLinks,
+    key: (u64, usize),
+    source_len: usize,
+    native_bytes: usize,
 }
 
 impl CachedBlock {
@@ -298,7 +476,10 @@ pub struct DbtEngine {
     /// `code_start..code_end`. Empty while nothing is cached.
     code_start: u64,
     code_end: u64,
+    /// Caller's direct-linking preference. Optional hot-block profiling
+    /// overrides it temporarily so every block reaches the dispatcher.
     linking: bool,
+    hot_profiler: HotBlockProfiler,
     services: HashMap<u64, HostServiceFn>,
     pub import_registry: Option<crate::imports::ImportRegistry>,
     pub metrics: DbtMetrics,
@@ -326,6 +507,7 @@ impl DbtEngine {
             code_start: u64::MAX,
             code_end: 0,
             linking: true,
+            hot_profiler: HotBlockProfiler::default(),
             services: HashMap::new(),
             import_registry: None,
             metrics: DbtMetrics::default(),
@@ -338,9 +520,38 @@ impl DbtEngine {
 
     /// Enable or disable direct block linking; it is enabled by default.
     /// Disabled, every block returns to the dispatcher, as before linking
-    /// existed, and no link is installed or followed.
+    /// existed, and no link is installed or followed. While hot-block
+    /// profiling is enabled, links are also disabled so each block entry can
+    /// be measured; disabling profiling restores this preference.
     pub fn set_block_linking(&mut self, enabled: bool) {
         self.linking = enabled;
+    }
+
+    /// Enable or disable bounded hot-block execution profiling.
+    ///
+    /// Recording is off by default and adds no work to the dispatcher until
+    /// enabled. While enabled, direct links are ignored and not installed, so
+    /// every translated block entry is sampled by the dispatcher. Link metrics
+    /// therefore report no links followed during a profiling run. Existing
+    /// translations and verification epochs are otherwise unchanged.
+    pub fn set_hot_block_profiling(&mut self, enabled: bool) {
+        self.hot_profiler.enabled = enabled;
+    }
+
+    /// Clear all recorded hot-block statistics without changing whether
+    /// recording is enabled.
+    pub fn reset_hot_block_profile(&mut self) {
+        self.hot_profiler.reset();
+    }
+
+    /// Return a bounded snapshot ordered from the most guest work to the least.
+    /// The snapshot retains statistics collected before recording was disabled.
+    pub fn hot_block_profile(&self) -> HotBlockProfile {
+        self.hot_profiler.snapshot(self.hot_profiler.enabled)
+    }
+
+    fn links_enabled(&self) -> bool {
+        self.linking && !self.hot_profiler.enabled
     }
 
     /// Enable or disable timing collection. Counters already accumulated are
@@ -570,7 +781,7 @@ impl DbtEngine {
             // only with a whole block of budget left for `run`, and with any
             // budget left for a slice.
             let remaining = max_instructions - instructions_count;
-            let headroom = match (self.linking, exact) {
+            let headroom = match (self.links_enabled(), exact) {
                 (false, _) => 0,
                 (true, true) => remaining.saturating_sub(MAX_BLOCK_INSTRUCTIONS),
                 (true, false) => remaining - 1,
@@ -603,6 +814,14 @@ impl DbtEngine {
             self.metrics.interpreter_fallbacks += ctx.helper_instructions as usize;
             self.profile.guest_memory_helper_calls += ctx.guest_memory_calls;
             self.link_metrics.links_followed += ctx.links_followed as usize;
+            if self.hot_profiler.enabled {
+                self.hot_profiler.record(
+                    selected.key,
+                    executed,
+                    selected.source_len,
+                    selected.native_bytes,
+                );
+            }
             if ctx.epoch != self.epoch || ctx.exit_reason.is_some() {
                 // Guest code may have changed, or a fault dispatch may write
                 // guest memory next.
@@ -639,7 +858,7 @@ impl DbtEngine {
     /// the dispatcher then selected, when that is a full block for the
     /// slot's own successor address.
     fn install_link(&mut self, slot: *mut LinkSlot, selected: &SelectedBlock, rip: u64) {
-        if slot.is_null() || selected.links.is_null() || !self.linking {
+        if slot.is_null() || selected.links.is_null() || !self.links_enabled() {
             return;
         }
         // SAFETY: slots and targets are owned by `self.links` and outlive
@@ -677,6 +896,7 @@ impl DbtEngine {
         memory: &GuestMemory,
         block_limit: usize,
     ) -> Result<SelectedBlock, ExitReason> {
+        let key = (rip, block_limit);
         if block_limit == MAX_BLOCK_INSTRUCTIONS {
             if let Some(cached) = self.block_cache.get(&rip) {
                 if cached.is_current(memory) {
@@ -691,6 +911,9 @@ impl DbtEngine {
                     return Ok(SelectedBlock {
                         code: cached.code,
                         links: cached.links,
+                        key,
+                        source_len: cached.source.len(),
+                        native_bytes: cached.native_bytes,
                     });
                 }
                 // Blocks linked to the old translation fall back to the
@@ -710,13 +933,15 @@ impl DbtEngine {
             let selected = SelectedBlock {
                 code: compiled.code,
                 links: compiled.links,
+                key,
+                source_len: compiled.source.len(),
+                native_bytes: compiled.native_bytes,
             };
             self.block_cache.insert(rip, compiled);
             return Ok(selected);
         }
 
         // Keep budget-limited blocks separate so they cannot shorten a later run.
-        let key = (rip, block_limit);
         if let Some(cached) = self.limited_block_cache.get(&key) {
             if cached.is_current(memory) {
                 self.metrics.cache_hits += 1;
@@ -725,6 +950,9 @@ impl DbtEngine {
                 return Ok(SelectedBlock {
                     code: cached.code,
                     links: std::ptr::null_mut(),
+                    key,
+                    source_len: cached.source.len(),
+                    native_bytes: cached.native_bytes,
                 });
             }
             self.metrics.blocks_invalidated += 1;
@@ -734,6 +962,9 @@ impl DbtEngine {
         let selected = SelectedBlock {
             code: compiled.code,
             links: std::ptr::null_mut(),
+            key,
+            source_len: compiled.source.len(),
+            native_bytes: compiled.native_bytes,
         };
         self.limited_block_cache.insert(key, compiled);
         Ok(selected)
@@ -885,6 +1116,7 @@ impl DbtEngine {
             self.profile.codegen_ns += started.elapsed().as_nanos();
         }
 
+        let native_bytes = asm.instructions().len() * 4;
         let publish_started = self.profiling.then(Instant::now);
         let emitted = self
             .jit
@@ -894,7 +1126,7 @@ impl DbtEngine {
             self.profile.jit_publish_ns += started.elapsed().as_nanos();
         }
         self.metrics.blocks_compiled += 1;
-        self.metrics.native_bytes_emitted += asm.instructions().len() * 4;
+        self.metrics.native_bytes_emitted += native_bytes;
         self.profile.translations += 1;
         self.profile.translated_guest_instructions += insns.len() as u64;
         self.decoded_blocks.push(insns);
@@ -913,6 +1145,7 @@ impl DbtEngine {
             start: start_rip,
             source,
             links,
+            native_bytes,
         })
     }
 }
@@ -2480,6 +2713,145 @@ mod tests {
         assert_eq!(engine.metrics.blocks_compiled, 1);
         assert_eq!(engine.metrics.cache_hits, 1);
         assert_eq!(engine.metrics.blocks_invalidated, 0);
+    }
+
+    #[test]
+    fn hot_block_profiling_is_opt_in_and_resettable() {
+        let (mut engine, mut memory) = writable_fixture(&mov_eax(1));
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
+        let profile = engine.hot_block_profile();
+        assert!(!profile.enabled);
+        assert_eq!(profile.recorded_dispatches, 0);
+        assert!(profile.blocks.is_empty());
+
+        engine.set_hot_block_profiling(true);
+        engine.reset_hot_block_profile();
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
+        let profile = engine.hot_block_profile();
+        assert!(profile.enabled);
+        assert_eq!(profile.recorded_dispatches, 1);
+        assert_eq!(profile.recorded_guest_instructions, 2);
+        assert_eq!(profile.untracked_dispatches, 0);
+        assert_eq!(profile.evicted_blocks, 0);
+        assert_eq!(profile.blocks.len(), 1);
+        let entry = profile.blocks[0];
+        assert_eq!(entry.start_rip, ENTRY);
+        assert_eq!(entry.block_limit, MAX_BLOCK_INSTRUCTIONS);
+        assert_eq!(entry.executions, 1);
+        assert_eq!(entry.guest_instructions, 2);
+        assert_eq!(entry.source_bytes, mov_eax(1).len());
+        assert!(entry.native_bytes > 0);
+
+        engine.reset_hot_block_profile();
+        let reset = engine.hot_block_profile();
+        assert!(reset.enabled);
+        assert_eq!(reset.recorded_dispatches, 0);
+        assert!(reset.blocks.is_empty());
+    }
+
+    #[test]
+    fn hot_block_profiling_counts_every_block_in_a_loop() {
+        let code = counted_loop(200);
+        let expected = interpreted(&code, MemoryPermissions::READ_EXECUTE, 10_000);
+        let mut memory = link_memory(&code, MemoryPermissions::READ_EXECUTE);
+        let mut engine = DbtEngine::new(256 * 1024).unwrap();
+        engine.set_block_linking(true);
+        engine.set_hot_block_profiling(true);
+        let mut cpu = link_cpu();
+        let result = engine.run(&mut cpu, &mut memory, 10_000);
+        assert_eq!(outcome(result, &memory), expected);
+        assert_eq!(engine.link_metrics.links_followed, 0);
+        assert_eq!(engine.link_metrics.links_installed, 0);
+
+        let profile = engine.hot_block_profile();
+        assert_eq!(engine.metrics.dbt_dispatches, 201);
+        assert_eq!(
+            profile.recorded_dispatches,
+            engine.metrics.dbt_dispatches as u64
+        );
+        assert_eq!(profile.recorded_guest_instructions, 603);
+        assert_eq!(profile.untracked_dispatches, 0);
+        assert_eq!(profile.evicted_blocks, 0);
+        assert_eq!(profile.blocks.len(), 3);
+        assert_eq!(profile.blocks[0].start_rip, ENTRY + 7);
+        assert_eq!(profile.blocks[0].executions, 199);
+        assert_eq!(profile.blocks[0].guest_instructions, 597);
+        assert_eq!(profile.blocks[0].source_bytes, 10);
+        for pair in profile.blocks.windows(2) {
+            assert!(pair[0].score() >= pair[1].score());
+        }
+    }
+
+    #[test]
+    fn hot_block_profile_is_bounded_and_sorted() {
+        let count = HOT_BLOCK_PROFILE_CAPACITY + 8;
+        let mut code = Vec::new();
+        for _ in 0..count {
+            code.extend_from_slice(&[0xE9, 0, 0, 0, 0]);
+        }
+        code.push(0xF4);
+        for index in 0..count {
+            let next = ENTRY + ((index + 1) * 5) as u64;
+            let next_ip = ENTRY + (index * 5 + 5) as u64;
+            let displacement = (next as i64 - next_ip as i64) as i32;
+            code[index * 5 + 1..index * 5 + 5].copy_from_slice(&displacement.to_le_bytes());
+        }
+
+        let (mut engine, mut memory) = writable_fixture(&code);
+        engine.set_hot_block_profiling(true);
+        let mut cpu = CpuState::new(ENTRY, 0);
+        let result = engine.run(&mut cpu, &mut memory, count + 1);
+        assert_eq!(result.exit_reason, ExitReason::Halt);
+        assert_eq!(result.instructions_executed, count + 1);
+
+        let profile = engine.hot_block_profile();
+        assert_eq!(profile.recorded_dispatches, (count + 1) as u64);
+        assert_eq!(profile.recorded_guest_instructions, (count + 1) as u64);
+        assert_eq!(profile.blocks.len(), HOT_BLOCK_PROFILE_CAPACITY);
+        assert_eq!(profile.evicted_blocks, 9);
+        assert_eq!(profile.untracked_dispatches, 0);
+        for pair in profile.blocks.windows(2) {
+            assert!(pair[0].score() >= pair[1].score());
+        }
+    }
+
+    #[test]
+    fn hot_block_profiling_follows_retranslation_at_the_same_address() {
+        let (mut engine, mut memory) = writable_fixture(&mov_eax(1));
+        engine.set_hot_block_profiling(true);
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 1);
+        memory.write_bytes(ENTRY + 1, &[2]).unwrap();
+        assert_eq!(rax_after_run(&mut engine, &mut memory, 16), 2);
+        assert_eq!(engine.metrics.blocks_compiled, 2);
+        assert_eq!(engine.metrics.blocks_invalidated, 1);
+
+        let profile = engine.hot_block_profile();
+        assert_eq!(profile.recorded_dispatches, 2);
+        assert_eq!(profile.recorded_guest_instructions, 4);
+        assert_eq!(profile.blocks.len(), 1);
+        assert_eq!(profile.blocks[0].executions, 2);
+        assert_eq!(profile.blocks[0].guest_instructions, 4);
+        assert_eq!(profile.blocks[0].source_bytes, mov_eax(1).len());
+    }
+
+    #[test]
+    fn hot_block_profiling_restores_the_linking_preference() {
+        let code = counted_loop(200);
+        let (mut engine, mut memory) = writable_fixture(&code);
+        engine.set_hot_block_profiling(true);
+        let result = engine.run(&mut CpuState::new(ENTRY, 0), &mut memory, 10_000);
+        assert_eq!(result.exit_reason, ExitReason::Halt);
+        assert_eq!(engine.link_metrics.links_followed, 0);
+        assert_eq!(engine.link_metrics.links_installed, 0);
+
+        engine.set_hot_block_profiling(false);
+        let result = engine.run(&mut CpuState::new(ENTRY, 0), &mut memory, 10_000);
+        assert_eq!(result.exit_reason, ExitReason::Halt);
+        assert!(
+            engine.link_metrics.links_followed >= 190,
+            "{:?}",
+            engine.link_metrics
+        );
     }
 
     #[test]
