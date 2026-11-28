@@ -46,6 +46,7 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 - [Package entry observation](runtime/package-entry-observer.md) — Root executable entry boundaries and the initial guest thread environment block.
 - [COM base services](runtime/com.md) — Partial apartment, GUID, task allocation and class lookup behavior, with explicit object-model limits.
 - [Guest threads](runtime/threads.md) — Deterministic scheduler, thread services, limits and tests.
+- [USER32 windows and posted messages](runtime/thread-messages.md) — Headless guest windows, procedure callbacks, per-thread queues and lifecycle limits.
 - [Guest graphics command path](runtime/guest-graphics.md) — The guest-callable graphics ABI, ordered resource destruction, and the path from a guest program to a rendered framebuffer.
 - [Packaged scene fixture](../fixtures/pe/package-scene/README.md) — Relocate a guest DLL, render two reference frames and export the guest file through the CLI.
 - [Bounded XAudio2 core](runtime/xaudio2.md) — Engine, mastering voice and source voice lifetimes, the source buffer queue, the sample clock and its events, the wave format rules, and what the model deliberately leaves out.

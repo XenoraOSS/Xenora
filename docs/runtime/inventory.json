@@ -7601,6 +7601,76 @@
       "symbol": "LoadLibraryW"
     },
     {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "user32.dll",
+      "canonical_symbol": "DispatchMessageA",
+      "kind": "name",
+      "library": "ext-ms-win-rtcore-ntuser-message-ansi-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "DispatchMessageA"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "user32.dll",
+      "canonical_symbol": "PeekMessageA",
+      "kind": "name",
+      "library": "ext-ms-win-rtcore-ntuser-message-ansi-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "PeekMessageA"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "user32.dll",
+      "canonical_symbol": "TranslateMessage",
+      "kind": "name",
+      "library": "ext-ms-win-rtcore-ntuser-message-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "TranslateMessage"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "user32.dll",
+      "canonical_symbol": "CreateWindowExA",
+      "kind": "name",
+      "library": "ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "CreateWindowExA"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "user32.dll",
+      "canonical_symbol": "DefWindowProcA",
+      "kind": "name",
+      "library": "ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "DefWindowProcA"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "user32.dll",
+      "canonical_symbol": "RegisterClassExA",
+      "kind": "name",
+      "library": "ext-ms-win-rtcore-ntuser-window-ansi-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "RegisterClassExA"
+    },
+    {
+      "api_set": true,
+      "canonical_kind": "name",
+      "canonical_library": "user32.dll",
+      "canonical_symbol": "ShowWindow",
+      "kind": "name",
+      "library": "ext-ms-win-rtcore-ntuser-window-l1-1-0.dll",
+      "status": "partial",
+      "symbol": "ShowWindow"
+    },
+    {
       "api_set": false,
       "canonical_kind": "name",
       "canonical_library": "kernel32.dll",
@@ -17960,6 +18030,36 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "CreateWindowExA"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "user32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "DefWindowProcA"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "user32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "DestroyWindow"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "user32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "DispatchMessageA"
     },
     {
@@ -18020,6 +18120,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "PostMessageA"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "user32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "PostThreadMessageA"
     },
     {
@@ -18040,6 +18150,16 @@
       "source": "manual",
       "status": "partial",
       "status_explicit": true,
+      "symbol": "RegisterClassExA"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "user32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
       "symbol": "ShowWindow"
     },
     {
@@ -18051,6 +18171,16 @@
       "status": "partial",
       "status_explicit": true,
       "symbol": "TranslateMessage"
+    },
+    {
+      "data_import": false,
+      "family": "other",
+      "kind": "name",
+      "library": "user32.dll",
+      "source": "manual",
+      "status": "partial",
+      "status_explicit": true,
+      "symbol": "UnregisterClassA"
     },
     {
       "data_import": false,
@@ -20404,17 +20534,17 @@
     }
   ],
   "summary": {
-    "aliases": 968,
-    "api_set_aliases": 760,
-    "canonical_services": 1015,
-    "data_import_services": 12,
+    "aliases": 975,
+    "api_set_aliases": 767,
+    "canonical_services": 1022,
+    "data_import_services": 13,
     "duplicate_registrations": 0,
     "implemented": 249,
     "implicit_status_services": 78,
     "libraries": 28,
-    "manual_services": 711,
+    "manual_services": 718,
     "ordinal_aliases": 35,
-    "partial": 766,
+    "partial": 773,
     "structural_consistency_findings": 0,
     "stub": 0,
     "typed_registry_entries": 304,
