@@ -1340,10 +1340,13 @@ Tokens cannot be used in another guest registry or after process exit.
 `BCryptGenRandom` accepts an open RNG token, the Windows 10 RNG pseudo-handle,
 or a null handle with the system-preferred flag. The Windows 8 and later
 entropy-in-buffer flag is accepted and ignored. A request can write up to
-65,536 bytes. The runtime validates the complete guest span before reading
-host entropy and publishes the bytes only after a successful read. A
-zero-length request with a nonnull pointer writes nothing. The three APIs
-return an NTSTATUS value and leave the caller's Win32 last error intact.
+the 64 MiB guest dynamic memory budget. Larger requests return
+`STATUS_INVALID_PARAMETER`. The runtime validates the complete writable span
+before allocating a temporary buffer or reading host entropy. If that allocation
+fails, it returns `STATUS_NO_MEMORY`. The runtime writes the guest buffer only
+after a complete entropy read. A zero-length request with a nonnull pointer
+writes nothing. The three APIs return an NTSTATUS value and leave the caller's
+Win32 last error intact.
 Provider registration, kernel flags and other algorithms are outside the
 supported subset.
 
