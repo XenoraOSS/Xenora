@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-//! Memory-mapped files, honestly scoped to paging-file-backed shared memory.
+//! Guest memory-region queries and paging-file-backed mappings.
 //!
 //! Documented (Microsoft Learn, "CreateFileMappingA", "MapViewOfFile",
 //! "UnmapViewOfFile"): a file mapping object describes a region of memory
@@ -25,10 +25,11 @@
 //! stays mapped do not propagate until those points, which is exact for
 //! the spawn-then-wait hand-off shells use and documented as the limit.
 
-use super::{GuestObject, KERNEL32, ServicesState};
+use super::{CURRENT_PROCESS, GuestObject, KERNEL32, ServicesState, handlers};
 use crate::cpu::ExitReason;
 use crate::imports::ImportRegistry;
 use crate::memory::{GuestMemory, PROCESS_HEAP};
+use crate::runtime::{OutPtr, ServiceContext};
 use std::sync::Arc;
 
 const MAPPING_API: &str = "api-ms-win-core-memory-l1-1-0.dll";
@@ -239,11 +240,35 @@ pub(super) fn register(registry: &mut ImportRegistry, state: &Arc<ServicesState>
         }
     });
 
+    let query_state = Arc::clone(state);
+    registry.register(KERNEL32, "VirtualQueryEx", move |args, cpu, memory| {
+        let teb = cpu.gs_base;
+        if args.rcx != CURRENT_PROCESS {
+            let objects = query_state.objects.lock().expect("guest object state");
+            // OpenProcess does not track granted rights. The runtime also
+            // has no live address space to query for a finished child.
+            let error = match objects.handles.get(&args.rcx) {
+                Some(GuestObject::Process | GuestObject::ChildProcess { .. }) => {
+                    ERROR_NOT_SUPPORTED
+                }
+                _ => ERROR_INVALID_HANDLE,
+            };
+            return query_state.fail(teb, error, 0);
+        }
+        let mut context = ServiceContext {
+            state: &query_state,
+            memory,
+            teb,
+        };
+        handlers::virtual_query(&mut context, args.rdx, OutPtr::<48>(args.r8), args.r9)
+    });
+
     for symbol in [
         "CreateFileMappingA",
         "CreateFileMappingW",
         "MapViewOfFile",
         "UnmapViewOfFile",
+        "VirtualQueryEx",
     ] {
         registry.alias(MAPPING_API, KERNEL32, symbol);
         registry.set_status(KERNEL32, symbol, crate::imports::ServiceStatus::Partial);
