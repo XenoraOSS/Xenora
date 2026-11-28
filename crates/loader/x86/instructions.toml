@@ -122,6 +122,7 @@ rorx = { ref = "sdm RORX" }
 # instruction writes a flag.
 pdep = { ref = "sdm PDEP" }
 pext = { ref = "sdm PEXT" }
+mulx = { ref = "sdm MULX" }
 push = { ref = "sdm PUSH" }
 pop = { ref = "sdm POP" }
 leave = { ref = "sdm LEAVE" }
@@ -6169,8 +6170,10 @@ enc = "reg_rm_ub"
 length = "128"
 
 # PDEP and PEXT take the bit source from VEX.vvvv and the mask from ModRM.
-# They share opcode F5 with VEX.pp selecting F2 for PDEP and F3 for PEXT;
-# VEX.W selects a 32- or 64-bit operand and VEX.L is clear in both forms.
+# They share opcode F5 with VEX.pp selecting the two forms; VEX.W selects a
+# 32- or 64-bit operand and VEX.L is clear in both. MULX takes its multiplicand
+# from the ModRM r/m operand and the implicit multiplier from RDX, writing the
+# high product to the ModRM register and the low product to VEX.vvvv.
 [[vex]]
 op = "pdep"
 map = "0f38"
@@ -6185,6 +6188,18 @@ op = "pext"
 map = "0f38"
 prefix = "f3"
 opcode = 0xF5
+enc = "reg_vvvv_rm"
+length = "128"
+nds = true
+
+# MULX writes the low product to the ModRM register and the high product to
+# VEX.vvvv. LLVM's encoding for `mulx r10d, r12d, [rsi + 4*rdi + 16]` uses
+# VEX.F2.0F38.F6 with VEX.vvvv naming the high destination.
+[[vex]]
+op = "mulx"
+map = "0f38"
+prefix = "f2"
+opcode = 0xF6
 enc = "reg_vvvv_rm"
 length = "128"
 nds = true

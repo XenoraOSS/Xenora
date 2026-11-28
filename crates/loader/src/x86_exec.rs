@@ -850,6 +850,39 @@ pub fn execute(
             }
             write_reg(cpu, insn.reg, size, result);
         }
+        Op::Mulx => {
+            // Intel SDM Vol. 2B MULX: the ModRM r/m operand is the unsigned
+            // multiplicand, RDX is the implicit unsigned multiplier, the
+            // ModRM register receives the high product and VEX.vvvv receives
+            // the low product. Read both sources before either destination
+            // so aliasing cannot change the product. The low write comes
+            // first: when the first two operands are the same register the
+            // SDM says that register holds the high half. No flag is written.
+            let Some(vvvv) = insn.vex.and_then(|vex| vex.source) else {
+                return Err(ExitReason::IllegalInstruction(0));
+            };
+            let source = read_rm(cpu, memory, insn)? & mask(size);
+            let multiplier = read_reg(
+                cpu,
+                RegOperand {
+                    index: RDX as u8,
+                    high: false,
+                },
+                size,
+            );
+            let product = u128::from(source) * u128::from(multiplier);
+            let bits = 8 * u32::from(size);
+            write_reg(
+                cpu,
+                RegOperand {
+                    index: vvvv,
+                    high: false,
+                },
+                size,
+                product as u64,
+            );
+            write_reg(cpu, insn.reg, size, (product >> bits) as u64);
+        }
         Op::Push => {
             let value = match insn.encoding {
                 Encoding::OpReg => read_reg(cpu, insn.reg, 8),
