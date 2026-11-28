@@ -6,7 +6,8 @@ pub use xenora_isa::{
     Architecture, CompareRelation, ExportTarget, ImageSampleOp, Instruction, InterpolationPhase,
     ScalarAluOp, ScalarCompareOp, ScalarImmediateCompareOp, ScalarImmediateOp, ScalarSource,
     ScalarUnaryOp, SoppControlOp, VectorAluOp, VectorAluVop3Op, VectorCompareOp,
-    VectorCompareVop3Op, VectorSource, VectorSwapOp, VectorUnaryOp,
+    VectorCompareVop3Op, VectorFloatAluVop3Op, VectorSource, VectorSwapOp, VectorTernaryVop3Op,
+    VectorUnaryOp,
 };
 use xenora_isa::{
     BUFFER_LOAD_DWORD, BUFFER_STORE_DWORD, EXP, S_WAITCNT_VSCNT, V_INTERP_P1_F32, V_INTERP_P2_F32,
@@ -15,7 +16,9 @@ use xenora_isa::{
 
 use xenora_isa::meta::EncodingFamily;
 use xenora_isa::semantics::{FORM_IDS, OperandRule};
-pub use xenora_isa::semantics::{Signedness, VectorBinary, VectorLowering, VectorUnary, VectorVcc};
+pub use xenora_isa::semantics::{
+    Signedness, VectorBinary, VectorLowering, VectorTernary, VectorUnary, VectorVcc,
+};
 
 /// Metadata forms that [`decode`] turns into an [`Instruction`] for at least one
 /// operand combination: the hand-written forms below followed by every form of
@@ -384,6 +387,14 @@ fn decode_gfx1030(bytes: &[u8], offset: usize) -> Result<(Instruction, u8), Deco
             8,
         ));
     }
+    if let Some(op) = VectorTernaryVop3Op::from_word(first) {
+        let second = word(bytes, 8)?;
+        return vop3_f32_ternary(op, first, second, bytes);
+    }
+    if let Some(op) = VectorFloatAluVop3Op::from_word(first) {
+        let second = word(bytes, 8)?;
+        return vop3_f32_legacy(op, first, second, bytes);
+    }
     if let Some(op) = VectorAluVop3Op::from_word(first) {
         let second = word(bytes, 8)?;
         return Ok((vop3_vgpr2(op, first, second)?, 8));
@@ -491,13 +502,17 @@ fn decode_gfx1030(bytes: &[u8], offset: usize) -> Result<(Instruction, u8), Deco
             }
             // Operand rule `vop2_f32`: the guide does not define how a binary32
             // form reads an integer inline constant (selectors 128-208).
-            OperandRule::Vop2F32 if matches!(first & 0x1ff, 128..=208) => {
+            OperandRule::Vop2F32 | OperandRule::Vop2F32Legacy
+                if matches!(first & 0x1ff, 128..=208) =>
+            {
                 return Err(unsupported(
                     op.assembly_name(),
                     "expected a VGPR, normal SGPR, vcc_lo or literal binary32 source",
                 ));
             }
-            OperandRule::Vop2F32 => vector_src0(first, bytes, op.assembly_name())?,
+            OperandRule::Vop2F32 | OperandRule::Vop2F32Legacy => {
+                vector_src0(first, bytes, op.assembly_name())?
+            }
             _ => unreachable!("non-VOP2 operand rule for VOP2 instruction"),
         };
         return Ok((
@@ -863,6 +878,128 @@ fn move_b32(first: u32, bytes: &[u8]) -> Result<(Instruction, u8), DecodeErrorKi
         }
     };
     Ok((Instruction::MoveB32 { dst, src }, len))
+}
+
+/// VOP3 three-input binary32 form. OP_SEL, CLAMP and OMOD are refused;
+/// all three ABS/NEG source modifier bits are meaningful.
+fn vop3_f32_ternary(
+    op: VectorTernaryVop3Op,
+    first: u32,
+    second: u32,
+    bytes: &[u8],
+) -> Result<(Instruction, u8), DecodeErrorKind> {
+    let mnemonic = op.assembly_name();
+    if first & 0xf800 != 0 || second & 0x1800_0000 != 0 {
+        return Err(unsupported(mnemonic, "expected no OP_SEL, CLAMP or OMOD"));
+    }
+    let abs = ((first >> 8) & 0x7) as u8;
+    let neg = ((second >> 29) & 0x7) as u8;
+    let selectors = [
+        second & 0x1ff,
+        (second >> 9) & 0x1ff,
+        (second >> 18) & 0x1ff,
+    ];
+    if selectors.iter().filter(|&&source| source == 255).count() > 1 {
+        return Err(unsupported(
+            mnemonic,
+            "only one source may select a literal",
+        ));
+    }
+    let mut len = 8;
+    let mut sources = [VectorSource::Immediate(0); 3];
+    for (index, selector) in selectors.into_iter().enumerate() {
+        sources[index] = match selector {
+            0..=106 => VectorSource::Scalar(selector as u8),
+            256..=511 => VectorSource::Register(selector as u8),
+            255 => {
+                len = 12;
+                VectorSource::Immediate(word(bytes, 12)?)
+            }
+            _ => {
+                return Err(unsupported(
+                    mnemonic,
+                    "expected a VGPR, normal SGPR, vcc_lo or literal binary32 source",
+                ));
+            }
+        };
+    }
+    Ok((
+        Instruction::VectorTernaryVop3 {
+            op,
+            dst: first as u8,
+            src0: sources[0],
+            src1: sources[1],
+            src2: sources[2],
+            abs,
+            neg,
+        },
+        len,
+    ))
+}
+
+/// VOP3 encoding of the DX9 legacy binary32 multiply. OP_SEL, CLAMP, OMOD
+/// and the unused SRC2 are refused; ABS/NEG are transported per source.
+fn vop3_f32_legacy(
+    op: VectorFloatAluVop3Op,
+    first: u32,
+    second: u32,
+    bytes: &[u8],
+) -> Result<(Instruction, u8), DecodeErrorKind> {
+    let mnemonic = op.assembly_name();
+    // OP_SEL (first bits 11-14), CLAMP (15), OMOD (second bits 27-28), and the
+    // unused SRC2 modifier bit are outside the bounded form.
+    if first & 0xf800 != 0 || second & 0x1800_0000 != 0 {
+        return Err(unsupported(mnemonic, "expected no OP_SEL, CLAMP or OMOD"));
+    }
+    if (second >> 18) & 0x1ff != 128 {
+        return Err(unsupported(mnemonic, "expected SRC2 inline zero"));
+    }
+    let abs = ((first >> 8) & 0x7) as u8;
+    let neg = ((second >> 29) & 0x7) as u8;
+    if abs & 0b100 != 0 || neg & 0b100 != 0 {
+        return Err(unsupported(
+            mnemonic,
+            "the unused SRC2 modifier bit must be clear",
+        ));
+    }
+    let src0_bits = second & 0x1ff;
+    let src1_bits = (second >> 9) & 0x1ff;
+    if src0_bits == 255 && src1_bits == 255 {
+        return Err(unsupported(
+            mnemonic,
+            "only one source may select a literal",
+        ));
+    }
+    let mut len = 8;
+    let source = |selector: u32, len: &mut u8| -> Result<VectorSource, DecodeErrorKind> {
+        Ok(match selector {
+            0..=106 => VectorSource::Scalar(selector as u8),
+            256..=511 => VectorSource::Register(selector as u8),
+            255 => {
+                *len = 12;
+                VectorSource::Immediate(word(bytes, 12)?)
+            }
+            _ => {
+                return Err(unsupported(
+                    mnemonic,
+                    "expected a VGPR, normal SGPR, vcc_lo or literal binary32 source",
+                ));
+            }
+        })
+    };
+    let src0 = source(src0_bits, &mut len)?;
+    let src1 = source(src1_bits, &mut len)?;
+    Ok((
+        Instruction::VectorFloatAluVop3 {
+            op,
+            dst: first as u8,
+            src0,
+            src1,
+            abs,
+            neg,
+        },
+        len,
+    ))
 }
 
 fn vop3_vgpr2(

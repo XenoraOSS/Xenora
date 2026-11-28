@@ -5,7 +5,8 @@ use std::process::{Command, Stdio};
 use xenora_decoder::{
     Architecture, CompareRelation, DecodeError, DecodeErrorKind, DecodedInstruction, Instruction,
     ScalarAluOp, ScalarImmediateOp, ScalarSource, ScalarUnaryOp, VectorAluOp, VectorAluVop3Op,
-    VectorCompareOp, VectorCompareVop3Op, VectorSource, VectorUnaryOp, decode, decode_at,
+    VectorCompareOp, VectorCompareVop3Op, VectorFloatAluVop3Op, VectorSource, VectorTernaryVop3Op,
+    VectorUnaryOp, decode, decode_at,
 };
 use xenora_isa::semantics::Signedness;
 use xenora_ref::{
@@ -966,6 +967,46 @@ fn reference_op(instruction: Instruction) -> Op {
             },
             src1,
         ),
+        Instruction::VectorFloatAluVop3 {
+            op,
+            dst,
+            src0,
+            src1,
+            abs,
+            neg,
+        } => {
+            assert!(matches!(op, VectorFloatAluVop3Op::MulLegacyF32));
+            let source = |source| match source {
+                VectorSource::Register(reg) => CompareSource::Vector(reg),
+                VectorSource::Scalar(reg) => CompareSource::Scalar(reg),
+                VectorSource::Immediate(bits) => CompareSource::Immediate(bits),
+            };
+            Op::VectorFloatVop3(
+                VectorFloat::MultiplyLegacy,
+                dst,
+                source(src0),
+                source(src1),
+                abs,
+                neg,
+            )
+        }
+        Instruction::VectorTernaryVop3 {
+            op,
+            dst,
+            src0,
+            src1,
+            src2,
+            abs,
+            neg,
+        } => {
+            assert!(matches!(op, VectorTernaryVop3Op::Med3F32));
+            let source = |source| match source {
+                VectorSource::Register(reg) => CompareSource::Vector(reg),
+                VectorSource::Scalar(reg) => CompareSource::Scalar(reg),
+                VectorSource::Immediate(bits) => CompareSource::Immediate(bits),
+            };
+            Op::VectorTernaryVop3(dst, source(src0), source(src1), source(src2), abs, neg)
+        }
         Instruction::EndProgram => Op::End,
     }
 }

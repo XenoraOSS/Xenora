@@ -431,6 +431,21 @@ source_order = "reversed"
 spec = [{ document = "guide", section = "12.7", page = 134 }, { document = "guide", section = "3.9", page = 20 }]
 verify = ["reference", "independent", "metal", "llvm_encoding"]
 
+# DX9 legacy binary32 multiply: same shape as vop2_f32, except NaN sources are
+# part of the operand domain because a zero operand wins over NaN.
+[operand_rules.vop2_f32_legacy]
+family = "VOP2"
+dst = { field = "VDST", class = "vgpr", min = 0, max = 255 }
+src = [
+  { field = "SRC0", class = "vector_source" },
+  { field = "VSRC1", class = "vgpr" },
+]
+max_literals = 1
+unsupported = [
+  "src_vcc_hi", "src_exec", "src_m0", "src_ttmp", "src_null", "src_inline",
+  "src_float_inline", "src_special",
+]
+
 # ---- VOP2 binary32 arithmetic (#784) ----
 # AMD RDNA 2 ISA guide 12.7: ADD, SUB, SUBREV and MUL on page 131, MIN on page
 # 132 and MAX on page 133. Per lane under EXEC; no SCC, VCC or EXEC write.
@@ -520,6 +535,23 @@ vcc = "unchanged"
 exec = "unchanged"
 wave = "any"
 operands = "vop2_f32"
+spec = [{ document = "guide", section = "12.7", page = 131 }]
+verify = ["reference", "independent", "metal", "llvm_encoding"]
+
+[[form]]
+name = "V_MUL_LEGACY_F32"
+family = "VOP2"
+opcode = 7
+variant = "MulLegacyF32"
+operation = "mul_legacy"
+signedness = "float"
+carry_in = "none"
+width = 32
+scc = "unchanged"
+vcc = "unchanged"
+exec = "unchanged"
+wave = "any"
+operands = "vop2_f32_legacy"
 spec = [{ document = "guide", section = "12.7", page = 131 }]
 verify = ["reference", "independent", "metal", "llvm_encoding"]
 

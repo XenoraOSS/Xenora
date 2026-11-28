@@ -32,7 +32,7 @@ either path. The [changelog](../CHANGELOG.md) records notable changes.
 - [Scalar buffer loads](shaders/scalar-memory.md) — SMEM loads, their bounds and wait rules, and where a loaded SGPR may be used.
 - [Run-time uniform branches](shaders/runtime-branches.md) — `s_cbranch_scc0` on a loaded value, if/else regions and their limits.
 - [VOP1 vector unary and swap](shaders/vector-unary.md) — Wave32 integer bit operations, register exchange, and operand limits.
-- [VOP2 binary32 arithmetic](shaders/vector-binary-f32.md) — Wave32 binary32 add, subtract both ways, multiply, and the guide's minimum and maximum with their NaN and signed-zero rules.
+- [Wave32 binary32 vector arithmetic](shaders/vector-binary-f32.md) — VOP2 arithmetic, DX9 legacy multiply and VOP3 MED3, with their NaN, signed-zero and operand-modifier rules.
 - [VOP2 select and carry](shaders/vector-vcc.md) — Wave32 lane selection, carry and borrow through the vector condition code.
 - [VOPC integer compares](shaders/vector-compare.md) — Wave32 compare forms, the VCC/EXEC contract, runtime `s_cbranch_vccz` and the Metal mapping.
 - [Metal Shading Language generation](shaders/msl.md) and [independent CPU reference](shaders/reference-interpreter.md) — Translation rules and separate CPU execution models.

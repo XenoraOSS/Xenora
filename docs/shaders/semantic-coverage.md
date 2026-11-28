@@ -31,12 +31,12 @@ acceptance remain outside the verified count. All results concern synthetic fixt
 | SOPP | 36 | 6 | 6 | 6 | 6 | 6 | 4 | 4 | 0 |
 | VINTRP | 3 | 0 | 0 | 2 | 0 | 0 | 0 | 0 | 0 |
 | VOP1 | 81 | 11 | 10 | 11 | 11 | 11 | 1 | 1 | 12 |
-| VOP2 | 47 | 28 | 28 | 28 | 28 | 28 | 7 | 7 | 12 |
-| VOP3 | 416 | 34 | 34 | 34 | 34 | 34 | 1 | 1 | 17 |
+| VOP2 | 47 | 29 | 29 | 29 | 29 | 29 | 7 | 7 | 12 |
+| VOP3 | 416 | 36 | 36 | 36 | 36 | 36 | 1 | 1 | 20 |
 | VOP3P | 29 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | VOP3SDST | 10 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
 | VOPC | 190 | 44 | 60 | 60 | 60 | 60 | 0 | 0 | 10 |
-| **Total** | 1465 | 216 | 225 | 235 | 232 | 232 | 20 | 20 | 86 |
+| **Total** | 1465 | 219 | 228 | 238 | 235 | 235 | 20 | 20 | 89 |
 
 ## Unsupported operand variants
 
@@ -59,10 +59,13 @@ The table counts distinct variant names per family across registry operand rules
 | VOP1 | `vop1_swap` | `src_exec`, `src_float_inline`, `src_inline`, `src_literal`, `src_m0`, `src_null`, `src_sgpr`, `src_special`, `src_ttmp`, `src_vcc` |
 | VOP1 | `vop1_vgpr` | `src_exec`, `src_float_inline`, `src_m0`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
 | VOP2 | `vop2_f32` | `src_exec`, `src_float_inline`, `src_inline`, `src_m0`, `src_nan`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
+| VOP2 | `vop2_f32_legacy` | `src_exec`, `src_float_inline`, `src_inline`, `src_m0`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
 | VOP2 | `vop2_vcc` | `src_exec`, `src_float_inline`, `src_m0`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
 | VOP2 | `vop2_vgpr` | `src_exec`, `src_float_inline`, `src_m0`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
 | VOP2 | `vop2_vgpr2` | `src_exec`, `src_float_inline`, `src_inline`, `src_literal`, `src_m0`, `src_null`, `src_sgpr`, `src_special`, `src_ttmp`, `src_vcc` |
 | VOP3 | `vop3_cmp_vgpr2` | `dst_exec`, `dst_m0`, `dst_null`, `dst_ttmp`, `dst_vcc_hi`, `modifiers`, `src2`, `src_exec`, `src_float_inline`, `src_inline`, `src_literal`, `src_m0`, `src_null`, `src_sgpr`, `src_special`, `src_ttmp`, `src_vcc` |
+| VOP3 | `vop3_f32_legacy` | `op_sel`, `output_modifiers`, `src2`, `src_exec`, `src_float_inline`, `src_inline`, `src_m0`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
+| VOP3 | `vop3_f32_ternary` | `op_sel`, `output_modifiers`, `src_exec`, `src_float_inline`, `src_inline`, `src_m0`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
 | VOP3 | `vop3_vgpr2` | `modifiers`, `src2`, `src_exec`, `src_float_inline`, `src_inline`, `src_literal`, `src_m0`, `src_null`, `src_sgpr`, `src_special`, `src_ttmp`, `src_vcc` |
 | VOPC | `vopc_vcc` | `src_exec`, `src_float_inline`, `src_m0`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
 | VOPC | `vopc_vcc_f32` | `src_exec`, `src_float_inline`, `src_inline`, `src_m0`, `src_null`, `src_special`, `src_ttmp`, `src_vcc_hi` |
